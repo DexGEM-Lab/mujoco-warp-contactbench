@@ -11,7 +11,9 @@ from typing import Any
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-for path in (REPO_ROOT, REPO_ROOT / "lance_manager"):
+THIRD_PARTY = REPO_ROOT / "3rd_party"
+LANCE_MANAGER_ROOT = THIRD_PARTY / "lance_manager"
+for path in (REPO_ROOT, THIRD_PARTY):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -19,10 +21,12 @@ from benchmarks.ball_pit.common import BallPitSpec, hand_pose_at  # noqa: E402
 from common.contact_schema import read_contact_fixture, validate_contact_sequence  # noqa: E402
 from lance_manager.lance_dataset_manager import LanceDatasetManager  # noqa: E402
 from lance_manager.schema.manager import SchemaManager  # noqa: E402
+from lance_manager.schema.utils.converter import DictToArrowConverter  # noqa: E402
+from lance_manager.schema.utils.parser import SchemaParser  # noqa: E402
+from lance_manager.schema.utils.validator import create_validator_from_schema  # noqa: E402
 
-GENERATED_SCHEMA = REPO_ROOT / "lance_manager/schema/schemas/generated_data_schema.jsonc"
+GENERATED_SCHEMA = LANCE_MANAGER_ROOT / "schema/schemas/generated_data_schema.jsonc"
 LOGS = REPO_ROOT / "logs"
-SAMPLE_LOGS = REPO_ROOT / "data/sample_logs"
 DEFAULT_OUTPUT = LOGS / "mujoco_cpu_mjx_warp_gpu_ball_pit_generated.lance"
 DEFAULT_INPUT_NAMES = (
     "mujoco_cpu_ball_pit_contact_10s.json",
@@ -30,14 +34,27 @@ DEFAULT_INPUT_NAMES = (
 )
 
 
+class SingleProcessSchemaConverter:
+    def __init__(self, schema_path: Path):
+        self._parser = SchemaParser(schema_path)
+        self._converter = DictToArrowConverter(self._parser)
+        self._validator = create_validator_from_schema(str(schema_path))
+        self._reserved_fields = set(self._parser.schema_dict.get("reserved_fields", []))
+
+    def convert(self, data_dict: dict[str, Any]):
+        processed = SchemaManager._process_reserved_fields(data_dict, self._reserved_fields)
+        self._validator(**processed)
+        return self._converter.convert(processed)
+
+    def close(self) -> None:
+        return None
+
+
 def _resolve_default_input(name: str) -> Path:
     generated = LOGS / name
     if generated.exists():
         return generated
-    sample = SAMPLE_LOGS / name
-    if sample.exists():
-        return sample
-    raise FileNotFoundError(f"missing {name}; run export scripts or restore data/sample_logs")
+    raise FileNotFoundError(f"missing {name}; run the JSON debug export scripts first")
 
 
 def _default_inputs() -> list[Path]:
@@ -45,7 +62,7 @@ def _default_inputs() -> list[Path]:
 
 
 def _backend_to_scene(backend: str) -> str:
-    # Must satisfy lance_manager/schema/configs/3_scene.yaml enum.
+    # Must satisfy 3rd_party/lance_manager/schema/configs/3_scene.yaml enum.
     # Both CPU MuJoCo and MJX-Warp GPU represent the same MuJoCo ball-pit scene.
     return "cube1_02"
 
@@ -191,12 +208,11 @@ def _contact_to_numpy(contact: list[list[dict[str, Any]]]) -> np.ndarray:
     return np.asarray(frames, dtype=object)
 
 
-def trajectory_from_contact(path: Path, raw_id: int) -> dict[str, Any]:
-    payload = read_contact_fixture(path)
+def trajectory_from_payload(payload: dict[str, Any], *, raw_id: int, source_name: str = "sim") -> dict[str, Any]:
     contact = payload["contact"]
     validate_contact_sequence(contact)
     metadata = payload.get("metadata", {})
-    backend = str(metadata.get("backend", path.stem))
+    backend = str(metadata.get("backend", source_name))
     fps = float(metadata.get("fps", 100.0))
     total_frames = int(metadata.get("frames", len(contact)))
     if total_frames != len(contact):
@@ -265,6 +281,58 @@ def trajectory_from_contact(path: Path, raw_id: int) -> dict[str, Any]:
     }
 
 
+def trajectory_from_contact(path: Path, raw_id: int) -> dict[str, Any]:
+    return trajectory_from_payload(read_contact_fixture(path), raw_id=raw_id, source_name=path.stem)
+
+
+def write_payloads_to_lance(
+    payloads: list[dict[str, Any]],
+    *,
+    output: Path,
+    replace: bool = False,
+    processes: int = 1,
+    source_names: list[str] | None = None,
+) -> dict[str, Any]:
+    if replace and output.exists():
+        shutil.rmtree(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    manager = SingleProcessSchemaConverter(GENERATED_SCHEMA) if processes <= 1 else SchemaManager(GENERATED_SCHEMA, processes=processes)
+    dataset = LanceDatasetManager(output)
+    rows: list[dict[str, Any]] = []
+    try:
+        for idx, payload in enumerate(payloads):
+            source_name = source_names[idx] if source_names and idx < len(source_names) else f"payload_{idx}"
+            trajectory = trajectory_from_payload(payload, raw_id=idx, source_name=source_name)
+            table = manager.convert(trajectory)
+            dataset.writer.write(table, dedup=False)
+            rows.append({"source": source_name, "rows": table.num_rows})
+            print(f"wrote {source_name} rows={table.num_rows}", flush=True)
+        dataset.writer.flush()
+    finally:
+        manager.close()
+    return {"output": str(output), "rows": rows}
+
+
+def write_contacts_to_lance(
+    inputs: list[Path],
+    *,
+    output: Path,
+    replace: bool = False,
+    processes: int = 1,
+) -> dict[str, Any]:
+    payloads = [read_contact_fixture(path) for path in inputs]
+    result = write_payloads_to_lance(
+        payloads,
+        output=output,
+        replace=replace,
+        processes=processes,
+        source_names=[str(path) for path in inputs],
+    )
+    result["inputs"] = [str(path) for path in inputs]
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export MuJoCo CPU and MJX-Warp GPU contact fixtures to full generated_data Lance.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
@@ -274,22 +342,13 @@ def main() -> int:
     args = parser.parse_args()
 
     inputs = list(args.inputs) if args.inputs else _default_inputs()
-    if args.replace and args.output.exists():
-        shutil.rmtree(args.output)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-
-    manager = SchemaManager(GENERATED_SCHEMA, processes=args.processes)
-    dataset = LanceDatasetManager(args.output)
-    try:
-        for idx, path in enumerate(inputs):
-            trajectory = trajectory_from_contact(path, raw_id=idx)
-            table = manager.convert(trajectory)
-            dataset.writer.write(table, dedup=False)
-            print(f"wrote {path} rows={table.num_rows}", flush=True)
-        dataset.writer.flush()
-    finally:
-        manager.close()
-    print(json.dumps({"output": str(args.output), "inputs": [str(path) for path in inputs]}, indent=2), flush=True)
+    result = write_contacts_to_lance(
+        inputs,
+        output=args.output,
+        replace=args.replace,
+        processes=args.processes,
+    )
+    print(json.dumps(result, indent=2), flush=True)
     return 0
 
 

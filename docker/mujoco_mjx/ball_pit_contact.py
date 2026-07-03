@@ -199,7 +199,7 @@ def render_camera_video(mujoco: Any, model: Any, data: Any, frames: list[Any], v
     write_video(video, frames, fps=VIDEO_FPS)
 
 
-def run_ball_pit(spec: BallPitSpec, output: Path, image: Path, video: Path | None = None) -> dict[str, Any]:
+def run_ball_pit(spec: BallPitSpec, output: Path | None = None, image: Path | None = None, video: Path | None = None) -> dict[str, Any]:
     mujoco = import_mujoco()
     tmp_dir = Path(tempfile.mkdtemp(prefix="contactbench_ball_pit_mujoco_"))
     scene_path = build_ball_pit_scene_xml(tmp_dir / "ball_pit.xml", spec)
@@ -312,20 +312,28 @@ def run_ball_pit(spec: BallPitSpec, output: Path, image: Path, video: Path | Non
         "object_trajectories": object_trajectories,
         "contact": contact,
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    render_svg(
-        image,
-        spec=spec,
-        backend="mujoco_mjx",
-        ball_positions=final_ball_positions or ball_initial_positions(spec),
-        hand_trace=hand_trace,
-        contact_points=contact_points,
-        summary=summary,
-    )
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if image is not None:
+        render_svg(
+            image,
+            spec=spec,
+            backend="mujoco_mjx",
+            ball_positions=final_ball_positions or ball_initial_positions(spec),
+            hand_trace=hand_trace,
+            contact_points=contact_points,
+            summary=summary,
+        )
     if video is not None:
         render_camera_video(mujoco, model, data, rendered_frames, video)
-    return metadata | {"output": str(output), "image": str(image), "video": str(video) if video is not None else None}
+    return {
+        "payload": payload,
+        "metadata": metadata,
+        "output": str(output) if output is not None else None,
+        "image": str(image) if image is not None else None,
+        "video": str(video) if video is not None else None,
+    }
 
 
 def main() -> int:
@@ -343,8 +351,8 @@ def main() -> int:
     parser.add_argument("--rollout-frames", type=int, default=1000)
     parser.add_argument("--duration-seconds", type=float, default=10.0)
     args = parser.parse_args()
-    metadata = run_ball_pit(spec_from_args(args), args.output, args.image, None if args.no_video else args.video)
-    print(json.dumps(metadata, indent=2))
+    result = run_ball_pit(spec_from_args(args), args.output, args.image, None if args.no_video else args.video)
+    print(json.dumps({"metadata": result["metadata"], "output": result["output"], "image": result["image"], "video": result["video"]}, indent=2))
     return 0
 
 

@@ -6,7 +6,6 @@ __pycache__
 .ipynb_checkpoints
 logs/*
 !logs/.gitkeep
-data/sample_logs/*
 *.lance
 *.mp4
 *.mov
