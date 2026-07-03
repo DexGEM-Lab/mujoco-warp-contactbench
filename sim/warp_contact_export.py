@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -12,8 +13,8 @@ from typing import Any
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-for path in (REPO_ROOT, REPO_ROOT / "docker/mujoco_mjx"):
+REPO_ROOT = Path(__file__).resolve().parents[1]
+for path in (REPO_ROOT, REPO_ROOT / "sim"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -25,17 +26,14 @@ from common.contact_schema import (  # noqa: E402
     transform_force_to_local,
     validate_contact_sequence,
 )
-from docker.mujoco_mjx.ball_pit_contact import (  # noqa: E402
+from sim.scene import (  # noqa: E402
     HAND_LINK_NAMES,
     build_ball_pit_scene_xml,
     hand_joint_addresses,
+    set_hand_pose_mjx,
 )
-from docker.mujoco_mjx.mjx_warp_ball_pit_video import set_hand_pose_mjx  # noqa: E402
 
-DEFAULT_OUTPUT = REPO_ROOT / "logs/mjx_warp_gpu_ball_pit_contact_native_10s.json"
-DEFAULT_CONTACTBENCH_OUTPUT = REPO_ROOT / "logs/mjx_warp_gpu_ball_pit_contact_10s.json"
-DEFAULT_ERROR_OUTPUT = REPO_ROOT / "logs/mjx_warp_gpu_contact_to_hand_mesh_error_raw.json"
-DEFAULT_SCENE_COPY = REPO_ROOT / "logs/mjx_warp_gpu_contact_error_scene.xml"
+DEFAULT_SCENE_COPY = REPO_ROOT / "outputs/mjx_warp_contact_error_scene.xml"
 
 
 def _device_get(jax: Any, value: Any) -> np.ndarray:
@@ -256,14 +254,25 @@ def _group_contactbench_entries(frame_contacts: list[dict[str, Any]]) -> list[di
     return entries
 
 
-def _export_gpu_contacts(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _export_warp_contacts(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    requested_device = str(getattr(args, "device", "gpu"))
+    if requested_device == "cpu":
+        os.environ.setdefault("JAX_PLATFORMS", "cpu")
+    elif requested_device == "gpu":
+        os.environ.setdefault("JAX_PLATFORMS", "cuda,cpu")
+    else:
+        raise ValueError(f"unsupported MJX-Warp device: {requested_device}")
+
     import jax
     import jax.numpy as jnp
     import mujoco
     from mujoco import mjx
 
-    if jax.default_backend() != "gpu":
-        raise RuntimeError(f"expected JAX GPU backend, got {jax.default_backend()} devices={jax.devices()}")
+    actual_backend = jax.default_backend()
+    if requested_device == "gpu" and actual_backend != "gpu":
+        raise RuntimeError(f"expected JAX GPU backend, got {actual_backend} devices={jax.devices()}")
+    if requested_device == "cpu" and actual_backend != "cpu":
+        raise RuntimeError(f"expected JAX CPU backend, got {actual_backend} devices={jax.devices()}")
 
     spec = spec_from_args(args)
     scene_path = build_ball_pit_scene_xml(Path(tempfile.mkdtemp(prefix="contactbench_mjx_warp_contact_")) / "ball_pit.xml", spec)
@@ -505,12 +514,13 @@ def _export_gpu_contacts(args: argparse.Namespace) -> tuple[dict[str, Any], dict
     validate_contact_sequence(contactbench_by_frame)
 
     metadata = {
-        "backend": "mjx_warp_gpu",
+        "backend": "mjx_warp",
+        "device": requested_device,
         "benchmark_case": spec.case_name,
-        "source": "MJX-Warp GPU native contact export from Data._impl contact buffers",
+        "source": f"MJX-Warp {requested_device} native contact export from Data._impl contact buffers",
         "api_stability_note": "Uses MJX-Warp internal _impl fields; not the stable MuJoCo CPU data.contact/mj_contactForce API.",
         "force_convention": "normal_force_proxy_on_hand_link_by_ball_from_mjx_warp_efc_first_row",
-        "force_note": "GPU ContactBench export stores a normal-force proxy from the first contact constraint row and zero tangential force. Native efc rows are preserved in the native sidecar. It is not a CPU mj_contactForce 6D wrench.",
+        "force_note": "ContactBench export stores a normal-force proxy from the first contact constraint row and zero tangential force. Native efc rows are preserved in the native sidecar. It is not a MuJoCo mj_contactForce 6D wrench.",
         "contact_position_note": "pos_world is raw MJX-Warp _impl.contact__pos. It is not projected onto the ball or hand mesh.",
         "object_trajectory_note": "All balls are exported from MJX-Warp dx.xpos. rot_aa is zero because sphere orientation is contact-invariant here.",
         "hand_trajectory_note": "hands fields are exported from MJX-Warp state. urdf_dof translation includes the MJCF floating_base offset so URDF mesh replay aligns with MuJoCo world contacts.",
@@ -555,50 +565,10 @@ def _export_gpu_contacts(args: argparse.Namespace) -> tuple[dict[str, Any], dict
     ]
     contactbench_payload = {
         "schema": LANCE_GENERATED_SCHEMA,
-        "note": "MJX-Warp GPU ball-pit hand-ball native contact export converted to ContactBench contact shape. Forces are normal-force proxies, not CPU mj_contactForce 6D wrenches.",
+        "note": "MJX-Warp ball-pit hand-ball native contact export converted to ContactBench contact shape. Forces are normal-force proxies, not MuJoCo mj_contactForce 6D wrenches.",
         "metadata": metadata,
         "hand_trajectory": hand_trajectory,
         "object_trajectories": object_trajectories,
         "contact": contactbench_by_frame,
     }
     return native_payload, {"metadata": metadata, **error_stats}, contactbench_payload
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Export native MJX-Warp GPU contacts and contact-to-hand-mesh errors.")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--contactbench-output", type=Path, default=DEFAULT_CONTACTBENCH_OUTPUT)
-    parser.add_argument("--error-output", type=Path, default=DEFAULT_ERROR_OUTPUT)
-    parser.add_argument("--scene-copy", type=Path, default=DEFAULT_SCENE_COPY)
-    parser.add_argument("--scenario", default="filled_tank", choices=("sparse_debug", "filled_tank"))
-    parser.add_argument("--ball-count", type=int, default=120)
-    parser.add_argument("--ball-radius", type=float, default=0.03)
-    parser.add_argument("--fps", type=float, default=100.0)
-    parser.add_argument("--substeps", type=int, default=2)
-    parser.add_argument("--settle-frames", type=int, default=60)
-    parser.add_argument("--rollout-frames", type=int, default=1000)
-    parser.add_argument("--duration-seconds", type=float, default=10.0)
-    parser.add_argument("--naconmax", type=int, default=8192)
-    parser.add_argument("--njmax", type=int, default=8192)
-    parser.add_argument("--progress-interval", type=int, default=100)
-    args = parser.parse_args()
-
-    native_payload, error_payload, contactbench_payload = _export_gpu_contacts(args)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.contactbench_output.parent.mkdir(parents=True, exist_ok=True)
-    args.error_output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(native_payload, indent=2), encoding="utf-8")
-    args.contactbench_output.write_text(json.dumps(contactbench_payload, indent=2), encoding="utf-8")
-    args.error_output.write_text(json.dumps(error_payload, indent=2), encoding="utf-8")
-    print(json.dumps({
-        "output": str(args.output),
-        "contactbench_output": str(args.contactbench_output),
-        "error_output": str(args.error_output),
-        "overall": error_payload["distance_to_hand_mesh"],
-        "contact_counts_by_frame": error_payload["contact_counts_by_frame"],
-    }, indent=2), flush=True)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

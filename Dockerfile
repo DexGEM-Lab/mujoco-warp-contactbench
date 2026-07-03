@@ -103,4 +103,4 @@ ENV PATH=${VENV_DIR}/bin:${CONDA_DIR}/bin:${PATH} \
 
 # Source code is not copied into the image. Runtime scripts mount the workspace at
 # /workspace/mujoco-warp-contactbench so code edits do not require image rebuilds.
-CMD ["python", "docker/mujoco_mjx/smoke_test.py", "--strict"]
+CMD ["python", "sim/smoke_test.py", "--strict"]

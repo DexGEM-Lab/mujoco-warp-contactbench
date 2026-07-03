@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
-import json
 import shutil
 import sys
 from pathlib import Path
@@ -18,7 +16,7 @@ for path in (REPO_ROOT, THIRD_PARTY):
         sys.path.insert(0, str(path))
 
 from benchmarks.ball_pit.common import BallPitSpec, hand_pose_at  # noqa: E402
-from common.contact_schema import read_contact_fixture, validate_contact_sequence  # noqa: E402
+from common.contact_schema import validate_contact_sequence  # noqa: E402
 from lance_manager.lance_dataset_manager import LanceDatasetManager  # noqa: E402
 from lance_manager.schema.manager import SchemaManager  # noqa: E402
 from lance_manager.schema.utils.converter import DictToArrowConverter  # noqa: E402
@@ -26,14 +24,8 @@ from lance_manager.schema.utils.parser import SchemaParser  # noqa: E402
 from lance_manager.schema.utils.validator import create_validator_from_schema  # noqa: E402
 
 GENERATED_SCHEMA = LANCE_MANAGER_ROOT / "schema/schemas/generated_data_schema.jsonc"
-LOGS = REPO_ROOT / "logs"
-DEFAULT_OUTPUT = LOGS / "mujoco_cpu_mjx_warp_gpu_ball_pit_generated.lance"
-DEFAULT_INPUT_NAMES = (
-    "mujoco_cpu_ball_pit_contact_10s.json",
-    "mjx_warp_gpu_ball_pit_contact_10s.json",
-)
-
-
+OUTPUTS = REPO_ROOT / "outputs"
+DEFAULT_OUTPUT = OUTPUTS / "mjx_warp_contactbench_generated.lance"
 class SingleProcessSchemaConverter:
     def __init__(self, schema_path: Path):
         self._parser = SchemaParser(schema_path)
@@ -48,17 +40,6 @@ class SingleProcessSchemaConverter:
 
     def close(self) -> None:
         return None
-
-
-def _resolve_default_input(name: str) -> Path:
-    generated = LOGS / name
-    if generated.exists():
-        return generated
-    raise FileNotFoundError(f"missing {name}; run the JSON debug export scripts first")
-
-
-def _default_inputs() -> list[Path]:
-    return [_resolve_default_input(name) for name in DEFAULT_INPUT_NAMES]
 
 
 def _backend_to_scene(backend: str) -> str:
@@ -281,10 +262,6 @@ def trajectory_from_payload(payload: dict[str, Any], *, raw_id: int, source_name
     }
 
 
-def trajectory_from_contact(path: Path, raw_id: int) -> dict[str, Any]:
-    return trajectory_from_payload(read_contact_fixture(path), raw_id=raw_id, source_name=path.stem)
-
-
 def write_payloads_to_lance(
     payloads: list[dict[str, Any]],
     *,
@@ -312,45 +289,3 @@ def write_payloads_to_lance(
     finally:
         manager.close()
     return {"output": str(output), "rows": rows}
-
-
-def write_contacts_to_lance(
-    inputs: list[Path],
-    *,
-    output: Path,
-    replace: bool = False,
-    processes: int = 1,
-) -> dict[str, Any]:
-    payloads = [read_contact_fixture(path) for path in inputs]
-    result = write_payloads_to_lance(
-        payloads,
-        output=output,
-        replace=replace,
-        processes=processes,
-        source_names=[str(path) for path in inputs],
-    )
-    result["inputs"] = [str(path) for path in inputs]
-    return result
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Export MuJoCo CPU and MJX-Warp GPU contact fixtures to full generated_data Lance.")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--inputs", type=Path, nargs="*", default=None)
-    parser.add_argument("--replace", action="store_true")
-    parser.add_argument("--processes", type=int, default=1)
-    args = parser.parse_args()
-
-    inputs = list(args.inputs) if args.inputs else _default_inputs()
-    result = write_contacts_to_lance(
-        inputs,
-        output=args.output,
-        replace=args.replace,
-        processes=args.processes,
-    )
-    print(json.dumps(result, indent=2), flush=True)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -14,8 +14,8 @@ __pycache__/
 .jupyter/
 
 # Generated outputs
-logs/*
-!logs/.gitkeep
+outputs/*
+!outputs/.gitkeep
 *.mp4
 *.mov
 *.avi

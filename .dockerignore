@@ -4,8 +4,8 @@ __pycache__
 *.pyc
 .pytest_cache
 .ipynb_checkpoints
-logs/*
-!logs/.gitkeep
+outputs/*
+!outputs/.gitkeep
 *.lance
 *.mp4
 *.mov

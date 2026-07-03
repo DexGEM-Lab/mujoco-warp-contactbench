@@ -1,20 +1,20 @@
 # MuJoCo Warp ContactBench
 
-Standalone MuJoCo CPU / MJX-Warp GPU sim-to-Lance export and Rerun visualization repo.
+Standalone MJX-Warp sim-to-Lance export repo.
 
-This repo is intentionally decoupled from the larger `contactbench` workspace. The MANO hand asset and `lance_manager` are git submodules. The repo contains MuJoCo scene builders, direct CPU and MJX-Warp GPU Lance export, and a Rerun notebook.
+This repo is intentionally decoupled from the larger `contactbench` workspace. The MANO hand asset and `lance_manager` are git submodules. The repo contains MuJoCo scene builders, MJX-Warp contact extraction, direct Lance export, and Docker/runtime helpers.
 
 ## Layout
 
 ```text
-assets/mano_hand_s02/        submodule: MANO MJCF/URDF/STL assets used by simulation and replay
+assets/mano_hand_s02/        submodule: MANO MJCF/URDF/STL assets used by simulation
 benchmarks/ball_pit/         deterministic ball-pit scenario and camera helpers
-common/                      contact JSON schema helpers and validators
-3rd_party/lance_manager/     submodule: full generated_data Lance writer/schema stack
-docker/mujoco_mjx/           Dockerfile and MuJoCo/MJX-Warp simulation scripts
-notebooks/                   Rerun SDK visualization notebook
-scripts/                     build, sim-to-Lance, smoke test, and notebook helper scripts
-logs/                        generated outputs; ignored by git
+common/                      contact schema helpers and validators
+3rd_party/lance_manager/     submodule: generated_data Lance writer/schema stack
+sim/                         MJX-Warp simulation and export code
+scripts/                     build, sim-to-Lance, smoke test, and env helper scripts
+outputs/                     generated outputs; ignored by git
+Dockerfile                   Debian + Miniforge + CUDA + uv runtime image
 ```
 
 ## Clone / Submodules
@@ -32,38 +32,14 @@ assets/mano_hand_s02 -> git@192.168.10.116:ai/group-ai-public/group-sim-assets/m
 3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
 ```
 
-## Quick Start: Visualization Only
+## Local uv Environment
 
 ```bash
-cd /path/to/mujoco-warp-contactbench
-git submodule update --init --recursive
-scripts/setup_viz_env.sh
-scripts/open_rerun_notebook.sh
+scripts/setup_local_env.sh
+JAX_PLATFORMS=cpu .venv/bin/python sim/smoke_test.py --strict --device cpu
 ```
 
-In Jupyter/VS Code, open:
-
-```text
-notebooks/rerun_cpu_gpu_contacts.ipynb
-```
-
-Use kernel:
-
-```text
-MuJoCo Warp ContactBench (.venv)
-```
-
-The notebook reads generated outputs from `logs/`. Run the JSON debug export scripts first if you want to visualize CPU/GPU contact JSON outputs in the notebook.
-
-Default Rerun behavior:
-
-```text
-- non-contacting balls are hidden
-- current-frame contacting balls are highlighted
-- current-frame contact points are highlighted
-- MANO hand URDF meshes are animated
-- no Rerun summary pane is logged
-```
+The local uv environment is useful for CPU checks and development. GPU execution is supported through the Docker image by default.
 
 ## Build Docker Image
 
@@ -77,27 +53,35 @@ This creates:
 mujoco-warp-contactbench:latest
 ```
 
+The image does not copy repo source code. Runtime scripts mount the workspace at `/workspace/mujoco-warp-contactbench`, so code changes do not require image rebuilds unless dependencies or the Dockerfile change.
+
 ## Sim-to-Lance Export
 
-Run simulation and write Lance directly, without contact JSON intermediates:
+Run MJX-Warp simulation and write Lance directly, without contact JSON intermediates. GPU is the default device:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 scripts/run_sim_lance.sh
 ```
 
-Output:
-
-```text
-logs/mujoco_cpu_mjx_warp_gpu_ball_pit_generated.lance
-```
-
-Use `BACKEND=cpu` or `BACKEND=gpu` to export only one backend. Extra simulation arguments are forwarded to `docker/mujoco_mjx/sim_to_lance.py`, for example:
+Use CPU execution for the same MJX-Warp backend with:
 
 ```bash
-BACKEND=cpu scripts/run_sim_lance.sh --duration-seconds 1 --ball-count 16
+DEVICE=cpu scripts/run_sim_lance.sh
 ```
 
-The exporter uses `3rd_party/lance_manager/schema/schemas/generated_data_schema.jsonc` from the submodule and writes with the submodule's configured Lance writer.
+Default output:
+
+```text
+outputs/mjx_warp_contactbench_generated.lance
+```
+
+Extra simulation arguments are forwarded to `sim/sim_to_lance.py`, for example:
+
+```bash
+DEVICE=cpu OUTPUT=outputs/test.lance scripts/run_sim_lance.sh --duration-seconds 1 --ball-count 16
+```
+
+The exporter uses `3rd_party/lance_manager/schema/schemas/generated_data_schema.jsonc` and writes with the submodule's Lance writer.
 
 ## Smoke Test
 
@@ -105,11 +89,10 @@ The exporter uses `3rd_party/lance_manager/schema/schemas/generated_data_schema.
 scripts/run_smoke_test.sh
 ```
 
-This validates MuJoCo availability and writes a small contact fixture to `logs/mujoco_mjx_live_contact.json`.
+This validates MuJoCo, JAX/MJX availability for the requested device, and a short MJX-Warp sim-to-Lance export. Set `DEVICE=cpu` to smoke test CPU execution.
 
 ## Notes
 
-- CPU contact points are raw MuJoCo solver contact positions, not projected onto ball surfaces.
-- GPU contact points are raw MJX-Warp `_impl.contact__pos`, not projected onto the ball or hand mesh.
-- MJX-Warp internal `_impl` fields are useful but private/unstable compared with the stable MuJoCo CPU `data.contact` API.
-- `logs/` is intentionally ignored and contains local generated artifacts.
+- MJX-Warp contact points are raw `_impl.contact__pos`, not projected onto the ball or hand mesh.
+- MJX-Warp internal `_impl` fields are useful but private/unstable compared with stable MuJoCo CPU APIs.
+- `outputs/` is intentionally ignored and contains local generated artifacts.
