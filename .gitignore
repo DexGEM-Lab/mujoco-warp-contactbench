@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local env
+.venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+.jupyter/
+
+# Generated outputs
+logs/*
+!logs/.gitkeep
+*.mp4
+*.mov
+*.avi
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Docker/temp
+.tmp/
+tmp/

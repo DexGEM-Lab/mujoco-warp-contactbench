@@ -1,0 +1,1030 @@
+{
+  "metadata": {
+    "backend": "mjx_warp_gpu",
+    "benchmark_case": "ball_pit_filled_tank_120_rigid_hand_sweep_10s",
+    "source": "MJX-Warp GPU native contact export from Data._impl contact buffers",
+    "api_stability_note": "Uses MJX-Warp internal _impl fields; not the stable MuJoCo CPU data.contact/mj_contactForce API.",
+    "force_convention": "normal_force_proxy_on_hand_link_by_ball_from_mjx_warp_efc_first_row",
+    "force_note": "GPU ContactBench export stores a normal-force proxy from the first contact constraint row and zero tangential force. Native efc rows are preserved in the native sidecar. It is not a CPU mj_contactForce 6D wrench.",
+    "contact_position_note": "pos_world is raw MJX-Warp _impl.contact__pos. It is not projected onto the ball or hand mesh.",
+    "object_trajectory_note": "All balls are exported from MJX-Warp dx.xpos. rot_aa is zero because sphere orientation is contact-invariant here.",
+    "hand_trajectory_note": "hands fields are exported from MJX-Warp state. urdf_dof translation includes the MJCF floating_base offset so URDF mesh replay aligns with MuJoCo world contacts.",
+    "hand_base_offset": [
+      0.0,
+      0.0,
+      0.06794221
+    ],
+    "scene_xml": "/tmp/contactbench_mjx_warp_contact_diti7rzj/ball_pit.xml",
+    "scene_copy": "logs/mjx_warp_gpu_contact_error_scene.xml",
+    "mujoco_version": "3.10.0",
+    "jax_backend": "gpu",
+    "jax_devices": [
+      "cuda:0"
+    ],
+    "ball_count": 120,
+    "ball_radius": 0.03,
+    "fps": 100.0,
+    "substeps": 2,
+    "physics_dt": 0.005,
+    "settle_frames": 60,
+    "rollout_frames": 1000,
+    "duration_seconds": 10.0,
+    "frames": 1000,
+    "nonempty_frames": 644,
+    "contact_entries": 2473,
+    "contact_pairs": 2473,
+    "naconmax": 8192,
+    "njmax": 8192
+  },
+  "distance_definition": "unsigned nearest distance from raw MJX-Warp _impl.contact__pos to the corresponding hand collision geom surface; contact point transformed into geom-local coordinates with dx.geom_xpos/dx.geom_xmat",
+  "distance_to_hand_mesh": {
+    "count": 2473,
+    "mean_mm": 1.1857658426242381,
+    "std_mm": 1.2133022940041263,
+    "min_mm": 0.00022776942144364632,
+    "median_mm": 0.7851705884305294,
+    "p75_mm": 1.7858536745297224,
+    "p90_mm": 2.9630382489144766,
+    "p95_mm": 3.727504618070424,
+    "p99_mm": 5.081183938972308,
+    "max_mm": 6.916862435196764
+  },
+  "abs_distance_to_ball_surface": {
+    "count": 2473,
+    "mean_mm": 1.894202268869287,
+    "std_mm": 2.184744962559808,
+    "min_mm": 0.000247369982015605,
+    "median_mm": 1.0968267493035657,
+    "p75_mm": 2.4062711884696304,
+    "p90_mm": 5.140499227554483,
+    "p95_mm": 6.841295724192119,
+    "p99_mm": 9.157519983180938,
+    "max_mm": 12.669215422689422
+  },
+  "contact_dist": {
+    "count": 2473,
+    "mean_mm": -3.7884042002155236,
+    "std_mm": 4.369488961216916,
+    "min_mm": -25.33845789730549,
+    "median_mm": -2.1936483681201935,
+    "p75_mm": -0.6807539612054825,
+    "p90_mm": -0.1674171537160873,
+    "p95_mm": -0.08382163941860195,
+    "p99_mm": -0.016676932573318363,
+    "max_mm": -0.0004898756742477417
+  },
+  "normal_force_proxy": {
+    "count": 2473,
+    "mean_mm": 205.80960970239954,
+    "std_mm": 597.3824962130724,
+    "min_mm": 0.0,
+    "median_mm": 30.40623664855957,
+    "p75_mm": 189.6935999393463,
+    "p90_mm": 546.9978809356697,
+    "p95_mm": 934.9983096122743,
+    "p99_mm": 2150.409536361703,
+    "max_mm": 10793.737411499023
+  },
+  "contact_counts_by_frame": {
+    "frames": 1000,
+    "nonempty_frames": 644,
+    "max_contacts_in_frame": 9,
+    "total_contacts": 2473
+  },
+  "by_link": {
+    "index_dip": {
+      "distance_to_hand_mesh": {
+        "count": 39,
+        "mean_mm": 1.0975302163002922,
+        "std_mm": 1.331292753500642,
+        "min_mm": 0.003618152800753222,
+        "median_mm": 0.22702887768593336,
+        "p75_mm": 1.7377487571891166,
+        "p90_mm": 3.1814625773830674,
+        "p95_mm": 3.6836322693460946,
+        "p99_mm": 4.612595605092465,
+        "max_mm": 4.7605578701685545
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 39,
+        "mean_mm": 2.4270994019053567,
+        "std_mm": 3.512625748256356,
+        "min_mm": 0.006112828780168583,
+        "median_mm": 0.3177097913631445,
+        "p75_mm": 3.0187650114742604,
+        "p90_mm": 8.404169347005473,
+        "p95_mm": 10.753528185960386,
+        "p99_mm": 11.631609656523922,
+        "max_mm": 11.661058567944984
+      },
+      "contact_dist": {
+        "count": 39,
+        "mean_mm": -4.854196037810582,
+        "std_mm": 7.025254551773325,
+        "min_mm": -23.322122171521187,
+        "median_mm": -0.635417178273201,
+        "p75_mm": -0.2938583493232727,
+        "p90_mm": -0.10933242738246911,
+        "p95_mm": -0.036813691258430446,
+        "p99_mm": -0.012466609477996828,
+        "max_mm": -0.012224540114402771
+      }
+    },
+    "index_mcp": {
+      "distance_to_hand_mesh": {
+        "count": 11,
+        "mean_mm": 0.2295168390191778,
+        "std_mm": 0.23711537079601502,
+        "min_mm": 0.011452595828715008,
+        "median_mm": 0.10782514074089557,
+        "p75_mm": 0.39732233014770063,
+        "p90_mm": 0.5854729502611007,
+        "p95_mm": 0.6313840768900136,
+        "p99_mm": 0.6681129781931441,
+        "max_mm": 0.6772952035189266
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 11,
+        "mean_mm": 0.24681019487593303,
+        "std_mm": 0.2611982365480803,
+        "min_mm": 0.011456999565614273,
+        "median_mm": 0.11217148331598911,
+        "p75_mm": 0.42603584373415543,
+        "p90_mm": 0.63516503887023,
+        "p95_mm": 0.689464256293175,
+        "p99_mm": 0.7329036302315309,
+        "max_mm": 0.7437634737161198
+      },
+      "contact_dist": {
+        "count": 11,
+        "mean_mm": -0.49361552704464307,
+        "std_mm": 0.522402175152188,
+        "min_mm": -1.487521454691887,
+        "median_mm": -0.22435374557971954,
+        "p75_mm": -0.09872950613498688,
+        "p90_mm": -0.04180707037448883,
+        "p95_mm": -0.03235694020986557,
+        "p99_mm": -0.024796836078166955,
+        "max_mm": -0.02290681004524231
+      }
+    },
+    "index_pip": {
+      "distance_to_hand_mesh": {
+        "count": 13,
+        "mean_mm": 0.7298796408039803,
+        "std_mm": 0.3792202732783246,
+        "min_mm": 0.07425812652160872,
+        "median_mm": 0.8195202973328247,
+        "p75_mm": 0.9214705911468439,
+        "p90_mm": 1.1504969757396952,
+        "p95_mm": 1.2054113347025612,
+        "p99_mm": 1.2638325194885194,
+        "max_mm": 1.2784378156850091
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 13,
+        "mean_mm": 1.1158152748586752,
+        "std_mm": 0.7252671357313574,
+        "min_mm": 0.07837522556030513,
+        "median_mm": 0.9786958240314524,
+        "p75_mm": 1.6872246860401945,
+        "p90_mm": 2.09820814663419,
+        "p95_mm": 2.176920992547416,
+        "p99_mm": 2.240795827384153,
+        "max_mm": 2.2567645360933377
+      },
+      "contact_dist": {
+        "count": 13,
+        "mean_mm": -2.231658078156985,
+        "std_mm": 1.4505692516271302,
+        "min_mm": -4.513531923294067,
+        "median_mm": -1.9573792815208435,
+        "p75_mm": -1.0738205164670944,
+        "p90_mm": -0.2854991704225538,
+        "p95_mm": -0.19223950803279885,
+        "p99_mm": -0.16383670270442968,
+        "max_mm": -0.15673600137233734
+      }
+    },
+    "middle_dip": {
+      "distance_to_hand_mesh": {
+        "count": 144,
+        "mean_mm": 1.837351830548653,
+        "std_mm": 1.4598721039980453,
+        "min_mm": 0.005293750265303853,
+        "median_mm": 1.6202888256598733,
+        "p75_mm": 2.856833640578599,
+        "p90_mm": 3.7964249401332086,
+        "p95_mm": 4.209014677480775,
+        "p99_mm": 5.684743454051359,
+        "max_mm": 6.916862435196764
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 144,
+        "mean_mm": 2.9404672993271963,
+        "std_mm": 2.879246035961547,
+        "min_mm": 0.011146338424614793,
+        "median_mm": 2.241107295075998,
+        "p75_mm": 3.576630944089409,
+        "p90_mm": 5.961557122740086,
+        "p95_mm": 11.050962592853091,
+        "p99_mm": 12.320032435572248,
+        "max_mm": 12.669215422689422
+      },
+      "contact_dist": {
+        "count": 144,
+        "mean_mm": -5.880933610670683,
+        "std_mm": 5.758491956757031,
+        "min_mm": -25.33845789730549,
+        "median_mm": -4.482214339077473,
+        "p75_mm": -2.139681950211525,
+        "p90_mm": -0.5842110142111762,
+        "p95_mm": -0.27285804972052613,
+        "p99_mm": -0.03536067903041846,
+        "max_mm": -0.022292137145996094
+      }
+    },
+    "middle_mcp": {
+      "distance_to_hand_mesh": {
+        "count": 91,
+        "mean_mm": 0.32235544388875653,
+        "std_mm": 0.5506213034992282,
+        "min_mm": 0.0013782074245631524,
+        "median_mm": 0.09690606218875243,
+        "p75_mm": 0.2789247159165474,
+        "p90_mm": 0.7347195268110585,
+        "p95_mm": 1.8271016793674688,
+        "p99_mm": 2.364566334150312,
+        "max_mm": 2.422597366266451
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 91,
+        "mean_mm": 0.3502556520998956,
+        "std_mm": 0.57307773513985,
+        "min_mm": 0.00258386580968481,
+        "median_mm": 0.1054828590470007,
+        "p75_mm": 0.28254680794664866,
+        "p90_mm": 0.9773397084142897,
+        "p95_mm": 1.869217180795666,
+        "p99_mm": 2.3935219836018478,
+        "max_mm": 2.492690874661151
+      },
+      "contact_dist": {
+        "count": 91,
+        "mean_mm": -0.7005115090818196,
+        "std_mm": 1.14615204018869,
+        "min_mm": -4.98536229133606,
+        "median_mm": -0.21096691489219666,
+        "p75_mm": -0.12260675430297852,
+        "p90_mm": -0.05512312054634094,
+        "p95_mm": -0.03031175583600998,
+        "p99_mm": -0.010315328836441073,
+        "max_mm": -0.005168840289115906
+      }
+    },
+    "middle_pip": {
+      "distance_to_hand_mesh": {
+        "count": 211,
+        "mean_mm": 0.7635425765961474,
+        "std_mm": 0.555540785905709,
+        "min_mm": 0.0016160210834274132,
+        "median_mm": 0.6685435414013553,
+        "p75_mm": 1.009733794678048,
+        "p90_mm": 1.215530797647946,
+        "p95_mm": 1.7812054948836333,
+        "p99_mm": 3.0165711002524955,
+        "max_mm": 3.5645081874478826
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 211,
+        "mean_mm": 1.077678887411629,
+        "std_mm": 1.0107658391269214,
+        "min_mm": 0.001677081206415132,
+        "median_mm": 0.7795406458232685,
+        "p75_mm": 1.1738529320006394,
+        "p90_mm": 2.3348079169489036,
+        "p95_mm": 3.849175745155642,
+        "p99_mm": 4.614134563180944,
+        "max_mm": 4.970341400024701
+      },
+      "contact_dist": {
+        "count": 211,
+        "mean_mm": -2.155356497561197,
+        "std_mm": 2.0215300714708375,
+        "min_mm": -9.940683841705322,
+        "median_mm": -1.5590619295835495,
+        "p75_mm": -1.016145572066307,
+        "p90_mm": -0.5787834525108337,
+        "p95_mm": -0.4348158836364746,
+        "p99_mm": -0.05977861583232876,
+        "max_mm": -0.0033639371395111084
+      }
+    },
+    "palm": {
+      "distance_to_hand_mesh": {
+        "count": 417,
+        "mean_mm": 0.5556227263043143,
+        "std_mm": 0.5664596050939051,
+        "min_mm": 0.0008139105937930307,
+        "median_mm": 0.34453372194089804,
+        "p75_mm": 0.860551184856188,
+        "p90_mm": 1.3051586772388295,
+        "p95_mm": 1.8858486120046885,
+        "p99_mm": 2.2874072909894427,
+        "max_mm": 2.4651910744887506
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 417,
+        "mean_mm": 0.5651374651679868,
+        "std_mm": 0.574303833170798,
+        "min_mm": 0.0008201127247170481,
+        "median_mm": 0.3584871925356864,
+        "p75_mm": 0.8627683046601824,
+        "p90_mm": 1.31798108033654,
+        "p95_mm": 1.9039124970186212,
+        "p99_mm": 2.287413621318319,
+        "max_mm": 2.575479950323735
+      },
+      "contact_dist": {
+        "count": 417,
+        "mean_mm": -1.1302739274587563,
+        "std_mm": 1.1486080146654363,
+        "min_mm": -5.150977522134781,
+        "median_mm": -0.7169768214225769,
+        "p75_mm": -0.2004280686378479,
+        "p90_mm": -0.07557906210422495,
+        "p95_mm": -0.0344451516866684,
+        "p99_mm": -0.009508132934570361,
+        "max_mm": -0.0016316771507263184
+      }
+    },
+    "pinky_dip": {
+      "distance_to_hand_mesh": {
+        "count": 364,
+        "mean_mm": 1.5610150225190689,
+        "std_mm": 1.2905682096794322,
+        "min_mm": 0.0073195919046621935,
+        "median_mm": 1.3839422923447913,
+        "p75_mm": 2.535085487405667,
+        "p90_mm": 3.413884791952051,
+        "p95_mm": 3.8063543234317074,
+        "p99_mm": 4.901359641350806,
+        "max_mm": 5.282167136165126
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 364,
+        "mean_mm": 3.2154263360715336,
+        "std_mm": 2.6851076374141694,
+        "min_mm": 0.015168588707585584,
+        "median_mm": 2.0999270749625776,
+        "p75_mm": 5.43278824372022,
+        "p90_mm": 7.4816085888444395,
+        "p95_mm": 7.956312068599515,
+        "p99_mm": 8.72284694909412,
+        "max_mm": 9.95757947319988
+      },
+      "contact_dist": {
+        "count": 364,
+        "mean_mm": -6.430851200922996,
+        "std_mm": 5.370212612207194,
+        "min_mm": -19.915157929062843,
+        "median_mm": -4.199855960905552,
+        "p75_mm": -1.9123204983770847,
+        "p90_mm": -0.5203194916248324,
+        "p95_mm": -0.29328586533665707,
+        "p99_mm": -0.04183365032076833,
+        "max_mm": -0.03034062683582306
+      }
+    },
+    "pinky_mcp": {
+      "distance_to_hand_mesh": {
+        "count": 255,
+        "mean_mm": 0.7548189086411506,
+        "std_mm": 0.6968585749143339,
+        "min_mm": 0.001976767648255668,
+        "median_mm": 0.5587975521809605,
+        "p75_mm": 1.2113358594259935,
+        "p90_mm": 1.5787010510704498,
+        "p95_mm": 1.9238875475812311,
+        "p99_mm": 3.243267683421223,
+        "max_mm": 4.361926518940613
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 255,
+        "mean_mm": 1.1687056869908674,
+        "std_mm": 1.0516967583758035,
+        "min_mm": 0.002892147707943965,
+        "median_mm": 0.8836925494129684,
+        "p75_mm": 1.9766845443284984,
+        "p90_mm": 2.3401287219966918,
+        "p95_mm": 2.739830684269109,
+        "p99_mm": 4.87470934839939,
+        "max_mm": 5.408508051489
+      },
+      "contact_dist": {
+        "count": 255,
+        "mean_mm": -2.3374097604377595,
+        "std_mm": 2.103392702211083,
+        "min_mm": -10.817000642418861,
+        "median_mm": -1.7673801630735397,
+        "p75_mm": -0.5690567195415497,
+        "p90_mm": -0.16291141510009768,
+        "p95_mm": -0.08044634014368068,
+        "p99_mm": -0.02071030437946318,
+        "max_mm": -0.005783513188362122
+      }
+    },
+    "pinky_pip": {
+      "distance_to_hand_mesh": {
+        "count": 456,
+        "mean_mm": 1.6439009429017255,
+        "std_mm": 1.2381241577183684,
+        "min_mm": 0.00022776942144364632,
+        "median_mm": 1.4445972483806089,
+        "p75_mm": 2.3340335355066184,
+        "p90_mm": 3.3309138461535044,
+        "p95_mm": 3.9809942422471125,
+        "p99_mm": 5.380823778396287,
+        "max_mm": 6.56958680902725
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 456,
+        "mean_mm": 2.475081380398672,
+        "std_mm": 2.1477815159968876,
+        "min_mm": 0.000247369982015605,
+        "median_mm": 1.9426847076069453,
+        "p75_mm": 3.003402617193619,
+        "p90_mm": 6.115464267751919,
+        "p95_mm": 7.327842867530854,
+        "p99_mm": 8.725411082021559,
+        "max_mm": 9.255694389183681
+      },
+      "contact_dist": {
+        "count": 456,
+        "mean_mm": -4.950158800439615,
+        "std_mm": 4.295562026320429,
+        "min_mm": -18.511388450860977,
+        "median_mm": -3.8853660225868225,
+        "p75_mm": -1.9867965020239353,
+        "p90_mm": -0.563264824450016,
+        "p95_mm": -0.1646941527724266,
+        "p99_mm": -0.015992391854524723,
+        "max_mm": -0.0004898756742477417
+      }
+    },
+    "ring_dip": {
+      "distance_to_hand_mesh": {
+        "count": 243,
+        "mean_mm": 1.831864590320026,
+        "std_mm": 1.6389458762660212,
+        "min_mm": 0.0036107038305241146,
+        "median_mm": 1.4072110260308253,
+        "p75_mm": 3.178295421986223,
+        "p90_mm": 4.253757803625473,
+        "p95_mm": 4.689064348493067,
+        "p99_mm": 5.23796086652082,
+        "max_mm": 5.377045214427446
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 243,
+        "mean_mm": 2.6923881879205305,
+        "std_mm": 2.571666594234395,
+        "min_mm": 0.004523306163430746,
+        "median_mm": 1.874766914996509,
+        "p75_mm": 4.344857651414992,
+        "p90_mm": 6.253939387710542,
+        "p95_mm": 7.360290265787562,
+        "p99_mm": 9.956955390265035,
+        "max_mm": 10.404314365950556
+      },
+      "contact_dist": {
+        "count": 243,
+        "mean_mm": -5.38477878404375,
+        "std_mm": 5.14333448881149,
+        "min_mm": -20.8086296916008,
+        "median_mm": -3.749549388885498,
+        "p75_mm": -0.7976684719324112,
+        "p90_mm": -0.24435371160507185,
+        "p95_mm": -0.09432677179574978,
+        "p99_mm": -0.028314888477325533,
+        "max_mm": -0.009043142199516296
+      }
+    },
+    "ring_mcp": {
+      "distance_to_hand_mesh": {
+        "count": 89,
+        "mean_mm": 0.9368984948068213,
+        "std_mm": 0.9002448225236133,
+        "min_mm": 0.006151857550478331,
+        "median_mm": 0.5181426023629588,
+        "p75_mm": 1.444688926697241,
+        "p90_mm": 2.3194731531078543,
+        "p95_mm": 2.7997244847542575,
+        "p99_mm": 3.6750411620050243,
+        "max_mm": 3.8463913507464986
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 89,
+        "mean_mm": 1.43146000910301,
+        "std_mm": 1.537437343698226,
+        "min_mm": 0.013352537099463324,
+        "median_mm": 0.6739833979253034,
+        "p75_mm": 1.8596014042657136,
+        "p90_mm": 4.120260828179194,
+        "p95_mm": 5.011102528819253,
+        "p99_mm": 5.274271022230524,
+        "max_mm": 5.288672600011656
+      },
+      "contact_dist": {
+        "count": 89,
+        "mean_mm": -2.86291991726736,
+        "std_mm": 3.0748736100267102,
+        "min_mm": -10.57734526693821,
+        "median_mm": -1.3479813933372498,
+        "p75_mm": -0.7325094193220139,
+        "p90_mm": -0.2799820154905318,
+        "p95_mm": -0.1339796930551529,
+        "p99_mm": -0.053545162081718306,
+        "max_mm": -0.026715919375419617
+      }
+    },
+    "ring_pip": {
+      "distance_to_hand_mesh": {
+        "count": 139,
+        "mean_mm": 1.0936079678288126,
+        "std_mm": 1.293192220936273,
+        "min_mm": 0.0012508864481112127,
+        "median_mm": 0.8028752127346234,
+        "p75_mm": 1.4410835369933235,
+        "p90_mm": 1.9675902407704438,
+        "p95_mm": 4.778859176813219,
+        "p99_mm": 6.072237031715091,
+        "max_mm": 6.799881177085905
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 139,
+        "mean_mm": 1.9801500102997467,
+        "std_mm": 1.913562944461895,
+        "min_mm": 0.010564362995069132,
+        "median_mm": 1.3865878351907168,
+        "p75_mm": 2.8361606075240493,
+        "p90_mm": 4.393990229061968,
+        "p95_mm": 5.360837047597989,
+        "p99_mm": 9.035322196332304,
+        "max_mm": 9.220567149511888
+      },
+      "contact_dist": {
+        "count": 139,
+        "mean_mm": -3.9603140325747805,
+        "std_mm": 3.827118891515082,
+        "min_mm": -18.44111829996109,
+        "median_mm": -2.773292362689972,
+        "p75_mm": -1.3305889442563057,
+        "p90_mm": -0.4703436046838759,
+        "p95_mm": -0.27048438787460344,
+        "p99_mm": -0.03695525228977189,
+        "max_mm": -0.020913779735565186
+      }
+    },
+    "thumb_cmc": {
+      "distance_to_hand_mesh": {
+        "count": 1,
+        "mean_mm": 0.021271413397820745,
+        "std_mm": 0.0,
+        "min_mm": 0.021271413397820745,
+        "median_mm": 0.021271413397820745,
+        "p75_mm": 0.021271413397820745,
+        "p90_mm": 0.021271413397820745,
+        "p95_mm": 0.021271413397820745,
+        "p99_mm": 0.021271413397820745,
+        "max_mm": 0.021271413397820745
+      },
+      "abs_distance_to_ball_surface": {
+        "count": 1,
+        "mean_mm": 0.16833197850339363,
+        "std_mm": 0.0,
+        "min_mm": 0.16833197850339363,
+        "median_mm": 0.16833197850339363,
+        "p75_mm": 0.16833197850339363,
+        "p90_mm": 0.16833197850339363,
+        "p95_mm": 0.16833197850339363,
+        "p99_mm": 0.16833197850339363,
+        "max_mm": 0.16833197850339363
+      },
+      "contact_dist": {
+        "count": 1,
+        "mean_mm": -0.3366731107234955,
+        "std_mm": 0.0,
+        "min_mm": -0.3366731107234955,
+        "median_mm": -0.3366731107234955,
+        "p75_mm": -0.3366731107234955,
+        "p90_mm": -0.3366731107234955,
+        "p95_mm": -0.3366731107234955,
+        "p99_mm": -0.3366731107234955,
+        "max_mm": -0.3366731107234955
+      }
+    }
+  },
+  "largest_distance_contacts": [
+    {
+      "frame": 535,
+      "contact_index": 5,
+      "link_name": "middle_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.26145219802856445,
+        0.0850832462310791,
+        0.12857921421527863
+      ],
+      "contact_dist_m": -0.01465571578592062,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.006916862435196764,
+      "signed_distance_to_ball_surface_m": -0.007327851195430071,
+      "abs_distance_to_ball_surface_m": 0.007327851195430071
+    },
+    {
+      "frame": 554,
+      "contact_index": 4,
+      "link_name": "ring_pip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.22888293862342834,
+        0.0926421731710434,
+        0.10368525236845016
+      ],
+      "contact_dist_m": -0.017119234427809715,
+      "normal_force_proxy_N": 7.946575164794922,
+      "distance_to_hand_mesh_m": 0.006799881177085905,
+      "signed_distance_to_ball_surface_m": -0.008559620436718696,
+      "abs_distance_to_ball_surface_m": 0.008559620436718696
+    },
+    {
+      "frame": 439,
+      "contact_index": 2,
+      "link_name": "pinky_pip",
+      "object_name": "ball_098",
+      "pos_world": [
+        -0.16283901035785675,
+        0.02409341186285019,
+        0.0969354435801506
+      ],
+      "contact_dist_m": -0.015339862555265427,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.00656958680902725,
+      "signed_distance_to_ball_surface_m": -0.007669921369654706,
+      "abs_distance_to_ball_surface_m": 0.007669921369654706
+    },
+    {
+      "frame": 450,
+      "contact_index": 2,
+      "link_name": "pinky_pip",
+      "object_name": "ball_098",
+      "pos_world": [
+        -0.1696169078350067,
+        0.031842779368162155,
+        0.0951586589217186
+      ],
+      "contact_dist_m": -0.017496244981884956,
+      "normal_force_proxy_N": 0.09308891743421555,
+      "distance_to_hand_mesh_m": 0.00638106554546787,
+      "signed_distance_to_ball_surface_m": -0.008748117041964189,
+      "abs_distance_to_ball_surface_m": 0.008748117041964189
+    },
+    {
+      "frame": 553,
+      "contact_index": 8,
+      "link_name": "ring_pip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.2267109453678131,
+        0.09006146341562271,
+        0.10287975519895554
+      ],
+      "contact_dist_m": -0.015001489780843258,
+      "normal_force_proxy_N": 5.218295574188232,
+      "distance_to_hand_mesh_m": 0.006274380685084772,
+      "signed_distance_to_ball_surface_m": -0.00750074726124977,
+      "abs_distance_to_ball_surface_m": 0.00750074726124977
+    },
+    {
+      "frame": 438,
+      "contact_index": 4,
+      "link_name": "pinky_pip",
+      "object_name": "ball_098",
+      "pos_world": [
+        -0.16144409775733948,
+        0.02397856116294861,
+        0.09994376450777054
+      ],
+      "contact_dist_m": -0.01415947824716568,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.006058523606314093,
+      "signed_distance_to_ball_surface_m": -0.007079736651508774,
+      "abs_distance_to_ball_surface_m": 0.007079736651508774
+    },
+    {
+      "frame": 552,
+      "contact_index": 4,
+      "link_name": "ring_pip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.22512942552566528,
+        0.089898020029068,
+        0.10252930968999863
+      ],
+      "contact_dist_m": -0.012843122705817223,
+      "normal_force_proxy_N": 4.046745300292969,
+      "distance_to_hand_mesh_m": 0.0057424237025329745,
+      "signed_distance_to_ball_surface_m": -0.006421561481997223,
+      "abs_distance_to_ball_surface_m": 0.006421561481997223
+    },
+    {
+      "frame": 534,
+      "contact_index": 6,
+      "link_name": "middle_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.2581000328063965,
+        0.08461974561214447,
+        0.12889695167541504
+      ],
+      "contact_dist_m": -0.013261467218399048,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.0057029631338170635,
+      "signed_distance_to_ball_surface_m": -0.006630764310587178,
+      "abs_distance_to_ball_surface_m": 0.006630764310587178
+    },
+    {
+      "frame": 536,
+      "contact_index": 5,
+      "link_name": "middle_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.2646414041519165,
+        0.0852372795343399,
+        0.12795744836330414
+      ],
+      "contact_dist_m": -0.016166353598237038,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005660591785524729,
+      "signed_distance_to_ball_surface_m": -0.008083175717997704,
+      "abs_distance_to_ball_surface_m": 0.008083175717997704
+    },
+    {
+      "frame": 545,
+      "contact_index": 2,
+      "link_name": "middle_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.26373380422592163,
+        0.0921495258808136,
+        0.12653383612632751
+      ],
+      "contact_dist_m": -0.02480645477771759,
+      "normal_force_proxy_N": 6.82257604598999,
+      "distance_to_hand_mesh_m": 0.005551929830321017,
+      "signed_distance_to_ball_surface_m": -0.012403228056009675,
+      "abs_distance_to_ball_surface_m": 0.012403228056009675
+    },
+    {
+      "frame": 556,
+      "contact_index": 4,
+      "link_name": "ring_pip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.23050588369369507,
+        0.09462592750787735,
+        0.10305675864219666
+      ],
+      "contact_dist_m": -0.018302368000149727,
+      "normal_force_proxy_N": 1.089228868484497,
+      "distance_to_hand_mesh_m": 0.005474864671277777,
+      "signed_distance_to_ball_surface_m": -0.009151181346460577,
+      "abs_distance_to_ball_surface_m": 0.009151181346460577
+    },
+    {
+      "frame": 555,
+      "contact_index": 1,
+      "link_name": "ring_pip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.2311994433403015,
+        0.09228605777025223,
+        0.10323157906532288
+      ],
+      "contact_dist_m": -0.017692577093839645,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005458317800579143,
+      "signed_distance_to_ball_surface_m": -0.008846288846123013,
+      "abs_distance_to_ball_surface_m": 0.008846288846123013
+    },
+    {
+      "frame": 440,
+      "contact_index": 3,
+      "link_name": "pinky_pip",
+      "object_name": "ball_098",
+      "pos_world": [
+        -0.16389191150665283,
+        0.024861836805939674,
+        0.09509732574224472
+      ],
+      "contact_dist_m": -0.01521386206150055,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005436191095084435,
+      "signed_distance_to_ball_surface_m": -0.007606916865065441,
+      "abs_distance_to_ball_surface_m": 0.007606916865065441
+    },
+    {
+      "frame": 441,
+      "contact_index": 1,
+      "link_name": "pinky_pip",
+      "object_name": "ball_098",
+      "pos_world": [
+        -0.16598491370677948,
+        0.02473815530538559,
+        0.0938723087310791
+      ],
+      "contact_dist_m": -0.016341105103492737,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.00541275089578233,
+      "signed_distance_to_ball_surface_m": -0.008170554305251657,
+      "abs_distance_to_ball_surface_m": 0.008170554305251657
+    },
+    {
+      "frame": 533,
+      "contact_index": 2,
+      "link_name": "ring_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.2472485899925232,
+        0.08565675467252731,
+        0.10078684240579605
+      ],
+      "contact_dist_m": -0.012583456933498383,
+      "normal_force_proxy_N": 0.10068459808826447,
+      "distance_to_hand_mesh_m": 0.005377045214427447,
+      "signed_distance_to_ball_surface_m": -0.006291727634075921,
+      "abs_distance_to_ball_surface_m": 0.006291727634075921
+    },
+    {
+      "frame": 442,
+      "contact_index": 2,
+      "link_name": "pinky_pip",
+      "object_name": "ball_098",
+      "pos_world": [
+        -0.16769158840179443,
+        0.024827243760228157,
+        0.09527032822370529
+      ],
+      "contact_dist_m": -0.017413660883903503,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005354701591444071,
+      "signed_distance_to_ball_surface_m": -0.008706833478432135,
+      "abs_distance_to_ball_surface_m": 0.008706833478432135
+    },
+    {
+      "frame": 559,
+      "contact_index": 1,
+      "link_name": "ring_dip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.2507111728191376,
+        0.09800492227077484,
+        0.09655052423477173
+      ],
+      "contact_dist_m": -0.013291215524077415,
+      "normal_force_proxy_N": 0.2790314257144928,
+      "distance_to_hand_mesh_m": 0.005283023596638871,
+      "signed_distance_to_ball_surface_m": -0.006645626668571769,
+      "abs_distance_to_ball_surface_m": 0.006645626668571769
+    },
+    {
+      "frame": 552,
+      "contact_index": 6,
+      "link_name": "pinky_dip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.2073095291852951,
+        0.08518330752849579,
+        0.07001082599163055
+      ],
+      "contact_dist_m": -0.014768300577998161,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005282167136165126,
+      "signed_distance_to_ball_surface_m": -0.007384124851077305,
+      "abs_distance_to_ball_surface_m": 0.007384124851077305
+    },
+    {
+      "frame": 534,
+      "contact_index": 4,
+      "link_name": "ring_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.24862585961818695,
+        0.08652956783771515,
+        0.09979695081710815
+      ],
+      "contact_dist_m": -0.012721704319119453,
+      "normal_force_proxy_N": 0.01755845732986927,
+      "distance_to_hand_mesh_m": 0.005258108571668048,
+      "signed_distance_to_ball_surface_m": -0.006360868479098409,
+      "abs_distance_to_ball_surface_m": 0.006360868479098409
+    },
+    {
+      "frame": 750,
+      "contact_index": 1,
+      "link_name": "ring_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.28765636682510376,
+        0.06905286014080048,
+        0.09673312306404114
+      ],
+      "contact_dist_m": -0.01123821921646595,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005210137845127029,
+      "signed_distance_to_ball_surface_m": -0.005619132061472746,
+      "abs_distance_to_ball_surface_m": 0.005619132061472746
+    },
+    {
+      "frame": 557,
+      "contact_index": 0,
+      "link_name": "ring_pip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.23224098980426788,
+        0.09202609956264496,
+        0.10395081341266632
+      ],
+      "contact_dist_m": -0.01844111829996109,
+      "normal_force_proxy_N": 0.123444102704525,
+      "distance_to_hand_mesh_m": 0.005186692634581297,
+      "signed_distance_to_ball_surface_m": -0.009220567149511888,
+      "abs_distance_to_ball_surface_m": 0.009220567149511888
+    },
+    {
+      "frame": 749,
+      "contact_index": 2,
+      "link_name": "ring_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.28760576248168945,
+        0.06913124769926071,
+        0.09626604616641998
+      ],
+      "contact_dist_m": -0.010432491078972816,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005120507002114091,
+      "signed_distance_to_ball_surface_m": -0.005216241987333819,
+      "abs_distance_to_ball_surface_m": 0.005216241987333819
+    },
+    {
+      "frame": 558,
+      "contact_index": 2,
+      "link_name": "ring_pip",
+      "object_name": "ball_097",
+      "pos_world": [
+        -0.2303856611251831,
+        0.092242032289505,
+        0.0998879224061966
+      ],
+      "contact_dist_m": -0.013926617801189423,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.005106801364802042,
+      "signed_distance_to_ball_surface_m": -0.006963302833097221,
+      "abs_distance_to_ball_surface_m": 0.006963302833097221
+    },
+    {
+      "frame": 386,
+      "contact_index": 4,
+      "link_name": "ring_dip",
+      "object_name": "ball_050",
+      "pos_world": [
+        -0.20147502422332764,
+        -0.03554355353116989,
+        0.11476967483758926
+      ],
+      "contact_dist_m": -0.012995745986700058,
+      "normal_force_proxy_N": 0.0,
+      "distance_to_hand_mesh_m": 0.0051004301761119215,
+      "signed_distance_to_ball_surface_m": -0.006497875457580248,
+      "abs_distance_to_ball_surface_m": 0.006497875457580248
+    },
+    {
+      "frame": 532,
+      "contact_index": 1,
+      "link_name": "ring_dip",
+      "object_name": "ball_065",
+      "pos_world": [
+        -0.2461705505847931,
+        0.0846976712346077,
+        0.10175872594118118
+      ],
+      "contact_dist_m": -0.012558184564113617,
+      "normal_force_proxy_N": 0.09757199883460999,
+      "distance_to_hand_mesh_m": 0.005096764991169324,
+      "signed_distance_to_ball_surface_m": -0.006279080134900417,
+      "abs_distance_to_ball_surface_m": 0.006279080134900417
+    }
+  ]
+}

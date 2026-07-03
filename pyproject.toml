@@ -1,0 +1,24 @@
+[project]
+name = "mujoco-warp-contactbench"
+version = "0.1.0"
+description = "Standalone MuJoCo CPU and MJX-Warp GPU contact export and Rerun visualization pipeline."
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "ipykernel",
+  "jupyterlab",
+  "numpy",
+  "pandas",
+  "mujoco==3.10.0",
+  "rerun-sdk[notebook]==0.33.1",
+  "rerun-notebook==0.33.1",
+  "trimesh",
+  "pylance==0.24.1",
+  "pyarrow==24.0.0",
+  "pydantic>=2.0.0",
+  "jsonc-parser>=1.1.5",
+  "pyyaml>=6.0.0",
+  "loguru>=0.7.0",
+]
+
+[tool.uv]
+package = false
