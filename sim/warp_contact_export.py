@@ -18,8 +18,8 @@ for path in (REPO_ROOT, REPO_ROOT / "sim"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from benchmarks.ball_pit.common import BallPitSpec, physics_dt, spec_from_args  # noqa: E402
-from common.contact_schema import (  # noqa: E402
+from sim.benchmarks.ball_pit.common import BallPitSpec, physics_dt, spec_from_args  # noqa: E402
+from sim.common.contact_schema import (  # noqa: E402
     LANCE_GENERATED_SCHEMA,
     make_contact_entry,
     make_contact_pair,

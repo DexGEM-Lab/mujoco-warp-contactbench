@@ -10,7 +10,8 @@ Use this skill when working in this repository, especially for simulation export
 - Preserve `--device cpu|gpu` semantics in Python CLIs and `DEVICE=cpu|gpu` semantics in shell scripts.
 - Generated artifacts belong under `outputs/`, not `logs/`.
 - `lance_manager` lives under `3rd_party/lance_manager`.
-- Source code should live in normal repo packages such as `sim/`; do not recreate `docker/mujoco_mjx/` as a source package.
+- Source code should live under `sim/`; do not recreate root-level `benchmarks/`, root-level `common/`, or `docker/mujoco_mjx/` as source packages.
+- Scenario helpers live under `sim/benchmarks/`; schema helpers live under `sim/common/`.
 
 ## Protect Generated Lance Data
 

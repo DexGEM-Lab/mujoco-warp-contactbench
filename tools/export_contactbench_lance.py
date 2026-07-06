@@ -15,8 +15,8 @@ for path in (REPO_ROOT, THIRD_PARTY):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from benchmarks.ball_pit.common import BallPitSpec, hand_pose_at  # noqa: E402
-from common.contact_schema import validate_contact_sequence  # noqa: E402
+from sim.benchmarks.ball_pit.common import BallPitSpec, hand_pose_at  # noqa: E402
+from sim.common.contact_schema import validate_contact_sequence  # noqa: E402
 from lance_manager.lance_dataset_manager import LanceDatasetManager  # noqa: E402
 from lance_manager.schema.manager import SchemaManager  # noqa: E402
 from lance_manager.schema.utils.converter import DictToArrowConverter  # noqa: E402

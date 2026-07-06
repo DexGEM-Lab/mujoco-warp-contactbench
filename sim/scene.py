@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from benchmarks.ball_pit.common import (  # noqa: E402
+from sim.benchmarks.ball_pit.common import (  # noqa: E402
     BallPitSpec,
     ball_color_rgba,
     ball_initial_positions,
