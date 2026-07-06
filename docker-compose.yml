@@ -1,0 +1,35 @@
+x-contactbench-base: &contactbench-base
+  image: mujoco-warp-contactbench:latest
+  build:
+    context: .
+    dockerfile: Dockerfile
+  working_dir: /workspace/mujoco-warp-contactbench
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+  environment:
+    HOME: /tmp
+    DISPLAY: "${DISPLAY}"
+    XAUTHORITY: /tmp/.docker.xauth
+    MUJOCO_GL: "${MUJOCO_GL:-glfw}"
+    PYOPENGL_PLATFORM: "${PYOPENGL_PLATFORM:-glx}"
+    NVIDIA_VISIBLE_DEVICES: "${NVIDIA_VISIBLE_DEVICES:-all}"
+    NVIDIA_DRIVER_CAPABILITIES: "${NVIDIA_DRIVER_CAPABILITIES:-compute,utility,graphics,display}"
+    XLA_PYTHON_CLIENT_PREALLOCATE: "${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+    QT_X11_NO_MITSHM: "1"
+  volumes:
+    - .:/workspace/mujoco-warp-contactbench
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    - ./.tmp/docker.xauth:/tmp/.docker.xauth:ro
+  network_mode: host
+  ipc: host
+  stdin_open: true
+  tty: true
+  command: ["bash"]
+
+services:
+  contactbench:
+    <<: *contactbench-base
+
+  contactbench-gpu:
+    <<: *contactbench-base
+    profiles: ["gpu"]
+    gpus: all

@@ -45,16 +45,23 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       libegl1 \
       libgl1 \
       libglew2.2 \
+      libglfw3 \
       libglvnd0 \
       libglx0 \
+      libice6 \
       libosmesa6 \
+      libsm6 \
       libx11-6 \
+      libxcursor1 \
       libxext6 \
+      libxfixes3 \
       libxi6 \
       libxinerama1 \
+      libxkbcommon0 \
       libxrandr2 \
       libxrender1 \
-      libxxf86vm1
+      libxxf86vm1 \
+      x11-apps
 
 # Install only Python tooling in conda. Project dependencies go into the uv
 # virtualenv below, so changing Python deps does not require re-solving CUDA.

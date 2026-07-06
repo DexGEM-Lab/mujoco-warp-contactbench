@@ -8,10 +8,10 @@ This repo is intentionally decoupled from the larger `contactbench` workspace. T
 
 ```text
 assets/mano_hand_s02/        submodule: MANO MJCF/URDF/STL assets used by simulation
-benchmarks/ball_pit/         deterministic ball-pit scenario and camera helpers
-common/                      contact schema helpers and validators
 3rd_party/lance_manager/     submodule: generated_data Lance writer/schema stack
-sim/                         MJX-Warp simulation and export code
+sim/                         MJX-Warp simulation, scenarios, schema helpers, and export code
+sim/benchmarks/ball_pit/     deterministic ball-pit scenario and camera helpers
+sim/common/                  contact schema helpers and validators
 scripts/                     build, sim-to-Lance, smoke test, and env helper scripts
 outputs/                     generated outputs; ignored by git
 Dockerfile                   Debian + Miniforge + CUDA + uv runtime image
@@ -54,6 +54,22 @@ mujoco-warp-contactbench:latest
 ```
 
 The image does not copy repo source code. Runtime scripts mount the workspace at `/workspace/mujoco-warp-contactbench`, so code changes do not require image rebuilds unless dependencies or the Dockerfile change.
+
+## Docker X11 Viewer
+
+`docker-compose.yml` forwards the host X11 socket and an xauth cookie into the container so GUI tools such as `mujoco.viewer` can open on the host display. From an active X11 desktop/session:
+
+```bash
+scripts/run_x11_viewer.sh
+```
+
+By default this opens the 3x3x3 puzzle cube asset at `.tmp/mujoco_cube/cube_3x3x3.xml`. To open another MJCF model:
+
+```bash
+MODEL_XML=path/to/model.xml scripts/run_x11_viewer.sh
+```
+
+The host needs `xauth` installed. The script writes the temporary cookie file to `.tmp/docker.xauth` and runs the compose service as the current UID/GID.
 
 ## Sim-to-Lance Export
 
