@@ -57,19 +57,20 @@ The image does not copy repo source code. Runtime scripts mount the workspace at
 
 ## Docker X11 Viewer
 
-`docker-compose.yml` forwards the host X11 socket and an xauth cookie into the container so GUI tools such as `mujoco.viewer` can open on the host display. From an active X11 desktop/session:
+`docker-compose.yml` forwards the host X11 socket and `${HOME}/.Xauthority` into the container so GUI tools such as `mujoco.viewer` can open on the host display. From an active X11 desktop/session:
 
 ```bash
-scripts/run_x11_viewer.sh
+HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose --profile gpu run --rm contactbench-gpu bash
 ```
 
-By default this opens the 3x3x3 puzzle cube asset at `.tmp/mujoco_cube/cube_3x3x3.xml`. To open another MJCF model:
+Inside the container, run GUI tools directly, for example:
 
 ```bash
-MODEL_XML=path/to/model.xml scripts/run_x11_viewer.sh
+xclock
+python -m mujoco.viewer path/to/model.xml
 ```
 
-The host needs `xauth` installed. The script writes the temporary cookie file to `.tmp/docker.xauth` and runs the compose service as the current UID/GID.
+The compose service uses host networking so SSH X11 forwarding values such as `DISPLAY=localhost:16.0` continue to work inside the container.
 
 ## Sim-to-Lance Export
 

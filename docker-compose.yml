@@ -8,7 +8,7 @@ x-contactbench-base: &contactbench-base
   environment:
     HOME: /tmp
     DISPLAY: "${DISPLAY}"
-    XAUTHORITY: /tmp/.docker.xauth
+    XAUTHORITY: /tmp/.Xauthority
     MUJOCO_GL: "${MUJOCO_GL:-glfw}"
     PYOPENGL_PLATFORM: "${PYOPENGL_PLATFORM:-glx}"
     NVIDIA_VISIBLE_DEVICES: "${NVIDIA_VISIBLE_DEVICES:-all}"
@@ -18,7 +18,7 @@ x-contactbench-base: &contactbench-base
   volumes:
     - .:/workspace/mujoco-warp-contactbench
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    - ./.tmp/docker.xauth:/tmp/.docker.xauth:ro
+    - ${HOME}/.Xauthority:/tmp/.Xauthority:ro
   network_mode: host
   ipc: host
   stdin_open: true
