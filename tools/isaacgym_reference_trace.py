@@ -36,23 +36,23 @@ SOURCE_REPO = TARGET_REPO.parent / "manohand_reconstruction"
 RUNTIME_CWD = SOURCE_REPO / "IsaacGymEnvs/isaacgymenvs"
 DATASET_PATH = Path(
     "/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/"
-    "20260605_133735.lance"
+    "npy_s02_v3.lance"
 )
 LANCE_BASE_PATH = DATASET_PATH.parent
-LANCE_INDEX_PATH = "cfg/lance_human_p1_remake_combined_index.json"
-EXPECTED_DATASET_VERSION = 3325
+LANCE_INDEX_PATH = "cfg/lance_human_p1_remake_npy_s02_v3_index.json"
+EXPECTED_DATASET_VERSION = 132
 ROW_INDEX = 1
 OBJECT_INDEX = 0
-UUID = "e49b87fb-51c1-44eb-aade-666b5e617959"
-FILE_UUID = "20260528022141_a5fb81e3"
-TRAJECTORY_NAME = "powerdrill_02_002"
-OBJECT_TYPE = "powerdrill"
-ACTION_ID = "02"
-SEQUENCE_ID = "002"
-SOURCE_START = 10
-SOURCE_STOP = 604
-REFERENCE_FRAMES = 594
-PHYSICS_CALLS = 593
+UUID = "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3"
+FILE_UUID = "e6fe4732-72cd-5ab7-93e6-2e62dc0263a5"
+TRAJECTORY_NAME = "cube1_01_009"
+OBJECT_TYPE = "cube1"
+ACTION_ID = "01"
+SEQUENCE_ID = "009"
+SOURCE_START = 440
+SOURCE_STOP = 1232
+REFERENCE_FRAMES = 792
+PHYSICS_CALLS = 791
 DOFS = 26
 
 EXPECTED_IDENTITY = {
@@ -124,7 +124,7 @@ SOURCE_HASH_PATHS = (
     "IsaacGymEnvs/isaacgymenvs/cfg/config.yaml",
 )
 
-# (shape after the fixed 593-step axis, exact output dtype)
+# (shape after the fixed 791-step axis, exact output dtype)
 REQUIRED_ARRAY_SPECS: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {
     "target_index": ((), np.dtype("int64")),
     "reference_index": ((), np.dtype("int64")),
@@ -221,13 +221,15 @@ def normalize_action_ids(actions: Any) -> tuple[str, ...] | None:
 
 
 def derive_row_identity(row: Mapping[str, Any], object_index: int = OBJECT_INDEX) -> str:
-    """Derive ``object_action_sequence`` from an authoritative Lance row."""
-    index = row["index"]
-    metadata = row["trajectory_metadata"]
-    object_name = str(metadata["object_names"][object_index])
-    raw_id = int(metadata["raw_data_info"]["id"])
-    gesture = str(index["gesture"]).split("-", 1)[0]
-    return f"{object_name}_{raw_id + 1:02d}_{gesture}"
+    """Derive ``object_action_sequence`` from an authoritative source path."""
+    del object_index
+    source_path = row["index"].get("source_path")
+    if not isinstance(source_path, str) or not source_path:
+        raise ValueError("row index must contain a non-empty source_path")
+    identity = Path(source_path).parent.name
+    if identity.count("_") != 2:
+        raise ValueError(f"source path does not encode an object_action_sequence: {source_path!r}")
+    return identity
 
 
 def validate_row_identity(row: Mapping[str, Any]) -> str:
@@ -242,15 +244,15 @@ def validate_row_identity(row: Mapping[str, Any]) -> str:
     if identity != TRAJECTORY_NAME:
         raise ValueError(f"row identity mismatch: {identity!r}")
     if metadata["object_names"][OBJECT_INDEX] != OBJECT_TYPE:
-        raise ValueError("object index 0 is not powerdrill")
+        raise ValueError(f"object index 0 is not {OBJECT_TYPE}")
     if metadata["hand_names"] != ["right"]:
         raise ValueError("accepted row must contain exactly the right hand")
-    if int(metadata["total_frames"]) != 605:
-        raise ValueError("accepted row must contain 605 source frames")
-    if int(metadata["data_fps"]) != 100:
-        raise ValueError("accepted row must be 100 Hz")
+    if int(metadata["total_frames"]) != 1373:
+        raise ValueError("accepted row must contain 1373 source frames")
+    if int(metadata["data_fps"]) != 111:
+        raise ValueError("accepted row must be 111 Hz")
     expected_move = [
-        {"object_name": OBJECT_TYPE, "start_frame": 260, "end_frame": 444}
+        {"object_name": OBJECT_TYPE, "start_frame": 690, "end_frame": 982}
     ]
     if metadata["trajectory_info"]["object_move"] != expected_move:
         raise ValueError("movement-frame identity mismatch")
@@ -272,9 +274,9 @@ def select_strict_index_entry(
 ) -> dict[str, Any]:
     """Return the sole exact index match; reject broad matches and ambiguity."""
     if {str(value) for value in object_types} != {OBJECT_TYPE}:
-        raise ValueError("wrapper requires object_types={'powerdrill'}")
+        raise ValueError(f"wrapper requires object_types={{{OBJECT_TYPE!r}}}")
     if set(normalize_action_ids(actions) or ()) != {ACTION_ID}:
-        raise ValueError("wrapper requires action filter {'02'}")
+        raise ValueError(f"wrapper requires action filter {{{ACTION_ID!r}}}")
 
     expected_path = os.path.realpath(DATASET_PATH)
     matches: list[dict[str, Any]] = []
@@ -303,7 +305,7 @@ def select_strict_index_entry(
 
 
 def schedule_point(physical_call: int) -> SchedulePoint:
-    """Map one of the exactly 593 physical calls to target/reference frames."""
+    """Map one of the exactly 791 physical calls to target/reference frames."""
     if not 0 <= physical_call < PHYSICS_CALLS:
         raise ValueError(f"physical_call must be in [0,{PHYSICS_CALLS})")
     target = max(physical_call - 1, 0)
@@ -323,7 +325,7 @@ def validate_terminal_policy(
     trajectory_complete: bool,
     termination_reason_code: int,
 ) -> None:
-    """Require no early reset and the sole completion reset on call 592."""
+    """Require no early reset and the sole completion reset on call 790."""
     if physical_call < PHYSICS_CALLS - 1:
         if reset or trajectory_complete:
             raise RuntimeError(f"early reset on physical call {physical_call}")
@@ -823,7 +825,7 @@ def _capture_record(
 
 
 def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool = True) -> tuple[Path, Path]:
-    """Run the fixed 593-call replay and return final NPZ/JSON paths."""
+    """Run the fixed 791-call replay and return final NPZ/JSON paths."""
     if device != "cuda:0":
         raise ValueError("the settled reference trace requires device cuda:0")
     if headless is not True:
@@ -909,7 +911,7 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
         if int(env.control_freq_inv) != 1:
             raise RuntimeError("constructed environment control frequency mismatch")
         if _numpy(env.env_trajectory_lengths, "int64").tolist() != [REFERENCE_FRAMES]:
-            raise RuntimeError("trajectory length is not 594")
+            raise RuntimeError("trajectory length is not 792")
         mocap = env.env_mocap_data[0]
         expected_slice = {
             "original_start_frame": SOURCE_START,
@@ -1010,7 +1012,7 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
 
         arrays = _stack_records(records)
         if len(records) != PHYSICS_CALLS:
-            raise RuntimeError("replay did not complete exactly 593 physical calls")
+            raise RuntimeError("replay did not complete exactly 791 physical calls")
         source_after = capture_source_state()
         if not _source_unchanged(source_before, source_after):
             raise RuntimeError("source repository state or protected file hashes changed")
@@ -1059,7 +1061,7 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
                     "contact_collection": task_cfg["sim"]["physx"]["contact_collection"],
                     "useResidualActions": task_cfg["env"]["useResidualActions"],
                 },
-                "target_schedule": "command 0,0,1,...,591; reference 0..592",
+                "target_schedule": "command 0,0,1,...,789; reference 0..790",
                 "quaternion_convention": "all source and actual quaternions are XYZW",
                 "seed": SEED,
                 "python_dont_write_bytecode": True,
@@ -1067,15 +1069,15 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
             "checks": {
                 "exact_index_entry": True,
                 "live_row_identity": True,
-                "dataset_version_3325": True,
+                "dataset_version_132": True,
                 "resolved_configuration": True,
-                "exact_slice_10_604": True,
+                "exact_slice_440_1232": True,
                 "one_environment": True,
                 "26_dofs": True,
                 "counter_schedule_all_calls": True,
-                "no_reset_before_call_592": True,
+                "no_reset_before_call_790": True,
                 "final_trajectory_completion_reset": True,
-                "exactly_593_simulate_calls": True,
+                "exactly_791_simulate_calls": True,
                 "source_repository_unchanged": True,
             },
             "action_invariance": invariance,

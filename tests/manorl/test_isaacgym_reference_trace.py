@@ -27,8 +27,8 @@ def exact_entry() -> dict[str, object]:
         "file_uuid": trace.FILE_UUID,
         "trajectory_name": trace.TRAJECTORY_NAME,
         "object_type": trace.OBJECT_TYPE,
-        "action_id": "02",
-        "sequence_id": "002",
+        "action_id": trace.ACTION_ID,
+        "sequence_id": trace.SEQUENCE_ID,
     }
 
 
@@ -37,20 +37,21 @@ def exact_row() -> dict[str, object]:
         "index": {
             "uuid": trace.UUID,
             "file_uuid": trace.FILE_UUID,
-            "gesture": "002-take",
+            "gesture": trace.ACTION_ID,
+            "source_path": "cube1/cube1_01_009/cube1_01_009_mano.npy",
         },
         "trajectory_metadata": {
-            "object_names": ["powerdrill"],
-            "raw_data_info": {"id": 1},
+            "object_names": [trace.OBJECT_TYPE],
+            "raw_data_info": {"id": 9},
             "hand_names": ["right"],
-            "total_frames": 605,
-            "data_fps": 100,
+            "total_frames": 1373,
+            "data_fps": 111,
             "trajectory_info": {
                 "object_move": [
                     {
-                        "object_name": "powerdrill",
-                        "start_frame": 260,
-                        "end_frame": 444,
+                        "object_name": trace.OBJECT_TYPE,
+                        "start_frame": 690,
+                        "end_frame": 982,
                     }
                 ]
             },
@@ -68,10 +69,14 @@ def valid_metadata() -> dict[str, object]:
             "uuid": trace.UUID,
             "file_uuid": trace.FILE_UUID,
             "identity": trace.TRAJECTORY_NAME,
-            "dataset_version": 3325,
-            "source_slice": {"start": 10, "stop": 604, "stop_exclusive": True},
-            "reference_frame_count": 594,
-            "physical_call_count": 593,
+            "dataset_version": trace.EXPECTED_DATASET_VERSION,
+            "source_slice": {
+                "start": trace.SOURCE_START,
+                "stop": trace.SOURCE_STOP,
+                "stop_exclusive": True,
+            },
+            "reference_frame_count": trace.REFERENCE_FRAMES,
+            "physical_call_count": trace.PHYSICS_CALLS,
         },
         "lance_index_entry": {},
         "source_repository": {},
@@ -133,7 +138,7 @@ def test_strict_selector_accepts_the_sole_exact_match() -> None:
     decoy = exact_entry()
     decoy["uuid"] = "object-action-only-decoy"
     selected = trace.select_strict_index_entry(
-        [decoy, exact_entry()], trace.LANCE_BASE_PATH, ["powerdrill"], [2]
+        [decoy, exact_entry()], trace.LANCE_BASE_PATH, [trace.OBJECT_TYPE], [1]
     )
     assert selected == exact_entry()
     assert trace.normalize_action_ids("2,02") == ("02", "02")
@@ -147,7 +152,7 @@ def test_strict_selector_accepts_the_sole_exact_match() -> None:
         ("object_index", 1),
         ("uuid", "wrong-uuid"),
         ("file_uuid", "wrong-file-uuid"),
-        ("trajectory_name", "powerdrill_02_003"),
+        ("trajectory_name", "cube1_01_010"),
         ("object_type", "hammer"),
         ("action_id", "03"),
         ("sequence_id", "003"),
@@ -158,42 +163,34 @@ def test_strict_selector_rejects_each_identity_defect(field: str, defect: object
     entry[field] = defect
     with pytest.raises(RuntimeError, match="found 0"):
         trace.select_strict_index_entry(
-            [entry], trace.LANCE_BASE_PATH, ["powerdrill"], ["02"]
+            [entry], trace.LANCE_BASE_PATH, [trace.OBJECT_TYPE], [trace.ACTION_ID]
         )
 
 
 def test_strict_selector_rejects_duplicates_and_wrong_filters() -> None:
     with pytest.raises(RuntimeError, match="found 2"):
         trace.select_strict_index_entry(
-            [exact_entry(), exact_entry()],
-            trace.LANCE_BASE_PATH,
-            ["powerdrill"],
-            ["02"],
+            [exact_entry(), exact_entry()], trace.LANCE_BASE_PATH, [trace.OBJECT_TYPE], [trace.ACTION_ID]
         )
     with pytest.raises(ValueError, match="object_types"):
         trace.select_strict_index_entry(
-            [exact_entry()], trace.LANCE_BASE_PATH, ["hammer"], ["02"]
+            [exact_entry()], trace.LANCE_BASE_PATH, ["hammer"], [trace.ACTION_ID]
         )
     with pytest.raises(ValueError, match="action filter"):
         trace.select_strict_index_entry(
-            [exact_entry()], trace.LANCE_BASE_PATH, ["powerdrill"], ["03"]
+            [exact_entry()], trace.LANCE_BASE_PATH, [trace.OBJECT_TYPE], ["03"]
         )
 
 
 def test_row_identity_derivation_and_validation() -> None:
     row = exact_row()
-    assert trace.derive_row_identity(row) == "powerdrill_02_002"
-    assert trace.validate_row_identity(row) == "powerdrill_02_002"
+    assert trace.derive_row_identity(row) == "cube1_01_009"
+    assert trace.validate_row_identity(row) == "cube1_01_009"
 
-    altered_id = copy.deepcopy(row)
-    altered_id["trajectory_metadata"]["raw_data_info"]["id"] = 2
+    altered_source_path = copy.deepcopy(row)
+    altered_source_path["index"]["source_path"] = "cube1/cube1_01_010/cube1_01_010_mano.npy"
     with pytest.raises(ValueError, match="row identity mismatch"):
-        trace.validate_row_identity(altered_id)
-
-    altered_gesture = copy.deepcopy(row)
-    altered_gesture["index"]["gesture"] = "003-take"
-    with pytest.raises(ValueError, match="row identity mismatch"):
-        trace.validate_row_identity(altered_gesture)
+        trace.validate_row_identity(altered_source_path)
 
 
 @pytest.mark.parametrize(
@@ -202,8 +199,8 @@ def test_row_identity_derivation_and_validation() -> None:
         (("index", "uuid"), "wrong", "UUID"),
         (("index", "file_uuid"), "wrong", "file UUID"),
         (("trajectory_metadata", "hand_names"), ["left"], "right hand"),
-        (("trajectory_metadata", "total_frames"), 604, "605 source frames"),
-        (("trajectory_metadata", "data_fps"), 60, "100 Hz"),
+        (("trajectory_metadata", "total_frames"), 1372, "1373 source frames"),
+        (("trajectory_metadata", "data_fps"), 60, "111 Hz"),
         (
             ("trajectory_metadata", "trajectory_info", "object_move"),
             [],
@@ -223,32 +220,32 @@ def test_row_validation_rejects_authoritative_defects(
         trace.validate_row_identity(row)
 
 
-def test_fixed_593_call_schedule_has_exact_endpoints() -> None:
-    schedule = [trace.schedule_point(call) for call in range(593)]
-    assert len(schedule) == 593
+def test_fixed_791_call_schedule_has_exact_endpoints() -> None:
+    schedule = [trace.schedule_point(call) for call in range(trace.PHYSICS_CALLS)]
+    assert len(schedule) == trace.PHYSICS_CALLS
     assert [(point.target_index, point.reference_index) for point in schedule[:3]] == [
         (0, 0),
         (0, 1),
         (1, 2),
     ]
-    assert (schedule[-1].target_index, schedule[-1].reference_index) == (591, 592)
-    assert [point.source_reference_index for point in schedule] == list(range(10, 603))
-    assert schedule[-1].source_target_index == 601
+    assert (schedule[-1].target_index, schedule[-1].reference_index) == (789, 790)
+    assert [point.source_reference_index for point in schedule] == list(range(440, 1231))
+    assert schedule[-1].source_target_index == 1229
     with pytest.raises(ValueError):
-        trace.schedule_point(593)
+        trace.schedule_point(trace.PHYSICS_CALLS)
 
 
 def test_terminal_policy_rejects_early_and_accepts_only_final_completion() -> None:
-    trace.validate_terminal_policy(591, False, False, 0)
+    trace.validate_terminal_policy(789, False, False, 0)
     with pytest.raises(RuntimeError, match="early reset"):
         trace.validate_terminal_policy(100, True, False, 2)
     with pytest.raises(RuntimeError, match="final call"):
-        trace.validate_terminal_policy(592, False, False, 0)
+        trace.validate_terminal_policy(790, False, False, 0)
     with pytest.raises(RuntimeError, match="final call"):
-        trace.validate_terminal_policy(592, True, False, 1)
+        trace.validate_terminal_policy(790, True, False, 1)
     with pytest.raises(RuntimeError, match="final call"):
-        trace.validate_terminal_policy(592, True, True, 2)
-    trace.validate_terminal_policy(592, True, True, 1)
+        trace.validate_terminal_policy(790, True, True, 2)
+    trace.validate_terminal_policy(790, True, True, 1)
 
 
 def test_schema_validator_accepts_exact_shapes_and_rejects_shape_dtype_and_identity() -> None:
@@ -257,7 +254,7 @@ def test_schema_validator_accepts_exact_shapes_and_rejects_shape_dtype_and_ident
     trace.validate_trace_schema(metadata, arrays)
 
     wrong_shape = dict(arrays)
-    wrong_shape["q_target"] = np.zeros((592, 26), dtype=np.float32)
+    wrong_shape["q_target"] = np.zeros((trace.PHYSICS_CALLS - 1, 26), dtype=np.float32)
     with pytest.raises(ValueError, match="q_target shape"):
         trace.validate_trace_schema(metadata, wrong_shape)
 
@@ -267,7 +264,7 @@ def test_schema_validator_accepts_exact_shapes_and_rejects_shape_dtype_and_ident
         trace.validate_trace_schema(metadata, wrong_dtype)
 
     wrong_identity = copy.deepcopy(metadata)
-    wrong_identity["trajectory_identity"]["dataset_version"] = 3324
+    wrong_identity["trajectory_identity"]["dataset_version"] = trace.EXPECTED_DATASET_VERSION - 1
     with pytest.raises(ValueError, match="dataset_version mismatch"):
         trace.validate_trace_schema(wrong_identity, arrays)
 

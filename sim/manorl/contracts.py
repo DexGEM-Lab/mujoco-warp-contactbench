@@ -7,17 +7,24 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-DATASET_PATH = "/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/20260605_133735.lance"
-EXPECTED_DATASET_VERSION = 3325
+DATASET_PATH = "/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/npy_s02_v3.lance"
+EXPECTED_DATASET_VERSION = 132
 DATASET_ROW_INDEX = 1
 OBJECT_INDEX = 0
-SOURCE_SLICE = (10, 604)
+OBJECT_TYPE = "cube1"
+OBJECT_LINK_NAME = "cube1_link"
+OBJECT_BODY_NAME = "cube1"
+OBJECT_FREE_JOINT_NAME = "cube1_free"
+OBJECT_COLLISION_GEOM_COUNT = 1
+SOURCE_FRAME_COUNT = 1373
+SOURCE_DATA_FPS = 111
+SOURCE_SLICE = (440, 1232)
 REFERENCE_FRAME_COUNT = SOURCE_SLICE[1] - SOURCE_SLICE[0]
-# Isaac source holds ref[0] for two commands and terminates after 593 calls:
-# command indices 0, 0, 1, ..., 591; post-step references 0, 1, ..., 592.
-# Slice ref[593] is therefore intentionally never consumed.
+# Isaac source holds ref[0] for two commands and terminates after 791 calls:
+# command indices 0, 0, 1, ..., 789; post-step references 0, 1, ..., 790.
+# Slice ref[791] is therefore intentionally never consumed.
 CONTROL_STEP_COUNT = REFERENCE_FRAME_COUNT - 1
-MOVEMENT_RAW_RANGE = (260, 444)
+MOVEMENT_RAW_RANGE = (690, 982)
 
 JOINT_NAMES = (
     "ARTx",
@@ -101,9 +108,9 @@ TRAJECTORY_IDENTITY = TrajectoryIdentity(
     dataset_version=EXPECTED_DATASET_VERSION,
     row_index=DATASET_ROW_INDEX,
     object_index=OBJECT_INDEX,
-    uuid="e49b87fb-51c1-44eb-aade-666b5e617959",
-    file_uuid="20260528022141_a5fb81e3",
-    identity="powerdrill_02_002",
+    uuid="d5bc2bc6-9458-52d0-bccc-66c9ec21bae3",
+    file_uuid="e6fe4732-72cd-5ab7-93e6-2e62dc0263a5",
+    identity="cube1_01_009",
     source_start=SOURCE_SLICE[0],
     source_stop=SOURCE_SLICE[1],
     movement_start_raw=MOVEMENT_RAW_RANGE[0],
@@ -167,8 +174,16 @@ def validate_contract() -> None:
         raise ValueError("JOINT_NAMES must contain 26 unique entries in source order")
     if len(KEYPOINT_NAMES) != 16 or len(set(KEYPOINT_NAMES)) != 16:
         raise ValueError("KEYPOINT_NAMES must contain 16 unique entries in source order")
-    if SOURCE_SLICE != (10, 604) or REFERENCE_FRAME_COUNT != 594:
-        raise ValueError("the accepted source slice must remain [10, 604)")
+    if SOURCE_SLICE != (440, 1232) or REFERENCE_FRAME_COUNT != 792:
+        raise ValueError("the accepted source slice must remain [440, 1232)")
+    if (
+        OBJECT_TYPE != "cube1"
+        or OBJECT_LINK_NAME != "cube1_link"
+        or OBJECT_BODY_NAME != "cube1"
+        or OBJECT_FREE_JOINT_NAME != "cube1_free"
+        or OBJECT_COLLISION_GEOM_COUNT != 1
+    ):
+        raise ValueError("the accepted runtime object must remain the one-geom cube1")
     for name, values in (
         ("source_physx_kp", SOURCE_PHYSX_KP),
         ("source_physx_kd", SOURCE_PHYSX_KD),
@@ -184,8 +199,8 @@ def validate_contract() -> None:
             raise ValueError(f"{name} must contain 26 finite positive values")
         if values.flags.writeable:
             raise ValueError(f"{name} must be immutable")
-    if CONTROL_STEP_COUNT != 593:
-        raise ValueError("source counter schedule must produce 593 replay steps")
+    if CONTROL_STEP_COUNT != 791:
+        raise ValueError("source counter schedule must produce 791 replay steps")
     if CONTROL_TIMESTEP != 0.005 or PHYSICS_SUBSTEPS_PER_TARGET != 2:
         raise ValueError("each target must execute exactly two 0.0025 second substeps")
     if RESIDUAL_ENABLED:

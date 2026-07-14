@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import struct
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from itertools import combinations
@@ -20,15 +21,19 @@ from sim.manorl.contracts import (
     JOINT_ARMATURE,
     JOINT_FRICTIONLOSS,
     JOINT_NAMES,
+    OBJECT_BODY_NAME,
+    OBJECT_COLLISION_GEOM_COUNT,
+    OBJECT_FREE_JOINT_NAME,
+    OBJECT_LINK_NAME,
     PHYSICS_TIMESTEP,
     ServoConfig,
 )
 
 ASSET_ROOT = Path(__file__).resolve().parent / "runtime_assets"
 HAND_URDF = ASSET_ROOT / "hand" / "mano_hand.urdf"
-OBJECT_URDF = ASSET_ROOT / "powerdrill" / "powerdrill.urdf"
+OBJECT_URDF = ASSET_ROOT / "cube1" / "cube1.urdf"
 ASSET_MANIFEST = ASSET_ROOT / "manifest.json"
-OBJECT_PIECE_NAMES = tuple(f"coacd_convex_piece_{index}.obj" for index in range(5))
+OBJECT_MESH = ASSET_ROOT / "cube1" / "cube1_aligned.stl"
 # Source shape groups name four rigid bodies per finger, but each abduction
 # body has no collision shape in the authoritative URDF. These are the three
 # actual collision-bearing bodies selected for each source filter group.
@@ -75,10 +80,9 @@ def _origin(element: ET.Element | None) -> tuple[tuple[float, ...], tuple[float,
 
 def _required_paths() -> tuple[Path, ...]:
     hand_meshes = tuple((ASSET_ROOT / "hand" / "meshes").glob("*.stl"))
-    object_meshes = tuple(ASSET_ROOT / "powerdrill" / "coacd" / name for name in OBJECT_PIECE_NAMES)
     if len(hand_meshes) != 16:
         raise FileNotFoundError(f"expected exactly 16 curated hand collision meshes, got {len(hand_meshes)}")
-    paths = (HAND_URDF, OBJECT_URDF, *hand_meshes, *object_meshes, ASSET_MANIFEST)
+    paths = (HAND_URDF, OBJECT_URDF, *hand_meshes, OBJECT_MESH, ASSET_MANIFEST)
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"curated ManoRL assets are incomplete: {missing}")
@@ -263,36 +267,44 @@ def _add_hand_self_collision_excludes(contact: ET.Element) -> None:
 
 def _object_body(worldbody: ET.Element, asset: ET.Element, urdf_root: ET.Element) -> None:
     object_link = urdf_root.find("link")
-    if object_link is None or object_link.get("name") != "powerdrill_link":
-        raise ValueError("powerdrill URDF must contain powerdrill_link")
+    if object_link is None or object_link.get("name") != OBJECT_LINK_NAME:
+        raise ValueError(f"cube URDF must contain {OBJECT_LINK_NAME}")
     collisions = object_link.findall("collision")
-    collision_names = tuple(collision.get("name") for collision in collisions)
-    expected_names = tuple(Path(name).stem for name in OBJECT_PIECE_NAMES)
-    if collision_names != expected_names:
-        raise ValueError(f"powerdrill collision order {collision_names} != {expected_names}")
-    for index, filename in enumerate(OBJECT_PIECE_NAMES):
-        path = ASSET_ROOT / "powerdrill" / "coacd" / filename
-        ET.SubElement(asset, "mesh", name=f"powerdrill_piece_{index}", file=str(path.resolve()))
+    if len(collisions) != OBJECT_COLLISION_GEOM_COUNT:
+        raise ValueError("cube URDF must contain exactly one collision mesh")
+    collision = collisions[0]
+    source_mesh = collision.find("geometry/mesh")
+    if source_mesh is None or Path(source_mesh.get("filename", "")).name != "cube1.obj":
+        raise ValueError("cube URDF collision must reference cube1.obj")
+    mesh_scale = _numbers(source_mesh.get("scale"), 3, (1.0, 1.0, 1.0))
+    if mesh_scale != (0.001, 0.001, 0.001):
+        raise ValueError("cube URDF collision scale must remain 0.001")
+    ET.SubElement(
+        asset,
+        "mesh",
+        name="cube1_mesh",
+        file=str(OBJECT_MESH.resolve()),
+        scale=_format(mesh_scale),
+    )
 
-    body = ET.SubElement(worldbody, "body", name="powerdrill", gravcomp="0")
-    ET.SubElement(body, "freejoint", name="powerdrill_free")
+    body = ET.SubElement(worldbody, "body", name=OBJECT_BODY_NAME, gravcomp="0")
+    ET.SubElement(body, "freejoint", name=OBJECT_FREE_JOINT_NAME)
     _link_inertial(body, object_link)
-    for index, collision in enumerate(collisions):
-        position, quaternion = _origin(collision.find("origin"))
-        ET.SubElement(
-            body,
-            "geom",
-            name=f"powerdrill_collision_{index}",
-            type="mesh",
-            mesh=f"powerdrill_piece_{index}",
-            pos=_format(position),
-            quat=_format(quaternion),
-            rgba="0.24 0.28 0.32 1",
-            contype="2",
-            conaffinity="5",
-            condim="3",
-            friction="0.9 0.01 0.001",
-        )
+    position, quaternion = _origin(collision.find("origin"))
+    ET.SubElement(
+        body,
+        "geom",
+        name="cube1_collision",
+        type="mesh",
+        mesh="cube1_mesh",
+        pos=_format(position),
+        quat=_format(quaternion),
+        rgba="0.8 0.18 0.16 1",
+        contype="2",
+        conaffinity="5",
+        condim="3",
+        friction="0.9 0.01 0.001",
+    )
 
 
 def build_scene_xml(servo: ServoConfig = ServoConfig()) -> str:
@@ -301,7 +313,7 @@ def build_scene_xml(servo: ServoConfig = ServoConfig()) -> str:
     validate_asset_manifest()
     hand_root = ET.parse(HAND_URDF).getroot()
     object_root = ET.parse(OBJECT_URDF).getroot()
-    root = ET.Element("mujoco", model="manorl_powerdrill_reference")
+    root = ET.Element("mujoco", model="manorl_cube1_reference")
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(
         root,
@@ -362,7 +374,7 @@ def validate_compiled_model(
 ) -> None:
     joint_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, model.njnt)
     if joint_names[: len(JOINT_NAMES)] != JOINT_NAMES or joint_names[len(JOINT_NAMES) :] != (
-        "powerdrill_free",
+        OBJECT_FREE_JOINT_NAME,
     ):
         raise ValueError(f"compiled joint order mismatch: {joint_names}")
     actuator_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu)
@@ -400,9 +412,9 @@ def validate_compiled_model(
         kv = -float(model.actuator_biasprm[actuator_id, 2])
         if not np.isfinite(kv) or kv <= 0:
             raise ValueError(f"compiled dampratio did not produce positive damping for {name}")
-    object_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "powerdrill")
+    object_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, OBJECT_BODY_NAME)
     if model.body_gravcomp[object_id] != 0:
-        raise ValueError("powerdrill gravity must remain active")
+        raise ValueError("cube gravity must remain active")
     hand_geom_ids = [
         geom_id
         for geom_id in range(model.ngeom)
@@ -431,7 +443,7 @@ def validate_compiled_model(
         raise ValueError("compiled within-finger collision excludes mismatch source groups")
     for body_id in range(1, model.nbody):
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
-        if name != "powerdrill" and model.body_gravcomp[body_id] != 1:
+        if name != OBJECT_BODY_NAME and model.body_gravcomp[body_id] != 1:
             raise ValueError(f"hand body gravity compensation missing: {name}")
 
 
@@ -495,7 +507,7 @@ def validate_static_fk(mujoco: Any, model: Any, *, atol: float = 1e-10) -> None:
 
     data = mujoco.MjData(model)
     data.qpos[:26] = 0.0
-    object_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "powerdrill_free")
+    object_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, OBJECT_FREE_JOINT_NAME)
     object_qpos_adr = model.jnt_qposadr[object_joint]
     data.qpos[object_qpos_adr + 3] = 1.0
     mujoco.mj_forward(model, data)
@@ -511,20 +523,26 @@ def validate_static_fk(mujoco: Any, model: Any, *, atol: float = 1e-10) -> None:
 
 @lru_cache(maxsize=1)
 def object_collision_vertices() -> NDArray[np.float64]:
-    """Return all five authoritative convex-piece vertices in object coordinates."""
+    """Return authoritative cube collision vertices in object coordinates."""
 
     validate_asset_manifest()
-    vertices: list[tuple[float, float, float]] = []
-    for filename in OBJECT_PIECE_NAMES:
-        path = ASSET_ROOT / "powerdrill" / "coacd" / filename
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("v "):
-                values = tuple(float(item) for item in line.split()[1:4])
-                if len(values) != 3:
-                    raise ValueError(f"invalid vertex in {path}: {line!r}")
-                vertices.append(values)
-    result = np.asarray(vertices, dtype=np.float64)
-    if result.shape != (5308, 3) or not np.all(np.isfinite(result)):
-        raise ValueError(f"unexpected powerdrill collision vertices: {result.shape}")
+    payload = OBJECT_MESH.read_bytes()
+    if len(payload) < 84:
+        raise ValueError("cube collision STL is too short")
+    triangle_count = struct.unpack_from("<I", payload, 80)[0]
+    expected_length = 84 + triangle_count * 50
+    if len(payload) != expected_length:
+        raise ValueError("cube collision STL has an invalid binary length")
+    triangles = np.frombuffer(
+        payload,
+        dtype=np.dtype(
+            [("normal", "<f4", (3,)), ("vertices", "<f4", (3, 3)), ("attribute", "<u2")]
+        ),
+        count=triangle_count,
+        offset=84,
+    )
+    result = np.asarray(triangles["vertices"], dtype=np.float64).reshape(-1, 3) * 0.001
+    if result.shape != (36, 3) or not np.all(np.isfinite(result)):
+        raise ValueError(f"unexpected cube collision vertices: {result.shape}")
     result.setflags(write=False)
     return result

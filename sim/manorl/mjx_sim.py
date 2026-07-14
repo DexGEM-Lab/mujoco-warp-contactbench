@@ -14,6 +14,9 @@ from sim.manorl.contracts import (
     FINGER_SERVO_DAMPRATIO,
     FINGER_SERVO_KP,
     JOINT_NAMES,
+    OBJECT_BODY_NAME,
+    OBJECT_COLLISION_GEOM_COUNT,
+    OBJECT_FREE_JOINT_NAME,
     PHYSICS_SUBSTEPS_PER_TARGET,
     PHYSICS_TIMESTEP,
     ServoConfig,
@@ -125,13 +128,13 @@ class _ReplayBase:
         self.mujoco, self.model = compile_model(servo)
         self.joint_lower, self.joint_upper = _joint_limits(self.mujoco, self.model)
         object_joint = self.mujoco.mj_name2id(
-            self.model, self.mujoco.mjtObj.mjOBJ_JOINT, "powerdrill_free"
+            self.model, self.mujoco.mjtObj.mjOBJ_JOINT, OBJECT_FREE_JOINT_NAME
         )
         if object_joint < 0:
-            raise ValueError("compiled powerdrill free joint is absent")
+            raise ValueError("compiled cube free joint is absent")
         self.object_qpos_address = int(self.model.jnt_qposadr[object_joint])
         object_body = self.mujoco.mj_name2id(
-            self.model, self.mujoco.mjtObj.mjOBJ_BODY, "powerdrill"
+            self.model, self.mujoco.mjtObj.mjOBJ_BODY, OBJECT_BODY_NAME
         )
         self.object_geom_ids = {
             geom_id
@@ -143,7 +146,7 @@ class _ReplayBase:
             for geom_id in range(self.model.ngeom)
             if int(self.model.geom_bodyid[geom_id]) not in (0, object_body)
         }
-        if len(self.object_geom_ids) != 5 or len(self.hand_geom_ids) != 16:
+        if len(self.object_geom_ids) != OBJECT_COLLISION_GEOM_COUNT or len(self.hand_geom_ids) != 16:
             raise ValueError("compiled hand/object geom partition is inconsistent")
         self.replay_step = 0
 

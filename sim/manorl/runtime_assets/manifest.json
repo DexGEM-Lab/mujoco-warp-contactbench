@@ -2,7 +2,7 @@
   "schema": "manorl.curated-assets.v1",
   "source_repository": "sibling:manohand_reconstruction/model/all_assets",
   "source_commit": "ead79126589d1abf2362ea30b9d674d9e675a2f9",
-  "policy": "Only authoritative source URDFs, collision meshes, metadata, and the powerdrill grasp mapping are curated. The 71 MB visual OBJ is intentionally excluded.",
+  "policy": "Only authoritative source URDFs, collision meshes, metadata, and the cube1 action-01 grasp mapping are curated. The compact binary STL is geometrically equivalent to the URDF-referenced OBJ and preserves the source 0.001 mesh scale.",
   "files": [
     {
       "source_path": "Assets/HAND/s02/mano/Z_upNew/mano_hand.urdf",
@@ -113,47 +113,23 @@
       "curated_sha256": "412c23b48899b0901176e71cc836dc0a4d4bc6ca07fc3bbfd99da0e7dd3ad25d"
     },
     {
-      "source_path": "Assets/sim/decomposed/powerdrill/powerdrill.urdf",
-      "source_sha256": "34f22cfcb519e342715d349b5184cb0b6a1ec4e440c793347762e25313a36105",
-      "curated_path": "powerdrill/powerdrill.urdf",
-      "curated_sha256": "34f22cfcb519e342715d349b5184cb0b6a1ec4e440c793347762e25313a36105"
+      "source_path": "Assets/sim/mano_objects_urdf/cube1.urdf",
+      "source_sha256": "b987d4806d33a62cde4c5f64fc69151bbd0ccddf6902eb625e471d1a5bcfb3c5",
+      "curated_path": "cube1/cube1.urdf",
+      "curated_sha256": "b987d4806d33a62cde4c5f64fc69151bbd0ccddf6902eb625e471d1a5bcfb3c5"
     },
     {
-      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_0.obj",
-      "source_sha256": "a413634662c84599566012de30198ed27e2bbc423319e87bd9dca0d80f427bac",
-      "curated_path": "powerdrill/coacd/coacd_convex_piece_0.obj",
-      "curated_sha256": "a413634662c84599566012de30198ed27e2bbc423319e87bd9dca0d80f427bac"
-    },
-    {
-      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_1.obj",
-      "source_sha256": "116aa7a9d602dbeb24b03aee4b51872ba91bbc822b713ac1a870dcc5b1ddf42e",
-      "curated_path": "powerdrill/coacd/coacd_convex_piece_1.obj",
-      "curated_sha256": "116aa7a9d602dbeb24b03aee4b51872ba91bbc822b713ac1a870dcc5b1ddf42e"
-    },
-    {
-      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_2.obj",
-      "source_sha256": "0b06e92975f0558941069674ea0140ca5f406e9bd8f43f9d58a36589330b648d",
-      "curated_path": "powerdrill/coacd/coacd_convex_piece_2.obj",
-      "curated_sha256": "0b06e92975f0558941069674ea0140ca5f406e9bd8f43f9d58a36589330b648d"
-    },
-    {
-      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_3.obj",
-      "source_sha256": "4d89292d56a7bae8ee3404cc766ade0101705d8bffca6013ea4dd0f39fd861be",
-      "curated_path": "powerdrill/coacd/coacd_convex_piece_3.obj",
-      "curated_sha256": "4d89292d56a7bae8ee3404cc766ade0101705d8bffca6013ea4dd0f39fd861be"
-    },
-    {
-      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_4.obj",
-      "source_sha256": "a7e8aaf43df5bca66a011825bbe545c8d09c93174758a09a57263befb0dd9c99",
-      "curated_path": "powerdrill/coacd/coacd_convex_piece_4.obj",
-      "curated_sha256": "a7e8aaf43df5bca66a011825bbe545c8d09c93174758a09a57263befb0dd9c99"
+      "source_path": "Assets/sim/mano_assets/objects/cube1/cube1_aligned.stl",
+      "source_sha256": "e16f0c87426d9775db0b2c70707da80c28a3680876ccbf407317c96923a10ef1",
+      "curated_path": "cube1/cube1_aligned.stl",
+      "curated_sha256": "e16f0c87426d9775db0b2c70707da80c28a3680876ccbf407317c96923a10ef1"
     },
     {
       "source_path": "Assets/object_grasps_simple.yaml",
-      "source_lines": "159-164",
+      "source_lines": "45-46",
       "source_sha256": "97293b96a3015173bf2fa875d165b04c925953147ebc0f4c0935ed1215558a9d",
-      "curated_path": "powerdrill/grasp_mapping.yaml",
-      "curated_sha256": "091cfdd5268f561861e58234e736271fc0f8f62ec212ac8dbaae5aa4446571b0"
+      "curated_path": "cube1/grasp_mapping.yaml",
+      "curated_sha256": "35ca6b19358420d9d8ba746f56f720c0c1a691c53f53a82ace5e40204ce791fb"
     }
   ]
 }

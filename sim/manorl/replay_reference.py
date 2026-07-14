@@ -1,4 +1,4 @@
-"""CLI for the accepted ManoRL powerdrill reference replay."""
+"""CLI for the accepted ManoRL cube1 reference replay."""
 
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ def summarize_trace(
             "joint_armature": JOINT_ARMATURE,
             "floor_top_z": FLOOR_TOP_Z,
             "object_clearance": OBJECT_CLEARANCE,
-            "target_schedule": "source-compatible command 0,0,1,...,591; two substeps; post references 0..592",
+            "target_schedule": "source-compatible command 0,0,1,...,789; two substeps; post references 0..790",
             "object_source_rotation": "axis-angle",
             "task_quaternion_order": "xyzw",
             "mujoco_freejoint_quaternion_order": "wxyz",
@@ -172,13 +172,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--backend", choices=("mjx-warp", "mujoco-cpu"), default="mjx-warp")
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
     parser.add_argument(
-        "--output", type=Path, default=Path("outputs/manorl/powerdrill_02_002_mjx_warp")
+        "--output", type=Path, default=Path("outputs/manorl/cube1_01_009_mjx_warp")
     )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=None,
-        help="Diagnostic prefix only; omit to replay all 593 accepted transitions.",
+        help="Diagnostic prefix only; omit to replay all 791 accepted transitions.",
     )
     parser.add_argument(
         "--wrist-kp", type=float, choices=WRIST_KP_GRID, default=200.0

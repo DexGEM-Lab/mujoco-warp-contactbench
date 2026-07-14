@@ -15,7 +15,10 @@ from sim.manorl.contracts import (
     EXPECTED_DATASET_VERSION,
     JOINT_NAMES,
     OBJECT_INDEX,
+    OBJECT_TYPE,
     REFERENCE_FRAME_COUNT,
+    SOURCE_DATA_FPS,
+    SOURCE_FRAME_COUNT,
     SOURCE_SLICE,
     TRAJECTORY_IDENTITY,
     TrajectoryIdentity,
@@ -98,11 +101,13 @@ class ReferenceTrajectory:
 
 
 def _derive_identity(row: dict[str, Any]) -> str:
-    metadata = row["trajectory_metadata"]
-    object_name = metadata["object_names"][OBJECT_INDEX]
-    raw_id = int(metadata["raw_data_info"]["id"])
-    gesture_code = str(row["index"]["gesture"]).split("-", maxsplit=1)[0]
-    return f"{object_name}_{raw_id + 1:02d}_{gesture_code}"
+    source_path = row["index"].get("source_path")
+    if not isinstance(source_path, str) or not source_path:
+        raise ValueError("row index must contain a non-empty source_path")
+    identity = Path(source_path).parent.name
+    if identity.count("_") != 2:
+        raise ValueError(f"source_path does not encode an object_action_sequence: {source_path!r}")
+    return identity
 
 
 def _validate_row(row: dict[str, Any]) -> None:
@@ -115,16 +120,24 @@ def _validate_row(row: dict[str, Any]) -> None:
         raise ValueError(f"file UUID mismatch: {index['file_uuid']!r}")
     if _derive_identity(row) != expected.identity:
         raise ValueError(f"trajectory identity mismatch: {_derive_identity(row)!r}")
-    if metadata["object_names"][OBJECT_INDEX] != "powerdrill":
-        raise ValueError("object index 0 must be powerdrill")
+    if metadata["object_names"][OBJECT_INDEX] != OBJECT_TYPE:
+        raise ValueError(f"object index 0 must be {OBJECT_TYPE}")
     if metadata["hand_names"] != ["right"]:
         raise ValueError(f"expected one right hand, got {metadata['hand_names']!r}")
-    if int(metadata["total_frames"]) != 605:
-        raise ValueError(f"expected 605 source frames, got {metadata['total_frames']}")
-    if int(metadata["data_fps"]) != 100:
-        raise ValueError(f"expected 100 Hz source data, got {metadata['data_fps']}")
+    if int(metadata["total_frames"]) != SOURCE_FRAME_COUNT:
+        raise ValueError(
+            f"expected {SOURCE_FRAME_COUNT} source frames, got {metadata['total_frames']}"
+        )
+    if int(metadata["data_fps"]) != SOURCE_DATA_FPS:
+        raise ValueError(f"expected {SOURCE_DATA_FPS} Hz source data, got {metadata['data_fps']}")
     movement = metadata["trajectory_info"]["object_move"]
-    expected_movement = [{"object_name": "powerdrill", "start_frame": 260, "end_frame": 444}]
+    expected_movement = [
+        {
+            "object_name": OBJECT_TYPE,
+            "start_frame": expected.movement_start_raw,
+            "end_frame": expected.movement_end_raw,
+        }
+    ]
     if movement != expected_movement:
         raise ValueError(f"movement range mismatch: {movement!r}")
     if len(row["hands"]) != 1 or len(row["objects"]) <= OBJECT_INDEX:
@@ -170,16 +183,11 @@ def trajectory_from_row(row: dict[str, Any], dataset_version: int) -> ReferenceT
         if not np.all(np.isfinite(arrays[name])):
             raise ValueError(f"{name} contains non-finite values")
     timestamp_delta = np.diff(timestamps_all)
-    nominal_dt = 1.0 / float(row["trajectory_metadata"]["data_fps"])
     if np.any(timestamp_delta <= 0):
         raise ValueError("source timestamps are not strictly increasing")
-    # Capture timestamps have measured 6--14 ms frame jitter. The source
-    # simulator intentionally ignores them, but their aggregate rate must still
-    # agree with the 100 Hz metadata.
-    if not np.isclose(np.mean(timestamp_delta), nominal_dt, atol=5e-5):
-        raise ValueError("source mean timestamp interval is inconsistent with data_fps")
-    if np.min(timestamp_delta) < 0.005 or np.max(timestamp_delta) > 0.015:
-        raise ValueError("source timestamp jitter is outside the accepted 5--15 ms envelope")
+    # The accepted capture intervals range from 1 to 65 ms despite the source
+    # metadata reporting 111 Hz. The source control loop uses its fixed 5 ms
+    # schedule, so timestamps establish ordering only and never simulation time.
 
     start, stop = SOURCE_SLICE
     q_ref = q_all[start:stop].copy()

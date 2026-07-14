@@ -17,7 +17,7 @@ from scipy.stats import spearmanr
 OUTPUT_SCHEMA = "manorl.reference_comparison.v1"
 MUJOCO_SCHEMA = "manorl.mujoco.reference_replay.v1"
 ISAAC_SCHEMA = "manorl.isaacgym.reference_replay.v1"
-TRACE_STEPS = 593
+TRACE_STEPS = 791
 DOFS = 26
 CONTROL_DT = 0.005
 SIM_TIME_ATOL = 2.0e-7
@@ -34,16 +34,16 @@ RATIO_MAX = 3.0
 EXPECTED_IDENTITY = {
     "dataset_path": (
         "/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/"
-        "20260605_133735.lance"
+        "npy_s02_v3.lance"
     ),
-    "dataset_version": 3325,
+    "dataset_version": 132,
     "row_index": 1,
     "object_index": 0,
-    "uuid": "e49b87fb-51c1-44eb-aade-666b5e617959",
-    "file_uuid": "20260528022141_a5fb81e3",
-    "identity": "powerdrill_02_002",
-    "source_start": 10,
-    "source_stop": 604,
+    "uuid": "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3",
+    "file_uuid": "e6fe4732-72cd-5ab7-93e6-2e62dc0263a5",
+    "identity": "cube1_01_009",
+    "source_start": 440,
+    "source_stop": 1232,
 }
 
 JOINT_NAMES = (
@@ -161,23 +161,23 @@ ISAAC_CHECK_KEYS = frozenset(
     {
         "exact_index_entry",
         "live_row_identity",
-        "dataset_version_3325",
+        "dataset_version_132",
         "resolved_configuration",
-        "exact_slice_10_604",
+        "exact_slice_440_1232",
         "one_environment",
         "26_dofs",
         "counter_schedule_all_calls",
-        "no_reset_before_call_592",
+        "no_reset_before_call_790",
         "final_trajectory_completion_reset",
-        "exactly_593_simulate_calls",
+        "exactly_791_simulate_calls",
         "source_repository_unchanged",
     }
 )
 
 PHASES = {
     "pre_motion": (0, 249),
-    "movement": (250, 434),
-    "post_motion": (435, 592),
+    "movement": (250, 542),
+    "post_motion": (543, 790),
 }
 
 FINGER_GROUPS = {
@@ -916,7 +916,7 @@ def compare_traces(
         },
         "validation": {
             "trace_steps": TRACE_STEPS,
-            "schedule": "command 0,0,1,...,591; post reference 0..592; source reference 10..602",
+            "schedule": "command 0,0,1,...,789; post reference 0..790; source reference 440..1230",
             "sim_time_atol": SIM_TIME_ATOL,
             "quaternion_norm_atol": QUATERNION_NORM_ATOL,
             "shared_input_contracts": shared_inputs,

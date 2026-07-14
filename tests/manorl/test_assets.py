@@ -20,8 +20,11 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     manifest = validate_asset_manifest()
     assert manifest["source_repository"] == "sibling:manohand_reconstruction/model/all_assets"
     assert manifest["source_commit"] == "ead79126589d1abf2362ea30b9d674d9e675a2f9"
-    assert len(manifest["files"]) == 25
-    assert all("powerdrill.obj" not in entry["curated_path"] for entry in manifest["files"])
+    assert len(manifest["files"]) == 21
+    assert all(
+        entry["curated_path"].startswith(("hand/", "cube1/"))
+        for entry in manifest["files"]
+    )
 
     root = ET.fromstring(build_scene_xml())
     compiled_order = tuple(
@@ -34,8 +37,8 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     assert len(positions) == 26
     assert all(actuator.get("inheritrange") == "1" for actuator in positions)
     assert all(actuator.get("dampratio") == "1" for actuator in positions)
-    assert len(root.findall(".//body[@name='powerdrill']/geom")) == 5
-    assert root.find(".//body[@name='powerdrill']/freejoint").get("name") == "powerdrill_free"
+    assert len(root.findall(".//body[@name='cube1']/geom")) == 1
+    assert root.find(".//body[@name='cube1']/freejoint").get("name") == "cube1_free"
     assert root.find("./option").get("timestep") == "0.0025"
     assert root.find("./worldbody/geom[@name='floor']").get("pos") == "0 0 -0.001"
 
@@ -115,7 +118,7 @@ def test_compiled_collision_masks_match_source_disable_within_finger_mode() -> N
             "pinky_dip",
         )
     ]
-    object_ids = [geom_id(f"powerdrill_collision_{index}") for index in range(5)]
+    object_ids = [geom_id("cube1_collision")]
     floor_id = geom_id("floor")
 
     assert all((model.geom_contype[geom], model.geom_conaffinity[geom]) == (1, 7) for geom in hand_ids)
@@ -146,17 +149,14 @@ def test_free_space_configuration_disables_only_hand_contacts() -> None:
     if importlib.util.find_spec("mujoco") is None:
         pytest.skip("mujoco is not installed in this environment")
     mujoco, model = compile_model(ServoConfig(hand_contacts_enabled=False))
-    object_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "powerdrill")
+    object_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "cube1")
     floor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
     hand_ids = [
         geom_id
         for geom_id in range(model.ngeom)
         if model.geom_bodyid[geom_id] not in (0, object_id)
     ]
-    object_ids = [
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"powerdrill_collision_{index}")
-        for index in range(5)
-    ]
+    object_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_collision")]
     assert all((model.geom_contype[geom], model.geom_conaffinity[geom]) == (0, 0) for geom in hand_ids)
     assert all((model.geom_contype[geom], model.geom_conaffinity[geom]) == (2, 5) for geom in object_ids)
     assert (model.geom_contype[floor_id], model.geom_conaffinity[floor_id]) == (4, 1)

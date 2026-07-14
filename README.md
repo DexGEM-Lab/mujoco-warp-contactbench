@@ -66,7 +66,7 @@ python -m sim.manorl.replay_reference \
   --device cpu \
   --wrist-kp 200 \
   --wrist-dampratio 1 \
-  --output outputs/manorl/powerdrill_02_002_mjx_warp
+  --output outputs/manorl/cube1_01_009_mjx_warp
 ```
 
 A bounded free-space controller diagnostic disables only hand collision geoms;
@@ -86,20 +86,20 @@ not a fallback data path and still requires the exact Lance dataset.
 The accepted input is row 1 of:
 
 ```text
-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/20260605_133735.lance
+/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/npy_s02_v3.lance
 ```
 
-It must resolve to UUID `e49b87fb-51c1-44eb-aade-666b5e617959`, file UUID
-`20260528022141_a5fb81e3`, identity `powerdrill_02_002`, and source slice
-`[10,604)`. The loader calls `dataset.take([1], columns=...)`; there is no broad
-scan or NPY fallback. The `pylance` package imports as `lance`.
+It must resolve to version `132`, UUID `d5bc2bc6-9458-52d0-bccc-66c9ec21bae3`,
+file UUID `e6fe4732-72cd-5ab7-93e6-2e62dc0263a5`, identity `cube1_01_009`, and
+source slice `[440,1232)`. The loader calls `dataset.take([1], columns=...)`;
+there is no broad scan or NPY fallback. The `pylance` package imports as `lance`.
 
 The source counter schedule is intentionally preserved from
-`IsaacGymEnvs/isaacgymenvs/tasks/mano_hand.py::pre_physics_step`: 593 physics
-calls command slice indices `0, 0, 1, ..., 591` and post-step comparisons use
-`0, 1, ..., 592`. Slice index 593 is never consumed because the source checks
+`IsaacGymEnvs/isaacgymenvs/tasks/mano_hand.py::pre_physics_step`: 791 physics
+calls command slice indices `0, 0, 1, ..., 789` and post-step comparisons use
+`0, 1, ..., 790`. Slice index 791 is never consumed because the source checks
 termination after progress reaches `L-1`. Each call executes two 0.0025 s
-physics substeps; jittered capture timestamps are validated but do not drive
+physics substeps; capture timestamps are validated for ordering but do not drive
 simulation time.
 
 The trace is a compressed `.npz`; its adjacent `.json` records the exact
@@ -113,8 +113,8 @@ The existing `3rd_party/lance_manager` pin may be broken or unavailable and is
 irrelevant to this input-only replay: this slice depends only on the public
 `pylance` reader. Curated files under `sim/manorl/runtime_assets/` come from
 `all_assets` commit `ead79126589d1abf2362ea30b9d674d9e675a2f9`; the manifest
-records provenance and SHA256 digests. The 71 MB drill visual OBJ is excluded,
-and the five convex collision pieces are rendered directly.
+records provenance and SHA256 digests. The runtime uses the source cube URDF
+and the geometrically equivalent compact `cube1_aligned.stl` collision mesh.
 
 ## Build Docker Image
 

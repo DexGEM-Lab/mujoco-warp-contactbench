@@ -32,20 +32,20 @@ def test_exact_row_one_identity_slice_and_support_shift() -> None:
         pytest.skip(reason)
     trajectory = load_reference_trajectory()
     assert trajectory.dataset_version == EXPECTED_DATASET_VERSION
-    assert trajectory.source_indices[0] == 10
-    assert trajectory.source_indices[-1] == 603
-    assert trajectory.q_ref.shape == (594, 26)
-    assert trajectory.object_pos_raw.shape == (594, 3)
-    assert trajectory.object_pos.shape == (594, 3)
-    assert trajectory.object_quat_xyzw.shape == (594, 4)
+    assert trajectory.source_indices[0] == 440
+    assert trajectory.source_indices[-1] == 1231
+    assert trajectory.q_ref.shape == (792, 26)
+    assert trajectory.object_pos_raw.shape == (792, 3)
+    assert trajectory.object_pos.shape == (792, 3)
+    assert trajectory.object_quat_xyzw.shape == (792, 4)
     assert not trajectory.q_ref.flags.writeable
-    assert trajectory.identity.identity == "powerdrill_02_002"
+    assert trajectory.identity.identity == "cube1_01_009"
     rotated_vertices = Rotation.from_quat(trajectory.object_quat_xyzw[0]).apply(
         object_collision_vertices().copy()
     )
     support_bottom = np.min(rotated_vertices[:, 2] + trajectory.object_pos[0, 2])
     assert support_bottom == pytest.approx(0.0, abs=1e-12)
-    assert trajectory.object_z_shift == pytest.approx(0.0005318821542129315, abs=1e-12)
+    assert trajectory.object_z_shift == pytest.approx(0.006806849331337565, abs=1e-12)
     np.testing.assert_allclose(
         trajectory.object_pos[:, 2] - trajectory.object_pos_raw[:, 2],
         trajectory.object_z_shift,
@@ -56,42 +56,39 @@ def test_exact_row_one_identity_slice_and_support_shift() -> None:
 def _accepted_fake_row(timestamps: np.ndarray) -> dict[str, object]:
     return {
         "index": {
-            "uuid": "e49b87fb-51c1-44eb-aade-666b5e617959",
-            "file_uuid": "20260528022141_a5fb81e3",
-            "gesture": "002-test",
+            "uuid": "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3",
+            "file_uuid": "e6fe4732-72cd-5ab7-93e6-2e62dc0263a5",
+            "gesture": "01",
+            "source_path": "cube1/cube1_01_009/cube1_01_009_mano.npy",
         },
         "trajectory_metadata": {
-            "object_names": ["powerdrill"],
+            "object_names": ["cube1"],
             "hand_names": ["right"],
-            "raw_data_info": {"id": 1},
-            "total_frames": 605,
-            "data_fps": 100,
+            "raw_data_info": {"id": 9},
+            "total_frames": 1373,
+            "data_fps": 111,
             "trajectory_info": {
                 "object_move": [
-                    {"object_name": "powerdrill", "start_frame": 260, "end_frame": 444}
+                    {"object_name": "cube1", "start_frame": 690, "end_frame": 982}
                 ]
             },
         },
         "timestamp": timestamps,
-        "hands": [{"urdf_dof": np.zeros((605, 26))}],
-        "objects": [{"pos": np.repeat([[0.0, 0.0, 1.0]], 605, axis=0), "rot_aa": np.zeros((605, 3))}],
+        "hands": [{"urdf_dof": np.zeros((1373, 26))}],
+        "objects": [{"pos": np.repeat([[0.0, 0.0, 1.0]], 1373, axis=0), "rot_aa": np.zeros((1373, 3))}],
     }
 
 
-def test_timestamp_jitter_is_validated_by_rate_and_envelope() -> None:
-    deltas = np.resize(np.array([0.006, 0.014], dtype=np.float64), 604)
+def test_timestamps_require_strict_monotonicity_only() -> None:
+    deltas = np.resize(np.array([0.001, 0.065], dtype=np.float64), 1372)
     timestamps = np.concatenate([[0.0], np.cumsum(deltas)])
     trajectory = trajectory_from_row(_accepted_fake_row(timestamps), EXPECTED_DATASET_VERSION)
-    assert trajectory.timestamps.shape == (594,)
+    assert trajectory.timestamps.shape == (792,)
 
-    bad_rate = np.arange(605, dtype=np.float64) * 0.012
-    with pytest.raises(ValueError, match="mean timestamp interval"):
-        trajectory_from_row(_accepted_fake_row(bad_rate), EXPECTED_DATASET_VERSION)
-
-    bad_jitter = np.arange(605, dtype=np.float64) * 0.01
-    bad_jitter[301:] += 0.006
-    with pytest.raises(ValueError, match="jitter"):
-        trajectory_from_row(_accepted_fake_row(bad_jitter), EXPECTED_DATASET_VERSION)
+    non_monotonic = timestamps.copy()
+    non_monotonic[301] = non_monotonic[300]
+    with pytest.raises(ValueError, match="strictly increasing"):
+        trajectory_from_row(_accepted_fake_row(non_monotonic), EXPECTED_DATASET_VERSION)
 
 
 def test_loader_uses_exact_take_and_columns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

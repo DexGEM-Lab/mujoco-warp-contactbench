@@ -34,12 +34,14 @@ def valid_arrays(backend: str) -> dict[str, np.ndarray]:
     calls = np.arange(compare.TRACE_STEPS, dtype=np.int64)
     arrays["target_index"][:] = np.maximum(calls - 1, 0)
     arrays["reference_index"][:] = calls
-    arrays["source_reference_index"][:] = calls + 10
+    arrays["source_reference_index"][:] = calls + compare.EXPECTED_IDENTITY["source_start"]
     arrays["sim_time"][:] = (calls.astype(np.float64) + 1.0) * compare.CONTROL_DT
     arrays["object_quat_xyzw"][:, 3] = 1.0
     arrays["object_reference_quat_xyzw"][:, 3] = 1.0
     if backend == "isaac":
-        arrays["source_target_index"][:] = arrays["target_index"] + 10
+        arrays["source_target_index"][:] = (
+            arrays["target_index"] + compare.EXPECTED_IDENTITY["source_start"]
+        )
         arrays["hand_palm_quat_xyzw"][:, 3] = 1.0
     return arrays
 
@@ -47,18 +49,18 @@ def valid_arrays(backend: str) -> dict[str, np.ndarray]:
 def valid_metadata(backend: str) -> dict[str, Any]:
     identity = {
         "dataset_path": compare.EXPECTED_IDENTITY["dataset_path"],
-        "dataset_version": 3325,
+        "dataset_version": compare.EXPECTED_IDENTITY["dataset_version"],
         "row_index": 1,
         "object_index": 0,
         "uuid": compare.EXPECTED_IDENTITY["uuid"],
         "file_uuid": compare.EXPECTED_IDENTITY["file_uuid"],
-        "identity": "powerdrill_02_002",
+        "identity": compare.EXPECTED_IDENTITY["identity"],
     }
     if backend == "mujoco":
         identity.update(
-            source_start=10,
-            source_stop=604,
-            loaded_dataset_version=3325,
+            source_start=compare.EXPECTED_IDENTITY["source_start"],
+            source_stop=compare.EXPECTED_IDENTITY["source_stop"],
+            loaded_dataset_version=compare.EXPECTED_IDENTITY["dataset_version"],
         )
         return {
             "schema": compare.MUJOCO_SCHEMA,
@@ -66,7 +68,7 @@ def valid_metadata(backend: str) -> dict[str, Any]:
             "backend": "mjx-warp",
             "device": "gpu",
             "trace_path": "mujoco.npz",
-            "trace_steps": 593,
+            "trace_steps": compare.TRACE_STEPS,
             "metrics": {},
             "stability_gates": {
                 "finite": True,
@@ -81,12 +83,12 @@ def valid_metadata(backend: str) -> dict[str, Any]:
             "claims": {"isaac_parity": "not_evaluated_no_isaac_trace"},
         }
     identity["source_slice"] = {
-        "start": 10,
-        "stop": 604,
+        "start": compare.EXPECTED_IDENTITY["source_start"],
+        "stop": compare.EXPECTED_IDENTITY["source_stop"],
         "stop_exclusive": True,
     }
-    identity["reference_frame_count"] = 594
-    identity["physical_call_count"] = 593
+    identity["reference_frame_count"] = compare.TRACE_STEPS + 1
+    identity["physical_call_count"] = compare.TRACE_STEPS
     return {
         "schema": compare.ISAAC_SCHEMA,
         "trajectory_identity": identity,
@@ -417,26 +419,26 @@ def test_phase_boundaries_use_post_step_reference_index(tmp_path: Path) -> None:
     mujoco = valid_arrays("mujoco")
     isaac = valid_arrays("isaac")
     for arrays in (mujoco, isaac):
-        arrays["hand_qpos"][[249, 250, 434, 435], 0] = 1.0
+        arrays["hand_qpos"][[249, 250, 542, 543], 0] = 1.0
 
     report = run_comparison(tmp_path, mujoco_arrays=mujoco, isaac_arrays=isaac)
     phases = report["tracking_metrics"]["mujoco"]["phases"]
 
     assert phases["pre_motion"]["call_count"] == 250
-    assert phases["movement"]["call_count"] == 185
-    assert phases["post_motion"]["call_count"] == 158
+    assert phases["movement"]["call_count"] == 293
+    assert phases["post_motion"]["call_count"] == 248
     assert phases["pre_motion"]["hand_translation_norm_rmse_m"] == pytest.approx(
         np.sqrt(1.0 / 250.0)
     )
     assert phases["movement"]["hand_translation_norm_rmse_m"] == pytest.approx(
-        np.sqrt(2.0 / 185.0)
+        np.sqrt(2.0 / 293.0)
     )
     assert phases["post_motion"]["hand_translation_norm_rmse_m"] == pytest.approx(
-        np.sqrt(1.0 / 158.0)
+        np.sqrt(1.0 / 248.0)
     )
     assert phases["movement"]["raw_source_reference_index"] == {
-        "start": 260,
-        "stop_inclusive": 444,
+        "start": 690,
+        "stop_inclusive": 982,
     }
 
 

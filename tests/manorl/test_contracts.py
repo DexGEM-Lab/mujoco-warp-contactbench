@@ -24,15 +24,15 @@ from sim.manorl.trajectory import rotvec_to_xyzw, wxyz_to_xyzw, xyzw_to_wxyz
 
 def test_exact_identity_and_slice_contract() -> None:
     validate_contract()
-    assert SOURCE_SLICE == (10, 604)
-    assert REFERENCE_FRAME_COUNT == 594
-    assert CONTROL_STEP_COUNT == 593
-    assert TRAJECTORY_IDENTITY.uuid == "e49b87fb-51c1-44eb-aade-666b5e617959"
-    assert TRAJECTORY_IDENTITY.file_uuid == "20260528022141_a5fb81e3"
-    assert TRAJECTORY_IDENTITY.identity == "powerdrill_02_002"
+    assert SOURCE_SLICE == (440, 1232)
+    assert REFERENCE_FRAME_COUNT == 792
+    assert CONTROL_STEP_COUNT == 791
+    assert TRAJECTORY_IDENTITY.uuid == "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3"
+    assert TRAJECTORY_IDENTITY.file_uuid == "e6fe4732-72cd-5ab7-93e6-2e62dc0263a5"
+    assert TRAJECTORY_IDENTITY.identity == "cube1_01_009"
     assert (TRAJECTORY_IDENTITY.movement_start_raw, TRAJECTORY_IDENTITY.movement_end_raw) == (
-        260,
-        444,
+        690,
+        982,
     )
     with pytest.raises(FrozenInstanceError):
         TRAJECTORY_IDENTITY.row_index = 2  # type: ignore[misc]
