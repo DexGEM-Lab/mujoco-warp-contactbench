@@ -30,6 +30,7 @@ import numpy as np
 
 
 SCHEMA = "manorl.isaacgym.reference_replay.v1"
+SEMANTIC_FIXTURE_SCHEMA = "manorl.isaacgym.semantic_fixture.v1"
 SEED = 42
 TARGET_REPO = Path(__file__).resolve().parents[1]
 SOURCE_REPO = TARGET_REPO.parent / "manohand_reconstruction"
@@ -123,6 +124,18 @@ TASK_UPDATES: dict[str, Any] = {
     "task.env.maxDeviationDistance": REFERENCE_MAX_DEVIATION_DISTANCE,
 }
 
+
+def task_updates_for_mode(*, semantic_only: bool) -> dict[str, Any]:
+    """Keep PD trace and current-source semantic contracts intentionally separate."""
+
+    updates = dict(TASK_UPDATES)
+    if semantic_only:
+        updates.update({
+            "task.env.useResidualActions": True,
+            "task.env.earlyPhaseMocapSteps": 100,
+        })
+    return updates
+
 SOURCE_HASH_PATHS = (
     "IsaacGymEnvs/isaacgymenvs/tasks/mano_hand.py",
     "IsaacGymEnvs/isaacgymenvs/tasks/base/vec_task.py",
@@ -175,6 +188,79 @@ REQUIRED_ARRAY_SPECS: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {
     "expected_contact_mask": ((16,), np.dtype("float32")),
     "contact_count": ((), np.dtype("int64")),
     "has_contact": ((), np.dtype("bool")),
+}
+
+# These calls isolate every piecewise transition in the current source task:
+# early phase, contact-window start/end, post-window behavior, and terminal.
+SEMANTIC_REGULAR_CALLS = (0, 99, 100, 101, 102, 249, 250, 542, 543, 789, 790)
+SEMANTIC_DELAYED_RESET_CALL = 791
+SEMANTIC_SAMPLE_COUNT = len(SEMANTIC_REGULAR_CALLS) + 1
+SEMANTIC_SAMPLE_KIND_POST_STEP = 0
+SEMANTIC_SAMPLE_KIND_DELAYED_RESET_POST = 1
+SEMANTIC_ARRAY_SPECS: dict[str, tuple[tuple[int, ...], np.dtype[Any]]] = {
+    "physical_call": ((), np.dtype("int64")),
+    "sample_kind": ((), np.dtype("int8")),
+    "pulse_case": ((), np.dtype("int8")),
+    "raw_action": ((26,), np.dtype("float32")),
+    "processed_action": ((26,), np.dtype("float32")),
+    "mocap_target": ((26,), np.dtype("float32")),
+    "controller_target": ((26,), np.dtype("float32")),
+    "action_trajectory_step": ((), np.dtype("int64")),
+    "action_cumulative_offset": ((3,), np.dtype("float32")),
+    "action_cumulative_joint_offset": ((20,), np.dtype("float32")),
+    "source_raw_observation": ((476,), np.dtype("float32")),
+    "mano_dof_pos": ((26,), np.dtype("float32")),
+    "mano_dof_lower": ((26,), np.dtype("float32")),
+    "mano_dof_upper": ((26,), np.dtype("float32")),
+    "hand_position": ((3,), np.dtype("float32")),
+    "hand_orientation_xyzw": ((4,), np.dtype("float32")),
+    "object_position": ((3,), np.dtype("float32")),
+    "object_orientation_xyzw": ((4,), np.dtype("float32")),
+    "object_linear_velocity": ((3,), np.dtype("float32")),
+    "target_object_position": ((3,), np.dtype("float32")),
+    "target_object_orientation_xyzw": ((4,), np.dtype("float32")),
+    "target_object_pos_next_5": ((3,), np.dtype("float32")),
+    "cumulative_offset": ((3,), np.dtype("float32")),
+    "cumulative_joint_offset": ((20,), np.dtype("float32")),
+    "point_cloud_relative": ((64, 3), np.dtype("float32")),
+    "point_cloud_local_template": ((64, 3), np.dtype("float32")),
+    "point_cloud_scale": ((3,), np.dtype("float32")),
+    "point_cloud_normalized": ((), np.dtype("bool")),
+    "object_geometry": ((12,), np.dtype("float32")),
+    "object_support_points": ((256, 3), np.dtype("float32")),
+    "object_support_point_count": ((), np.dtype("int64")),
+    "table_surface_height": ((), np.dtype("float32")),
+    "table_clearance_support_point_cap": ((), np.dtype("int64")),
+    "hand_keypoint_positions": ((16, 3), np.dtype("float32")),
+    "fingertip_positions": ((5, 3), np.dtype("float32")),
+    "hand_keypoint_contact_forces": ((16, 3), np.dtype("float32")),
+    "object_contact_force": ((3,), np.dtype("float32")),
+    "object_gravity_force": ((), np.dtype("float32")),
+    "expected_contact_mask": ((16,), np.dtype("float32")),
+    "expected_contact_weights": ((16,), np.dtype("float32")),
+    "action_type": ((50,), np.dtype("float32")),
+    "action_id": ((), np.dtype("int64")),
+    "active_joint_mask": ((20,), np.dtype("bool")),
+    "rotation_disabled_mask": ((), np.dtype("bool")),
+    "early_phase_start": ((), np.dtype("int64")),
+    "progress": ((), np.dtype("int64")),
+    "trajectory_step": ((), np.dtype("int64")),
+    "contact_start_frame": ((), np.dtype("int64")),
+    "contact_end_frame": ((), np.dtype("int64")),
+    "reset": ((), np.dtype("bool")),
+    "deviation_reset": ((), np.dtype("bool")),
+    "deviation_penalty": ((), np.dtype("float32")),
+    "reward_total": ((), np.dtype("float32")),
+    "reward_distance_x": ((), np.dtype("float32")),
+    "reward_distance_y": ((), np.dtype("float32")),
+    "reward_distance_z": ((), np.dtype("float32")),
+    "reward_rotation": ((), np.dtype("float32")),
+    "reward_action_penalty": ((), np.dtype("float32")),
+    "reward_position_penalty": ((), np.dtype("float32")),
+    "reward_joint_penalty": ((), np.dtype("float32")),
+    "reward_contact": ((), np.dtype("float32")),
+    "reward_object_stability": ((), np.dtype("float32")),
+    "reward_object_speed": ((), np.dtype("float32")),
 }
 
 NON_COMPARABLE_FIELDS = [
@@ -465,6 +551,101 @@ def validate_trace_schema(metadata: Mapping[str, Any], arrays: Mapping[str, np.n
             raise ValueError(f"{name} contains non-finite values")
 
 
+def validate_semantic_fixture_schema(
+    metadata: Mapping[str, Any], arrays: Mapping[str, np.ndarray]
+) -> None:
+    """Validate the sparse source-state contract consumed by target semantics."""
+
+    if metadata.get("schema") != SEMANTIC_FIXTURE_SCHEMA:
+        raise ValueError(f"semantic fixture schema must be {SEMANTIC_FIXTURE_SCHEMA!r}")
+    if metadata.get("regular_sample_calls") != list(SEMANTIC_REGULAR_CALLS):
+        raise ValueError("semantic fixture sample calls differ from the settled phase boundaries")
+    identity = metadata.get("trajectory_identity")
+    if not isinstance(identity, Mapping) or identity.get("identity") != TRAJECTORY_NAME:
+        raise ValueError("semantic fixture identity mismatch")
+    discriminator = metadata.get("termination_discriminator")
+    if not isinstance(discriminator, Mapping) or set(discriminator.get("cases", ())) != {
+        "below_threshold",
+        "above_threshold",
+        "early_above_threshold",
+        "trajectory_complete",
+    }:
+        raise ValueError("semantic fixture lacks the current-source termination discriminator")
+    configuration = metadata.get("configuration")
+    if not isinstance(configuration, Mapping) or configuration.get("useResidualActions") is not True or configuration.get(
+        "earlyPhaseMocapSteps"
+    ) != 100:
+        raise ValueError("semantic fixture must use the current-source residual/early configuration")
+    pulse_cases = metadata.get("pulse_cases")
+    if not isinstance(pulse_cases, Mapping) or set(pulse_cases) != {
+        str(PULSE_NONE),
+        str(PULSE_EARLY_MASK),
+        str(PULSE_TRANSITION),
+        str(PULSE_ACCUMULATE_POSITIVE),
+        str(PULSE_ACCUMULATE_NEGATIVE),
+    }:
+        raise ValueError("semantic fixture lacks the bounded residual action pulse contract")
+    missing = sorted(set(SEMANTIC_ARRAY_SPECS) - set(arrays))
+    extra = sorted(set(arrays) - set(SEMANTIC_ARRAY_SPECS))
+    if missing or extra:
+        raise ValueError(f"semantic fixture fields differ: missing={missing}, extra={extra}")
+    for name, (tail_shape, expected_dtype) in SEMANTIC_ARRAY_SPECS.items():
+        array = np.asarray(arrays[name])
+        expected_shape = (SEMANTIC_SAMPLE_COUNT, *tail_shape)
+        if array.shape != expected_shape:
+            raise ValueError(f"semantic fixture {name} shape {array.shape} != {expected_shape}")
+        if array.dtype != expected_dtype:
+            raise ValueError(f"semantic fixture {name} dtype {array.dtype} != {expected_dtype}")
+        if array.dtype.kind in "fc" and not np.isfinite(array).all():
+            raise ValueError(f"semantic fixture {name} contains non-finite values")
+    expected_calls = [*SEMANTIC_REGULAR_CALLS, SEMANTIC_DELAYED_RESET_CALL]
+    if arrays["physical_call"].tolist() != expected_calls:
+        raise ValueError("semantic fixture physical-call array differs from metadata")
+    expected_kinds = [SEMANTIC_SAMPLE_KIND_POST_STEP] * len(SEMANTIC_REGULAR_CALLS) + [
+        SEMANTIC_SAMPLE_KIND_DELAYED_RESET_POST
+    ]
+    if arrays["sample_kind"].tolist() != expected_kinds:
+        raise ValueError("semantic fixture sample kinds do not distinguish delayed reset")
+    expected_pulses = {
+        99: PULSE_EARLY_MASK,
+        100: PULSE_TRANSITION,
+        101: PULSE_ACCUMULATE_POSITIVE,
+        102: PULSE_ACCUMULATE_NEGATIVE,
+    }
+    for call, pulse in expected_pulses.items():
+        index = arrays["physical_call"].tolist().index(call)
+        if int(arrays["pulse_case"][index]) != pulse:
+            raise ValueError(f"semantic fixture call {call} lacks required residual pulse {pulse}")
+
+
+def _write_semantic_fixture(
+    output: os.PathLike[str] | str,
+    metadata: Mapping[str, Any],
+    arrays: Mapping[str, np.ndarray],
+) -> tuple[Path, Path]:
+    paths = artifact_paths(output)
+    if paths.prefix == SOURCE_REPO or SOURCE_REPO in paths.prefix.parents:
+        raise ValueError("semantic fixture output must be outside the protected sibling source repository")
+    validate_semantic_fixture_schema(metadata, arrays)
+    if paths.final_npz.exists() or paths.final_json.exists():
+        raise FileExistsError("refusing to replace an existing semantic fixture")
+    npz_temporary = _temporary_npz(paths.final_npz, arrays)
+    try:
+        _atomic_json(paths.final_json, metadata)
+        os.replace(npz_temporary, paths.final_npz)
+    except BaseException:
+        try:
+            npz_temporary.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            paths.final_json.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return paths.final_npz, paths.final_json
+
+
 def _required_attr(owner: Any, name: str) -> Any:
     if not hasattr(owner, name):
         raise AttributeError(f"MANOHand missing required authoritative attribute {name!r}")
@@ -577,12 +758,15 @@ def _write_success(paths: ArtifactPaths, metadata: Mapping[str, Any], arrays: Ma
         raise
 
 
-def _assert_resolved_config(task_cfg: Mapping[str, Any]) -> None:
+def _assert_resolved_config(
+    task_cfg: Mapping[str, Any], *, residual_actions: bool = False, early_phase_steps: int = 0
+) -> None:
     checks = {
         "task name": task_cfg["name"] == "MANOHand",
         "physics engine": task_cfg["physics_engine"] == "physx",
         "one environment": task_cfg["env"]["numEnvs"] == 1,
-        "residual actions disabled": task_cfg["env"]["useResidualActions"] is False,
+        "residual action mode": task_cfg["env"]["useResidualActions"] is residual_actions,
+        "early mocap phase": task_cfg["env"]["earlyPhaseMocapSteps"] == early_phase_steps,
         "deviation termination disabled": task_cfg["env"]["maxDeviationDistance"]
         == REFERENCE_MAX_DEVIATION_DISTANCE,
         "control frequency": task_cfg["env"]["controlFrequencyInv"] == 1,
@@ -836,8 +1020,254 @@ def _capture_record(
     }
 
 
-def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool = True) -> tuple[Path, Path]:
-    """Run the fixed 791-call replay and return final NPZ/JSON paths."""
+def _capture_semantic_record(
+    env: Any,
+    record: Mapping[str, Any],
+    pre_capture: Mapping[str, np.ndarray],
+    physical_call: int,
+    *,
+    sample_kind: int,
+    pulse_case: int,
+) -> dict[str, Any]:
+    """Capture source-resolved inputs and named reward outputs at one phase boundary."""
+
+    if bool(record["deviation_reset_mask"]):
+        raise RuntimeError("fixed-horizon semantic fixture cannot include a deviation reset")
+    point_cloud = env.get_point_cloud_observation(mode="raw")[0]
+    fingertip_positions = env.observation_encoder._compute_finger_tip_positions_world()[0]
+    active_joint_mask = env._get_active_joint_mask()[0]
+    gravity_forces = _required_attr(env, "object_gravity_forces")
+    if gravity_forces is None:
+        raise RuntimeError("MANOHand did not expose object gravity force for reward semantics")
+    point_template = _required_attr(_required_attr(env, "pc_encoder"), "pointcloud_template")
+    if point_template is None:
+        raise RuntimeError("MANOHand did not expose a static point-cloud template")
+    point_normalized = bool(_required_attr(env, "pc_normalize"))
+    point_scale = getattr(env.pc_encoder, "pc_scale", None)
+    if point_normalized and point_scale is None:
+        raise RuntimeError("normalized source point-cloud template has no source scale")
+    if point_scale is None:
+        point_scale = env.pc_encoder.pointcloud_template.new_ones(3)
+    support_points = env.observation_encoder._get_object_support_points(
+        OBJECT_TYPE, dtype=point_template.dtype
+    )
+    support_count = int(support_points.shape[0])
+    if not 1 <= support_count <= 256:
+        raise RuntimeError(f"source support-point count {support_count} is outside fixture capacity")
+    padded_support = point_template.new_zeros((256, 3))
+    padded_support[:support_count] = support_points
+    trajectory_info = _required_attr(env, "trajectory_manager").get_trajectory_info(0)
+    action_id = trajectory_info.get("action_id") if trajectory_info else None
+    if action_id is None or not str(action_id).isdigit():
+        raise RuntimeError("source trajectory manager did not expose a numeric action_id")
+    return {
+        "physical_call": np.int64(physical_call),
+        "sample_kind": np.int8(sample_kind),
+        "pulse_case": np.int8(pulse_case),
+        "raw_action": pre_capture["raw_action"],
+        "processed_action": pre_capture["processed_action"],
+        "mocap_target": pre_capture["mocap_target_unclamped"],
+        "controller_target": pre_capture["q_target"],
+        "action_trajectory_step": pre_capture["trajectory_step"],
+        "action_cumulative_offset": pre_capture["action_cumulative_offset"],
+        "action_cumulative_joint_offset": pre_capture["action_cumulative_joint_offset"],
+        "source_raw_observation": _numpy(_required_attr(env, "obs_buf")[0], "float32"),
+        "mano_dof_pos": _numpy(_required_attr(env, "mano_dof_pos")[0], "float32"),
+        "mano_dof_lower": _numpy(_required_attr(env, "mano_dof_lower_limits"), "float32"),
+        "mano_dof_upper": _numpy(_required_attr(env, "mano_dof_upper_limits"), "float32"),
+        "hand_position": _numpy(_required_attr(env, "hand_positions")[0], "float32"),
+        "hand_orientation_xyzw": _numpy(_required_attr(env, "hand_orientations")[0], "float32"),
+        "object_position": _numpy(_required_attr(env, "object_positions")[0], "float32"),
+        "object_orientation_xyzw": _numpy(_required_attr(env, "object_orientations")[0], "float32"),
+        "object_linear_velocity": _numpy(_required_attr(env, "object_linvels")[0], "float32"),
+        "target_object_position": _numpy(_required_attr(env, "target_object_positions")[0], "float32"),
+        "target_object_orientation_xyzw": _numpy(
+            _required_attr(env, "target_object_orientations")[0], "float32"
+        ),
+        "target_object_pos_next_5": _numpy(
+            _required_attr(env, "target_object_pos_next_5")[0], "float32"
+        ),
+        "cumulative_offset": _numpy(_required_attr(env, "cumulative_offset")[0], "float32"),
+        "cumulative_joint_offset": _numpy(
+            _required_attr(env, "cumulative_joint_offset")[0], "float32"
+        ),
+        "point_cloud_relative": _numpy(point_cloud, "float32").reshape(64, 3),
+        "point_cloud_local_template": _numpy(point_template, "float32"),
+        "point_cloud_scale": _numpy(point_scale, "float32"),
+        "point_cloud_normalized": np.bool_(point_normalized),
+        "object_geometry": _numpy(_required_attr(env, "object_geometry")[0], "float32"),
+        "object_support_points": _numpy(padded_support, "float32"),
+        "object_support_point_count": np.int64(support_count),
+        "table_surface_height": np.float32(_required_attr(env, "table_surface_height")),
+        "table_clearance_support_point_cap": np.int64(
+            env.observation_encoder.table_clearance_support_point_cap
+        ),
+        "hand_keypoint_positions": _numpy(
+            _required_attr(env, "hand_keypoint_positions")[0], "float32"
+        ),
+        "fingertip_positions": _numpy(fingertip_positions, "float32"),
+        "hand_keypoint_contact_forces": _numpy(
+            _required_attr(env, "hand_keypoint_contact_forces")[0], "float32"
+        ),
+        "object_contact_force": _numpy(
+            _required_attr(env, "object_contact_forces")[0], "float32"
+        ),
+        "object_gravity_force": np.float32(_scalar(gravity_forces[0], float)),
+        "expected_contact_mask": _numpy(
+            _required_attr(env, "expected_contact_mask_tensor")[0], "float32"
+        ),
+        "expected_contact_weights": _numpy(
+            _required_attr(env, "contact_reward_calculator").expected_contact_weights[0], "float32"
+        ),
+        "action_type": _numpy(_required_attr(env, "action_type")[0], "float32"),
+        "action_id": np.int64(int(action_id)),
+        "active_joint_mask": _numpy(active_joint_mask, "bool"),
+        "rotation_disabled_mask": np.bool_(
+            _scalar(_required_attr(env, "rotation_disabled_mask")[0], bool)
+        ),
+        "early_phase_start": np.int64(
+            _scalar(env._get_early_phase_starts_tensor()[0], int)
+        ),
+        "progress": np.int64(_scalar(_required_attr(env, "progress_buf")[0], int)),
+        "trajectory_step": np.int64(_scalar(_required_attr(env, "trajectory_steps")[0], int)),
+        "contact_start_frame": np.int64(_scalar(_required_attr(env, "env_contact_start_frames")[0], int)),
+        "contact_end_frame": np.int64(_scalar(_required_attr(env, "env_contact_end_frames")[0], int)),
+        "reset": np.bool_(record["reset"]),
+        "deviation_reset": np.bool_(record["deviation_reset_mask"]),
+        # The guarded source configuration disables deviation termination so all
+        # selected samples have exactly zero termination penalty.
+        "deviation_penalty": np.float32(0.0),
+        "reward_total": np.float32(record["reward"]),
+        "reward_distance_x": np.float32(_scalar(_required_attr(env, "distance_reward_x")[0], float)),
+        "reward_distance_y": np.float32(_scalar(_required_attr(env, "distance_reward_y")[0], float)),
+        "reward_distance_z": np.float32(_scalar(_required_attr(env, "distance_reward_z")[0], float)),
+        "reward_rotation": np.float32(_scalar(_required_attr(env, "rotation_reward")[0], float)),
+        "reward_action_penalty": np.float32(_scalar(_required_attr(env, "action_penalty")[0], float)),
+        "reward_position_penalty": np.float32(_scalar(_required_attr(env, "position_penalty")[0], float)),
+        "reward_joint_penalty": np.float32(_scalar(_required_attr(env, "joint_penalty")[0], float)),
+        "reward_contact": np.float32(_scalar(_required_attr(env, "contact_reward")[0], float)),
+        "reward_object_stability": np.float32(
+            _scalar(_required_attr(env, "object_stability_reward")[0], float)
+        ),
+        "reward_object_speed": np.float32(_scalar(_required_attr(env, "object_speed")[0], float)),
+    }
+
+
+PULSE_NONE = 0
+PULSE_EARLY_MASK = 1
+PULSE_TRANSITION = 2
+PULSE_ACCUMULATE_POSITIVE = 3
+PULSE_ACCUMULATE_NEGATIVE = 4
+
+
+def _semantic_action(torch: Any, env: Any, *, physical_call: int) -> tuple[Any, int]:
+    """Exercise wrist, active and inactive fingers across the 99/100 boundary."""
+
+    cases = {
+        99: (PULSE_EARLY_MASK, 1.0),
+        100: (PULSE_TRANSITION, 1.0),
+        101: (PULSE_ACCUMULATE_POSITIVE, 1.0),
+        102: (PULSE_ACCUMULATE_NEGATIVE, -1.0),
+    }
+    case = cases.get(physical_call)
+    action = torch.zeros((1, DOFS), device=env.device, dtype=torch.float32)
+    if case is None:
+        return action, PULSE_NONE
+    pulse_case, sign = case
+    active = env._get_active_joint_mask()[0]
+    active_indices = torch.nonzero(active, as_tuple=False).flatten()
+    inactive_indices = torch.nonzero(~active, as_tuple=False).flatten()
+    if len(active_indices) == 0 or len(inactive_indices) == 0:
+        raise RuntimeError("semantic action fixture requires both an active and inactive finger joint")
+    # Values exceed policy bounds deliberately: the source pre-step clamp, then
+    # active/inactive masking, must be observable in the recorded result.
+    action[0, 3] = 2.0 * sign
+    action[0, 6 + active_indices[0]] = 2.0 * sign
+    action[0, 6 + inactive_indices[0]] = -2.0 * sign
+    return action, pulse_case
+
+
+def _capture_termination_discriminator(
+    env: Any,
+    torch: Any,
+    *,
+    max_deviation_distance: float,
+    deviation_penalty: float,
+) -> dict[str, Any]:
+    """Measure source termination truth values under current-training settings.
+
+    This is deliberately independent of the fixed-horizon replay override.
+    It mutates only live runtime buffers and restores them before returning.
+    """
+
+    manager = _required_attr(env, "termination_manager")
+    saved = {
+        "object_positions": _required_attr(env, "object_positions").clone(),
+        "target_object_positions": _required_attr(env, "target_object_positions").clone(),
+        "progress_buf": _required_attr(env, "progress_buf").clone(),
+        "trajectory_steps": _required_attr(env, "trajectory_steps").clone(),
+        "manager_threshold": manager.max_deviation_distance,
+        "manager_penalty": manager.deviation_penalty,
+    }
+    cases = (
+        ("below_threshold", 100, 0, max_deviation_distance * 0.999),
+        ("above_threshold", 100, 0, max_deviation_distance * 1.001),
+        ("early_above_threshold", 99, 0, max_deviation_distance * 1.001),
+        ("trajectory_complete", 100, REFERENCE_FRAMES - 1, 0.0),
+    )
+    observed: dict[str, Any] = {}
+    try:
+        manager.max_deviation_distance = float(max_deviation_distance)
+        manager.deviation_penalty = float(deviation_penalty)
+        for name, trajectory_step, progress, displacement in cases:
+            env.object_positions.copy_(saved["target_object_positions"])
+            env.object_positions[0, 0] += displacement
+            env.progress_buf.fill_(progress)
+            env.trajectory_steps.fill_(trajectory_step)
+            reset, deviation, penalty = manager.check_termination()
+            observed[name] = {
+                "trajectory_step": trajectory_step,
+                "progress": progress,
+                "object_target_distance": displacement,
+                "early_mask": bool(env._get_early_phase_mask()[0].item()),
+                "reset": bool(reset[0].item()),
+                "deviation_reset": bool(deviation[0].item()),
+                "deviation_penalty": float(penalty[0].item()),
+            }
+    finally:
+        env.object_positions.copy_(saved["object_positions"])
+        env.target_object_positions.copy_(saved["target_object_positions"])
+        env.progress_buf.copy_(saved["progress_buf"])
+        env.trajectory_steps.copy_(saved["trajectory_steps"])
+        manager.max_deviation_distance = saved["manager_threshold"]
+        manager.deviation_penalty = saved["manager_penalty"]
+
+    expected = {
+        "below_threshold": (False, False, 0.0),
+        "above_threshold": (True, True, -float(deviation_penalty)),
+        "early_above_threshold": (False, False, 0.0),
+        "trajectory_complete": (True, False, 0.0),
+    }
+    for name, (reset, deviation, penalty) in expected.items():
+        actual = observed[name]
+        if (actual["reset"], actual["deviation_reset"]) != (reset, deviation) or not math.isclose(
+            actual["deviation_penalty"], penalty, abs_tol=1e-6
+        ):
+            raise RuntimeError(f"source termination discriminator failed for {name}: {actual}")
+    return {
+        "max_deviation_distance": float(max_deviation_distance),
+        "deviation_penalty": float(deviation_penalty),
+        "cases": observed,
+    }
+
+
+def run(
+    output: os.PathLike[str] | str,
+    device: str = "cuda:0",
+    headless: bool = True,
+    semantic_only: bool = False,
+) -> tuple[Path, Path]:
+    """Run either the fixed trace or the current-source sparse semantic fixture."""
     if device != "cuda:0":
         raise ValueError("the settled reference trace requires device cuda:0")
     if headless is not True:
@@ -850,10 +1280,12 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
     if paths.prefix == SOURCE_REPO or SOURCE_REPO in paths.prefix.parents:
         raise ValueError("output must be outside the protected sibling source repository")
     records: list[dict[str, Any]] = []
+    semantic_records: list[dict[str, Any]] = []
     source_before: dict[str, Any] | None = None
     source_after: dict[str, Any] | None = None
     patch_state: dict[str, Any] = {"matching_count": 0}
     resolved_config: dict[str, Any] | None = None
+    current_source_termination: dict[str, float] | None = None
     last_state: dict[str, Any] = {}
     captured_warnings: list[str] = []
     backend: Any = None
@@ -890,13 +1322,25 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
         backend = backend_module
         with initialize_config_dir(version_base=None, config_dir=str(RUNTIME_CWD / "cfg")):
             cfg = compose(config_name="config.yaml", overrides=HYDRA_OVERRIDES)
-        for key, value in TASK_UPDATES.items():
+        current_source_cfg = OmegaConf.to_container(cfg.task, resolve=True)
+        if not isinstance(current_source_cfg, dict):
+            raise TypeError("current source task configuration is not a dict")
+        current_source_termination = {
+            "max_deviation_distance": float(current_source_cfg["env"]["maxDeviationDistance"]),
+            "deviation_penalty": float(current_source_cfg["env"]["deviationPenalty"]),
+        }
+        task_updates = task_updates_for_mode(semantic_only=semantic_only)
+        for key, value in task_updates.items():
             OmegaConf.update(cfg, key, value, merge=False)
         task_cfg = OmegaConf.to_container(cfg.task, resolve=True)
         if not isinstance(task_cfg, dict):
             raise TypeError("resolved task configuration is not a dict")
         resolved_config = task_cfg
-        _assert_resolved_config(task_cfg)
+        _assert_resolved_config(
+            task_cfg,
+            residual_actions=semantic_only,
+            early_phase_steps=100 if semantic_only else 0,
+        )
 
         original_find = _install_strict_find(backend, lance, patch_state)
         from isaacgymenvs.tasks.mano_hand import MANOHand
@@ -916,8 +1360,8 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
                 f"{item.category.__name__}: {item.message}" for item in warning_records
             )
 
-        if env.use_residual_actions is not False:
-            raise RuntimeError("constructed environment enabled residual actions")
+        if bool(env.use_residual_actions) is not semantic_only:
+            raise RuntimeError("constructed environment residual-action mode differs from requested contract")
         if int(env.num_envs) != 1 or int(env.num_mano_dofs) != DOFS:
             raise RuntimeError("constructed environment dimension mismatch")
         if int(env.control_freq_inv) != 1:
@@ -937,7 +1381,7 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
         env.reset_idx(torch.tensor([0], device=env.device, dtype=torch.long))
         if int(env.trajectory_steps[0].item()) != 0 or int(env.progress_buf[0].item()) != 0:
             raise RuntimeError("explicit reset did not initialize both counters to zero")
-        invariance = _prove_action_invariance(env, torch)
+        invariance = None if semantic_only else _prove_action_invariance(env, torch)
 
         full_reference_raw = np.concatenate(
             (
@@ -969,12 +1413,22 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
 
         for physical_call in range(PHYSICS_CALLS):
             schedule = schedule_point(physical_call)
-            raw_action = torch.zeros((1, DOFS), device=env.device, dtype=torch.float32)
+            if semantic_only:
+                raw_action, pulse_case = _semantic_action(torch, env, physical_call=physical_call)
+            else:
+                raw_action = torch.zeros((1, DOFS), device=env.device, dtype=torch.float32)
+                pulse_case = PULSE_NONE
             if tuple(raw_action.shape) != (1, DOFS) or not bool(torch.isfinite(raw_action).all()):
                 raise RuntimeError("invalid replay action")
             action = torch.clamp(raw_action, -env.clip_actions, env.clip_actions)
             progress_before = int(env.progress_buf[0].item())
             trajectory_before = int(env.trajectory_steps[0].item())
+            action_cumulative_offset_before = _numpy(
+                _required_attr(env, "cumulative_offset")[0], "float32"
+            )
+            action_cumulative_joint_offset_before = _numpy(
+                _required_attr(env, "cumulative_joint_offset")[0], "float32"
+            )
             if trajectory_before != schedule.target_index:
                 raise RuntimeError(
                     f"target schedule diverged on call {physical_call}: "
@@ -995,6 +1449,9 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
                 "cumulative_joint_offset": _numpy(
                     _required_attr(env, "cumulative_joint_offset")[0], "float32"
                 ),
+                "trajectory_step": np.int64(trajectory_before),
+                "action_cumulative_offset": action_cumulative_offset_before,
+                "action_cumulative_joint_offset": action_cumulative_joint_offset_before,
             }
             env.gym.simulate(env.sim)
             env.post_physics_step()
@@ -1010,6 +1467,17 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
                 raw_object_reference[schedule.reference_index],
             )
             records.append(record)
+            if semantic_only and physical_call in SEMANTIC_REGULAR_CALLS:
+                semantic_records.append(
+                    _capture_semantic_record(
+                        env,
+                        record,
+                        pre_capture,
+                        physical_call,
+                        sample_kind=SEMANTIC_SAMPLE_KIND_POST_STEP,
+                        pulse_case=pulse_case,
+                    )
+                )
             env.control_steps += 1
             last_state = {
                 "last_completed_physical_call": physical_call,
@@ -1025,9 +1493,103 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
         arrays = _stack_records(records)
         if len(records) != PHYSICS_CALLS:
             raise RuntimeError("replay did not complete exactly 791 physical calls")
+
+        if semantic_only:
+            if not bool(records[-1]["reset"]):
+                raise RuntimeError("semantic fixture requires a terminal reset signal at physical call 790")
+            raw_action, pulse_case = _semantic_action(torch, env, physical_call=SEMANTIC_DELAYED_RESET_CALL)
+            action = torch.clamp(raw_action, -env.clip_actions, env.clip_actions)
+            delayed_trajectory_before = np.int64(
+                _scalar(_required_attr(env, "trajectory_steps")[0], int)
+            )
+            delayed_cumulative_offset_before = _numpy(
+                _required_attr(env, "cumulative_offset")[0], "float32"
+            )
+            delayed_cumulative_joint_offset_before = _numpy(
+                _required_attr(env, "cumulative_joint_offset")[0], "float32"
+            )
+            env.pre_physics_step(action)
+            delayed_pre_capture = {
+                "raw_action": _numpy(raw_action[0], "float32"),
+                "processed_action": _numpy(_required_attr(env, "actions")[0], "float32"),
+                "mocap_target_unclamped": _numpy(_required_attr(env, "mocap_targets")[0], "float32"),
+                "q_target": _numpy(_required_attr(env, "cur_targets")[0], "float32"),
+                "cumulative_offset": _numpy(_required_attr(env, "cumulative_offset")[0], "float32"),
+                "cumulative_joint_offset": _numpy(
+                    _required_attr(env, "cumulative_joint_offset")[0], "float32"
+                ),
+                "trajectory_step": delayed_trajectory_before,
+                "action_cumulative_offset": delayed_cumulative_offset_before,
+                "action_cumulative_joint_offset": delayed_cumulative_joint_offset_before,
+            }
+            # The next source post-step consumes the pending terminal reset and
+            # writes the reset state. It is fixture-only and never enters the
+            # immutable 791-call reference trace.
+            env.gym.simulate(env.sim)
+            env.post_physics_step()
+            delayed_record = {
+                "reset": np.bool_(_scalar(_required_attr(env, "reset_buf")[0], bool)),
+                "deviation_reset_mask": np.bool_(False),
+                "reward": np.float32(_scalar(_required_attr(env, "rew_buf")[0], float)),
+            }
+            semantic_records.append(
+                _capture_semantic_record(
+                    env,
+                    delayed_record,
+                    delayed_pre_capture,
+                    SEMANTIC_DELAYED_RESET_CALL,
+                    sample_kind=SEMANTIC_SAMPLE_KIND_DELAYED_RESET_POST,
+                    pulse_case=pulse_case,
+                )
+            )
+            assert current_source_termination is not None
+            termination_discriminator = _capture_termination_discriminator(
+                env,
+                torch,
+                **current_source_termination,
+            )
+
         source_after = capture_source_state()
         if not _source_unchanged(source_before, source_after):
             raise RuntimeError("source repository state or protected file hashes changed")
+
+        if semantic_only:
+            semantic_arrays = _stack_records(semantic_records)
+            semantic_metadata = _jsonable({
+                "schema": SEMANTIC_FIXTURE_SCHEMA,
+                "regular_sample_calls": list(SEMANTIC_REGULAR_CALLS),
+                "delayed_reset_post_after_call": PHYSICS_CALLS - 1,
+                "trajectory_identity": {
+                    "identity": TRAJECTORY_NAME,
+                    "dataset_path": str(DATASET_PATH),
+                    "dataset_version": patch_state["dataset_version"],
+                    "source_slice": [SOURCE_START, SOURCE_STOP],
+                },
+                "source_repository": {"before": source_before, "after": source_after},
+                "configuration": {
+                    "useResidualActions": task_cfg["env"]["useResidualActions"],
+                    "earlyPhaseMocapSteps": task_cfg["env"]["earlyPhaseMocapSteps"],
+                    "maxDeviationDistance": task_cfg["env"]["maxDeviationDistance"],
+                    "deviationPenalty": task_cfg["env"]["deviationPenalty"],
+                    "headless": True,
+                },
+                "pulse_cases": {
+                    str(PULSE_NONE): "zero_action",
+                    str(PULSE_EARLY_MASK): "early_mask_wrist_active_inactive",
+                    str(PULSE_TRANSITION): "transition_wrist_active_inactive",
+                    str(PULSE_ACCUMULATE_POSITIVE): "accumulate_positive_wrist_active_inactive",
+                    str(PULSE_ACCUMULATE_NEGATIVE): "accumulate_negative_wrist_active_inactive",
+                },
+                "termination_discriminator": termination_discriminator,
+                "purpose": (
+                    "resolved source inputs and named reward terms for target-side observation/action/reward verification; "
+                    "not a cross-simulator physical-state equality claim"
+                ),
+            })
+            # ``run`` changes cwd to the read-only source runtime. Reuse the
+            # target-absolute prefix resolved before that change rather than
+            # reinterpreting a caller-relative path under the sibling source.
+            return _write_semantic_fixture(paths.prefix, semantic_metadata, semantic_arrays)
 
         metrics = _compute_metrics(arrays)
         metadata: dict[str, Any] = {
@@ -1150,6 +1712,11 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, help="output prefix for .npz and .json")
+    parser.add_argument(
+        "--semantic-only",
+        action="store_true",
+        help="emit source current-configuration semantic samples instead of the residual-off PD trace",
+    )
     parser.add_argument("--device", default="cuda:0", choices=("cuda:0",))
     parser.add_argument(
         "--headless",
@@ -1162,7 +1729,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
-    run(arguments.output, device=arguments.device, headless=arguments.headless)
+    run(
+        arguments.output,
+        device=arguments.device,
+        headless=arguments.headless,
+        semantic_only=arguments.semantic_only,
+    )
     return 0
 
 

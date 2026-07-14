@@ -11,6 +11,9 @@ dependencies = [
   "mujoco-mjx[warp]==3.10.0",
   "warp-lang",
   "jax[cuda12]>=0.4.35",
+  "gymnasium==1.3.0",
+  "skrl==2.1.0",
+  "torch==2.13.0+cu129",
   "pylance==0.24.1",
   "pyarrow==24.0.0",
   "scipy",
@@ -25,3 +28,11 @@ test = ["pytest"]
 
 [tool.uv]
 package = false
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu129" }

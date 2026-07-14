@@ -103,6 +103,7 @@ def resolved_task_config() -> dict[str, object]:
         "env": {
             "numEnvs": 1,
             "useResidualActions": False,
+            "earlyPhaseMocapSteps": 0,
             "controlFrequencyInv": 1,
             "maxDeviationDistance": trace.REFERENCE_MAX_DEVIATION_DISTANCE,
         },
