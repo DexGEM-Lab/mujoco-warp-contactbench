@@ -154,10 +154,14 @@ in the early phase it is action penalty only
 - Post-window stability is `0.4 * exp(-(speed / 0.1)^2)` after a valid contact
   window (`reward_calculator.py:209-229`). Survival is `0.001`.
 
-Target owner is `sim/manorl/rewards.py`. No reward code is implemented in the
-minimal 5B slice because it depends on unresolved contact aggregation,
-trajectory contact-window mapping, and observation-source geometry. The first
-validation is a fixed tensor oracle for each calculator before aggregation.
+Target owner is `sim/manorl/rewards.py`. The deterministic equation layer is
+implemented as a pure resolved-state calculation: it receives source-order
+keypoint forces, expected masks/weights, object contact/gravity values,
+trajectory-window values, and the `sim/manorl/abi.py` termination result.
+`tests/manorl/test_observations_rewards.py` fixes the component equations,
+window boundaries, historical/current early-phase variants, and the final
+deviation-penalty ordering. It does not establish MuJoCo producers for those
+inputs; contact aggregation and trajectory-window mapping remain unresolved.
 
 ## Policy, normalization, inference, and checkpoint ABI
 
@@ -227,18 +231,18 @@ unknown.
 
 | Required semantic | Source is sufficiently specified? | Target owner | Required evidence before it changes status |
 | --- | --- | --- | --- |
-| Raw 476D composition and slice order | Yes | `sim/manorl/observations.py` | One source-state fixture per component and an exact concatenated 476D fixture. |
+| Raw 476D composition and slice order | Yes | `sim/manorl/observations.py` | Deterministic resolved-state fixtures now check every named slice and concatenated 476D layout. A source-versus-MuJoCo state fixture remains required once physical extractors exist. |
 | Hand/object kinematics, point cloud, geometry, table clearance | Partly; source formula is known but target simulator data extraction is absent | `sim/manorl/observations.py`, `pointcloud.py`, `object_features.py` | Fixed-state MuJoCo-versus-source component fixtures, including coordinate frames and keypoint ordering. |
 | Contact force aggregation and expected-mask lookup | Partly; source output formula and 16D ordering are known, target contact mapping is absent | `sim/manorl/contacts.py`, `metadata.py` | Keypoint-force and mask fixtures from a contact-bearing source episode. |
 | 26D residual transform, active-joint masking, early phase | Yes | `sim/manorl/abi.py` | Deterministic tensor cases for clipping, masking, transition step, accumulation, and limits. |
 | Target application and MuJoCo batched stepping | Partly; source target order is known, target vector runtime absent | `sim/manorl/environment.py` | One-world then batched action/target/physics ordering trace. |
 | Reset, progress, completion, deviation penalty | Yes for predicates; physical state writes are simulator-specific | `sim/manorl/abi.py`, `environment.py` | Termination truth-table and reset-state fixture with a trajectory restart. |
-| Rewards and contact-window timing | Yes for equations; target contact/window producers absent | `sim/manorl/rewards.py` | Component tensor oracles followed by a contact-window episode fixture. |
+| Rewards and contact-window timing | Yes for equations; target contact/window producers absent | `sim/manorl/rewards.py` | Component tensor oracles are implemented; a contact-window episode fixture remains required once the physical producers exist. |
 | Privileged/state inputs | Yes: absent in this configuration | `sim/manorl/environment.py` | Assert no `states` output until a source config declares `numStates > 0`. |
 | Network, PointNet/FiLM preprocessing, and normalization | Yes | `sim/manorl/model.py`, `normalization.py` | Frozen-normalizer and deterministic-mu equivalence on recorded 476D batches. |
 | Inference action selection and skrl adapter | No local Mano source defines the downstream rl-games player choice | `sim/manorl/skrl_adapter.py` | Explicit policy-mode contract and an evaluated deterministic/stochastic test; no inference mode may be inferred. |
 | Checkpoint and optimizer migration | File layout known; skrl mapping absent | `sim/manorl/checkpoint.py` | Key/shape conversion report plus loaded-model mu/value equivalence, or explicit unsupported-format rejection. |
-| Current-source versus checkpoint-sidecar training settings | Yes: they differ in named fields above | `sim/manorl/config.py` | Make selection explicit in a serializable target config; regression-test current (100) and historical checkpoint (50) early-phase behavior separately. |
+| Current-source versus checkpoint-sidecar training settings | Yes: they differ in named fields above | `sim/manorl/observations.py` / future `config.py` | Pure compatibility variants explicitly select current (100/static/250) or historical checkpoint (50/dynamic/200); serialize the selection before an environment or checkpoint claim. |
 
 ## Gate disposition
 
