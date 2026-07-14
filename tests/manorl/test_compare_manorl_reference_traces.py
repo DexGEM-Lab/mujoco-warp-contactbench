@@ -332,6 +332,30 @@ def test_schedule_mismatch_fails_before_metrics(tmp_path: Path) -> None:
         compare.compare_traces(mujoco_prefix, isaac_prefix, tmp_path / "comparison")
 
 
+def test_float32_accumulated_sim_time_is_accepted_but_bad_increment_is_rejected(
+    tmp_path: Path,
+) -> None:
+    mujoco = valid_arrays("mujoco")
+    half_step = np.float32(compare.CONTROL_DT / 2.0)
+    accumulated = np.empty(compare.TRACE_STEPS, dtype=np.float32)
+    clock = np.float32(0.0)
+    for call in range(compare.TRACE_STEPS):
+        clock = np.float32(clock + half_step)
+        clock = np.float32(clock + half_step)
+        accumulated[call] = clock
+    mujoco["sim_time"][:] = accumulated.astype(np.float64)
+
+    report = run_comparison(tmp_path / "float32", mujoco_arrays=mujoco)
+    assert report["comparison_status"] == "passed"
+
+    mujoco["sim_time"][250] += 1.0e-3
+    mujoco_prefix, isaac_prefix = artifact_pair(
+        tmp_path / "bad-increment", mujoco_arrays=mujoco
+    )
+    with pytest.raises(compare.TraceContractError, match="sim_time increment at call 250"):
+        compare.compare_traces(mujoco_prefix, isaac_prefix, tmp_path / "comparison")
+
+
 def test_raw_reference_mismatch_fails_before_metrics(tmp_path: Path) -> None:
     isaac = valid_arrays("isaac")
     isaac["object_reference_pos_raw"][100, 2] = 1.0e-9
