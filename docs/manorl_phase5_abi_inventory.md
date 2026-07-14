@@ -92,7 +92,9 @@ clipped before `ActionProcessor` (`vec_task.py:374-376`;
 3. applies XYZ scales `(0.005, 0.005, 0.005)`, rotation scale
    `0.025 * 0.01`, and the configured per-joint scales;
 4. zeros all cumulative offsets on reset, in early phase, on the first step
-   after early phase, or in non-residual mode; otherwise applies gamma `0.9`;
+   after early phase, or in non-residual mode; the first post-early step then
+   immediately accumulates its scaled action from zero history, while later
+   steps apply gamma `0.9`;
 5. clips XYZ offsets to `[-0.05, 0.05]` and joint offsets to their per-joint
    limits; and
 6. adds `[cum_xyz, immediate_rotation, cum_joints]` to the mocap target,
