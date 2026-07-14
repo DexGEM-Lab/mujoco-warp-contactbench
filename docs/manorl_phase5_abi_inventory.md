@@ -28,9 +28,9 @@ are contracts for later slices, not claims that those modules already exist.
 | Source semantic | Source evidence | Target owner | Status |
 | --- | --- | --- | --- |
 | Policy action space is `[-1, 1]^26`; input is clipped to `clipActions=1.0` before task control. | `cfg/task/MANOHand.yaml:79-91`; `tasks/base/vec_task.py:360-408` | `sim/manorl/abi.py` | Implemented in 5B. |
-| Environment returns `{"obs": obs}` plus reward, reset mask, and `extras["time_outs"]`; observation is clamped to `[-5, 5]` before return. | `tasks/base/vec_task.py:360-408`; `cfg/task/MANOHand.yaml:85-86` | `sim/manorl/environment.py` | Unresolved: full environment wrapper is later 5B work. |
+| Environment returns `{"obs": obs}` plus reward, reset mask, and `extras["time_outs"]`; observation is clamped to `[-5, 5]` before return. | `tasks/base/vec_task.py:360-408`; `cfg/task/MANOHand.yaml:85-86` | `sim/manorl/environment.py` | Implemented for the fixed cube1 source trajectory with a bounded batched MJX-Warp backend; it omits privileged state. |
 | No `numStates` is declared by the task. `VecTask` defaults it to zero and omits `states`; there is no privileged actor-critic input in this configuration. | `tasks/base/vec_task.py:101-116, 344-346, 402-406`; no `numStates` in `cfg/task/MANOHand.yaml` | `sim/manorl/environment.py` | Owned: omit privileged output unless a future source configuration explicitly adds it. |
-| One task control call performs one physics control interval (`controlFrequencyInv=1`). Source post-step increments progress before reward/termination. | `cfg/task/MANOHand.yaml:79-92`; `tasks/base/vec_task.py:374-394`; `tasks/mano_hand.py:3548-3559` | `sim/manorl/environment.py` | Unresolved: bind to batched MJX stepping after control core is validated. |
+| One task control call performs one physics control interval (`controlFrequencyInv=1`). Source post-step increments progress before reward/termination. | `cfg/task/MANOHand.yaml:79-92`; `tasks/base/vec_task.py:374-394`; `tasks/mano_hand.py:3548-3559` | `sim/manorl/environment.py` | Implemented with two 2.5 ms MJX-Warp substeps and the source counter order. |
 
 ## Raw observation ABI
 
@@ -72,12 +72,15 @@ The 16 keypoint order is already preserved by target
 ring_mcp, ring_pip, ring_dip, pinky_mcp, pinky_pip, pinky_dip, thumb_cmc,
 thumb_mcp, thumb_ip`.
 
-Unresolved observation owners are deliberately separated: batched MuJoCo
-contact-to-keypoint force aggregation, surface-point sampling/hand-relative
-coordinates, 12D source geometry encoding, table support-point reduction, and
-the source `target_object_pos_next_5` indexing rule. Their validation is a
-per-component source-state fixture comparison before a full environment is
-advertised.
+For the accepted cube1 trajectory, `sim/manorl/environment.py` now produces
+these state fields from batched MJX-Warp data: named body transforms in source
+keypoint order, five source fingertip offsets, deterministic seed-42 surface
+templates, cube support points/geometry, source lookahead indexing, and world
+contact-force aggregation. The Warp contact buffer is decoded from its pinned
+3.10.0 pyramidal solver rows and contact frames because host conversion retains
+padded contact records. A native MuJoCo contact fixture validates the
+frame/sign convention. This establishes target-state production, not Isaac
+contact-force equivalence or policy/normalizer compatibility.
 
 ## Residual action ABI
 
@@ -127,7 +130,10 @@ their progress/reset flag first (`vec_task.py:391-400`; `mano_hand.py:3548-3559,
 3817-3827, 4483-4489`). The source therefore does not establish an independent
 600-step reset semantic for this task. Target owner: `sim/manorl/abi.py` for
 the task termination predicate and `sim/manorl/environment.py` for physical
-reset. The predicate is implemented in 5B; the physical reset remains open.
+reset. Both are implemented for the bounded cube1 MJX-Warp environment. Its
+791-call CPU smoke test returns terminal source target 790, sets timeout
+metadata at source completion, and restores frame-zero state on the following
+post-step, matching delayed source reset ordering.
 
 ## Reward ABI
 
@@ -232,12 +238,12 @@ unknown.
 | Required semantic | Source is sufficiently specified? | Target owner | Required evidence before it changes status |
 | --- | --- | --- | --- |
 | Raw 476D composition and slice order | Yes | `sim/manorl/observations.py` | Deterministic resolved-state fixtures now check every named slice and concatenated 476D layout. A source-versus-MuJoCo state fixture remains required once physical extractors exist. |
-| Hand/object kinematics, point cloud, geometry, table clearance | Partly; source formula is known but target simulator data extraction is absent | `sim/manorl/observations.py`, `pointcloud.py`, `object_features.py` | Fixed-state MuJoCo-versus-source component fixtures, including coordinate frames and keypoint ordering. |
-| Contact force aggregation and expected-mask lookup | Partly; source output formula and 16D ordering are known, target contact mapping is absent | `sim/manorl/contacts.py`, `metadata.py` | Keypoint-force and mask fixtures from a contact-bearing source episode. |
+| Hand/object kinematics, point cloud, geometry, table clearance | Implemented for accepted cube1 MJX-Warp state production | `sim/manorl/environment.py` | Fixed-state Isaac-versus-MuJoCo component fixtures remain needed for cross-simulator parity. |
+| Contact force aggregation and expected-mask lookup | Implemented for accepted cube1 MJX-Warp state production | `sim/manorl/environment.py` | Native sign/frame fixture and MJX buffer tests pass; Isaac force equivalence remains needed for parity. |
 | 26D residual transform, active-joint masking, early phase | Yes | `sim/manorl/abi.py` | Deterministic tensor cases for clipping, masking, transition step, accumulation, and limits. |
-| Target application and MuJoCo batched stepping | Partly; source target order is known, target vector runtime absent | `sim/manorl/environment.py` | One-world then batched action/target/physics ordering trace. |
-| Reset, progress, completion, deviation penalty | Yes for predicates; physical state writes are simulator-specific | `sim/manorl/abi.py`, `environment.py` | Termination truth-table and reset-state fixture with a trajectory restart. |
-| Rewards and contact-window timing | Yes for equations; target contact/window producers absent | `sim/manorl/rewards.py` | Component tensor oracles are implemented; a contact-window episode fixture remains required once the physical producers exist. |
+| Target application and MuJoCo batched stepping | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/environment.py` | Focused source-counter test and two-world CPU smoke cover action/target/two-substep ordering. |
+| Reset, progress, completion, deviation penalty | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/abi.py`, `environment.py` | Focused terminal-observation/delayed-reset fixture and 791-call CPU episode smoke. |
+| Rewards and contact-window timing | Yes for bounded cube1 state production and equations | `sim/manorl/environment.py`, `rewards.py` | Source raw movement `[690,982]` maps to inclusive sliced window `[250,542]`; cross-simulator reward parity remains required before policy claims. |
 | Privileged/state inputs | Yes: absent in this configuration | `sim/manorl/environment.py` | Assert no `states` output until a source config declares `numStates > 0`. |
 | Network, PointNet/FiLM preprocessing, and normalization | Yes | `sim/manorl/model.py`, `normalization.py` | Frozen-normalizer and deterministic-mu equivalence on recorded 476D batches. |
 | Inference action selection and skrl adapter | No local Mano source defines the downstream rl-games player choice | `sim/manorl/skrl_adapter.py` | Explicit policy-mode contract and an evaluated deterministic/stochastic test; no inference mode may be inferred. |
