@@ -219,14 +219,33 @@ checkpoint records epoch 6600/frame 3892838400. The optimizer has one parameter
 group and 41 parameter-state entries. This is observed file content, not a
 portable skrl format.
 
-Target owners are `sim/manorl/model.py`, `sim/manorl/normalization.py`, and
-`sim/manorl/checkpoint.py`. They remain unresolved by design. Required evidence
-before compatibility claims is: frozen-normalizer preprocessing equivalence,
-deterministic mu equivalence on a captured 476D batch, explicit key/shape map,
-and a documented optimizer-state migration or an explicit rejection. Exact
-rl-games action sampling versus deterministic player selection is upstream
-behavior not defined in the local Mano files inspected here; the future skrl
-adapter must choose and test its evaluation mode rather than infer one.
+Target implementations are `sim/manorl/model.py`, `normalization.py`,
+`gymnasium_env.py`, `skrl_runtime.py`, and `checkpoint.py`. The PointNet,
+FiLM, actor/critic, fixed log-std, and normalizer preserve the source module
+shapes and relevant state-dict tails: the FiLM generator is named
+`actor_backbone.0.film.film_generator`, and the remaining actor linears retain
+source indices `1`, `3`, and `5`. The normalizer retains per-observation
+float64 moments plus shared XYZ point moments under the source buffer names.
+
+The skrl runtime explicitly maps the current source PPO objective: 48 rollout
+steps, 1024-sample minibatches, three learning epochs, `gamma=0.99`,
+`lambda=0.95`, clipping `0.2`, entropy `0.001`, critic coefficient `4.0`,
+learning rate `3e-4`, KL threshold `0.016`, gradient norm `1.0`, reward scale
+`0.5`, and timeout bootstrapping. Its 1024-sample minibatch must divide the
+configured rollout batch; a two-sample `optimizer_smoke` is deliberately
+separate from training and disables only KL early-stop so it can demonstrate a
+finite optimizer step. The adapter exposes the source terminal observation,
+uses Gymnasium `NEXT_STEP` autoreset semantics, and defines the target
+evaluation choice as clipped normalized actor mean. That is a target contract,
+not an inferred rl-games player behavior.
+
+Target checkpoint I/O saves and reloads native skrl policy/value, optimizer,
+and normalizer state with a configuration sidecar. It explicitly rejects an
+rl-games top-level `model`/`env_state` checkpoint; no parameter, normalizer, or
+optimizer conversion is implemented. Required evidence before any source
+compatibility claim remains frozen-normalizer preprocessing equivalence and
+deterministic mu/value equivalence on a captured 476D batch. Training and
+evaluation are outside this slice.
 
 ## Unresolved-owner audit
 
@@ -245,9 +264,9 @@ unknown.
 | Reset, progress, completion, deviation penalty | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/abi.py`, `environment.py` | Focused terminal-observation/delayed-reset fixture and 791-call CPU episode smoke. |
 | Rewards and contact-window timing | Yes for bounded cube1 state production and equations | `sim/manorl/environment.py`, `rewards.py` | Source raw movement `[690,982]` maps to inclusive sliced window `[250,542]`; cross-simulator reward parity remains required before policy claims. |
 | Privileged/state inputs | Yes: absent in this configuration | `sim/manorl/environment.py` | Assert no `states` output until a source config declares `numStates > 0`. |
-| Network, PointNet/FiLM preprocessing, and normalization | Yes | `sim/manorl/model.py`, `normalization.py` | Frozen-normalizer and deterministic-mu equivalence on recorded 476D batches. |
-| Inference action selection and skrl adapter | No local Mano source defines the downstream rl-games player choice | `sim/manorl/skrl_adapter.py` | Explicit policy-mode contract and an evaluated deterministic/stochastic test; no inference mode may be inferred. |
-| Checkpoint and optimizer migration | File layout known; skrl mapping absent | `sim/manorl/checkpoint.py` | Key/shape conversion report plus loaded-model mu/value equivalence, or explicit unsupported-format rejection. |
+| Network, PointNet/FiLM preprocessing, and normalization | Yes | `sim/manorl/model.py`, `normalization.py` | Source module namespace/shape and shared-XYZ statistics are tested; frozen-normalizer and deterministic-mu equivalence on a captured source batch remain required. |
+| Inference action selection and skrl adapter | No local Mano source defines the downstream rl-games player choice | `sim/manorl/gymnasium_env.py`, `skrl_runtime.py` | Target policy mode is explicitly clipped normalized mean; deterministic CPU/CUDA physics rollouts and a stochastic PPO update smoke pass. No rl-games evaluation equivalence is claimed. |
+| Checkpoint and optimizer migration | File layout known; target conversion deliberately absent | `sim/manorl/checkpoint.py` | Native skrl I/O round trip passes and rl-games format is explicitly rejected. Conversion would still require a key/shape report and loaded mu/value equivalence. |
 | Current-source versus checkpoint-sidecar training settings | Yes: they differ in named fields above | `sim/manorl/observations.py` / future `config.py` | Pure compatibility variants explicitly select current (100/static/250) or historical checkpoint (50/dynamic/200); serialize the selection before an environment or checkpoint claim. |
 
 ## Gate disposition

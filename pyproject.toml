@@ -10,7 +10,7 @@ dependencies = [
   "mujoco==3.10.0",
   "mujoco-mjx[warp]==3.10.0",
   "warp-lang",
-  "jax>=0.4.35",
+  "jax[cuda12]>=0.4.35",
   "pylance==0.24.1",
   "pyarrow==24.0.0",
   "scipy",

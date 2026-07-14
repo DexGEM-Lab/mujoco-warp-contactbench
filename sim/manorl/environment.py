@@ -396,9 +396,14 @@ class MujocoManoEnvironment:
             from mujoco import mjx
         except ImportError as exc:
             raise RuntimeError("jax and mujoco-mjx are required for the MJX environment") from exc
-        devices = jax.devices(config.device)
+        # ``gpu`` is the repository's public device mode. JAX 0.10 treats
+        # that alias as CUDA plus ROCm candidates; this CUDA/NVIDIA runtime
+        # must request its concrete platform to avoid an unavailable ROCm
+        # backend becoming a startup failure.
+        jax_platform = "cuda" if config.device == "gpu" else "cpu"
+        devices = jax.devices(jax_platform)
         if not devices:
-            raise RuntimeError(f"no JAX {config.device} device is available")
+            raise RuntimeError(f"no JAX {jax_platform} device is available")
         self.trajectory = trajectory
         self.config = config
         self.jax = jax
@@ -485,6 +490,15 @@ class MujocoManoEnvironment:
             self._dynamic_templates = np.zeros((self.config.num_envs, POINT_COUNT, 3), dtype=np.float64)
         for env_id in env_ids:
             self._dynamic_templates[env_id] = _dynamic_surface_template(self._point_rngs[int(env_id)])
+
+    def reseed_point_templates(self, seed: int) -> None:
+        """Set deterministic reset-local RNGs without changing static templates."""
+
+        if not isinstance(seed, (int, np.integer)):
+            raise TypeError("point-template seed must be an integer")
+        self._point_rngs = [
+            np.random.default_rng(int(seed) + index) for index in range(self.config.num_envs)
+        ]
 
     def _point_template(self) -> PointCloudTemplate:
         if self.config.compatibility.point_template_mode == "static_seed_42":
