@@ -1,0 +1,132 @@
+"""Interactively test the actual residual-off cube1 MJX-Warp environment.
+
+This uses :class:`MujocoManoEnvironment`, not the narrow reference-replay
+helper. The viewer mirrors its one-world MJX state into native ``MjData`` only
+for rendering; observations, rewards, termination, delayed reset, and action
+processing all remain on the production environment path.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import time
+
+import numpy as np
+
+from sim.manorl.contracts import CONTROL_STEP_COUNT, CONTROL_TIMESTEP
+from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
+from sim.manorl.trajectory import load_reference_trajectory
+
+
+def _telemetry(environment: MujocoManoEnvironment, reward: float, reset: bool) -> str:
+    call = int(environment.progress[0] - 1)
+    command_index = max(call - 1, 0)
+    post_index = int(environment.trajectory_steps[0])
+    command = np.array2string(
+        environment.last_controller_targets[0],
+        precision=3,
+        suppress_small=True,
+        max_line_width=240,
+    )
+    return (
+        f"call={call:03d}/{CONTROL_STEP_COUNT - 1} command_ref={command_index:03d} "
+        f"post_ref={post_index:03d} source_ref={environment.trajectory.source_indices[post_index]:04d} "
+        f"reward={reward:.4f} reset={reset} ctrl={command}"
+    )
+
+
+def _require_graphical_session() -> None:
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return
+    raise RuntimeError(
+        "MuJoCo viewer needs an X11 or Wayland graphical session; set DISPLAY or run from a desktop terminal"
+    )
+
+
+def view_environment(*, device: str, speed: float, loop: bool, print_every: int) -> None:
+    """Run and render one production environment world with residuals disabled."""
+
+    if speed <= 0.0:
+        raise ValueError("speed must be positive")
+    if print_every < 1:
+        raise ValueError("print_every must be positive")
+    _require_graphical_session()
+
+    import mujoco
+    import mujoco.viewer
+
+    environment = MujocoManoEnvironment(
+        load_reference_trajectory(),
+        EnvironmentConfig(
+            device=device,
+            num_envs=1,
+            residual_enabled=False,
+            max_deviation_distance=1_000_000.0,
+        ),
+    )
+    if environment.config.residual_enabled:
+        raise RuntimeError("visual environment test must run with residual actions disabled")
+    render_data = environment.host_data()
+    zero_action = np.zeros((1, 26), dtype=np.float64)
+    sleep_seconds = CONTROL_TIMESTEP / speed
+
+    print(
+        "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action. "
+        "The right-side actuator pane shows the applied mocap ctrl target."
+    )
+    with mujoco.viewer.launch_passive(
+        environment.model, render_data, show_left_ui=True, show_right_ui=True
+    ) as viewer:
+        viewer.sync()
+        while viewer.is_running():
+            started = time.perf_counter()
+            _, rewards, resets, _ = environment.step(zero_action)
+            mujoco.mj_copyData(render_data, environment.model, environment.host_data())
+            viewer.sync()
+
+            call = int(environment.progress[0] - 1)
+            if call % print_every == 0 or bool(resets[0]):
+                print(_telemetry(environment, float(rewards[0]), bool(resets[0])), flush=True)
+            if bool(resets[0]) and not loop:
+                return
+            time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=0.25,
+        help="Simulation speed multiplier; 0.25 makes the 3.955 second trajectory visible over about 16 seconds.",
+    )
+    parser.add_argument(
+        "--loop",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Continue through the environment's source-compatible delayed reset after call 790.",
+    )
+    parser.add_argument(
+        "--print-every",
+        type=int,
+        default=10,
+        help="Print the applied 26D source command every N control calls.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    view_environment(
+        device=args.device,
+        speed=args.speed,
+        loop=args.loop,
+        print_every=args.print_every,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

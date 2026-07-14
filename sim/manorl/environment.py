@@ -500,6 +500,20 @@ class MujocoManoEnvironment:
             np.random.default_rng(int(seed) + index) for index in range(self.config.num_envs)
         ]
 
+    def host_data(self, env_id: int = 0) -> Any:
+        """Mirror one MJX-Warp world into native data for rendering only.
+
+        Contact extraction deliberately never uses this host representation:
+        the production contact decoder reads the Warp capacity buffers directly.
+        """
+
+        if not 0 <= env_id < self.config.num_envs:
+            raise IndexError(f"env_id must be in [0, {self.config.num_envs - 1}]")
+        host_data = self.mjx.get_data(self.model, self.data)
+        if not isinstance(host_data, list) or len(host_data) != self.config.num_envs:
+            raise RuntimeError("batched MJX environment did not produce one host state per world")
+        return host_data[env_id]
+
     def _point_template(self) -> PointCloudTemplate:
         if self.config.compatibility.point_template_mode == "static_seed_42":
             return self._static_template
