@@ -1,3 +1,8 @@
+---
+name: mujoco-warp-contactbench-workflow
+description: Repository workflow guidance for MuJoCo Warp ContactBench simulation exports, Docker and local environments, generated Lance data, and source restructuring.
+---
+
 # MuJoCo Warp ContactBench Workflow
 
 Use this skill when working in this repository, especially for simulation export, Docker/local environment changes, generated data handling, or repository restructuring.
