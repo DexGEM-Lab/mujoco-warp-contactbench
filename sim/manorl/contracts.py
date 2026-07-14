@@ -144,8 +144,8 @@ FINGER_SERVO_DAMPRATIO = 1.0
 class ServoConfig:
     """Bounded MuJoCo-native position-servo experiment configuration."""
 
-    wrist_kp: float = 200.0
-    wrist_dampratio: float = 1.0
+    wrist_kp: float = 100.0
+    wrist_dampratio: float = 1.4
     hand_contacts_enabled: bool = True
 
     def __post_init__(self) -> None:

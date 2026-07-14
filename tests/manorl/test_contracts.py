@@ -81,8 +81,9 @@ def test_source_and_mujoco_gains_have_distinct_explicit_contracts() -> None:
     np.testing.assert_array_equal(SOURCE_PHYSX_KD[:6], 500.0)
     np.testing.assert_array_equal(EFFORT[:6], 5000.0)
     servo = ServoConfig()
-    np.testing.assert_array_equal(servo.kp[:6], 200.0)
-    np.testing.assert_array_equal(servo.dampratio, 1.0)
+    np.testing.assert_array_equal(servo.kp[:6], 100.0)
+    np.testing.assert_array_equal(servo.dampratio[:6], 1.4)
+    np.testing.assert_array_equal(servo.dampratio[6:], 1.0)
     for start in range(6, 26, 4):
         np.testing.assert_array_equal(SOURCE_PHYSX_KP[start : start + 4], expected_kp)
         np.testing.assert_array_equal(SOURCE_PHYSX_KD[start : start + 4], expected_kd)

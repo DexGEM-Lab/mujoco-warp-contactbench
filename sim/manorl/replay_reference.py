@@ -181,13 +181,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Diagnostic prefix only; omit to replay all 791 accepted transitions.",
     )
     parser.add_argument(
-        "--wrist-kp", type=float, choices=WRIST_KP_GRID, default=200.0
+        "--wrist-kp", type=float, choices=WRIST_KP_GRID, default=ServoConfig().wrist_kp
     )
     parser.add_argument(
         "--wrist-dampratio",
         type=float,
         choices=WRIST_DAMPRATIO_GRID,
-        default=1.0,
+        default=ServoConfig().wrist_dampratio,
     )
     parser.add_argument(
         "--hand-contacts",

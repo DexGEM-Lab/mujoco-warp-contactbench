@@ -36,7 +36,8 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     assert actuator_order == JOINT_NAMES
     assert len(positions) == 26
     assert all(actuator.get("inheritrange") == "1" for actuator in positions)
-    assert all(actuator.get("dampratio") == "1" for actuator in positions)
+    assert all(actuator.get("dampratio") == "1.3999999999999999" for actuator in positions[:6])
+    assert all(actuator.get("dampratio") == "1" for actuator in positions[6:])
     assert len(root.findall(".//body[@name='cube1']/geom")) == 1
     assert root.find(".//body[@name='cube1']/freejoint").get("name") == "cube1_free"
     assert root.find("./option").get("timestep") == "0.0025"
