@@ -96,10 +96,54 @@ def valid_arrays() -> dict[str, np.ndarray]:
     }
 
 
+def resolved_task_config() -> dict[str, object]:
+    return {
+        "name": "MANOHand",
+        "physics_engine": "physx",
+        "env": {
+            "numEnvs": 1,
+            "useResidualActions": False,
+            "controlFrequencyInv": 1,
+            "maxDeviationDistance": trace.REFERENCE_MAX_DEVIATION_DISTANCE,
+        },
+        "sim": {
+            "dt": 0.005,
+            "substeps": 2,
+            "use_gpu_pipeline": True,
+            "physx": {
+                "use_gpu": True,
+                "max_gpu_contact_pairs": trace.MAX_GPU_CONTACT_PAIRS,
+                "num_subscenes": trace.NUM_SUBSCENES,
+                "contact_collection": 1,
+            },
+        },
+    }
+
+
 def test_module_import_does_not_import_runtime_dependencies() -> None:
     assert "isaacgym" not in sys.modules
     assert "torch" not in sys.modules
     assert "hydra" not in sys.modules
+
+
+def test_resolved_config_requires_the_preflighted_gpu_scene_parameters() -> None:
+    task_cfg = resolved_task_config()
+    trace._assert_resolved_config(task_cfg)
+
+    wrong_capacity = copy.deepcopy(task_cfg)
+    wrong_capacity["sim"]["physx"]["max_gpu_contact_pairs"] += 1
+    with pytest.raises(RuntimeError, match="bounded GPU contact capacity"):
+        trace._assert_resolved_config(wrong_capacity)
+
+    wrong_subscenes = copy.deepcopy(task_cfg)
+    wrong_subscenes["sim"]["physx"]["num_subscenes"] = 1
+    with pytest.raises(RuntimeError, match="single GPU scene"):
+        trace._assert_resolved_config(wrong_subscenes)
+
+    wrong_termination = copy.deepcopy(task_cfg)
+    wrong_termination["env"]["maxDeviationDistance"] = 0.1
+    with pytest.raises(RuntimeError, match="deviation termination disabled"):
+        trace._assert_resolved_config(wrong_termination)
 
 
 def test_protected_source_hash_paths_are_correct_and_state_capture_is_read_only(

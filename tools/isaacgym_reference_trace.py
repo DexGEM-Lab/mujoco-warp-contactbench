@@ -54,6 +54,9 @@ SOURCE_STOP = 1232
 REFERENCE_FRAMES = 792
 PHYSICS_CALLS = 791
 DOFS = 26
+MAX_GPU_CONTACT_PAIRS = 1_554_432
+NUM_SUBSCENES = 0
+REFERENCE_MAX_DEVIATION_DISTANCE = 1_000_000.0
 
 EXPECTED_IDENTITY = {
     "dataset_path": str(DATASET_PATH),
@@ -75,7 +78,7 @@ HYDRA_OVERRIDES = [
     "sim_device=cuda:0",
     "rl_device=cuda:0",
     "graphics_device_id=0",
-    "num_subscenes=1",
+    f"num_subscenes={NUM_SUBSCENES}",
     "headless=true",
     "force_render=false",
 ]
@@ -114,6 +117,10 @@ TASK_UPDATES: dict[str, Any] = {
     "task.env.enableCameraOrbit": False,
     "task.env.printNumSuccesses": False,
     "task.env.pointCloudEncoding.isDynamic": False,
+    "task.sim.physx.max_gpu_contact_pairs": MAX_GPU_CONTACT_PAIRS,
+    # MuJoCo records one fixed 791-call horizon regardless of tracking error.
+    # Disable only this source training reset so both traces preserve every call.
+    "task.env.maxDeviationDistance": REFERENCE_MAX_DEVIATION_DISTANCE,
 }
 
 SOURCE_HASH_PATHS = (
@@ -576,11 +583,16 @@ def _assert_resolved_config(task_cfg: Mapping[str, Any]) -> None:
         "physics engine": task_cfg["physics_engine"] == "physx",
         "one environment": task_cfg["env"]["numEnvs"] == 1,
         "residual actions disabled": task_cfg["env"]["useResidualActions"] is False,
+        "deviation termination disabled": task_cfg["env"]["maxDeviationDistance"]
+        == REFERENCE_MAX_DEVIATION_DISTANCE,
         "control frequency": task_cfg["env"]["controlFrequencyInv"] == 1,
         "dt": task_cfg["sim"]["dt"] == 0.005,
         "substeps": task_cfg["sim"]["substeps"] == 2,
         "GPU pipeline": task_cfg["sim"]["use_gpu_pipeline"] is True,
         "PhysX GPU": task_cfg["sim"]["physx"]["use_gpu"] is True,
+        "bounded GPU contact capacity": task_cfg["sim"]["physx"]["max_gpu_contact_pairs"]
+        == MAX_GPU_CONTACT_PAIRS,
+        "single GPU scene": task_cfg["sim"]["physx"]["num_subscenes"] == NUM_SUBSCENES,
         "contact collection": task_cfg["sim"]["physx"]["contact_collection"] == 1,
     }
     failures = [name for name, passed in checks.items() if not passed]
@@ -1058,9 +1070,13 @@ def run(output: os.PathLike[str] | str, device: str = "cuda:0", headless: bool =
                     "gravity": task_cfg["sim"]["gravity"],
                     "use_gpu_pipeline": task_cfg["sim"]["use_gpu_pipeline"],
                     "physx_use_gpu": task_cfg["sim"]["physx"]["use_gpu"],
+                    "physx_max_gpu_contact_pairs": task_cfg["sim"]["physx"]["max_gpu_contact_pairs"],
+                    "physx_num_subscenes": task_cfg["sim"]["physx"]["num_subscenes"],
                     "contact_collection": task_cfg["sim"]["physx"]["contact_collection"],
+                    "maxDeviationDistance": task_cfg["env"]["maxDeviationDistance"],
                     "useResidualActions": task_cfg["env"]["useResidualActions"],
                 },
+                "deviation_termination": "disabled_for_fixed_horizon_reference",
                 "target_schedule": "command 0,0,1,...,789; reference 0..790",
                 "quaternion_convention": "all source and actual quaternions are XYZW",
                 "seed": SEED,
