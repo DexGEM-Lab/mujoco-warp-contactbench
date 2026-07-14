@@ -1,0 +1,6 @@
+powerdrill:
+  "01": [thumb3, index3]
+  "02": [thumb3, index3, middle3]
+  "03": [thumb3, index3, middle3, ring3]
+  "04": [thumb3, index3, middle3, ring3, pinky3]
+  "09": [thumb3, index3, middle3, ring3, pinky3]

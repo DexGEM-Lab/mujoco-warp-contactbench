@@ -1,0 +1,2 @@
+# Preserve curated mesh bytes exactly; OBJ whitespace is part of source provenance.
+*.obj -whitespace

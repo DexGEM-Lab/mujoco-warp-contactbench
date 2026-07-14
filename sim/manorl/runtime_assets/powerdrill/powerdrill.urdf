@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot name="powerdrill">
+  <link name="powerdrill_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../../mano_assets/objects/powerdrill/powerdrill.obj" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="powerdrill_material">
+        <color rgba="0.25 0.25 0.28 1.0"/>
+      </material>
+    </visual>
+    <collision name="coacd_convex_piece_0">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="coacd/coacd_convex_piece_0.obj" scale="1 1 1"/>
+      </geometry>
+    </collision>
+    <collision name="coacd_convex_piece_1">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="coacd/coacd_convex_piece_1.obj" scale="1 1 1"/>
+      </geometry>
+    </collision>
+    <collision name="coacd_convex_piece_2">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="coacd/coacd_convex_piece_2.obj" scale="1 1 1"/>
+      </geometry>
+    </collision>
+    <collision name="coacd_convex_piece_3">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="coacd/coacd_convex_piece_3.obj" scale="1 1 1"/>
+      </geometry>
+    </collision>
+    <collision name="coacd_convex_piece_4">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="coacd/coacd_convex_piece_4.obj" scale="1 1 1"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.000672188958158 -0.00121561393696 -0.0313586249132" rpy="0 0 0"/>
+      <mass value="0.48"/>
+      <inertia ixx="0.00134202833221" ixy="2.52297949692e-05" ixz="7.35585716294e-05" iyy="0.00206271225247" iyz="-3.61651745789e-05" izz="0.000922034285384"/>
+    </inertial>
+  </link>
+</robot>

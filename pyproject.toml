@@ -1,23 +1,27 @@
 [project]
 name = "mujoco-warp-contactbench"
 version = "0.1.0"
-description = "Standalone MJX-Warp sim-to-Lance export pipeline."
+description = "Standalone MJX-Warp contact export and ManoRL reference replay."
 requires-python = ">=3.11,<3.12"
 dependencies = [
   "numpy",
   "imageio",
   "imageio-ffmpeg",
   "mujoco==3.10.0",
-  "mujoco-mjx[warp]>=3.10",
+  "mujoco-mjx[warp]==3.10.0",
   "warp-lang",
   "jax>=0.4.35",
   "pylance==0.24.1",
   "pyarrow==24.0.0",
+  "scipy",
   "pydantic>=2.0.0",
   "jsonc-parser>=1.1.5",
   "pyyaml>=6.0.0",
   "loguru>=0.7.0",
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [tool.uv]
 package = false

@@ -1,0 +1,159 @@
+{
+  "schema": "manorl.curated-assets.v1",
+  "source_repository": "sibling:manohand_reconstruction/model/all_assets",
+  "source_commit": "ead79126589d1abf2362ea30b9d674d9e675a2f9",
+  "policy": "Only authoritative source URDFs, collision meshes, metadata, and the powerdrill grasp mapping are curated. The 71 MB visual OBJ is intentionally excluded.",
+  "files": [
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/mano_hand.urdf",
+      "source_sha256": "136d32b72ba811f20f7ba3162af5bf7fc00e7c845edcd80b535871492daf5f87",
+      "curated_path": "hand/mano_hand.urdf",
+      "curated_sha256": "136d32b72ba811f20f7ba3162af5bf7fc00e7c845edcd80b535871492daf5f87"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/metadata.json",
+      "source_sha256": "9cc9aa4084572cf22054e15dc662e9f16fbbba11005f07f61965abca3bd54b5d",
+      "curated_path": "hand/metadata.json",
+      "curated_sha256": "9cc9aa4084572cf22054e15dc662e9f16fbbba11005f07f61965abca3bd54b5d"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/index1.stl",
+      "source_sha256": "76ceae76b79f6346ebe001b1211202ca2e31385cb84d543ab75973b163fa1f3e",
+      "curated_path": "hand/meshes/index1.stl",
+      "curated_sha256": "76ceae76b79f6346ebe001b1211202ca2e31385cb84d543ab75973b163fa1f3e"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/index2.stl",
+      "source_sha256": "eab55672e2326522689cffd23c0028313d0bad62759f84fedb537ca3fa47b091",
+      "curated_path": "hand/meshes/index2.stl",
+      "curated_sha256": "eab55672e2326522689cffd23c0028313d0bad62759f84fedb537ca3fa47b091"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/index3.stl",
+      "source_sha256": "f080fc5856351e961b21c1ad58773eae7a1f042d01060f72bd42f9ed69f39b8a",
+      "curated_path": "hand/meshes/index3.stl",
+      "curated_sha256": "f080fc5856351e961b21c1ad58773eae7a1f042d01060f72bd42f9ed69f39b8a"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/middle1.stl",
+      "source_sha256": "b065c8ad4e664f039ad8832fef97e27a0a384accda4a8f9b18cfb8d2c99d67a8",
+      "curated_path": "hand/meshes/middle1.stl",
+      "curated_sha256": "b065c8ad4e664f039ad8832fef97e27a0a384accda4a8f9b18cfb8d2c99d67a8"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/middle2.stl",
+      "source_sha256": "88972eb81edb49c52935d2e1a7e7139b097bcf2659564fa5ae3e09b269969be8",
+      "curated_path": "hand/meshes/middle2.stl",
+      "curated_sha256": "88972eb81edb49c52935d2e1a7e7139b097bcf2659564fa5ae3e09b269969be8"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/middle3.stl",
+      "source_sha256": "a6ee6cb0594edd9a71d8390a6c78360319e160479632da37537e10507e6657a3",
+      "curated_path": "hand/meshes/middle3.stl",
+      "curated_sha256": "a6ee6cb0594edd9a71d8390a6c78360319e160479632da37537e10507e6657a3"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/palm.stl",
+      "source_sha256": "f3cbc18579420819b954749e681723013c71477f8e9a45968c71d47405d2e2dc",
+      "curated_path": "hand/meshes/palm.stl",
+      "curated_sha256": "f3cbc18579420819b954749e681723013c71477f8e9a45968c71d47405d2e2dc"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/pinky1.stl",
+      "source_sha256": "b9c83e466ea70da0f2ec4cd67261af0cb0ecdaccf68d33baac5609fb8a2bec5f",
+      "curated_path": "hand/meshes/pinky1.stl",
+      "curated_sha256": "b9c83e466ea70da0f2ec4cd67261af0cb0ecdaccf68d33baac5609fb8a2bec5f"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/pinky2.stl",
+      "source_sha256": "189af0e57e897b7afcb811a2709eed127606b6bd6e0028d832947fbb79d38272",
+      "curated_path": "hand/meshes/pinky2.stl",
+      "curated_sha256": "189af0e57e897b7afcb811a2709eed127606b6bd6e0028d832947fbb79d38272"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/pinky3.stl",
+      "source_sha256": "e58dadc0797fa2c351b066a6911f0b524385fdd3fae545965fe9a243f6684eb2",
+      "curated_path": "hand/meshes/pinky3.stl",
+      "curated_sha256": "e58dadc0797fa2c351b066a6911f0b524385fdd3fae545965fe9a243f6684eb2"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/ring1.stl",
+      "source_sha256": "bab71163a5ec34c080b9c6b11411fba72c572b85f907365155d4a3d9e166cf6f",
+      "curated_path": "hand/meshes/ring1.stl",
+      "curated_sha256": "bab71163a5ec34c080b9c6b11411fba72c572b85f907365155d4a3d9e166cf6f"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/ring2.stl",
+      "source_sha256": "376eedfc475d337499365890c06360da1cd1be273a6e83505294ce2164b11475",
+      "curated_path": "hand/meshes/ring2.stl",
+      "curated_sha256": "376eedfc475d337499365890c06360da1cd1be273a6e83505294ce2164b11475"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/ring3.stl",
+      "source_sha256": "ad1953d1f143e63b426488d02df3de9e3142277884408caa77d348870f9398a4",
+      "curated_path": "hand/meshes/ring3.stl",
+      "curated_sha256": "ad1953d1f143e63b426488d02df3de9e3142277884408caa77d348870f9398a4"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/thumb1.stl",
+      "source_sha256": "2ca0a5f0ad15c6a8ed94fd7117fcec70d05070bcfdf408138b0257c1b5e4efa2",
+      "curated_path": "hand/meshes/thumb1.stl",
+      "curated_sha256": "2ca0a5f0ad15c6a8ed94fd7117fcec70d05070bcfdf408138b0257c1b5e4efa2"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/thumb2.stl",
+      "source_sha256": "1699ee13a5dcf107af146d2c9ed2ddca36c482e733451accd1f6505e99374bfd",
+      "curated_path": "hand/meshes/thumb2.stl",
+      "curated_sha256": "1699ee13a5dcf107af146d2c9ed2ddca36c482e733451accd1f6505e99374bfd"
+    },
+    {
+      "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/thumb3.stl",
+      "source_sha256": "412c23b48899b0901176e71cc836dc0a4d4bc6ca07fc3bbfd99da0e7dd3ad25d",
+      "curated_path": "hand/meshes/thumb3.stl",
+      "curated_sha256": "412c23b48899b0901176e71cc836dc0a4d4bc6ca07fc3bbfd99da0e7dd3ad25d"
+    },
+    {
+      "source_path": "Assets/sim/decomposed/powerdrill/powerdrill.urdf",
+      "source_sha256": "34f22cfcb519e342715d349b5184cb0b6a1ec4e440c793347762e25313a36105",
+      "curated_path": "powerdrill/powerdrill.urdf",
+      "curated_sha256": "34f22cfcb519e342715d349b5184cb0b6a1ec4e440c793347762e25313a36105"
+    },
+    {
+      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_0.obj",
+      "source_sha256": "a413634662c84599566012de30198ed27e2bbc423319e87bd9dca0d80f427bac",
+      "curated_path": "powerdrill/coacd/coacd_convex_piece_0.obj",
+      "curated_sha256": "a413634662c84599566012de30198ed27e2bbc423319e87bd9dca0d80f427bac"
+    },
+    {
+      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_1.obj",
+      "source_sha256": "116aa7a9d602dbeb24b03aee4b51872ba91bbc822b713ac1a870dcc5b1ddf42e",
+      "curated_path": "powerdrill/coacd/coacd_convex_piece_1.obj",
+      "curated_sha256": "116aa7a9d602dbeb24b03aee4b51872ba91bbc822b713ac1a870dcc5b1ddf42e"
+    },
+    {
+      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_2.obj",
+      "source_sha256": "0b06e92975f0558941069674ea0140ca5f406e9bd8f43f9d58a36589330b648d",
+      "curated_path": "powerdrill/coacd/coacd_convex_piece_2.obj",
+      "curated_sha256": "0b06e92975f0558941069674ea0140ca5f406e9bd8f43f9d58a36589330b648d"
+    },
+    {
+      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_3.obj",
+      "source_sha256": "4d89292d56a7bae8ee3404cc766ade0101705d8bffca6013ea4dd0f39fd861be",
+      "curated_path": "powerdrill/coacd/coacd_convex_piece_3.obj",
+      "curated_sha256": "4d89292d56a7bae8ee3404cc766ade0101705d8bffca6013ea4dd0f39fd861be"
+    },
+    {
+      "source_path": "Assets/sim/decomposed/powerdrill/coacd/coacd_convex_piece_4.obj",
+      "source_sha256": "a7e8aaf43df5bca66a011825bbe545c8d09c93174758a09a57263befb0dd9c99",
+      "curated_path": "powerdrill/coacd/coacd_convex_piece_4.obj",
+      "curated_sha256": "a7e8aaf43df5bca66a011825bbe545c8d09c93174758a09a57263befb0dd9c99"
+    },
+    {
+      "source_path": "Assets/object_grasps_simple.yaml",
+      "source_lines": "159-164",
+      "source_sha256": "97293b96a3015173bf2fa875d165b04c925953147ebc0f4c0935ed1215558a9d",
+      "curated_path": "powerdrill/grasp_mapping.yaml",
+      "curated_sha256": "091cfdd5268f561861e58234e736271fc0f8f62ec212ac8dbaae5aa4446571b0"
+    }
+  ]
+}

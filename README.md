@@ -41,6 +41,81 @@ JAX_PLATFORMS=cpu .venv/bin/python sim/smoke_test.py --strict --device cpu
 
 The local uv environment is useful for CPU checks and development. GPU execution is supported through the Docker image by default.
 
+## ManoRL reference replay (local, no Docker)
+
+The first migration slice is isolated under `sim/manorl/`. It reads one settled
+trajectory without `lance_manager`, builds a MuJoCo model from curated source
+URDF/collision assets, and runs residual-off reference control. It does not
+implement observations, rewards, SKRL training, or checkpoint conversion.
+
+Copying the PhysX drive values into an external MuJoCo torque law was falsified
+in free space: the explicit damping kick drove the maximum DOF velocity to about
+`1082 rad/s`. The replay therefore uses MuJoCo-native position actuators under
+`implicitfast`, initially with wrist `kp=200`, `dampratio=1`; the five finger
+blocks retain proportional gains `[6, 4, 3, 3]` with `dampratio=1`. The source
+PhysX gains remain trace metadata but are not applied as MuJoCo torques. Hand
+self-collision follows the source `disable_within_finger` mode: same-finger
+collision pairs are excluded while palm/finger and cross-finger collisions
+remain enabled.
+
+```bash
+conda activate manorl_mujoco
+JAX_PLATFORMS=cpu python -m pytest -q tests/manorl
+python -m sim.manorl.replay_reference \
+  --backend mjx-warp \
+  --device cpu \
+  --wrist-kp 200 \
+  --wrist-dampratio 1 \
+  --output outputs/manorl/powerdrill_02_002_mjx_warp
+```
+
+A bounded free-space controller diagnostic disables only hand collision geoms;
+object-floor contact remains active:
+
+```bash
+python -m sim.manorl.replay_reference \
+  --backend mujoco-cpu \
+  --max-steps 16 \
+  --no-hand-contacts \
+  --output outputs/manorl/native_servo_free_space_16
+```
+
+This diagnostic separates controller instability from contact geometry. It is
+not a fallback data path and still requires the exact Lance dataset.
+
+The accepted input is row 1 of:
+
+```text
+/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/20260605_133735.lance
+```
+
+It must resolve to UUID `e49b87fb-51c1-44eb-aade-666b5e617959`, file UUID
+`20260528022141_a5fb81e3`, identity `powerdrill_02_002`, and source slice
+`[10,604)`. The loader calls `dataset.take([1], columns=...)`; there is no broad
+scan or NPY fallback. The `pylance` package imports as `lance`.
+
+The source counter schedule is intentionally preserved from
+`IsaacGymEnvs/isaacgymenvs/tasks/mano_hand.py::pre_physics_step`: 593 physics
+calls command slice indices `0, 0, 1, ..., 591` and post-step comparisons use
+`0, 1, ..., 592`. Slice index 593 is never consumed because the source checks
+termination after progress reaches `L-1`. Each call executes two 0.0025 s
+physics substeps; jittered capture timestamps are validated but do not drive
+simulation time.
+
+The trace is a compressed `.npz`; its adjacent `.json` records the exact
+configuration, trajectory identity, hand/object errors, raw Lance and
+MuJoCo-support-shifted object references, actual actuator forces,
+velocity and effort-saturation diagnostics, engine warnings, hand-object
+penetration when observable, and contact-capacity flags. These are MuJoCo replay
+errors. No Isaac parity claim is made without an Isaac trace.
+
+The existing `3rd_party/lance_manager` pin may be broken or unavailable and is
+irrelevant to this input-only replay: this slice depends only on the public
+`pylance` reader. Curated files under `sim/manorl/runtime_assets/` come from
+`all_assets` commit `ead79126589d1abf2362ea30b9d674d9e675a2f9`; the manifest
+records provenance and SHA256 digests. The 71 MB drill visual OBJ is excluded,
+and the five convex collision pieces are rendered directly.
+
 ## Build Docker Image
 
 ```bash

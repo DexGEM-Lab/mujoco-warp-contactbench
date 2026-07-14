@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-uv sync
+uv sync --extra test
 
 cat <<'EOF'
 Local uv environment is ready.
