@@ -323,6 +323,18 @@ def build_scene_xml(servo: ServoConfig = ServoConfig()) -> str:
         integrator="implicitfast",
     )
     asset = ET.SubElement(root, "asset")
+    # Visual-only skybox: it supplies a readable horizon in MuJoCo viewers and
+    # is not referenced by any physical geom, contact, or actuator.
+    ET.SubElement(
+        asset,
+        "texture",
+        type="skybox",
+        builtin="gradient",
+        rgb1="0.07 0.12 0.18",
+        rgb2="0.35 0.48 0.62",
+        width="512",
+        height="512",
+    )
     worldbody = ET.SubElement(root, "worldbody")
     contact = ET.SubElement(root, "contact")
     _add_hand_self_collision_excludes(contact)
