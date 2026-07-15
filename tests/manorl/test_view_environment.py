@@ -16,6 +16,9 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert args.num_envs == 1
     assert args.render_env == 0
     assert args.tile_envs == 1
+    assert args.object_type is None
+    assert args.gesture is None
+    assert args.rerun_output is None
 
     one_shot = parse_args(
         [
@@ -33,6 +36,12 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
             "9",
             "--tile-envs",
             "10",
+            "--object",
+            "cube1",
+            "--gesture",
+            "03",
+            "--rerun-output",
+            "outputs/manorl/viewer.rrd",
         ]
     )
     assert one_shot.device == "gpu"
@@ -43,6 +52,9 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert one_shot.num_envs == 10
     assert one_shot.render_env == 9
     assert one_shot.tile_envs == 10
+    assert one_shot.object_type == "cube1"
+    assert one_shot.gesture == "03"
+    assert str(one_shot.rerun_output) == "outputs/manorl/viewer.rrd"
 
 
 def test_tile_layout_covers_non_overlapping_grid() -> None:

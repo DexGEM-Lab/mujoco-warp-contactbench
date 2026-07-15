@@ -91,9 +91,8 @@ once every four vector control calls:
 The default recording is env 0 only. It keeps one stable artifact:
 `cube1_03_scratch_run.rrd`. The recorder writes the active episode privately,
 then atomically replaces that path when the next delayed reset is applied; it
-does not retain an episode archive. The standalone test recorder launches the
-Rerun GUI by default; use `--no-viewer` only for automated/headless runs. Open
-the latest completed recording with:
+does not retain an episode archive. Recording never opens a second GUI; open
+the latest completed recording from another terminal with:
 
 ```bash
 /home/jay/anaconda3/envs/manorl_mujoco/bin/rerun \
@@ -104,6 +103,27 @@ The embedded Rerun blueprint explicitly displays the object point cloud and
 tracks the object with an orbital camera. It records actual state, target, 26D
 action/controller target, hand keypoints, contact force vectors, named reward
 terms, reset causes, and the thresholds used by that recording.
+
+## Visual Test With Background Rerun
+
+Run the production MuJoCo viewer and record env 0 on the same environment
+steps. `--loop` keeps the normal visual simulation running through delayed
+resets; it does not start a Rerun GUI.
+
+```bash
+JAX_PLATFORMS=cpu /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m sim.manorl.view_environment \
+  --device cpu --object cube1 --gesture 03 --num-envs 8 --render-env 0 \
+  --loop --rerun-output outputs/manorl/cube1_03_latest.rrd
+```
+
+From a second terminal, inspect the latest published env-0 episode without
+altering the MuJoCo viewer:
+
+```bash
+/home/jay/anaconda3/envs/manorl_mujoco/bin/rerun \
+  outputs/manorl/cube1_03_latest.rrd
+```
 
 ## Artifacts
 
