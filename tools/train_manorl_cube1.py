@@ -7,10 +7,13 @@ import argparse
 from contextlib import contextmanager
 import json
 import math
+import os
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -53,6 +56,7 @@ class TrainingBudget:
     residual_enabled: bool = True
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
+    checkpoint_interval_updates: int | None = None
 
     @property
     def transitions(self) -> int:
@@ -322,21 +326,139 @@ def _train(
     return updates, global_timestep * environment.config.num_envs, time.monotonic() - started
 
 
+def _numbered_checkpoint_path(output: Path, completed_updates: int) -> Path:
+    return output / f"checkpoint-{completed_updates:06d}.pt"
+
+
+def _last_checkpoint_path(output: Path) -> Path:
+    return output / "last.pt"
+
+
+def _checkpoint_runtime_config(runtime: ManoSkrlRuntime, update: dict[str, float]) -> dict[str, object]:
+    return {
+        **runtime.checkpoint_metadata(),
+        "training_progress": {
+            "completed_updates": int(update["update"]),
+            "environment_transitions": int(update["environment_transitions"]),
+        },
+    }
+
+
+def _checkpoint_sidecar_path(checkpoint: Path) -> Path:
+    return checkpoint.with_suffix(checkpoint.suffix + ".json")
+
+
+def _temporary_checkpoint_path(checkpoint: Path) -> Path:
+    return checkpoint.with_name(f".{checkpoint.name}.{uuid4().hex}.tmp")
+
+
+def _save_checkpoint_atomically(
+    agent: Any, checkpoint: Path, *, runtime_config: dict[str, object]
+) -> Path:
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    temporary_checkpoint = _temporary_checkpoint_path(checkpoint)
+    temporary_sidecar = _checkpoint_sidecar_path(temporary_checkpoint)
+    sidecar = _checkpoint_sidecar_path(checkpoint)
+    try:
+        save_skrl_checkpoint(agent, temporary_checkpoint, runtime_config=runtime_config)
+        metadata = json.loads(temporary_sidecar.read_text(encoding="utf-8"))
+        metadata["checkpoint_file"] = checkpoint.name
+        temporary_sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary_checkpoint, checkpoint)
+        os.replace(temporary_sidecar, sidecar)
+    finally:
+        temporary_checkpoint.unlink(missing_ok=True)
+        temporary_sidecar.unlink(missing_ok=True)
+    return checkpoint
+
+
+def _last_sidecar_content(checkpoint: Path, last_checkpoint: Path) -> bytes:
+    metadata = json.loads(_checkpoint_sidecar_path(checkpoint).read_text(encoding="utf-8"))
+    runtime_config = dict(metadata["runtime_config"])
+    runtime_config.pop("training_progress", None)
+    metadata["checkpoint_file"] = last_checkpoint.name
+    metadata["runtime_config"] = runtime_config
+    metadata["progress_metadata"] = "immutable numbered and final checkpoint sidecars"
+    return (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _update_last_checkpoint(output: Path, checkpoint: Path) -> Path:
+    output.mkdir(parents=True, exist_ok=True)
+    last_checkpoint = _last_checkpoint_path(output)
+    last_sidecar = _checkpoint_sidecar_path(last_checkpoint)
+    sidecar_content = _last_sidecar_content(checkpoint, last_checkpoint)
+    if last_sidecar.exists():
+        if not last_sidecar.is_file() or last_sidecar.read_bytes() != sidecar_content:
+            raise ValueError(f"last checkpoint compatibility sidecar does not match: {last_sidecar}")
+    else:
+        if last_checkpoint.exists():
+            raise FileExistsError(f"last checkpoint exists without compatibility sidecar: {last_checkpoint}")
+        temporary_sidecar = _temporary_checkpoint_path(last_sidecar)
+        try:
+            temporary_sidecar.write_bytes(sidecar_content)
+            os.replace(temporary_sidecar, last_sidecar)
+        finally:
+            temporary_sidecar.unlink(missing_ok=True)
+    temporary_checkpoint = _temporary_checkpoint_path(last_checkpoint)
+    try:
+        shutil.copyfile(checkpoint, temporary_checkpoint)
+        os.replace(temporary_checkpoint, last_checkpoint)
+    finally:
+        temporary_checkpoint.unlink(missing_ok=True)
+    return last_checkpoint
+
+
+def _save_periodic_checkpoint(
+    runtime: ManoSkrlRuntime, output: Path, update: dict[str, float]
+) -> Path:
+    checkpoint = _numbered_checkpoint_path(output, int(update["update"]))
+    sidecar = _checkpoint_sidecar_path(checkpoint)
+    if checkpoint.exists() or sidecar.exists():
+        raise FileExistsError(f"refusing to replace periodic checkpoint artifact: {checkpoint}")
+    return _save_checkpoint_atomically(
+        runtime.agent, checkpoint, runtime_config=_checkpoint_runtime_config(runtime, update)
+    )
+
+
+def _maybe_save_periodic_checkpoint(
+    runtime: ManoSkrlRuntime,
+    output: Path,
+    checkpoint_interval_updates: int | None,
+    update: dict[str, float],
+) -> Path | None:
+    completed_updates = int(update["update"])
+    if checkpoint_interval_updates is None or completed_updates % checkpoint_interval_updates != 0:
+        return None
+    checkpoint = _save_periodic_checkpoint(runtime, output, update)
+    _update_last_checkpoint(output, checkpoint)
+    return checkpoint
+
+
 def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     _assert_cuda_runtime()
     if output.suffix:
         raise ValueError("--output must be a prefix without a suffix")
     output = output.resolve()
     checkpoint = output.with_suffix(".pt")
+    last_checkpoint = _last_checkpoint_path(output)
     metrics_path = output.with_suffix(".json")
     trace_path = output.with_suffix(".eval.npz")
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
-    artifacts = (checkpoint, metrics_path, trace_path)
+    artifacts = (
+        checkpoint,
+        _checkpoint_sidecar_path(checkpoint),
+        metrics_path,
+        trace_path,
+    )
     rerun_existing = [] if rerun_path is None else [
         rerun_path,
         rerun_path.with_name(f".{rerun_path.stem}.active{rerun_path.suffix or '.rrd'}"),
     ]
-    if any(path.exists() for path in artifacts) or any(path.exists() for path in rerun_existing):
+    if (
+        output.exists()
+        or any(path.exists() for path in artifacts)
+        or any(path.exists() for path in rerun_existing)
+    ):
         raise FileExistsError("refusing to replace an existing training artifact prefix")
     torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)
@@ -398,17 +520,35 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             if rerun_path is not None
             else None
         )
+        periodic_checkpoints: list[Path] = []
+
+        def on_update(update: dict[str, float]) -> None:
+            periodic_checkpoint = _maybe_save_periodic_checkpoint(
+                runtime, output, budget.checkpoint_interval_updates, update
+            )
+            if periodic_checkpoint is not None:
+                periodic_checkpoints.append(periodic_checkpoint)
+            if wandb_run is not None:
+                _log_wandb_update(wandb_run, update)
+
         try:
             updates, transitions, elapsed = _train(
                 runtime,
                 budget,
                 recorder,
-                on_update=None if wandb_run is None else lambda update: _log_wandb_update(wandb_run, update),
+                on_update=on_update,
             )
         finally:
             published_rerun = None if recorder is None else recorder.close()
         rerun_artifact = None if published_rerun is None else str(published_rerun)
-        save_skrl_checkpoint(runtime.agent, checkpoint, runtime_config=runtime.checkpoint_metadata())
+        final_update = {
+            "update": float(len(updates)),
+            "environment_transitions": float(transitions),
+        }
+        _save_checkpoint_atomically(
+            runtime.agent, checkpoint, runtime_config=_checkpoint_runtime_config(runtime, final_update)
+        )
+        _update_last_checkpoint(output, checkpoint)
         # Evaluate exactly what a user will later load. skrl preprocessor/module
         # state may differ in-process after PPO training, so a fresh native load is
         # the reproducibility boundary rather than an implementation detail.
@@ -476,6 +616,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "updates": updates,
             "artifacts": {
                 "checkpoint": str(checkpoint),
+                "last_checkpoint": str(last_checkpoint),
+                "periodic_checkpoints": [str(path) for path in periodic_checkpoints],
                 "evaluation_trace": str(trace_path),
                 "rerun": rerun_artifact,
             },
@@ -491,7 +633,18 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             }
             wandb_run.log(acceptance_metrics, step=transitions)
             wandb_run.summary.update(acceptance_metrics)
-            artifact_paths = [checkpoint, checkpoint.with_suffix(checkpoint.suffix + ".json"), metrics_path, trace_path]
+            artifact_paths = [
+                checkpoint,
+                _checkpoint_sidecar_path(checkpoint),
+                last_checkpoint,
+                _checkpoint_sidecar_path(last_checkpoint),
+                metrics_path,
+                trace_path,
+            ]
+            for periodic_checkpoint in periodic_checkpoints:
+                artifact_paths.extend(
+                    [periodic_checkpoint, _checkpoint_sidecar_path(periodic_checkpoint)]
+                )
             if published_rerun is not None:
                 artifact_paths.append(published_rerun)
             _log_wandb_artifacts(wandb_run, wandb, output=output, paths=artifact_paths)
@@ -502,6 +655,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--updates", type=int, default=64)
+    parser.add_argument("--checkpoint-interval-updates", type=int)
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
@@ -521,6 +675,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
+    if args.checkpoint_interval_updates is not None and args.checkpoint_interval_updates < 1:
+        parser.error("checkpoint-interval-updates must be positive when provided")
     if args.wall_clock_seconds is not None and (
         not math.isfinite(args.wall_clock_seconds) or args.wall_clock_seconds <= 0
     ):
@@ -549,6 +705,7 @@ def main(argv: list[str] | None = None) -> int:
                 name=args.wandb_name,
                 tags=_parse_wandb_tags(args.wandb_tags),
             ),
+            args.checkpoint_interval_updates,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
