@@ -40,8 +40,10 @@ than being simulated using cube geometry.
 ## Fixed Budget
 
 Use 64 vector worlds, 48 rollout steps, and 64 PPO updates. This is 196,608
-environment transitions. Stop earlier only at a 20 minute wall-clock limit or
-on non-finite values, CUDA failure, or a semantic/reset invariant failure.
+environment transitions. By default training completes all 64 updates; it
+stops earlier only on non-finite values, CUDA failure, or a semantic/reset
+invariant failure. An explicit `--wall-clock-seconds` safety cap may stop the
+run before all requested updates complete.
 The 64-world Warp broadphase uses `naconmax=2048`: Warp requires at least 31
 contacts per world in this scene, and the remaining 64 slots are margin.
 
@@ -92,9 +94,12 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --object cube1 \
   --gesture 03 \
   --num-envs 64 \
-  --updates 64 \
-  --wall-clock-seconds 1200
+  --updates 64
 ```
+
+To apply an opt-in time cap, add `--wall-clock-seconds <positive-seconds>`.
+The cap may stop the run before the fixed 64-update, 196,608-transition budget
+is complete.
 
 ### Optional W&B Tracking
 

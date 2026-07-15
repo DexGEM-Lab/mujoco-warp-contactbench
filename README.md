@@ -138,7 +138,9 @@ The Cube1 fast-training contract is documented in
 [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
 PPO optimizes the raw environment reward at `1.0x`; it intentionally does not
 reuse IsaacGym's `0.5x` reward shaper. Run the fixed 64-world budget with W&B
-tracking disabled by default:
+tracking disabled by default. This executes 64 updates of 48 rollout steps
+(196,608 transitions); it has no wall-clock cutoff unless one is explicitly
+requested:
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
@@ -146,6 +148,9 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --output outputs/manorl/cube1_03_scratch_run \
   --object cube1 --gesture 03 --num-envs 64 --updates 64
 ```
+
+For an opt-in safety cap that may stop before all 64 updates complete, add
+`--wall-clock-seconds <positive-seconds>`.
 
 To create one W&B run using the authenticated default account, provision the
 locked SDK in the documented training interpreter, then add explicit tracking

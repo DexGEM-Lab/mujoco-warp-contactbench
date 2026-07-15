@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import json
+import math
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -42,7 +43,7 @@ class WandbOptions:
 class TrainingBudget:
     num_envs: int = 64
     updates: int = 64
-    wall_clock_seconds: float = 20.0 * 60.0
+    wall_clock_seconds: float | None = None
     seed: int = 42
     rerun_output: str | None = None
     rerun_env_id: int = 0
@@ -268,7 +269,10 @@ def _train(
     updates: list[dict[str, float]] = []
     global_timestep = 0
     for update in range(budget.updates):
-        if time.monotonic() - started >= budget.wall_clock_seconds:
+        if (
+            budget.wall_clock_seconds is not None
+            and time.monotonic() - started >= budget.wall_clock_seconds
+        ):
             break
         rewards: list[torch.Tensor] = []
         action_magnitudes: list[torch.Tensor] = []
@@ -499,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--updates", type=int, default=64)
     parser.add_argument("--num-envs", type=int, default=64)
-    parser.add_argument("--wall-clock-seconds", type=float, default=20.0 * 60.0)
+    parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
     parser.add_argument("--rerun-env-id", type=int, default=0)
@@ -515,8 +519,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wandb-name")
     parser.add_argument("--wandb-tags", action="append", default=[], metavar="TAG[,TAG...]")
     args = parser.parse_args(argv)
-    if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0 or args.rerun_stride < 1:
-        parser.error("updates, num-envs, wall-clock-seconds, and rerun-stride must be positive")
+    if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
+        parser.error("updates, num-envs, and rerun-stride must be positive")
+    if args.wall_clock_seconds is not None and (
+        not math.isfinite(args.wall_clock_seconds) or args.wall_clock_seconds <= 0
+    ):
+        parser.error("wall-clock-seconds must be a finite positive value when provided")
     if not 0 <= args.rerun_env_id < args.num_envs:
         parser.error("rerun-env-id must be within num-envs")
     result = run(

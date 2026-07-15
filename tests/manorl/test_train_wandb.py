@@ -188,6 +188,7 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
 
     assert json.loads(json.dumps(config)) == config
     assert config["training_budget"]["planned_transitions"] == budget.transitions
+    assert config["training_budget"]["wall_clock_seconds"] is None
     assert config["reward"]["ppo_scale"] == 1.0
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
     assert config["device"]["skrl"] == "cuda"
