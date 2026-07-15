@@ -10,7 +10,7 @@ array retains capacity-padding entries after the solved records.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -124,6 +124,7 @@ class PhysicalSnapshot:
     hand_keypoint_contact_forces: NDArray[np.float64]
     object_contact_force: NDArray[np.float64]
     geom_contact_force_world_N: NDArray[np.float64]
+    hand_object_force_on_object_world_N: NDArray[np.float64]
     contact_count: NDArray[np.int64]
 
 
@@ -197,6 +198,75 @@ def _aggregate_geometry_contact_forces(
     if not np.all(np.isfinite(forces)):
         raise RuntimeError("MJX contact decoder produced a non-finite world force")
     return forces, per_world_count
+
+
+def _decode_contact_forces(
+    *,
+    count: int,
+    geom: NDArray[np.int64],
+    world: NDArray[np.int64],
+    dimension: NDArray[np.int64],
+    addresses: NDArray[np.int64],
+    nefc: NDArray[np.int64],
+    friction: NDArray[np.float64],
+    frame: NDArray[np.float64],
+    constraint_force: NDArray[np.float64],
+    ngeom: int,
+    keypoint_geom_ids: Sequence[int],
+    object_geom_ids: set[int],
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
+    """Decode solved contact rows into all-geom and hand-on-object force tensors."""
+
+    batch = len(nefc)
+    if ngeom < 1 or constraint_force.ndim != 2 or constraint_force.shape[0] != batch:
+        raise ValueError("contact decoder received incompatible geometry or constraint-force shapes")
+    if len(keypoint_geom_ids) != len(KEYPOINT_NAMES) or len(set(keypoint_geom_ids)) != len(KEYPOINT_NAMES):
+        raise ValueError("contact decoder requires one source-order collision geom per keypoint")
+    keypoint_geom_id_set = set(keypoint_geom_ids)
+    if any(not 0 <= geom_id < ngeom for geom_id in keypoint_geom_id_set | object_geom_ids):
+        raise ValueError("contact decoder received an invalid keypoint or object geom")
+    if keypoint_geom_id_set & object_geom_ids:
+        raise ValueError("contact decoder requires disjoint hand and object collision geoms")
+    geom_to_keypoint = {geom_id: index for index, geom_id in enumerate(keypoint_geom_ids)}
+    geometry_forces = np.zeros((batch, ngeom, 3), dtype=np.float64)
+    hand_object_forces = np.zeros((batch, len(KEYPOINT_NAMES), 3), dtype=np.float64)
+    per_world_count = np.zeros(batch, dtype=np.int64)
+    for contact_id in range(count):
+        world_id = int(world[contact_id])
+        if not 0 <= world_id < batch:
+            raise RuntimeError(f"contact {contact_id} references invalid MJX world {world_id}")
+        if int(dimension[contact_id]) != 3:
+            raise RuntimeError("the bounded MANO scene requires condim=3 contacts")
+        address = addresses[contact_id]
+        if np.any(address < 0) or np.any(address >= nefc[world_id]):
+            raise RuntimeError(
+                f"contact {contact_id} has a pyramidal constraint address outside world {world_id}'s solved range"
+            )
+        first_geom, second_geom = map(int, geom[contact_id])
+        if not 0 <= first_geom < ngeom or not 0 <= second_geom < ngeom:
+            raise RuntimeError(f"contact {contact_id} references an invalid MuJoCo geom")
+        pyramid = constraint_force[world_id, address]
+        local_force = np.asarray(
+            (
+                pyramid.sum(),
+                (pyramid[0] - pyramid[1]) * friction[contact_id, 0],
+                (pyramid[2] - pyramid[3]) * friction[contact_id, 1],
+            ),
+            dtype=np.float64,
+        )
+        world_force = local_force @ frame[contact_id]
+        geometry_forces[world_id, first_geom] -= world_force
+        geometry_forces[world_id, second_geom] += world_force
+        first_keypoint = geom_to_keypoint.get(first_geom)
+        second_keypoint = geom_to_keypoint.get(second_geom)
+        if first_keypoint is not None and second_keypoint is None and second_geom in object_geom_ids:
+            hand_object_forces[world_id, first_keypoint] += world_force
+        elif second_keypoint is not None and first_keypoint is None and first_geom in object_geom_ids:
+            hand_object_forces[world_id, second_keypoint] -= world_force
+        per_world_count[world_id] += 1
+    if not np.all(np.isfinite(geometry_forces)) or not np.all(np.isfinite(hand_object_forces)):
+        raise RuntimeError("MJX contact decoder produced a non-finite world force")
+    return geometry_forces, hand_object_forces, per_world_count
 
 
 def _normalized_xyzw(quaternions_wxyz: NDArray[object]) -> NDArray[np.float64]:
@@ -320,6 +390,8 @@ class MjxWarpPhysicalProducer:
         }
         if len(self.object_geom_ids) != 1:
             raise ValueError("the bounded cube contract requires exactly one object collision geom")
+        if self.object_geom_ids & set(self.keypoint_geom_ids):
+            raise ValueError("source hand and object collision geoms must be disjoint")
 
     def _contact_arrays(
         self, data: Any, batch: int
@@ -409,7 +481,7 @@ class MjxWarpPhysicalProducer:
             np.broadcast_to(_FINGERTIP_LOCAL_OFFSETS, (batch, len(_FINGERTIP_NAMES), 3)),
         )
         count, geom, world, dimension, addresses, nefc, friction, frame, constraint_force = self._contact_arrays(data, batch)
-        geometry_forces, per_world_count = _aggregate_geometry_contact_forces(
+        geometry_forces, hand_object_forces, per_world_count = _decode_contact_forces(
             count=count,
             geom=geom,
             world=world,
@@ -420,6 +492,8 @@ class MjxWarpPhysicalProducer:
             frame=frame,
             constraint_force=constraint_force,
             ngeom=self.model.ngeom,
+            keypoint_geom_ids=self.keypoint_geom_ids,
+            object_geom_ids=self.object_geom_ids,
         )
         forces = geometry_forces[:, self.keypoint_geom_ids].copy()
         object_force = geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
@@ -435,6 +509,7 @@ class MjxWarpPhysicalProducer:
             hand_keypoint_contact_forces=forces,
             object_contact_force=object_force,
             geom_contact_force_world_N=geometry_forces,
+            hand_object_force_on_object_world_N=hand_object_forces,
             contact_count=per_world_count,
         )
 

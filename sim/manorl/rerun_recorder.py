@@ -21,6 +21,7 @@ _GEOMETRY_FORCE_PATHS = (
     ("y_N", "World F_y"),
     ("z_N", "World F_z"),
 )
+_HAND_OBJECT_FORCE_PATH = "contact/hand_object_force/on_object/magnitude_N"
 
 
 class ManoRerunRecorder:
@@ -50,6 +51,10 @@ class ManoRerunRecorder:
         self._close_result: Path | None = None
         self.geometry_table = self._geometry_table()
         self.geometry_series_names = tuple(row["series_name"] for row in self.geometry_table)
+        self.hand_object_force_series_table = self._hand_object_force_series_table()
+        self.hand_object_force_series_names = tuple(
+            row["series_name"] for row in self.hand_object_force_series_table
+        )
         self._start_episode()
 
     def _default_blueprint(self):
@@ -96,7 +101,11 @@ class ManoRerunRecorder:
                     ),
                     name="Collision geometry contact forces",
                 ),
-                row_shares=[3.0, 1.0, 2.0],
+                blueprint.TimeSeriesView(
+                    name="ManoHand-object contact forces",
+                    contents=[_HAND_OBJECT_FORCE_PATH],
+                ),
+                row_shares=[3.0, 1.0, 2.0, 1.0],
             ),
             blueprint.TimePanel(timeline="step"),
             auto_layout=False,
@@ -150,6 +159,18 @@ class ManoRerunRecorder:
             )
         return rows
 
+    def _hand_object_force_series_table(self) -> list[dict[str, int | str]]:
+        producer = self.environment.producer
+        return [
+            {
+                "keypoint_name": keypoint_name,
+                "geom_id": geom_id,
+                "geom_name": f"{keypoint_name}_collision",
+                "series_name": f"{geom_id:03d}:{keypoint_name}_collision",
+            }
+            for keypoint_name, geom_id in zip(KEYPOINT_NAMES, producer.keypoint_geom_ids, strict=True)
+        ]
+
     def _log_static_metadata(self) -> None:
         environment = self.environment
         trajectory = environment.trajectories[self.env_id]
@@ -167,6 +188,11 @@ class ManoRerunRecorder:
             "joint_names": list(JOINT_NAMES),
             "keypoint_names": list(KEYPOINT_NAMES),
             "collision_geometries": self.geometry_table,
+            "hand_object_force_on_object_world_N": {
+                "direction": "net world-frame force exerted on the object by each hand collision geom",
+                "filter": "only contact rows with exactly one source-mapped hand collision geom and one object collision geom",
+                "series": self.hand_object_force_series_table,
+            },
             "object_gravity_world_N": environment.object_gravity_world_force.tolist(),
             "control_timestep_s": CONTROL_TIMESTEP,
             "physics_substeps": PHYSICS_SUBSTEPS_PER_TARGET,
@@ -191,6 +217,11 @@ class ManoRerunRecorder:
                 self.rr.SeriesLines(names=self.geometry_series_names),
                 static=True,
             )
+        self.recording.log(
+            _HAND_OBJECT_FORCE_PATH,
+            self.rr.SeriesLines(names=self.hand_object_force_series_names),
+            static=True,
+        )
 
     def record_transition(self) -> None:
         if self._closed:
@@ -218,9 +249,13 @@ class ManoRerunRecorder:
         object_cloud_local = self.environment.object_point_cloud_local()[env_id]
         keypoint_forces = physical.hand_keypoint_contact_forces[env_id]
         geometry_forces = physical.geom_contact_force_world_N[env_id]
+        hand_object_forces = physical.hand_object_force_on_object_world_N[env_id]
         if geometry_forces.shape != (len(self.geometry_series_names), 3):
             raise RuntimeError("physical geometry force shape no longer matches static Rerun labels")
+        if hand_object_forces.shape != (len(KEYPOINT_NAMES), 3) or not np.all(np.isfinite(hand_object_forces)):
+            raise RuntimeError("physical hand-object force shape no longer matches the source keypoint contract")
         force_magnitudes = np.linalg.norm(keypoint_forces, axis=1)
+        hand_object_force_magnitudes = np.linalg.norm(hand_object_forces, axis=1)
         target_next = min(index + 5, int(self.environment.trajectory_lengths[env_id]) - 1)
         target_position = self.environment.reference_object_pos[env_id, index]
         target_orientation = self.environment.reference_object_quat_xyzw[env_id, index]
@@ -275,6 +310,7 @@ class ManoRerunRecorder:
                 f"contact/geometry_force/world/{component}",
                 self.rr.Scalars(geometry_series[component]),
             )
+        self.recording.log(_HAND_OBJECT_FORCE_PATH, self.rr.Scalars(hand_object_force_magnitudes))
         gravity = self.environment.object_gravity_world_force
         for component, value in zip(("x_N", "y_N", "z_N"), gravity, strict=True):
             self.recording.log(f"contact/object/gravity/world/{component}", self.rr.Scalars(float(value)))
@@ -298,6 +334,8 @@ class ManoRerunRecorder:
                 cumulative_joint_offset=snapshot.observation.raw[env_id, OBSERVATION_SLICES["cumulative_joint_offset"]],
                 keypoint_force_components_48=keypoint_forces.reshape(-1),
                 keypoint_force_magnitude=force_magnitudes,
+                hand_object_force_on_object_world_N_components_48=hand_object_forces.reshape(-1),
+                hand_object_force_on_object_magnitude_N=hand_object_force_magnitudes,
                 object_force_xyz=physical.object_contact_force[env_id],
                 expected_contact_mask=self.environment.expected_contact_mask[env_id],
                 raw_observation_476=snapshot.observation.raw[env_id],

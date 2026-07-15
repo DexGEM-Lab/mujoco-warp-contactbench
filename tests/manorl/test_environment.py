@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
 from sim.manorl.assets import OBJECT_MESH
+from sim.manorl.contracts import KEYPOINT_NAMES
 from sim.manorl.environment import (
     EnvironmentConfig,
     MujocoManoEnvironment,
     _aggregate_geometry_contact_forces,
+    _decode_contact_forces,
 )
 from sim.manorl.mjx_sim import MujocoCpuReplay
 from sim.manorl.observations import (
@@ -163,6 +167,81 @@ def test_geometry_contact_aggregation_routes_worlds_and_rejects_unsolved_address
         )
 
 
+def test_pair_filtered_contact_decoder_preserves_geometry_aggregation_and_force_direction() -> None:
+    """Only source-mapped hand/object rows contribute force exerted on the object."""
+
+    keypoint_geom_ids = tuple(range(10, 10 + len(KEYPOINT_NAMES)))
+    object_geom_id = 99
+    count = 7
+    geom = np.asarray(
+        (
+            (keypoint_geom_ids[0], object_geom_id),  # hand -> object
+            (keypoint_geom_ids[0], object_geom_id),  # same pair, vector sum
+            (object_geom_id, keypoint_geom_ids[1]),  # object -> hand
+            (keypoint_geom_ids[2], 0),  # hand -> floor
+            (object_geom_id, 0),  # object -> floor
+            (keypoint_geom_ids[3], keypoint_geom_ids[4]),  # hand -> hand
+            (100, object_geom_id),  # other -> object
+        ),
+        dtype=np.int64,
+    )
+    world = np.zeros(count, dtype=np.int64)
+    dimension = np.full(count, 3, dtype=np.int64)
+    addresses = np.arange(count * 4, dtype=np.int64).reshape(count, 4)
+    nefc = np.asarray((count * 4,), dtype=np.int64)
+    friction = np.ones((count, 5), dtype=np.float64)
+    frame = np.broadcast_to(np.eye(3), (count, 3, 3)).copy()
+    world_forces = np.asarray(
+        ((2.0, 0.0, 0.0), (0.0, 3.0, 0.0), (0.0, 0.0, 4.0), (1.0, 2.0, 3.0),
+         (4.0, 5.0, 6.0), (7.0, 8.0, 9.0), (10.0, 11.0, 12.0)),
+        dtype=np.float64,
+    )
+    constraint_force = np.zeros((1, count * 4), dtype=np.float64)
+    for contact_id, (normal, tangent_x, tangent_y) in enumerate(world_forces):
+        constraint_force[0, addresses[contact_id]] = (
+            (normal + tangent_x) / 2.0,
+            (normal - tangent_x) / 2.0,
+            tangent_y / 2.0,
+            -tangent_y / 2.0,
+        )
+
+    legacy_geometry, legacy_counts = _aggregate_geometry_contact_forces(
+        count=count,
+        geom=geom,
+        world=world,
+        dimension=dimension,
+        addresses=addresses,
+        nefc=nefc,
+        friction=friction,
+        frame=frame,
+        constraint_force=constraint_force,
+        ngeom=101,
+    )
+    geometry, hand_object, counts = _decode_contact_forces(
+        count=count,
+        geom=geom,
+        world=world,
+        dimension=dimension,
+        addresses=addresses,
+        nefc=nefc,
+        friction=friction,
+        frame=frame,
+        constraint_force=constraint_force,
+        ngeom=101,
+        keypoint_geom_ids=keypoint_geom_ids,
+        object_geom_ids={object_geom_id},
+    )
+
+    assert hand_object.dtype == np.float64
+    assert hand_object.shape == (1, len(KEYPOINT_NAMES), 3)
+    np.testing.assert_allclose(hand_object[0, 0], (2.0, 3.0, 0.0))
+    np.testing.assert_allclose(hand_object[0, 1], (0.0, 0.0, -4.0))
+    np.testing.assert_allclose(hand_object[0, 2:], 0.0)
+    np.testing.assert_allclose(geometry, legacy_geometry, rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(counts, legacy_counts)
+    np.testing.assert_allclose(geometry.sum(axis=1), 0.0, rtol=0, atol=1e-12)
+
+
 def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> None:
     env = _environment(trajectory)
     assert env.last_physical is not None
@@ -229,6 +308,8 @@ def test_mjx_geometry_force_snapshot_matches_private_rows_and_legacy_aggregates(
     nefc_values = np.asarray(impl.nefc, dtype=np.int64).reshape(-1)
     nefc = np.full(2, nefc_values[0], dtype=np.int64) if nefc_values.shape == (1,) else nefc_values
     expected = np.zeros_like(physical.geom_contact_force_world_N)
+    expected_hand_object = np.zeros((2, len(KEYPOINT_NAMES), 3), dtype=np.float64)
+    keypoint_indices = {geom_id: index for index, geom_id in enumerate(env.producer.keypoint_geom_ids)}
     geom = np.asarray(impl.contact__geom, dtype=np.int64)
     world = np.asarray(impl.contact__worldid, dtype=np.int64)
     addresses = np.asarray(impl.contact__efc_address, dtype=np.int64)
@@ -247,6 +328,10 @@ def test_mjx_geometry_force_snapshot_matches_private_rows_and_legacy_aggregates(
         first_geom, second_geom = map(int, geom[contact_id])
         expected[world_id, first_geom] -= world_force
         expected[world_id, second_geom] += world_force
+        if first_geom in keypoint_indices and second_geom in env.producer.object_geom_ids:
+            expected_hand_object[world_id, keypoint_indices[first_geom]] += world_force
+        elif second_geom in keypoint_indices and first_geom in env.producer.object_geom_ids:
+            expected_hand_object[world_id, keypoint_indices[second_geom]] -= world_force
     np.testing.assert_allclose(physical.geom_contact_force_world_N, expected, rtol=0, atol=1e-10)
     np.testing.assert_allclose(
         physical.hand_keypoint_contact_forces,
@@ -257,6 +342,13 @@ def test_mjx_geometry_force_snapshot_matches_private_rows_and_legacy_aggregates(
     np.testing.assert_allclose(
         physical.object_contact_force,
         physical.geom_contact_force_world_N[:, sorted(env.producer.object_geom_ids)].sum(axis=1),
+        rtol=0,
+        atol=1e-10,
+    )
+    assert physical.hand_object_force_on_object_world_N.dtype == np.float64
+    np.testing.assert_allclose(
+        physical.hand_object_force_on_object_world_N,
+        expected_hand_object,
         rtol=0,
         atol=1e-10,
     )
@@ -420,7 +512,13 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     recorder.episode_id = 0
     recorder.geometry_table = recorder._geometry_table()
     recorder.geometry_series_names = tuple(row["series_name"] for row in recorder.geometry_table)
+    recorder.hand_object_force_series_table = recorder._hand_object_force_series_table()
+    recorder.hand_object_force_series_names = tuple(
+        row["series_name"] for row in recorder.hand_object_force_series_table
+    )
     assert len(recorder.geometry_table) == env.model.ngeom
+    assert [row["keypoint_name"] for row in recorder.hand_object_force_series_table] == list(KEYPOINT_NAMES)
+    assert [row["geom_id"] for row in recorder.hand_object_force_series_table] == env.producer.keypoint_geom_ids
     assert recorder.geometry_table[0] == {
         "id": 0,
         "label": "floor",
@@ -444,10 +542,21 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     assert root.contents[1].contents[1].contents == [
         "contact/count", "contact/object_force_magnitude", "contact/keypoint_force_total", "action/**", "episode/**"
     ]
+    hand_object_path = "contact/hand_object_force/on_object/magnitude_N"
+    hand_object_view = root.contents[3]
+    assert hand_object_view.name == "ManoHand-object contact forces"
+    assert hand_object_view.contents == [hand_object_path]
+    assert all(hand_object_path not in view.contents for view in tabs.contents)
+    assert hand_object_path not in root.contents[1].contents[1].contents
 
+    expected_hand_object_magnitudes = []
     for _ in range(2):
         env.step(np.zeros((1, 26), dtype=np.float64))
         assert env.last_transition is not None
+        assert env.last_physical is not None
+        expected_hand_object_magnitudes.append(
+            np.linalg.norm(env.last_physical.hand_object_force_on_object_world_N[0], axis=1)
+        )
         recorder._record(env.last_transition)
 
     geometry_paths = [f"contact/geometry_force/world/{component}" for component, _ in (
@@ -461,12 +570,38 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     assert set(geometry_paths).issubset(static_logs)
     for path in geometry_paths:
         assert static_logs[path].names.as_arrow_array().to_pylist() == list(recorder.geometry_series_names)
+    assert static_logs[hand_object_path].names.as_arrow_array().to_pylist() == list(
+        recorder.hand_object_force_series_names
+    )
+    assert len(recorder.hand_object_force_series_names) == len(KEYPOINT_NAMES)
+    metadata_document = next(
+        args[0]
+        for path, args, kwargs, _ in recorder.recording.logs
+        if path == "run/metadata" and kwargs.get("static")
+    )
+    metadata = json.loads(metadata_document.text.as_arrow_array().to_pylist()[0])
+    assert metadata["hand_object_force_on_object_world_N"] == {
+        "direction": "net world-frame force exerted on the object by each hand collision geom",
+        "filter": "only contact rows with exactly one source-mapped hand collision geom and one object collision geom",
+        "series": recorder.hand_object_force_series_table,
+    }
 
     samples = {
         path: [args[0] for logged_path, args, kwargs, _ in recorder.recording.logs if logged_path == path and not kwargs.get("static")]
         for path in geometry_paths
     }
     assert all(len(values) == 2 for values in samples.values())
+    hand_object_samples = [
+        args[0]
+        for logged_path, args, kwargs, _ in recorder.recording.logs
+        if logged_path == hand_object_path and not kwargs.get("static")
+    ]
+    assert len(hand_object_samples) == 2
+    for value, expected_magnitudes in zip(hand_object_samples, expected_hand_object_magnitudes, strict=True):
+        actual = value.scalars.as_arrow_array().to_numpy()
+        assert actual.shape == (len(KEYPOINT_NAMES),)
+        np.testing.assert_allclose(actual, expected_magnitudes, rtol=0, atol=1e-12)
+    assert np.any(np.stack(expected_hand_object_magnitudes) == 0.0)
     for values in samples.values():
         assert all(value.scalars.as_arrow_array().to_numpy().shape == (env.model.ngeom,) for value in values)
     zero_geom_ids = np.flatnonzero(
