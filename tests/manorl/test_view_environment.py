@@ -11,11 +11,15 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert args.speed == 0.25
     assert args.loop is True
     assert args.print_every == 10
+    assert args.training_termination is False
 
-    one_shot = parse_args(["--device", "gpu", "--no-loop", "--speed", "1.0"])
+    one_shot = parse_args(
+        ["--device", "gpu", "--no-loop", "--speed", "1.0", "--training-termination"]
+    )
     assert one_shot.device == "gpu"
     assert one_shot.loop is False
     assert one_shot.speed == 1.0
+    assert one_shot.training_termination is True
 
 
 def test_viewer_requires_a_graphical_session(monkeypatch: pytest.MonkeyPatch) -> None:

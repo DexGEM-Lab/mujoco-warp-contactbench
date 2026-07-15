@@ -44,7 +44,9 @@ def _require_graphical_session() -> None:
     )
 
 
-def view_environment(*, device: str, speed: float, loop: bool, print_every: int) -> None:
+def view_environment(
+    *, device: str, speed: float, loop: bool, print_every: int, training_termination: bool
+) -> None:
     """Run and render one production environment world with residuals disabled."""
 
     if speed <= 0.0:
@@ -56,13 +58,14 @@ def view_environment(*, device: str, speed: float, loop: bool, print_every: int)
     import mujoco
     import mujoco.viewer
 
+    max_deviation_distance = 0.1 if training_termination else 1_000_000.0
     environment = MujocoManoEnvironment(
         load_reference_trajectory(),
         EnvironmentConfig(
             device=device,
             num_envs=1,
             residual_enabled=False,
-            max_deviation_distance=1_000_000.0,
+            max_deviation_distance=max_deviation_distance,
         ),
     )
     if environment.config.residual_enabled:
@@ -72,7 +75,8 @@ def view_environment(*, device: str, speed: float, loop: bool, print_every: int)
     sleep_seconds = CONTROL_TIMESTEP / speed
 
     print(
-        "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action. "
+        "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action "
+        f"(maxDeviationDistance={max_deviation_distance:g}). "
         "The right-side actuator pane shows the applied mocap ctrl target."
     )
     with mujoco.viewer.launch_passive(
@@ -103,6 +107,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Simulation speed multiplier; 0.25 makes the 3.955 second trajectory visible over about 16 seconds.",
     )
     parser.add_argument(
+        "--training-termination",
+        action="store_true",
+        help="use the current training deviation threshold (0.1 m) instead of formal 791-call replay termination",
+    )
+    parser.add_argument(
         "--loop",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -124,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         speed=args.speed,
         loop=args.loop,
         print_every=args.print_every,
+        training_termination=args.training_termination,
     )
     return 0
 
