@@ -186,8 +186,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     trace_path = output.with_suffix(".eval.npz")
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
     artifacts = (checkpoint, metrics_path, trace_path)
-    rerun_existing = [] if rerun_path is None else list(rerun_path.parent.glob(f"{rerun_path.stem}.episode_*.rrd"))
-    if any(path.exists() for path in artifacts) or rerun_existing:
+    rerun_existing = [] if rerun_path is None else [
+        rerun_path,
+        rerun_path.with_name(f".{rerun_path.stem}.active{rerun_path.suffix or '.rrd'}"),
+    ]
+    if any(path.exists() for path in artifacts) or any(path.exists() for path in rerun_existing):
         raise FileExistsError("refusing to replace an existing training artifact prefix")
     torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)
@@ -225,9 +228,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         else None
     )
     updates, transitions, elapsed = _train(runtime, budget, recorder)
-    if recorder is not None:
-        recorder.close()
-    rerun_episode_paths = [] if recorder is None else [str(path) for path in recorder.episode_paths]
+    rerun_artifact = None if recorder is None else str(recorder.close())
     save_skrl_checkpoint(runtime.agent, checkpoint, runtime_config=runtime.checkpoint_metadata())
     # Evaluate exactly what a user will later load. skrl preprocessor/module
     # state may differ in-process after PPO training, so a fresh native load is
@@ -295,7 +296,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         "artifacts": {
             "checkpoint": str(checkpoint),
             "evaluation_trace": str(trace_path),
-            "rerun_episodes": rerun_episode_paths,
+            "rerun": rerun_artifact,
         },
     }
     metrics_path.parent.mkdir(parents=True, exist_ok=True)

@@ -188,16 +188,18 @@ def test_rerun_finalizes_terminal_episode_before_delayed_reset(trajectory, tmp_p
     assert env.last_transition is not None
     assert bool(env.last_transition.termination.reset[0])
     recorder.record_transition()
-    assert len(recorder.episode_paths) == 1
+    assert recorder.active_path.exists()
+    assert not recorder.output.exists()
     env.step(np.zeros((1, 26), dtype=np.float64))
     assert env.last_transition is not None
     assert bool(env.last_transition.reset_applied[0])
     recorder.record_transition()
-    assert len(recorder.episode_paths) == 2
-    assert recorder.episode_paths[0].name == "episodes.episode_0000.rrd"
-    assert recorder.episode_paths[0].stat().st_size > 0
+    assert recorder.output.name == "episodes.rrd"
+    assert recorder.output.stat().st_size > 0
+    assert recorder.active_path.exists()
     recorder.close()
-    assert recorder.episode_paths[1].stat().st_size > 0
+    assert recorder.output.stat().st_size > 0
+    assert not recorder.active_path.exists()
 
 
 def test_residual_core_masks_inactive_fingers_in_live_environment(trajectory) -> None:

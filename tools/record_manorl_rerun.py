@@ -28,7 +28,7 @@ def _assignment_payload(trajectory_batch) -> list[dict[str, object]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="episode files become <stem>.episode_XXXX.rrd")
+    parser.add_argument("--output", type=Path, required=True, help="stable latest-env0 .rrd output, atomically replaced at episode boundaries")
     parser.add_argument("--object", dest="object_type", default="cube1")
     parser.add_argument("--gesture", default="01")
     parser.add_argument("--steps", type=int, default=160)
@@ -57,8 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     for _ in range(args.steps):
         environment.step(actions)
         recorder.record_transition()
-    recorder.close()
-    print(json.dumps({"episode_artifacts": [str(path) for path in recorder.episode_paths]}, indent=2))
+    print(json.dumps({"rerun_artifact": str(recorder.close())}, indent=2))
     return 0
 
 

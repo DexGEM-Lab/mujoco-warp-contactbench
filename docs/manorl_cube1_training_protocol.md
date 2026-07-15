@@ -88,19 +88,20 @@ once every four vector control calls:
   --rerun-stride 4
 ```
 
-Each completed env-0 episode is atomically written as
-`cube1_03_scratch_run.episode_0000.rrd`, then
-`cube1_03_scratch_run.episode_0001.rrd`, and so on. Open an artifact with:
+The default recording is env 0 only. It keeps one stable artifact:
+`cube1_03_scratch_run.rrd`. The recorder writes the active episode privately,
+then atomically replaces that path when the next delayed reset is applied; it
+does not retain an episode archive. Open the latest completed recording with:
 
 ```bash
 /home/jay/anaconda3/envs/manorl_mujoco/bin/rerun \
-  outputs/manorl/cube1_03_scratch_run.episode_0000.rrd
+  outputs/manorl/cube1_03_scratch_run.rrd
 ```
 
 The embedded Rerun blueprint explicitly displays the object point cloud and
 tracks the object with an orbital camera. It records actual state, target, 26D
 action/controller target, hand keypoints, contact force vectors, named reward
-terms, reset causes, and the thresholds used by that episode.
+terms, reset causes, and the thresholds used by that recording.
 
 ## Artifacts
 

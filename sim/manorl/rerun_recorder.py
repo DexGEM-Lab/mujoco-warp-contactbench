@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,7 @@ _FORCE_ARROW_SCALE = 0.002
 
 
 class ManoRerunRecorder:
-    """Write one immutable Rerun artifact for each episode of a selected world."""
+    """Publish only the latest selected-world episode to one stable Rerun path."""
 
     def __init__(self, environment: MujocoManoEnvironment, output: str | Path, *, env_id: int = 0) -> None:
         if not isinstance(environment, MujocoManoEnvironment):
@@ -34,14 +35,11 @@ class ManoRerunRecorder:
         self.output = Path(output)
         self.output.parent.mkdir(parents=True, exist_ok=True)
         self.episode_id = 0
-        self.episode_paths: list[Path] = []
-        self._closed = False
-        self._start_episode()
-
-    def _episode_path(self) -> Path:
         suffix = self.output.suffix or ".rrd"
         stem = self.output.stem if self.output.suffix else self.output.name
-        return self.output.with_name(f"{stem}.episode_{self.episode_id:04d}{suffix}")
+        self.active_path = self.output.with_name(f".{stem}.active{suffix}")
+        self._closed = False
+        self._start_episode()
 
     def _default_blueprint(self):
         blueprint = self.rr.blueprint
@@ -78,15 +76,14 @@ class ManoRerunRecorder:
         )
 
     def _start_episode(self) -> None:
-        self.current_path = self._episode_path()
         self.recording = self.rr.RecordingStream("manorl_mujoco")
-        self.recording.save(self.current_path, default_blueprint=self._default_blueprint())
-        self.episode_paths.append(self.current_path)
+        self.recording.save(self.active_path, default_blueprint=self._default_blueprint())
         self._log_static_metadata()
 
-    def _finish_episode(self) -> None:
+    def _publish_episode(self) -> None:
         self.recording.flush()
         self.recording.disconnect()
+        os.replace(self.active_path, self.output)
 
     def _log_static_metadata(self) -> None:
         environment = self.environment
@@ -129,9 +126,10 @@ class ManoRerunRecorder:
         if snapshot is None:
             raise RuntimeError("record_transition requires one completed environment.step call")
         # The transition after terminal state has physically applied the delayed
-        # reset. Finalize the prior episode before writing the new reset state.
+        # reset. Atomically replace the user-visible recording before writing
+        # the new reset state into a fresh private active file.
         if bool(snapshot.reset_applied[self.env_id]):
-            self._finish_episode()
+            self._publish_episode()
             self.episode_id += 1
             self._start_episode()
         self._record(snapshot)
@@ -208,6 +206,6 @@ class ManoRerunRecorder:
 
     def close(self) -> Path:
         if not self._closed:
-            self._finish_episode()
+            self._publish_episode()
             self._closed = True
-        return self.current_path
+        return self.output
