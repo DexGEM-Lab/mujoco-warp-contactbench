@@ -613,6 +613,37 @@ class MujocoManoEnvironment:
             raise RuntimeError("dynamic point templates were not initialized")
         return PointCloudTemplate(self._dynamic_templates.copy(), mode="dynamic_reset")
 
+    def object_point_cloud_local(self) -> NDArray[np.float64]:
+        """Return the metric 64-point template in every object's local frame."""
+
+        template = self._point_template()
+        points = np.asarray(template.local_points, dtype=np.float64)
+        batch = self.config.num_envs
+        if points.shape == (POINT_COUNT, 3):
+            points = np.broadcast_to(points, (batch, POINT_COUNT, 3))
+        elif points.shape != (batch, POINT_COUNT, 3):
+            raise ValueError("object point template has invalid batch shape")
+        if template.normalized:
+            if template.scale is None:
+                raise ValueError("normalized object point template lacks scale")
+            scale = np.asarray(template.scale, dtype=np.float64)
+            if scale.shape == (3,):
+                scale = np.broadcast_to(scale, (batch, 3))
+            if scale.shape != (batch, 3):
+                raise ValueError("normalized object point template has invalid scale shape")
+            points = points * scale[:, None, :]
+        return points.copy()
+
+    def object_point_cloud_world(self, physical: PhysicalSnapshot | None = None) -> NDArray[np.float64]:
+        """Return the actual 64-point object template in each world's coordinates."""
+
+        resolved = self.last_physical if physical is None else physical
+        if resolved is None:
+            raise RuntimeError("object point cloud requires a resolved physical snapshot")
+        points = self.object_point_cloud_local()
+        quaternions = np.broadcast_to(resolved.object_orientation_xyzw[:, None, :], (self.config.num_envs, POINT_COUNT, 4))
+        return quat_rotate_xyzw(quaternions, points) + resolved.object_position[:, None, :]
+
     def _reset_indices(self, env_ids: NDArray[np.int64]) -> None:
         if len(env_ids) == 0:
             return

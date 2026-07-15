@@ -218,21 +218,19 @@ def test_linked_worktree_invocation_is_rejected(tmp_path: Path) -> None:
 def test_git_guard_policy_and_runtime_config_match_task_topology() -> None:
     policy = json.loads((REPO_ROOT / ".git-guard" / "policy.json").read_text(encoding="utf-8"))
     config = json.loads((REPO_ROOT / ".git-guard" / "config.json").read_text(encoding="utf-8"))
-    migration = "feature/manorl-mujoco-migration"
+    legacy_branch = "feature/manorl-mujoco-migration"
 
     assert policy["branches"] == {
-        "long_lived": ["main", "dev", migration],
+        "long_lived": ["main", "dev"],
         "families": ["feat/*", "case/*/*"],
     }
     assert {(edge["source"], edge["target"]) for edge in policy["branch_from"]} == {
         ("main", "dev"),
-        ("main", migration),
         ("dev", "feat/*"),
         ("dev", "case/*/*"),
     }
     rules = {(rule["source"], rule["target"]): rule for rule in policy["merge_rules"]}
     assert set(rules) == {
-        (migration, "dev"),
         ("case/*/*", "feat/*"),
         ("dev", "feat/*"),
         ("feat/*", "dev"),
@@ -240,14 +238,8 @@ def test_git_guard_policy_and_runtime_config_match_task_topology() -> None:
     }
     assert rules[("dev", "feat/*")]["sync"] is True
     assert rules[("feat/*", "dev")]["sync_merge_required"] is True
-    assert {item["name"] for item in policy["direct_commit_refs"]} == {
-        migration,
-        "feat/*",
-        "case/*/*",
-    }
-    assert [(rule["source"], rule["target"]) for rule in policy["merge_rules"] if rule["source"] == migration] == [
-        (migration, "dev")
-    ]
+    assert {item["name"] for item in policy["direct_commit_refs"]} == {"feat/*", "case/*/*"}
+    assert legacy_branch not in json.dumps(policy, sort_keys=True)
     assert policy["tag_rules"] == []
     assert all("tag_pattern" not in rule for rule in policy["merge_rules"])
     assert config["branch_logs"]["force_diff_required"] is False

@@ -8,13 +8,6 @@
       "target_ref_regex": "^refs/heads/dev$"
     },
     {
-      "source": "main",
-      "source_ref": "refs/heads/main",
-      "target": "feature/manorl-mujoco-migration",
-      "target_ref": "refs/heads/feature/manorl-mujoco-migration",
-      "target_ref_regex": "^refs/heads/feature/manorl\\-mujoco\\-migration$"
-    },
-    {
       "source": "dev",
       "source_ref": "refs/heads/dev",
       "target": "feat/*",
@@ -36,16 +29,10 @@
     ],
     "long_lived": [
       "main",
-      "dev",
-      "feature/manorl-mujoco-migration"
+      "dev"
     ]
   },
   "direct_commit_refs": [
-    {
-      "name": "feature/manorl-mujoco-migration",
-      "ref": "refs/heads/feature/manorl-mujoco-migration",
-      "ref_regex": "^refs/heads/feature/manorl\\-mujoco\\-migration$"
-    },
     {
       "name": "case/*/*",
       "ref": "refs/heads/case/*/*",
@@ -58,15 +45,6 @@
     }
   ],
   "merge_rules": [
-    {
-      "id": "feature/manorl-mujoco-migration to dev",
-      "source": "feature/manorl-mujoco-migration",
-      "source_ref": "refs/heads/feature/manorl-mujoco-migration",
-      "source_ref_regex": "^refs/heads/feature/manorl\\-mujoco\\-migration$",
-      "target": "dev",
-      "target_ref": "refs/heads/dev",
-      "target_ref_regex": "^refs/heads/dev$"
-    },
     {
       "id": "case/*/* to feat/*",
       "source": "case/*/*",
@@ -111,17 +89,6 @@
     "refs/heads/main"
   ],
   "required_targets": [
-    {
-      "source": "feature/manorl-mujoco-migration",
-      "source_ref": "refs/heads/feature/manorl-mujoco-migration",
-      "source_ref_regex": "^refs/heads/feature/manorl\\-mujoco\\-migration$",
-      "target_refs": [
-        "refs/heads/dev"
-      ],
-      "targets": [
-        "dev"
-      ]
-    },
     {
       "source": "case/*/*",
       "source_ref": "refs/heads/case/*/*",
