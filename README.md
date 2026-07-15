@@ -154,10 +154,10 @@ For an opt-in safety cap that may stop before all 64 updates complete, add
 
 For a 2,500-update Server2 run, add `--checkpoint-interval-updates 100`. Each
 completed interval writes `<output>/checkpoint-000100.pt` plus its `.pt.json`
-sidecar. `<output>/last.pt` and its sidecar are atomically replaced from the
-latest completed periodic checkpoint and again from the final `<output>.pt`
-checkpoint; sibling output prefixes therefore have independent checkpoint
-namespaces.
+sidecar. `<output>/last.pt` atomically follows the latest completed checkpoint;
+its fixed sidecar records compatibility only. Exact progress remains in the
+immutable numbered and final checkpoint sidecars. Sibling output prefixes have
+independent checkpoint namespaces.
 
 To create one W&B run using the authenticated default account, provision the
 locked SDK in the documented training interpreter, then add explicit tracking

@@ -167,9 +167,12 @@ def test_train_saves_periodic_native_checkpoints_and_updates_last(
 
     last_checkpoint = output / "last.pt"
     assert last_checkpoint.read_bytes() == checkpoint_paths[-1].read_bytes()
-    last_metadata = json.loads(last_checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
+    last_sidecar = last_checkpoint.with_suffix(".pt.json")
+    last_sidecar_content = last_sidecar.read_bytes()
+    last_metadata = json.loads(last_sidecar_content)
     assert last_metadata["checkpoint_file"] == "last.pt"
-    assert last_metadata["runtime_config"]["training_progress"]["completed_updates"] == 4
+    assert "training_progress" not in last_metadata["runtime_config"]
+    assert last_metadata["progress_metadata"] == "immutable numbered and final checkpoint sidecars"
     tool.load_skrl_checkpoint(runtime.agent, last_checkpoint)
     assert runtime.agent.loaded_checkpoint == str(last_checkpoint)
 
@@ -181,9 +184,9 @@ def test_train_saves_periodic_native_checkpoints_and_updates_last(
     )
     tool._update_last_checkpoint(output, final_checkpoint)
     assert last_checkpoint.read_bytes() == final_checkpoint.read_bytes()
-    final_last_metadata = json.loads(last_checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
-    assert final_last_metadata["checkpoint_file"] == "last.pt"
-    assert final_last_metadata["runtime_config"]["training_progress"]["completed_updates"] == 5
+    assert last_sidecar.read_bytes() == last_sidecar_content
+    final_metadata = json.loads(final_checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
+    assert final_metadata["runtime_config"]["training_progress"]["completed_updates"] == 5
 
     with pytest.raises(FileExistsError, match="periodic checkpoint artifact"):
         tool._maybe_save_periodic_checkpoint(runtime, output, 2, updates[1])
@@ -194,8 +197,8 @@ def test_periodic_checkpoint_namespaces_isolate_sibling_output_prefixes(tmp_path
     runtime = _runtime()
     runtime.checkpoint_metadata = lambda: {"runtime": "fake"}
     update = {"update": 100.0, "environment_transitions": 4_800.0}
-    first_output = tmp_path / "first" / "training"
-    second_output = tmp_path / "second" / "training"
+    first_output = tmp_path / "first"
+    second_output = tmp_path / "second"
 
     first_checkpoint = tool._maybe_save_periodic_checkpoint(runtime, first_output, 100, update)
     second_checkpoint = tool._maybe_save_periodic_checkpoint(runtime, second_output, 100, update)
@@ -213,16 +216,34 @@ def test_checkpoint_publication_failures_preserve_complete_artifacts(
     tool = _load_tool()
     runtime = _runtime()
     runtime.checkpoint_metadata = lambda: {"runtime": "fake"}
-    output = tmp_path / "training"
     first_update = {"update": 2.0, "environment_transitions": 96.0}
     second_update = {"update": 4.0, "environment_transitions": 192.0}
-    initial_checkpoint = tool._save_periodic_checkpoint(runtime, output, first_update)
-    last_checkpoint = tool._update_last_checkpoint(output, initial_checkpoint)
+    original_replace = tool.os.replace
+
+    initial_output = tmp_path / "initial"
+    initial_checkpoint = tool._save_periodic_checkpoint(runtime, initial_output, first_update)
+    initial_last = initial_output / "last.pt"
+    initial_sidecar = initial_last.with_suffix(".pt.json")
+
+    def fail_initial_sidecar(source: Path, destination: Path) -> None:
+        if destination == initial_sidecar:
+            raise OSError("injected initial sidecar publication failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(tool.os, "replace", fail_initial_sidecar)
+    with pytest.raises(OSError, match="initial sidecar"):
+        tool._update_last_checkpoint(initial_output, initial_checkpoint)
+    assert not initial_last.exists()
+    assert not initial_sidecar.exists()
+    assert not list(initial_output.glob(".last.pt.json.*.tmp*"))
+
+    output = tmp_path / "training"
+    first_checkpoint = tool._save_periodic_checkpoint(runtime, output, first_update)
+    last_checkpoint = tool._update_last_checkpoint(output, first_checkpoint)
     last_sidecar = last_checkpoint.with_suffix(".pt.json")
     previous_payload = last_checkpoint.read_bytes()
-    previous_sidecar = last_sidecar.read_bytes()
+    static_sidecar = last_sidecar.read_bytes()
     next_checkpoint = tool._save_periodic_checkpoint(runtime, output, second_update)
-    original_replace = tool.os.replace
 
     def fail_last_payload(source: Path, destination: Path) -> None:
         if destination == last_checkpoint:
@@ -233,21 +254,20 @@ def test_checkpoint_publication_failures_preserve_complete_artifacts(
     with pytest.raises(OSError, match="last payload"):
         tool._update_last_checkpoint(output, next_checkpoint)
     assert last_checkpoint.read_bytes() == previous_payload
-    assert last_sidecar.read_bytes() == previous_sidecar
+    assert last_sidecar.read_bytes() == static_sidecar
     tool.load_skrl_checkpoint(runtime.agent, last_checkpoint)
     assert runtime.agent.loaded_checkpoint == str(last_checkpoint)
     assert not list(output.glob(".last.pt.*.tmp*"))
 
-    def fail_last_sidecar(source: Path, destination: Path) -> None:
+    def fail_sidecar_if_replaced(source: Path, destination: Path) -> None:
         if destination == last_sidecar:
-            raise OSError("injected last sidecar publication failure")
+            raise AssertionError("static last sidecar was replaced")
         original_replace(source, destination)
 
-    monkeypatch.setattr(tool.os, "replace", fail_last_sidecar)
-    with pytest.raises(OSError, match="last sidecar"):
-        tool._update_last_checkpoint(output, next_checkpoint)
+    monkeypatch.setattr(tool.os, "replace", fail_sidecar_if_replaced)
+    tool._update_last_checkpoint(output, next_checkpoint)
     assert last_checkpoint.read_bytes() == next_checkpoint.read_bytes()
-    assert last_sidecar.read_bytes() == previous_sidecar
+    assert last_sidecar.read_bytes() == static_sidecar
     tool.load_skrl_checkpoint(runtime.agent, last_checkpoint)
     assert runtime.agent.loaded_checkpoint == str(last_checkpoint)
 

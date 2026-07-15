@@ -372,25 +372,39 @@ def _save_checkpoint_atomically(
     return checkpoint
 
 
+def _last_sidecar_content(checkpoint: Path, last_checkpoint: Path) -> bytes:
+    metadata = json.loads(_checkpoint_sidecar_path(checkpoint).read_text(encoding="utf-8"))
+    runtime_config = dict(metadata["runtime_config"])
+    runtime_config.pop("training_progress", None)
+    metadata["checkpoint_file"] = last_checkpoint.name
+    metadata["runtime_config"] = runtime_config
+    metadata["progress_metadata"] = "immutable numbered and final checkpoint sidecars"
+    return (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def _update_last_checkpoint(output: Path, checkpoint: Path) -> Path:
     output.mkdir(parents=True, exist_ok=True)
     last_checkpoint = _last_checkpoint_path(output)
-    checkpoint_sidecar = _checkpoint_sidecar_path(checkpoint)
     last_sidecar = _checkpoint_sidecar_path(last_checkpoint)
+    sidecar_content = _last_sidecar_content(checkpoint, last_checkpoint)
+    if last_sidecar.exists():
+        if not last_sidecar.is_file() or last_sidecar.read_bytes() != sidecar_content:
+            raise ValueError(f"last checkpoint compatibility sidecar does not match: {last_sidecar}")
+    else:
+        if last_checkpoint.exists():
+            raise FileExistsError(f"last checkpoint exists without compatibility sidecar: {last_checkpoint}")
+        temporary_sidecar = _temporary_checkpoint_path(last_sidecar)
+        try:
+            temporary_sidecar.write_bytes(sidecar_content)
+            os.replace(temporary_sidecar, last_sidecar)
+        finally:
+            temporary_sidecar.unlink(missing_ok=True)
     temporary_checkpoint = _temporary_checkpoint_path(last_checkpoint)
-    temporary_sidecar = _checkpoint_sidecar_path(temporary_checkpoint)
-    metadata = json.loads(checkpoint_sidecar.read_text(encoding="utf-8"))
-    metadata["checkpoint_file"] = last_checkpoint.name
     try:
         shutil.copyfile(checkpoint, temporary_checkpoint)
-        temporary_sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        # Replacing payload first keeps the existing sidecar valid for either
-        # complete native payload if interruption occurs before its update.
         os.replace(temporary_checkpoint, last_checkpoint)
-        os.replace(temporary_sidecar, last_sidecar)
     finally:
         temporary_checkpoint.unlink(missing_ok=True)
-        temporary_sidecar.unlink(missing_ok=True)
     return last_checkpoint
 
 
