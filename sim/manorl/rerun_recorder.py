@@ -67,6 +67,7 @@ class ManoRerunRecorder:
                 ),
                 row_shares=[3.0, 1.0],
             ),
+            blueprint.TimePanel(timeline="step"),
             auto_layout=False,
             auto_views=False,
             collapse_panels=False,
@@ -148,7 +149,7 @@ class ManoRerunRecorder:
         target_orientation = self.environment.reference_object_quat_xyzw[env_id, index]
         trajectory_complete = bool(termination.reset[env_id] and not termination.deviation_reset[env_id])
         target_distance = float(np.linalg.norm(object_position - target_position))
-        self.recording.set_time("control_call", sequence=snapshot.control_call)
+        self.recording.set_time("step", sequence=snapshot.control_call)
         self.recording.set_time("simulation", duration=snapshot.control_call * CONTROL_TIMESTEP)
 
         self.recording.log(

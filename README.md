@@ -111,6 +111,10 @@ JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
   --device cpu --speed 0.25 --use_residual true --terminal true
 ```
 
+When `--rerun-output` records the same environment run, its charts open on the
+`step` timeline. Select `simulation` in Rerun's time panel to chart against
+elapsed seconds.
+
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
 single 791-call replay. Both runtime controls default to `true`: use
 `--use_residual false` for source-reference diagnostics and `--terminal false`

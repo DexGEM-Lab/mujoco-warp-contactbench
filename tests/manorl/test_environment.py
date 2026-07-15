@@ -200,6 +200,48 @@ def test_transition_snapshot_preserves_action_reference_and_rerun_artifact(traje
     assert recorder.close().stat().st_size > 0
 
 
+def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> None:
+    import rerun as rr
+
+    from sim.manorl.contracts import CONTROL_TIMESTEP
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.time_context: dict[str, dict[str, float | int]] = {}
+            self.logs: list[tuple[str, dict[str, dict[str, float | int]]]] = []
+
+        def set_time(self, timeline: str, **kwargs: float | int) -> None:
+            self.time_context[timeline] = kwargs
+
+        def log(self, entity_path: str, *args, **kwargs) -> None:
+            self.logs.append((entity_path, self.time_context.copy()))
+
+    env = _environment(trajectory)
+    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, 26), dtype=np.float64))
+    snapshot = env.last_transition
+    assert snapshot is not None
+
+    recorder = object.__new__(ManoRerunRecorder)
+    recorder.rr = rr
+    recorder.environment = env
+    recorder.env_id = 0
+    recorder.episode_id = 0
+    blueprint = recorder._default_blueprint()
+    assert isinstance(blueprint.time_panel, rr.blueprint.TimePanel)
+    assert blueprint.time_panel.timeline == "step"
+
+    recorder.recording = RecordingStream()
+    recorder._record(snapshot)
+    expected_context = {
+        "step": {"sequence": snapshot.control_call},
+        "simulation": {"duration": snapshot.control_call * CONTROL_TIMESTEP},
+    }
+    assert recorder.recording.logs
+    assert all(context == expected_context for _, context in recorder.recording.logs)
+
+
 def test_rerun_finalizes_terminal_episode_before_delayed_reset(trajectory, tmp_path) -> None:
     from sim.manorl.rerun_recorder import ManoRerunRecorder
 
