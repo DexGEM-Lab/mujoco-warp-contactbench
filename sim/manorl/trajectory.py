@@ -34,6 +34,18 @@ GENERATED_CUBE1_ROW_INDEX = 507
 GENERATED_CUBE1_UUID = "00f45dd5-6699-5be1-8948-d6f7b623da48"
 GENERATED_CUBE1_MOVEMENT = (267, 541)
 GENERATED_PADDING = 250
+CUBE1_ACTION_01_BATCH_ROWS = (
+    (0, "97f4b8a1-19f4-5c1c-a051-162f21fcfc84", "cube1_01_003", 1481, 681, 971),
+    (1, "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3", "cube1_01_009", 1373, 690, 982),
+    (2, "7ff8a804-55f7-5bce-be50-e09dbbfb4018", "cube1_01_011", 1348, 486, 760),
+    (3, "9fdd20ef-8b9e-5ce3-8bbc-d0c60c3c55f2", "cube1_01_012", 1562, 721, 1036),
+    (4, "a700b2bd-bb93-5e62-a120-afb2807eb4a6", "cube1_01_014", 1111, 460, 757),
+    (5, "2024ca74-970e-5ad8-bb8c-d49f8615ac9a", "cube1_01_025", 1258, 587, 858),
+    (7, "4adcb856-a43c-5fab-9a88-f0726797ce41", "cube1_01_042", 1302, 676, 956),
+    (14, "0063573a-2137-550f-9bb1-cecd5b92f71e", "cube1_01_092", 1118, 458, 697),
+    (15, "bde3b93e-0679-5ce3-96b7-6862b9b44ef7", "cube1_01_093", 1530, 524, 750),
+    (16, "ec08a573-5050-552d-8175-8e18343f2cc0", "cube1_01_094", 1043, 502, 745),
+)
 
 
 def _immutable(array: NDArray[np.floating[Any]], *, dtype: Any = np.float64) -> NDArray[Any]:
@@ -107,6 +119,29 @@ class ReferenceTrajectory:
             raise ValueError("object quaternions must be normalized")
         if np.any(np.diff(self.timestamps) <= 0):
             raise ValueError("timestamps must be strictly increasing")
+
+
+@dataclass(frozen=True)
+class TrajectoryBatch:
+    """Immutable per-world reference assignments, mirroring Isaac batch loading."""
+
+    trajectories: tuple[ReferenceTrajectory, ...]
+
+    def __post_init__(self) -> None:
+        if not self.trajectories:
+            raise ValueError("trajectory batch must be non-empty")
+        if any(not isinstance(trajectory, ReferenceTrajectory) for trajectory in self.trajectories):
+            raise TypeError("trajectory batch must contain ReferenceTrajectory values")
+        if any(trajectory.identity.identity.split("_")[0] != OBJECT_TYPE for trajectory in self.trajectories):
+            raise ValueError("trajectory batch must contain only cube1 trajectories")
+
+    @property
+    def num_envs(self) -> int:
+        return len(self.trajectories)
+
+    @property
+    def lengths(self) -> NDArray[np.int64]:
+        return _immutable(np.asarray([len(trajectory.q_ref) for trajectory in self.trajectories]), dtype=np.int64)
 
 
 def _derive_identity(row: dict[str, Any]) -> str:
@@ -363,3 +398,134 @@ def load_generated_cube1_row_507(
     if len(rows) != 1:
         raise ValueError("generated dataset did not return exactly row 507")
     return generated_cube1_row_507_from_row(rows[0], version)
+
+
+def _cube1_action_01_trajectory_from_row(
+    row: dict[str, Any],
+    dataset_version: int,
+    *,
+    row_index: int,
+    uuid: str,
+    identity: str,
+    source_count: int,
+    movement_start: int,
+    movement_end: int,
+) -> ReferenceTrajectory:
+    """Decode one explicit cube1/action-01 Lance assignment with full padding."""
+
+    if dataset_version != EXPECTED_DATASET_VERSION:
+        raise ValueError(f"dataset version {dataset_version} != accepted version {EXPECTED_DATASET_VERSION}")
+    index = row["index"]
+    metadata = row["trajectory_metadata"]
+    expected_path = f"cube1/{identity}/{identity}_mano.npy"
+    if (
+        index.get("uuid") != uuid
+        or index.get("scene") != OBJECT_TYPE
+        or index.get("gesture") != "01"
+        or index.get("source_path") != expected_path
+    ):
+        raise ValueError(f"batch row {row_index} identity contract changed")
+    if metadata.get("object_names") != [OBJECT_TYPE] or metadata.get("hand_names") != ["right"]:
+        raise ValueError(f"batch row {row_index} must contain one right hand and cube1")
+    if int(metadata.get("total_frames", -1)) != source_count or int(metadata.get("data_fps", -1)) != SOURCE_DATA_FPS:
+        raise ValueError(f"batch row {row_index} source frame/fps contract changed")
+    movement = metadata.get("trajectory_info", {}).get("object_move")
+    if movement != [{"object_name": OBJECT_TYPE, "start_frame": movement_start, "end_frame": movement_end}]:
+        raise ValueError(f"batch row {row_index} movement contract changed")
+    if len(row["hands"]) != 1 or len(row["objects"]) != 1:
+        raise ValueError(f"batch row {row_index} must contain one hand and one object")
+
+    timestamps_all = np.asarray(row["timestamp"], dtype=np.float64)
+    q_all = np.asarray(row["hands"][0]["urdf_dof"], dtype=np.float64)
+    object_pos_all = np.asarray(row["objects"][0]["pos"], dtype=np.float64)
+    object_rotvec_all = np.asarray(row["objects"][0]["rot_aa"], dtype=np.float64)
+    arrays = {
+        "timestamp": timestamps_all,
+        "urdf_dof": q_all,
+        "object position": object_pos_all,
+        "object axis-angle": object_rotvec_all,
+    }
+    expected_shapes = {
+        "timestamp": (source_count,),
+        "urdf_dof": (source_count, len(JOINT_NAMES)),
+        "object position": (source_count, 3),
+        "object axis-angle": (source_count, 3),
+    }
+    for name, shape in expected_shapes.items():
+        if arrays[name].shape != shape or not np.all(np.isfinite(arrays[name])):
+            raise ValueError(f"batch row {row_index} invalid {name}")
+    if np.any(np.diff(timestamps_all) <= 0):
+        raise ValueError(f"batch row {row_index} timestamps are not strictly increasing")
+
+    start = movement_start - GENERATED_PADDING
+    stop = movement_end + GENERATED_PADDING
+    if start < 0 or stop > source_count:
+        raise ValueError(f"batch row {row_index} lacks the required 250-frame movement padding")
+    q_ref = q_all[start:stop].copy()
+    q_ref[:, 3:6] = np.unwrap(q_ref[:, 3:6], axis=0, period=2.0 * np.pi)
+    object_pos_raw = object_pos_all[start:stop].copy()
+    object_quat_xyzw = rotvec_to_xyzw(object_rotvec_all[start:stop])
+    z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0])
+    object_pos = object_pos_raw.copy()
+    object_pos[:, 2] += z_shift
+    identity_contract = TrajectoryIdentity(
+        dataset_path=str(TRAJECTORY_IDENTITY.dataset_path),
+        dataset_version=dataset_version,
+        row_index=row_index,
+        object_index=0,
+        uuid=uuid,
+        file_uuid=str(index.get("file_uuid", "")),
+        identity=identity,
+        source_start=start,
+        source_stop=stop,
+        movement_start_raw=movement_start,
+        movement_end_raw=movement_end,
+    )
+    return ReferenceTrajectory(
+        identity=identity_contract,
+        dataset_version=dataset_version,
+        source_indices=_immutable(np.arange(start, stop), dtype=np.int64),
+        timestamps=_immutable(timestamps_all[start:stop]),
+        q_ref=_immutable(q_ref),
+        object_pos_raw=_immutable(object_pos_raw),
+        object_pos=_immutable(object_pos),
+        object_quat_xyzw=_immutable(object_quat_xyzw),
+        object_z_shift=z_shift,
+    )
+
+
+def load_cube1_action_01_batch10(
+    dataset_path: str | Path = TRAJECTORY_IDENTITY.dataset_path,
+) -> TrajectoryBatch:
+    """Load ten explicit, fully padded cube1/action-01 trajectory assignments."""
+
+    path = Path(dataset_path)
+    if not path.exists():
+        raise FileNotFoundError(f"required Lance dataset is absent: {path}")
+    try:
+        import lance
+    except ImportError as exc:
+        raise RuntimeError("pylance is required to read the cube1 action-01 batch") from exc
+    dataset = lance.dataset(str(path))
+    version = int(getattr(dataset, "version", -1))
+    if version != EXPECTED_DATASET_VERSION:
+        raise ValueError(f"dataset version {version} != accepted version {EXPECTED_DATASET_VERSION}")
+    row_indices = [entry[0] for entry in CUBE1_ACTION_01_BATCH_ROWS]
+    rows = dataset.take(row_indices, columns=list(LANCE_COLUMNS)).to_pylist()
+    if len(rows) != len(CUBE1_ACTION_01_BATCH_ROWS):
+        raise ValueError("cube1 action-01 batch did not return all selected rows")
+    trajectories = tuple(
+        _cube1_action_01_trajectory_from_row(
+            row,
+            version,
+            row_index=row_index,
+            uuid=uuid,
+            identity=identity,
+            source_count=source_count,
+            movement_start=movement_start,
+            movement_end=movement_end,
+        )
+        for row, (row_index, uuid, identity, source_count, movement_start, movement_end)
+        in zip(rows, CUBE1_ACTION_01_BATCH_ROWS, strict=True)
+    )
+    return TrajectoryBatch(trajectories)

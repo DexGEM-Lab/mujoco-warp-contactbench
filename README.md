@@ -119,6 +119,26 @@ This selector binds generated Lance version 236, row 507, UUID
 generated cube1 test trajectory, not a claim that the dataset identifies source
 gesture `01`.
 
+To run ten independent accepted `cube1` gesture-`01` trajectories in parallel
+and view all ten in one MuJoCo-rendered window, use the pinned batch contract:
+
+```bash
+JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
+  --device cpu \
+  --trajectory accepted-cube1-action-01-batch10 \
+  --num-envs 10 \
+  --tile-envs 10 \
+  --training-termination \
+  --loop \
+  --speed 0.25
+```
+
+The batch contains ten distinct fully padded action-`01` trajectories. They
+retain independent reference progress and delayed resets while sharing one
+compiled cube1 model and batched MJX-Warp physics. `--tile-envs 1` preserves
+the native actuator-pane viewer; larger values render the first N batch worlds
+as tiles in one GLFW/MuJoCo window.
+
 The accepted input is row 1 of:
 
 ```text

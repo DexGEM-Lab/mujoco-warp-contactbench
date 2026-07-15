@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from sim.manorl.view_environment import _tile_layout, parse_args
+
 
 def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
-    from sim.manorl.view_environment import parse_args
-
     args = parse_args([])
     assert args.device == "cpu"
     assert args.speed == 0.25
@@ -15,6 +15,7 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert args.trajectory == "accepted"
     assert args.num_envs == 1
     assert args.render_env == 0
+    assert args.tile_envs == 1
 
     one_shot = parse_args(
         [
@@ -30,6 +31,8 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
             "10",
             "--render-env",
             "9",
+            "--tile-envs",
+            "10",
         ]
     )
     assert one_shot.device == "gpu"
@@ -39,6 +42,17 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert one_shot.trajectory == "generated-cube1-row-507"
     assert one_shot.num_envs == 10
     assert one_shot.render_env == 9
+    assert one_shot.tile_envs == 10
+
+
+def test_tile_layout_covers_non_overlapping_grid() -> None:
+    assert _tile_layout(1, width=100, height=80) == [(0, 0, 100, 80)]
+    assert _tile_layout(4, width=100, height=80) == [
+        (0, 40, 50, 40),
+        (50, 40, 50, 40),
+        (0, 0, 50, 40),
+        (50, 0, 50, 40),
+    ]
 
 
 def test_viewer_requires_a_graphical_session(monkeypatch: pytest.MonkeyPatch) -> None:

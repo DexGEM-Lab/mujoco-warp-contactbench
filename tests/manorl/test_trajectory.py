@@ -9,7 +9,9 @@ from scipy.spatial.transform import Rotation
 from sim.manorl.assets import object_collision_vertices
 from sim.manorl.contracts import DATASET_PATH, EXPECTED_DATASET_VERSION
 from sim.manorl.trajectory import (
+    CUBE1_ACTION_01_BATCH_ROWS,
     LANCE_COLUMNS,
+    load_cube1_action_01_batch10,
     load_reference_trajectory,
     trajectory_from_row,
 )
@@ -51,6 +53,23 @@ def test_exact_row_one_identity_slice_and_support_shift() -> None:
         trajectory.object_z_shift,
         atol=1e-15,
     )
+
+
+@pytest.mark.integration
+def test_cube1_action_01_batch_has_explicit_distinct_padded_assignments() -> None:
+    available, reason = _dataset_available()
+    if not available:
+        pytest.skip(reason)
+    batch = load_cube1_action_01_batch10()
+    assert batch.num_envs == 10
+    assert [trajectory.identity.row_index for trajectory in batch.trajectories] == [
+        row[0] for row in CUBE1_ACTION_01_BATCH_ROWS
+    ]
+    assert [trajectory.identity.identity for trajectory in batch.trajectories] == [
+        row[2] for row in CUBE1_ACTION_01_BATCH_ROWS
+    ]
+    assert batch.lengths.tolist() == [790, 792, 774, 815, 797, 771, 780, 739, 726, 743]
+    assert len({tuple(trajectory.object_pos[0]) for trajectory in batch.trajectories}) == 10
 
 
 def _accepted_fake_row(timestamps: np.ndarray) -> dict[str, object]:

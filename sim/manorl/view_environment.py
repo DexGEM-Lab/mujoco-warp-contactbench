@@ -1,14 +1,16 @@
 """Interactively test the actual residual-off cube1 MJX-Warp environment.
 
 This uses :class:`MujocoManoEnvironment`, not the narrow reference-replay
-helper. The viewer mirrors its one-world MJX state into native ``MjData`` only
-for rendering; observations, rewards, termination, delayed reset, and action
-processing all remain on the production environment path.
+helper. The default viewer mirrors one MJX state into native ``MjData``;
+the tiled mode renders several independently batched states in one window.
+Observations, rewards, termination, delayed reset, and action processing all
+remain on the production environment path.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import time
 
@@ -16,7 +18,12 @@ import numpy as np
 
 from sim.manorl.contracts import CONTROL_TIMESTEP
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
-from sim.manorl.trajectory import load_generated_cube1_row_507, load_reference_trajectory
+from sim.manorl.trajectory import (
+    TrajectoryBatch,
+    load_cube1_action_01_batch10,
+    load_generated_cube1_row_507,
+    load_reference_trajectory,
+)
 
 
 def _telemetry(environment: MujocoManoEnvironment, env_id: int, reward: float, reset: bool) -> str:
@@ -30,8 +37,9 @@ def _telemetry(environment: MujocoManoEnvironment, env_id: int, reward: float, r
         max_line_width=240,
     )
     return (
-        f"env={env_id} call={call:03d}/{len(environment.trajectory.q_ref) - 2} command_ref={command_index:03d} "
-        f"post_ref={post_index:03d} source_ref={environment.trajectory.source_indices[post_index]:04d} "
+        f"env={env_id} trajectory={environment.trajectories[env_id].identity.identity} "
+        f"call={call:03d}/{environment.trajectory_lengths[env_id] - 2} command_ref={command_index:03d} "
+        f"post_ref={post_index:03d} source_ref={environment.reference_source_indices[env_id, post_index]:04d} "
         f"reward={reward:.4f} reset={reset} ctrl={command}"
     )
 
@@ -44,6 +52,96 @@ def _require_graphical_session() -> None:
     )
 
 
+def _tile_layout(count: int, *, width: int = 1600, height: int = 900) -> list[tuple[int, int, int, int]]:
+    """Return lower-left OpenGL viewports for a compact tiled batch render."""
+
+    if count < 1 or count > 100:
+        raise ValueError("tile count must be in [1, 100]")
+    columns = math.ceil(math.sqrt(count))
+    rows = math.ceil(count / columns)
+    tile_width = width // columns
+    tile_height = height // rows
+    return [
+        ((index % columns) * tile_width, height - ((index // columns) + 1) * tile_height, tile_width, tile_height)
+        for index in range(count)
+    ]
+
+
+def _view_tiled(
+    environment: MujocoManoEnvironment,
+    *,
+    tile_envs: int,
+    speed: float,
+    loop: bool,
+    print_every: int,
+) -> None:
+    """Render selected batched worlds in one GLFW/MuJoCo window without altering physics."""
+
+    import glfw
+    import mujoco
+
+    width, height = 1600, 900
+    if not glfw.init():
+        raise RuntimeError("GLFW initialization failed for tiled MuJoCo rendering")
+    window = glfw.create_window(width, height, f"ManoRL batch viewer ({tile_envs} envs)", None, None)
+    if window is None:
+        glfw.terminate()
+        raise RuntimeError("could not create GLFW window for tiled MuJoCo rendering")
+    glfw.make_context_current(window)
+    glfw.swap_interval(1)
+    camera = mujoco.MjvCamera()
+    mujoco.mjv_defaultCamera(camera)
+    camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+    camera.azimuth = 135.0
+    camera.elevation = -20.0
+    camera.distance = 1.2
+    camera.lookat[:] = (0.25, 0.0, 0.1)
+    option = mujoco.MjvOption()
+    mujoco.mjv_defaultOption(option)
+    scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
+    context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+    zero_action = np.zeros((environment.config.num_envs, 26), dtype=np.float64)
+    sleep_seconds = CONTROL_TIMESTEP / speed
+    viewports = _tile_layout(tile_envs, width=width, height=height)
+    try:
+        while not glfw.window_should_close(window):
+            started = time.perf_counter()
+            _, rewards, resets, _ = environment.step(zero_action)
+            host_data = environment.host_data_batch()
+            framebuffer_width, framebuffer_height = glfw.get_framebuffer_size(window)
+            if (framebuffer_width, framebuffer_height) != (width, height):
+                width, height = framebuffer_width, framebuffer_height
+                viewports = _tile_layout(tile_envs, width=width, height=height)
+            for env_id, (x, y, tile_width, tile_height) in enumerate(viewports):
+                mujoco.mjv_updateScene(
+                    environment.model,
+                    host_data[env_id],
+                    option,
+                    None,
+                    camera,
+                    mujoco.mjtCatBit.mjCAT_ALL,
+                    scene,
+                )
+                mujoco.mjr_render(mujoco.MjrRect(x, y, tile_width, tile_height), scene, context)
+            glfw.swap_buffers(window)
+            glfw.poll_events()
+            call = int(environment.progress[0] - 1)
+            if call % print_every == 0 or bool(np.any(resets[:tile_envs])):
+                print(
+                    " | ".join(
+                        _telemetry(environment, env_id, float(rewards[env_id]), bool(resets[env_id]))
+                        for env_id in range(tile_envs)
+                    ),
+                    flush=True,
+                )
+            if bool(np.any(resets[:tile_envs])) and not loop:
+                return
+            time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
+    finally:
+        glfw.destroy_window(window)
+        glfw.terminate()
+
+
 def view_environment(
     *,
     device: str,
@@ -54,6 +152,7 @@ def view_environment(
     trajectory_name: str,
     num_envs: int,
     render_env: int,
+    tile_envs: int,
 ) -> None:
     """Run a batched production environment and render its first world."""
 
@@ -65,6 +164,8 @@ def view_environment(
         raise ValueError("num_envs must be positive")
     if not 0 <= render_env < num_envs:
         raise ValueError("render_env must be within the configured batch")
+    if not 1 <= tile_envs <= num_envs:
+        raise ValueError("tile_envs must be within the configured batch")
     _require_graphical_session()
 
     import mujoco
@@ -74,8 +175,14 @@ def view_environment(
         trajectory = load_reference_trajectory()
     elif trajectory_name == "generated-cube1-row-507":
         trajectory = load_generated_cube1_row_507()
+    elif trajectory_name == "accepted-cube1-action-01-batch10":
+        trajectory = load_cube1_action_01_batch10()
     else:
         raise ValueError(f"unsupported viewer trajectory {trajectory_name!r}")
+    if isinstance(trajectory, TrajectoryBatch) and trajectory.num_envs != num_envs:
+        raise ValueError(
+            f"{trajectory_name} requires --num-envs {trajectory.num_envs}, got {num_envs}"
+        )
     max_deviation_distance = 0.1 if training_termination else 1_000_000.0
     contact_capacity = max(128, 31 * num_envs + 64)
     environment = MujocoManoEnvironment(
@@ -96,10 +203,19 @@ def view_environment(
 
     print(
         "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action "
-        f"(trajectory={trajectory.identity.identity}, frames={len(trajectory.q_ref)}, "
-        f"envs={num_envs}, maxDeviationDistance={max_deviation_distance:g}). "
+        f"(trajectory={trajectory_name}, envs={num_envs}, "
+        f"maxDeviationDistance={max_deviation_distance:g}). "
         f"The viewer renders env {render_env}; all configured environments execute the same batched path."
     )
+    if tile_envs > 1:
+        _view_tiled(
+            environment,
+            tile_envs=tile_envs,
+            speed=speed,
+            loop=loop,
+            print_every=print_every,
+        )
+        return
     with mujoco.viewer.launch_passive(
         environment.model, render_data, show_left_ui=True, show_right_ui=True
     ) as viewer:
@@ -132,7 +248,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--trajectory",
-        choices=("accepted", "generated-cube1-row-507"),
+        choices=("accepted", "generated-cube1-row-507", "accepted-cube1-action-01-batch10"),
         default="accepted",
         help="explicit versioned Lance trajectory contract to render",
     )
@@ -143,6 +259,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="batched environments to execute; viewer renders env 0",
     )
     parser.add_argument("--render-env", type=int, default=0, help="batched env index mirrored into the viewer")
+    parser.add_argument(
+        "--tile-envs",
+        type=int,
+        default=1,
+        help="render the first N batched worlds as tiles in one MuJoCo GLFW window",
+    )
     parser.add_argument(
         "--training-termination",
         action="store_true",
@@ -174,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         trajectory_name=args.trajectory,
         num_envs=args.num_envs,
         render_env=args.render_env,
+        tile_envs=args.tile_envs,
     )
     return 0
 

@@ -26,7 +26,6 @@ from sim.manorl.assets import ASSET_ROOT, compile_model, object_collision_vertic
 from sim.manorl.contracts import (
     FLOOR_TOP_Z,
     KEYPOINT_NAMES,
-    MOVEMENT_RAW_RANGE,
     OBJECT_BODY_NAME,
     OBJECT_FREE_JOINT_NAME,
     PHYSICS_SUBSTEPS_PER_TARGET,
@@ -46,7 +45,7 @@ from sim.manorl.observations import (
     quat_rotate_xyzw,
 )
 from sim.manorl.rewards import RewardDiagnostics, RewardState, compute_rewards
-from sim.manorl.trajectory import ReferenceTrajectory, wxyz_to_xyzw, xyzw_to_wxyz
+from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch, wxyz_to_xyzw, xyzw_to_wxyz
 
 _FINGERTIP_NAMES = ("thumb_ip", "index_dip", "middle_dip", "ring_dip", "pinky_dip")
 _FINGERTIP_LOCAL_OFFSETS = np.asarray(
@@ -383,13 +382,22 @@ class MujocoManoEnvironment:
     state, model, checkpoint, and training concerns.
     """
 
-    def __init__(self, trajectory: ReferenceTrajectory, config: EnvironmentConfig = EnvironmentConfig()) -> None:
-        if not isinstance(trajectory, ReferenceTrajectory):
-            raise TypeError("trajectory must be a ReferenceTrajectory")
+    def __init__(
+        self, trajectory: ReferenceTrajectory | TrajectoryBatch, config: EnvironmentConfig = EnvironmentConfig()
+    ) -> None:
+        if not isinstance(trajectory, (ReferenceTrajectory, TrajectoryBatch)):
+            raise TypeError("trajectory must be a ReferenceTrajectory or TrajectoryBatch")
         if not isinstance(config, EnvironmentConfig):
             raise TypeError("config must be an EnvironmentConfig")
-        if len(trajectory.q_ref) < 2:
-            raise ValueError("environment requires at least two source references")
+        trajectories = (
+            (trajectory,) * config.num_envs
+            if isinstance(trajectory, ReferenceTrajectory)
+            else trajectory.trajectories
+        )
+        if len(trajectories) != config.num_envs:
+            raise ValueError("trajectory batch size must equal config.num_envs")
+        if any(len(item.q_ref) < 2 for item in trajectories):
+            raise ValueError("environment requires at least two source references per environment")
         try:
             import jax
             from mujoco import mjx
@@ -403,13 +411,21 @@ class MujocoManoEnvironment:
         devices = jax.devices(jax_platform)
         if not devices:
             raise RuntimeError(f"no JAX {jax_platform} device is available")
-        self.trajectory = trajectory
+        # ``trajectory`` remains the first assignment for legacy single-world
+        # diagnostics. Production gathers below always use the per-env tables.
+        self.trajectory = trajectories[0]
+        self.trajectories = tuple(trajectories)
         self.config = config
         self.jax = jax
         self.jp = jax.numpy
         self.mjx = mjx
         self.device = devices[0]
         self.mujoco, self.model = compile_model(config.servo)
+        minimum_contact_capacity = 31 * config.num_envs
+        if config.contact_capacity < minimum_contact_capacity:
+            raise ValueError(
+                f"contact_capacity {config.contact_capacity} is below {minimum_contact_capacity} required for {config.num_envs} cube1 worlds"
+            )
         self.producer = MjxWarpPhysicalProducer(self.mujoco, self.model)
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
@@ -418,11 +434,14 @@ class MujocoManoEnvironment:
         self.joint_upper = self.model.jnt_range[:26, 1].astype(np.float64, copy=True)
         self._step_fn = jax.jit(jax.vmap(lambda world: mjx.step(self.mjx_model, world)))
         self._forward_fn = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
+        self._build_reference_tables()
         self._reset_qpos = self._initial_qpos()
-        host = self._initial_host_data()
+        # Warp contact implementation metadata is static for the whole batch.
+        # Replicate one capacity-configured world, then replace only dynamic
+        # per-world qpos/qvel/ctrl below during reset.
         single_data = mjx.put_data(
             self.model,
-            host,
+            self._initial_host_data(0),
             device=self.device,
             impl="warp",
             naconmax=config.contact_capacity,
@@ -445,10 +464,6 @@ class MujocoManoEnvironment:
         )
         self.object_support_points = object_collision_vertices().copy()
         self.object_gravity_force = float(self.model.body_mass[self.producer.object_body_id] * abs(self.model.opt.gravity[2]))
-        self.contact_start_frame = int(trajectory.identity.movement_start_raw - trajectory.source_indices[0])
-        self.contact_end_frame = int(trajectory.identity.movement_end_raw - trajectory.source_indices[0])
-        if not 0 <= self.contact_start_frame <= self.contact_end_frame < len(trajectory.q_ref):
-            raise ValueError("accepted raw movement window does not map into trajectory space")
         self._point_rngs = [np.random.default_rng(config.point_seed + index) for index in range(config.num_envs)]
         self._static_template = _source_surface_template(42)
         self._dynamic_templates: NDArray[np.float64] | None = None
@@ -465,20 +480,49 @@ class MujocoManoEnvironment:
         self.last_controller_targets = np.zeros((config.num_envs, 26), dtype=np.float64)
         self.reset()
 
+    def _build_reference_tables(self) -> None:
+        self.trajectory_lengths = np.asarray([len(item.q_ref) for item in self.trajectories], dtype=np.int64)
+        max_length = int(self.trajectory_lengths.max())
+        def pad(name: str) -> NDArray[np.float64]:
+            values = [getattr(item, name) for item in self.trajectories]
+            return np.stack(
+                [
+                    np.pad(value, ((0, max_length - len(value)), (0, 0)), mode="edge")
+                    for value in values
+                ]
+            )
+        self.reference_q = pad("q_ref")
+        self.reference_object_pos = pad("object_pos")
+        self.reference_object_quat_xyzw = pad("object_quat_xyzw")
+        self.reference_source_indices = np.stack(
+            [np.pad(item.source_indices, (0, max_length - len(item.source_indices)), mode="edge") for item in self.trajectories]
+        )
+        self.contact_start_frames = np.asarray(
+            [item.identity.movement_start_raw - item.source_indices[0] for item in self.trajectories], dtype=np.int64
+        )
+        self.contact_end_frames = np.asarray(
+            [item.identity.movement_end_raw - item.source_indices[0] for item in self.trajectories], dtype=np.int64
+        )
+        if np.any(self.contact_start_frames < 0) or np.any(self.contact_end_frames >= self.trajectory_lengths):
+            raise ValueError("trajectory movement window does not map into its reference slice")
+        # Compatibility diagnostics still expose scalar values for a single/shared trajectory.
+        self.contact_start_frame = int(self.contact_start_frames[0])
+        self.contact_end_frame = int(self.contact_end_frames[0])
+
     def _initial_qpos(self) -> NDArray[np.float64]:
-        qpos = np.zeros(self.model.nq, dtype=np.float64)
-        qpos[:26] = self.trajectory.q_ref[0]
+        qpos = np.zeros((self.config.num_envs, self.model.nq), dtype=np.float64)
+        qpos[:, :26] = self.reference_q[:, 0]
         address = self.producer.object_qpos_address
-        qpos[address : address + 3] = self.trajectory.object_pos[0]
-        qpos[address + 3 : address + 7] = xyzw_to_wxyz(self.trajectory.object_quat_xyzw[0])
+        qpos[:, address : address + 3] = self.reference_object_pos[:, 0]
+        qpos[:, address + 3 : address + 7] = xyzw_to_wxyz(self.reference_object_quat_xyzw[:, 0])
         return qpos
 
-    def _initial_host_data(self) -> Any:
+    def _initial_host_data(self, env_id: int) -> Any:
         data = self.mujoco.MjData(self.model)
         self.mujoco.mj_resetData(self.model, data)
-        data.qpos[:] = self._reset_qpos
+        data.qpos[:] = self._reset_qpos[env_id]
         data.qvel[:] = 0.0
-        data.ctrl[:] = self.trajectory.q_ref[0]
+        data.ctrl[:] = self.reference_q[env_id, 0]
         self.mujoco.mj_forward(self.model, data)
         return data
 
@@ -508,10 +552,15 @@ class MujocoManoEnvironment:
 
         if not 0 <= env_id < self.config.num_envs:
             raise IndexError(f"env_id must be in [0, {self.config.num_envs - 1}]")
+        return self.host_data_batch()[env_id]
+
+    def host_data_batch(self) -> list[Any]:
+        """Transfer the complete batch once for tiled rendering diagnostics."""
+
         host_data = self.mjx.get_data(self.model, self.data)
         if not isinstance(host_data, list) or len(host_data) != self.config.num_envs:
             raise RuntimeError("batched MJX environment did not produce one host state per world")
-        return host_data[env_id]
+        return host_data
 
     def _point_template(self) -> PointCloudTemplate:
         if self.config.compatibility.point_template_mode == "static_seed_42":
@@ -526,9 +575,9 @@ class MujocoManoEnvironment:
         qpos = np.asarray(self.data.qpos, dtype=np.float64).copy()
         qvel = np.asarray(self.data.qvel, dtype=np.float64).copy()
         ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
-        qpos[env_ids] = self._reset_qpos
+        qpos[env_ids] = self._reset_qpos[env_ids]
         qvel[env_ids] = 0.0
-        ctrl[env_ids] = self.trajectory.q_ref[0]
+        ctrl[env_ids] = self.reference_q[env_ids, 0]
         self.data = self.data.replace(
             qpos=self.jax.device_put(self.jp.asarray(qpos), self.device),
             qvel=self.jax.device_put(self.jp.asarray(qvel), self.device),
@@ -544,11 +593,14 @@ class MujocoManoEnvironment:
         self._set_dynamic_templates(env_ids)
 
     def _target_indices(self) -> NDArray[np.int64]:
-        return np.clip(self.trajectory_steps, 0, len(self.trajectory.q_ref) - 1)
+        return np.minimum(np.maximum(self.trajectory_steps, 0), self.trajectory_lengths - 1)
+
+    def _reference_gather(self, table: NDArray[np.float64], indices: NDArray[np.int64]) -> NDArray[np.float64]:
+        return table[np.arange(self.config.num_envs), indices]
 
     def _build_observation(self, physical: PhysicalSnapshot) -> ObservationResult:
         indices = self._target_indices()
-        next_indices = np.minimum(indices + 5, len(self.trajectory.q_ref) - 1)
+        next_indices = np.minimum(indices + 5, self.trajectory_lengths - 1)
         state = ObservationState(
             mano_dof_pos=physical.mano_dof_pos,
             mano_dof_lower=self.joint_lower,
@@ -557,9 +609,9 @@ class MujocoManoEnvironment:
             hand_orientation_xyzw=physical.hand_orientation_xyzw,
             object_position=physical.object_position,
             object_orientation_xyzw=physical.object_orientation_xyzw,
-            target_object_position=self.trajectory.object_pos[indices],
-            target_object_orientation_xyzw=self.trajectory.object_quat_xyzw[indices],
-            target_object_pos_next_5=self.trajectory.object_pos[next_indices],
+            target_object_position=self._reference_gather(self.reference_object_pos, indices),
+            target_object_orientation_xyzw=self._reference_gather(self.reference_object_quat_xyzw, indices),
+            target_object_pos_next_5=self._reference_gather(self.reference_object_pos, next_indices),
             cumulative_offset=self.cumulative_offset,
             cumulative_joint_offset=self.cumulative_joint_offset,
             point_cloud=self._point_template(),
@@ -579,9 +631,9 @@ class MujocoManoEnvironment:
         batch = self.config.num_envs
         return RewardState(
             object_position=physical.object_position,
-            target_object_position=self.trajectory.object_pos[indices],
+            target_object_position=self._reference_gather(self.reference_object_pos, indices),
             object_orientation_xyzw=physical.object_orientation_xyzw,
-            target_object_orientation_xyzw=self.trajectory.object_quat_xyzw[indices],
+            target_object_orientation_xyzw=self._reference_gather(self.reference_object_quat_xyzw, indices),
             cumulative_offset=self.cumulative_offset,
             cumulative_joint_offset=self.cumulative_joint_offset,
             active_joint_mask=self.active_joint_mask,
@@ -592,8 +644,8 @@ class MujocoManoEnvironment:
             object_gravity_force=np.full(batch, self.object_gravity_force, dtype=np.float64),
             object_linear_velocity=physical.object_linear_velocity,
             trajectory_steps=self.trajectory_steps.copy(),
-            contact_start_frames=np.full(batch, self.contact_start_frame, dtype=np.int64),
-            contact_end_frames=np.full(batch, self.contact_end_frame, dtype=np.int64),
+            contact_start_frames=self.contact_start_frames.copy(),
+            contact_end_frames=self.contact_end_frames.copy(),
             rotation_disabled_mask=np.zeros(batch, dtype=bool),
             early_phase_starts=np.zeros(batch, dtype=np.int64),
         )
@@ -630,7 +682,7 @@ class MujocoManoEnvironment:
             trajectory_steps=self.trajectory_steps,
             cumulative_offset=self.cumulative_offset,
             cumulative_joint_offset=self.cumulative_joint_offset,
-            mocap_targets=self.trajectory.q_ref[mocap_indices],
+            mocap_targets=self._reference_gather(self.reference_q, mocap_indices),
             joint_lower=self.joint_lower,
             joint_upper=self.joint_upper,
             active_joint_mask=self.active_joint_mask,
@@ -664,9 +716,9 @@ class MujocoManoEnvironment:
         )
         termination = check_termination(
             object_position=physical.object_position,
-            target_position=self.trajectory.object_pos[self._target_indices()],
+            target_position=self._reference_gather(self.reference_object_pos, self._target_indices()),
             progress=self.progress,
-            trajectory_lengths=np.full(self.config.num_envs, len(self.trajectory.q_ref), dtype=np.int64),
+            trajectory_lengths=self.trajectory_lengths.copy(),
             early_mask=early,
             max_deviation_distance=self.config.max_deviation_distance,
             deviation_penalty=self.config.deviation_penalty,
