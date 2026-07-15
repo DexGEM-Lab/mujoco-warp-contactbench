@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+import sys
+
 import pytest
 
 from sim.manorl.view_environment import _tile_layout, parse_args
 
 
-def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
+def _load_tool(name: str):
+    path = Path(__file__).resolve().parents[2] / "tools" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_viewer_cli_enables_residual_and_loops_by_default() -> None:
     args = parse_args([])
     assert args.device == "cpu"
     assert args.speed == 0.25
@@ -58,6 +72,76 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert one_shot.object_type == "cube1"
     assert one_shot.gesture == "03"
     assert str(one_shot.rerun_output) == "outputs/manorl/viewer.rrd"
+
+
+@pytest.mark.parametrize(
+    ("residual_flag", "expected_residual_enabled"),
+    [([], True), (["--no-residual-enabled"], False)],
+)
+def test_record_rerun_cli_parses_residual_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    residual_flag: list[str],
+    expected_residual_enabled: bool,
+) -> None:
+    record_manorl_rerun = _load_tool("record_manorl_rerun")
+    captured_configs = []
+
+    class FakeEnvironment:
+        def __init__(self, trajectories, config) -> None:
+            captured_configs.append(config)
+
+        def step(self, actions) -> None:
+            pass
+
+    class FakeRecorder:
+        def __init__(self, environment, output, env_id: int) -> None:
+            pass
+
+        def record_transition(self) -> None:
+            pass
+
+        def close(self) -> Path:
+            return tmp_path / "recording.rrd"
+
+    monkeypatch.setattr(
+        record_manorl_rerun,
+        "load_assigned_trajectory_batch",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(record_manorl_rerun, "_assignment_payload", lambda trajectories: [])
+    monkeypatch.setattr(record_manorl_rerun, "MujocoManoEnvironment", FakeEnvironment)
+    monkeypatch.setattr(record_manorl_rerun, "ManoRerunRecorder", FakeRecorder)
+
+    assert record_manorl_rerun.main(
+        ["--output", str(tmp_path / "recording.rrd"), "--steps", "1", *residual_flag]
+    ) == 0
+    assert captured_configs[0].residual_enabled is expected_residual_enabled
+
+
+@pytest.mark.parametrize(
+    ("residual_flag", "expected_residual_enabled"),
+    [([], True), (["--no-residual-enabled"], False)],
+)
+def test_train_cube1_cli_parses_residual_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    residual_flag: list[str],
+    expected_residual_enabled: bool,
+) -> None:
+    train_manorl_cube1 = _load_tool("train_manorl_cube1")
+    captured_budgets = []
+
+    def fake_run(output: Path, budget) -> dict[str, object]:
+        captured_budgets.append(budget)
+        return {}
+
+    monkeypatch.setattr(train_manorl_cube1, "run", fake_run)
+
+    assert train_manorl_cube1.main(
+        ["--output", str(tmp_path / "training"), *residual_flag]
+    ) == 0
+    assert captured_budgets[0].residual_enabled is expected_residual_enabled
 
 
 def test_tile_layout_covers_non_overlapping_grid() -> None:
