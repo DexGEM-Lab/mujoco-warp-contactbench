@@ -134,8 +134,9 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     # commanded, post-step target 790 is observed, then reset is flagged.
     env.progress[:] = 790
     env.trajectory_steps[:] = 789
-    terminal_obs, _, done, _ = env.step(zero)
+    terminal_obs, _, done, terminal_extras = env.step(zero)
     np.testing.assert_array_equal(done, [True])
+    np.testing.assert_array_equal(terminal_extras["time_outs"], [False])
     np.testing.assert_array_equal(env.progress, [791])
     np.testing.assert_array_equal(env.trajectory_steps, [790])
     np.testing.assert_allclose(

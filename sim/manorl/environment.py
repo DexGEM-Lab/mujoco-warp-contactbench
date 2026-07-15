@@ -735,7 +735,10 @@ class MujocoManoEnvironment:
         self.last_observation = observation
         self.last_termination = termination
         self.last_reward = reward
-        timeouts = (self.progress >= self.config.episode_length - 1) & termination.reset
+        # ``episode_length`` is a rollout/statistics setting in this source
+        # slice, not an independent physics horizon. A source trajectory end
+        # or deviation is therefore a terminal transition, never a timeout.
+        timeouts = np.zeros(self.config.num_envs, dtype=bool)
         return (
             {"obs": observation.policy_input.copy()},
             reward.total.copy(),

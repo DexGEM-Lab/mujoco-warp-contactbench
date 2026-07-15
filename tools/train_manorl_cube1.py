@@ -105,7 +105,7 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "policy"]) -> Eval
                 contact_reward_mean=float(np.mean(contacts)),
                 reset_seen=reset_seen,
                 timeout_seen=timeout_seen,
-                completed_horizon=call == 790 and timeout_seen,
+                completed_horizon=call == 790 and reset_seen,
                 rewards_by_call=reward_means,
                 object_target_distance_by_call=distance_means,
             )

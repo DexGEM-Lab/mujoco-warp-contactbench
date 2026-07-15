@@ -96,6 +96,18 @@ def test_adapter_and_skrl_wrapper_preserve_vector_tensor_boundary(adapter: ManoG
     assert torch.all(actions >= -1.0) and torch.all(actions <= 1.0)
 
 
+def test_trajectory_completion_is_terminated_not_truncated(adapter: ManoGymnasiumVectorEnv) -> None:
+    physical = adapter.environment
+    physical.reset()
+    physical.progress[:] = 790
+    physical.trajectory_steps[:] = 789
+    _, _, terminated, truncated, info = adapter.step(np.zeros((1, 26), dtype=np.float64))
+    np.testing.assert_array_equal(terminated, [True])
+    np.testing.assert_array_equal(truncated, [False])
+    np.testing.assert_array_equal(info["time_outs"], [False])
+    np.testing.assert_array_equal(info["_final_observation"], [True])
+
+
 def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnasiumVectorEnv, tmp_path) -> None:
     import torch
 
