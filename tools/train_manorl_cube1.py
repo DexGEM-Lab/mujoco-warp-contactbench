@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
+from sim.manorl.cli import parse_cli_bool
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.rerun_recorder import ManoRerunRecorder
@@ -35,6 +36,7 @@ class TrainingBudget:
     object_type: str = "cube1"
     gesture: str = "01"
     residual_enabled: bool = True
+    terminal: bool = True
 
     @property
     def transitions(self) -> int:
@@ -209,7 +211,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             num_envs=budget.num_envs,
             device="gpu",
             residual_enabled=budget.residual_enabled,
-            max_deviation_distance=0.1,
+            max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
             contact_capacity=contact_capacity,
         ),
     )
@@ -240,7 +242,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             num_envs=budget.num_envs,
             device="gpu",
             residual_enabled=budget.residual_enabled,
-            max_deviation_distance=0.1,
+            max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
             contact_capacity=contact_capacity,
         ),
     )
@@ -317,12 +319,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rerun-stride", type=int, default=1)
     parser.add_argument("--object", dest="object_type", default="cube1")
     parser.add_argument("--gesture", default="01")
-    parser.add_argument(
-        "--residual-enabled",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="enable 26D residual action processing; use --no-residual-enabled for source-reference diagnostics",
-    )
+    parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
+    parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0 or args.rerun_stride < 1:
         parser.error("updates, num-envs, wall-clock-seconds, and rerun-stride must be positive")
@@ -340,7 +338,8 @@ def main(argv: list[str] | None = None) -> int:
             args.rerun_stride,
             args.object_type,
             args.gesture,
-            args.residual_enabled,
+            args.use_residual,
+            args.terminal,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))

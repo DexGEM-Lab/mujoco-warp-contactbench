@@ -19,14 +19,14 @@ def _load_tool(name: str):
     return module
 
 
-def test_viewer_cli_enables_residual_and_loops_by_default() -> None:
+def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
     args = parse_args([])
     assert args.device == "cpu"
     assert args.speed == 0.25
     assert args.loop is True
     assert args.print_every == 10
-    assert args.training_termination is False
-    assert args.residual_enabled is True
+    assert args.terminal is True
+    assert args.use_residual is True
     assert args.trajectory == "accepted"
     assert args.num_envs == 1
     assert args.render_env == 0
@@ -42,8 +42,10 @@ def test_viewer_cli_enables_residual_and_loops_by_default() -> None:
             "--no-loop",
             "--speed",
             "1.0",
-            "--training-termination",
-            "--no-residual-enabled",
+            "--terminal",
+            "false",
+            "--use_residual",
+            "false",
             "--trajectory",
             "generated-cube1-row-507",
             "--num-envs",
@@ -63,8 +65,8 @@ def test_viewer_cli_enables_residual_and_loops_by_default() -> None:
     assert one_shot.device == "gpu"
     assert one_shot.loop is False
     assert one_shot.speed == 1.0
-    assert one_shot.training_termination is True
-    assert one_shot.residual_enabled is False
+    assert one_shot.terminal is False
+    assert one_shot.use_residual is False
     assert one_shot.trajectory == "generated-cube1-row-507"
     assert one_shot.num_envs == 10
     assert one_shot.render_env == 9
@@ -75,14 +77,15 @@ def test_viewer_cli_enables_residual_and_loops_by_default() -> None:
 
 
 @pytest.mark.parametrize(
-    ("residual_flag", "expected_residual_enabled"),
-    [([], True), (["--no-residual-enabled"], False)],
+    ("mode_args", "expected_residual_enabled", "expected_terminal"),
+    [([], True, True), (["--use_residual", "false", "--terminal", "false"], False, False)],
 )
-def test_record_rerun_cli_parses_residual_enabled(
+def test_record_rerun_cli_parses_runtime_modes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    residual_flag: list[str],
+    mode_args: list[str],
     expected_residual_enabled: bool,
+    expected_terminal: bool,
 ) -> None:
     record_manorl_rerun = _load_tool("record_manorl_rerun")
     captured_configs = []
@@ -114,20 +117,22 @@ def test_record_rerun_cli_parses_residual_enabled(
     monkeypatch.setattr(record_manorl_rerun, "ManoRerunRecorder", FakeRecorder)
 
     assert record_manorl_rerun.main(
-        ["--output", str(tmp_path / "recording.rrd"), "--steps", "1", *residual_flag]
+        ["--output", str(tmp_path / "recording.rrd"), "--steps", "1", *mode_args]
     ) == 0
     assert captured_configs[0].residual_enabled is expected_residual_enabled
+    assert (captured_configs[0].max_deviation_distance == 0.1) is expected_terminal
 
 
 @pytest.mark.parametrize(
-    ("residual_flag", "expected_residual_enabled"),
-    [([], True), (["--no-residual-enabled"], False)],
+    ("mode_args", "expected_residual_enabled", "expected_terminal"),
+    [([], True, True), (["--use_residual", "false", "--terminal", "false"], False, False)],
 )
-def test_train_cube1_cli_parses_residual_enabled(
+def test_train_cube1_cli_parses_runtime_modes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    residual_flag: list[str],
+    mode_args: list[str],
     expected_residual_enabled: bool,
+    expected_terminal: bool,
 ) -> None:
     train_manorl_cube1 = _load_tool("train_manorl_cube1")
     captured_budgets = []
@@ -139,9 +144,10 @@ def test_train_cube1_cli_parses_residual_enabled(
     monkeypatch.setattr(train_manorl_cube1, "run", fake_run)
 
     assert train_manorl_cube1.main(
-        ["--output", str(tmp_path / "training"), *residual_flag]
+        ["--output", str(tmp_path / "training"), *mode_args]
     ) == 0
     assert captured_budgets[0].residual_enabled is expected_residual_enabled
+    assert captured_budgets[0].terminal is expected_terminal
 
 
 def test_tile_layout_covers_non_overlapping_grid() -> None:

@@ -108,12 +108,13 @@ the terminal prints the complete command vector and source/reference indices.
 ```bash
 conda activate manorl_mujoco
 JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
-  --device cpu --speed 0.25 --residual-enabled
+  --device cpu --speed 0.25 --use_residual true --terminal true
 ```
 
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
-single 791-call replay. Use `--no-residual-enabled` for an explicit
-source-reference diagnostic mode.
+single 791-call replay. Both runtime controls default to `true`: use
+`--use_residual false` for source-reference diagnostics and `--terminal false`
+for formal source-horizon termination only.
 
 To inspect the explicitly selected generated cube1 Lance row 507 under current
 training termination semantics, use the same production environment with its
@@ -123,7 +124,7 @@ separate versioned selector:
 JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
   --device cpu \
   --trajectory generated-cube1-row-507 \
-  --training-termination \
+  --terminal true \
   --loop \
   --speed 0.25
 ```
@@ -142,7 +143,7 @@ JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
   --trajectory accepted-cube1-action-01-batch10 \
   --num-envs 10 \
   --tile-envs 10 \
-  --training-termination \
+  --terminal true \
   --loop \
   --speed 0.25
 ```

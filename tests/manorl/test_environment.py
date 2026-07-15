@@ -158,6 +158,12 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     np.testing.assert_allclose(env.last_physical.object_position[0], trajectory.object_pos[0], atol=1e-7)
 
 
+def test_compiled_floor_is_neutral_gray(trajectory) -> None:
+    env = _environment(trajectory)
+    floor_id = env.model.geom("floor").id
+    np.testing.assert_allclose(env.model.geom_rgba[floor_id], (0.7, 0.7, 0.7, 1.0), rtol=0.0, atol=1e-7)
+
+
 def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajectory) -> None:
     env = _environment(trajectory)
     env.step(np.zeros((1, 26), dtype=np.float64))

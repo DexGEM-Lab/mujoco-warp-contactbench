@@ -17,6 +17,7 @@ import time
 
 import numpy as np
 
+from sim.manorl.cli import parse_cli_bool
 from sim.manorl.contracts import CONTROL_TIMESTEP
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.rerun_recorder import ManoRerunRecorder
@@ -227,7 +228,7 @@ def view_environment(
     speed: float,
     loop: bool,
     print_every: int,
-    training_termination: bool,
+    terminal: bool,
     trajectory_name: str,
     num_envs: int,
     render_env: int,
@@ -235,7 +236,7 @@ def view_environment(
     object_type: str | None,
     gesture: str | None,
     rerun_output: Path | None,
-    residual_enabled: bool,
+    use_residual: bool,
 ) -> None:
     """Run a batched production environment and render its first world."""
 
@@ -276,14 +277,14 @@ def view_environment(
         raise ValueError(
             f"{trajectory_name} requires --num-envs {trajectory.num_envs}, got {num_envs}"
         )
-    max_deviation_distance = 0.1 if training_termination else 1_000_000.0
+    max_deviation_distance = 0.1 if terminal else 1_000_000.0
     contact_capacity = max(128, 31 * num_envs + 64)
     environment = MujocoManoEnvironment(
         trajectory,
         EnvironmentConfig(
             device=device,
             num_envs=num_envs,
-            residual_enabled=residual_enabled,
+            residual_enabled=use_residual,
             max_deviation_distance=max_deviation_distance,
             contact_capacity=contact_capacity,
         ),
@@ -294,7 +295,7 @@ def view_environment(
     sleep_seconds = CONTROL_TIMESTEP / speed
 
     print(
-        f"Testing MujocoManoEnvironment with residual_enabled={residual_enabled} and zero 26D action "
+        f"Testing MujocoManoEnvironment with use_residual={use_residual}, terminal={terminal}, and zero 26D action "
         f"(trajectory={trajectory_label}, envs={num_envs}, "
         f"maxDeviationDistance={max_deviation_distance:g}). "
         f"The viewer renders env {render_env}; all configured environments execute the same batched path."
@@ -371,15 +372,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="render the first N batched worlds as tiles in one MuJoCo GLFW window",
     )
     parser.add_argument(
-        "--residual-enabled",
-        action=argparse.BooleanOptionalAction,
+        "--use_residual",
+        type=parse_cli_bool,
         default=True,
-        help="enable 26D residual action processing; use --no-residual-enabled for source-reference diagnostics",
+        metavar="{true,false}",
+        help="enable 26D residual action processing (default: true)",
     )
     parser.add_argument(
-        "--training-termination",
-        action="store_true",
-        help="use the current training deviation threshold (0.1 m) instead of formal 791-call replay termination",
+        "--terminal",
+        type=parse_cli_bool,
+        default=True,
+        metavar="{true,false}",
+        help="use the 0.1 m training deviation threshold (default: true)",
     )
     parser.add_argument(
         "--loop",
@@ -408,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         speed=args.speed,
         loop=args.loop,
         print_every=args.print_every,
-        training_termination=args.training_termination,
+        terminal=args.terminal,
         trajectory_name=args.trajectory,
         num_envs=args.num_envs,
         render_env=args.render_env,
@@ -416,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         object_type=args.object_type,
         gesture=args.gesture,
         rerun_output=args.rerun_output,
-        residual_enabled=args.residual_enabled,
+        use_residual=args.use_residual,
     )
     return 0
 
