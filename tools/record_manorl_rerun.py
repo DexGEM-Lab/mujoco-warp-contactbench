@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
     parser.add_argument("--training-termination", action="store_true")
-    parser.add_argument("--no-viewer", action="store_true", help="do not launch the Rerun GUI after recording")
+    parser.add_argument("--open-rerun", action="store_true", help="open the published .rrd after recording")
     args = parser.parse_args(argv)
     if args.steps < 1 or args.num_envs < 1:
         parser.error("steps and num-envs must be positive")
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         recorder.record_transition()
     artifact = recorder.close()
     print(json.dumps({"rerun_artifact": str(artifact)}, indent=2))
-    if not args.no_viewer:
+    if args.open_rerun:
         viewer = Path(sys.executable).with_name("rerun")
         if not viewer.exists():
             raise RuntimeError(f"Rerun viewer executable is absent: {viewer}")

@@ -12,14 +12,18 @@ from __future__ import annotations
 import argparse
 import math
 import os
+from pathlib import Path
 import time
 
 import numpy as np
 
 from sim.manorl.contracts import CONTROL_TIMESTEP
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
+from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.trajectory import (
     TrajectoryBatch,
+    TrajectorySelection,
+    load_assigned_trajectory_batch,
     load_cube1_action_01_batch10,
     load_generated_cube1_row_507,
     load_reference_trajectory,
@@ -93,6 +97,7 @@ def _view_tiled(
     speed: float,
     loop: bool,
     print_every: int,
+    recorder: ManoRerunRecorder | None,
 ) -> None:
     """Render selected batched worlds in one GLFW/MuJoCo window without altering physics."""
 
@@ -169,6 +174,8 @@ def _view_tiled(
         while not glfw.window_should_close(window):
             started = time.perf_counter()
             _, rewards, resets, _ = environment.step(zero_action)
+            if recorder is not None:
+                recorder.record_transition()
             host_data = environment.host_data_batch()
             framebuffer_width, framebuffer_height = glfw.get_framebuffer_size(window)
             if (framebuffer_width, framebuffer_height) != (width, height):
@@ -225,6 +232,9 @@ def view_environment(
     num_envs: int,
     render_env: int,
     tile_envs: int,
+    object_type: str | None,
+    gesture: str | None,
+    rerun_output: Path | None,
 ) -> None:
     """Run a batched production environment and render its first world."""
 
@@ -243,12 +253,22 @@ def view_environment(
     import mujoco
     import mujoco.viewer
 
-    if trajectory_name == "accepted":
+    if (object_type is None) != (gesture is None):
+        raise ValueError("--object and --gesture must be supplied together")
+    if object_type is not None:
+        trajectory = load_assigned_trajectory_batch(
+            TrajectorySelection(object_type=object_type, gesture=gesture), num_envs=num_envs
+        )
+        trajectory_label = f"object={object_type}, gesture={gesture.zfill(2)}"
+    elif trajectory_name == "accepted":
         trajectory = load_reference_trajectory()
+        trajectory_label = trajectory_name
     elif trajectory_name == "generated-cube1-row-507":
         trajectory = load_generated_cube1_row_507()
+        trajectory_label = trajectory_name
     elif trajectory_name == "accepted-cube1-action-01-batch10":
         trajectory = load_cube1_action_01_batch10()
+        trajectory_label = trajectory_name
     else:
         raise ValueError(f"unsupported viewer trajectory {trajectory_name!r}")
     if isinstance(trajectory, TrajectoryBatch) and trajectory.num_envs != num_envs:
@@ -269,44 +289,56 @@ def view_environment(
     )
     if environment.config.residual_enabled:
         raise RuntimeError("visual environment test must run with residual actions disabled")
+    recorder = None if rerun_output is None else ManoRerunRecorder(environment, rerun_output, env_id=0)
     render_data = environment.host_data(render_env)
     zero_action = np.zeros((num_envs, 26), dtype=np.float64)
     sleep_seconds = CONTROL_TIMESTEP / speed
 
     print(
         "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action "
-        f"(trajectory={trajectory_name}, envs={num_envs}, "
+        f"(trajectory={trajectory_label}, envs={num_envs}, "
         f"maxDeviationDistance={max_deviation_distance:g}). "
         f"The viewer renders env {render_env}; all configured environments execute the same batched path."
     )
     if tile_envs > 1:
-        _view_tiled(
-            environment,
-            tile_envs=tile_envs,
-            speed=speed,
-            loop=loop,
-            print_every=print_every,
-        )
+        try:
+            _view_tiled(
+                environment,
+                tile_envs=tile_envs,
+                speed=speed,
+                loop=loop,
+                print_every=print_every,
+                recorder=recorder,
+            )
+        finally:
+            if recorder is not None:
+                print(f"Rerun artifact: {recorder.close()}", flush=True)
         return
-    with mujoco.viewer.launch_passive(
-        environment.model, render_data, show_left_ui=True, show_right_ui=True
-    ) as viewer:
-        viewer.sync()
-        while viewer.is_running():
-            started = time.perf_counter()
-            _, rewards, resets, _ = environment.step(zero_action)
-            mujoco.mj_copyData(render_data, environment.model, environment.host_data(render_env))
+    try:
+        with mujoco.viewer.launch_passive(
+            environment.model, render_data, show_left_ui=True, show_right_ui=True
+        ) as viewer:
             viewer.sync()
+            while viewer.is_running():
+                started = time.perf_counter()
+                _, rewards, resets, _ = environment.step(zero_action)
+                if recorder is not None:
+                    recorder.record_transition()
+                mujoco.mj_copyData(render_data, environment.model, environment.host_data(render_env))
+                viewer.sync()
 
-            call = int(environment.progress[render_env] - 1)
-            if call % print_every == 0 or bool(resets[render_env]):
-                print(
-                    _telemetry(environment, render_env, float(rewards[render_env]), bool(resets[render_env])),
-                    flush=True,
-                )
-            if bool(resets[render_env]) and not loop:
-                return
-            time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
+                call = int(environment.progress[render_env] - 1)
+                if call % print_every == 0 or bool(resets[render_env]):
+                    print(
+                        _telemetry(environment, render_env, float(rewards[render_env]), bool(resets[render_env])),
+                        flush=True,
+                    )
+                if bool(resets[render_env]) and not loop:
+                    return
+                time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
+    finally:
+        if recorder is not None:
+            print(f"Rerun artifact: {recorder.close()}", flush=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -324,6 +356,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="accepted",
         help="explicit versioned Lance trajectory contract to render",
     )
+    parser.add_argument("--object", dest="object_type", help="Lance object selector; requires --gesture")
+    parser.add_argument("--gesture", help="Lance two-digit action selector; requires --object")
     parser.add_argument(
         "--num-envs",
         type=int,
@@ -349,6 +383,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Continue through the environment's source-compatible delayed reset after terminal.",
     )
     parser.add_argument(
+        "--rerun-output",
+        type=Path,
+        help="optionally record latest env-0 Rerun data while the MuJoCo viewer runs",
+    )
+    parser.add_argument(
         "--print-every",
         type=int,
         default=10,
@@ -369,6 +408,9 @@ def main(argv: list[str] | None = None) -> int:
         num_envs=args.num_envs,
         render_env=args.render_env,
         tile_envs=args.tile_envs,
+        object_type=args.object_type,
+        gesture=args.gesture,
+        rerun_output=args.rerun_output,
     )
     return 0
 
