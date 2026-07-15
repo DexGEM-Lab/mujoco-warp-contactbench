@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 
 from sim.manorl.assets import OBJECT_MESH
-from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
+from sim.manorl.environment import (
+    EnvironmentConfig,
+    MujocoManoEnvironment,
+    _aggregate_geometry_contact_forces,
+)
 from sim.manorl.mjx_sim import MujocoCpuReplay
 from sim.manorl.observations import (
     CHECKPOINT_SIDECAR_COMPATIBILITY,
@@ -55,6 +59,108 @@ def test_native_contact_frame_and_geom_sign_match_body_external_force(trajectory
             )
             return
     pytest.fail("expected a solved floor-hand contact in the real accepted replay state")
+
+
+def test_native_multi_contact_geom_aggregation_matches_external_force() -> None:
+    """A tilted box has four contact rows, which must sum in world coordinates."""
+
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <option timestep="0.002" gravity="0 0 -9.81"/>
+          <worldbody>
+            <geom name="floor" type="plane" size="2 2 .1"/>
+            <body name="box" pos="0 0 .04" euler=".2 .1 .3">
+              <freejoint/>
+              <geom name="box" type="box" size=".1 .1 .05" mass="1"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    for _ in range(10):
+        mujoco.mj_step(model, data)
+    mujoco.mj_rnePostConstraint(model, data)
+
+    geom_forces = np.zeros((model.ngeom, 3), dtype=np.float64)
+    for contact_id, contact in enumerate(data.contact[: data.ncon]):
+        wrench = np.zeros(6, dtype=np.float64)
+        mujoco.mj_contactForce(model, data, contact_id, wrench)
+        world_force = wrench[:3] @ contact.frame.reshape(3, 3)
+        first_geom, second_geom = map(int, contact.geom)
+        geom_forces[first_geom] -= world_force
+        geom_forces[second_geom] += world_force
+
+    assert data.ncon == 4
+    np.testing.assert_allclose(geom_forces[0], -geom_forces[1], rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(geom_forces[1], data.cfrc_ext[1, 3:], rtol=1e-10, atol=1e-10)
+    assert not np.allclose(geom_forces[1], np.zeros(3))
+
+
+def test_geometry_contact_aggregation_routes_worlds_and_rejects_unsolved_addresses() -> None:
+    """Synthetic solved rows expose sign, frame, sum, world, and nefc errors."""
+
+    count = 3
+    geom = np.asarray(((0, 1), (0, 1), (2, 3)), dtype=np.int64)
+    world = np.asarray((0, 0, 1), dtype=np.int64)
+    dimension = np.full(count, 3, dtype=np.int64)
+    addresses = np.asarray(((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 2, 3)), dtype=np.int64)
+    nefc = np.asarray((8, 4), dtype=np.int64)
+    friction = np.ones((count, 5), dtype=np.float64)
+    frame = np.asarray(
+        (
+            np.eye(3),
+            ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            np.eye(3),
+        ),
+        dtype=np.float64,
+    )
+    constraint_force = np.asarray(
+        (
+            (1.0, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 1.0),
+            (4.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        ),
+        dtype=np.float64,
+    )
+
+    forces, counts = _aggregate_geometry_contact_forces(
+        count=count,
+        geom=geom,
+        world=world,
+        dimension=dimension,
+        addresses=addresses,
+        nefc=nefc,
+        friction=friction,
+        frame=frame,
+        constraint_force=constraint_force,
+        ngeom=4,
+    )
+    first_world_force = np.asarray((10.0, -1.0, -1.0))
+    second_world_force = np.asarray((2.0, -4.0, 0.0))
+    np.testing.assert_allclose(forces[0, 0], -(first_world_force + second_world_force))
+    np.testing.assert_allclose(forces[0, 1], first_world_force + second_world_force)
+    np.testing.assert_allclose(forces[1, 2], (-5.0, -4.0, -1.0))
+    np.testing.assert_allclose(forces[1, 3], (5.0, 4.0, 1.0))
+    np.testing.assert_array_equal(counts, (2, 1))
+
+    invalid_addresses = addresses.copy()
+    invalid_addresses[2, 3] = nefc[1]
+    with pytest.raises(RuntimeError, match="outside world 1's solved range"):
+        _aggregate_geometry_contact_forces(
+            count=count,
+            geom=geom,
+            world=world,
+            dimension=dimension,
+            addresses=invalid_addresses,
+            nefc=nefc,
+            friction=friction,
+            frame=frame,
+            constraint_force=constraint_force,
+            ngeom=4,
+        )
 
 
 def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> None:
@@ -111,6 +217,50 @@ def test_mjx_contact_producer_feeds_source_order_observation_and_reward(trajecto
     assert observation["obs"].shape == (1, 476)
     assert reward.shape == reset.shape == (1,)
     assert np.all(np.isfinite(reward))
+
+
+def test_mjx_geometry_force_snapshot_matches_private_rows_and_legacy_aggregates(trajectory) -> None:
+    env = _environment(trajectory, num_envs=2)
+    env.step(np.zeros((2, 26), dtype=np.float64))
+    assert env.last_physical is not None
+    physical = env.last_physical
+    impl = env.data._impl
+    count = int(np.asarray(impl.nacon, dtype=np.int64).reshape(-1)[0])
+    nefc_values = np.asarray(impl.nefc, dtype=np.int64).reshape(-1)
+    nefc = np.full(2, nefc_values[0], dtype=np.int64) if nefc_values.shape == (1,) else nefc_values
+    expected = np.zeros_like(physical.geom_contact_force_world_N)
+    geom = np.asarray(impl.contact__geom, dtype=np.int64)
+    world = np.asarray(impl.contact__worldid, dtype=np.int64)
+    addresses = np.asarray(impl.contact__efc_address, dtype=np.int64)
+    friction = np.asarray(impl.contact__friction, dtype=np.float64)
+    frame = np.asarray(impl.contact__frame, dtype=np.float64)
+    constraint_force = np.asarray(impl.efc__force, dtype=np.float64)
+    for contact_id in range(count):
+        world_id = int(world[contact_id])
+        address = addresses[contact_id]
+        assert np.all(address >= 0) and np.all(address < nefc[world_id])
+        pyramid = constraint_force[world_id, address]
+        local_force = np.asarray(
+            (pyramid.sum(), (pyramid[0] - pyramid[1]) * friction[contact_id, 0], (pyramid[2] - pyramid[3]) * friction[contact_id, 1])
+        )
+        world_force = local_force @ frame[contact_id]
+        first_geom, second_geom = map(int, geom[contact_id])
+        expected[world_id, first_geom] -= world_force
+        expected[world_id, second_geom] += world_force
+    np.testing.assert_allclose(physical.geom_contact_force_world_N, expected, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(
+        physical.hand_keypoint_contact_forces,
+        physical.geom_contact_force_world_N[:, env.producer.keypoint_geom_ids],
+        rtol=0,
+        atol=1e-10,
+    )
+    np.testing.assert_allclose(
+        physical.object_contact_force,
+        physical.geom_contact_force_world_N[:, sorted(env.producer.object_geom_ids)].sum(axis=1),
+        rtol=0,
+        atol=1e-10,
+    )
+    np.testing.assert_allclose(env.object_gravity_world_force, (0.0, 0.0, -1.22625), rtol=0, atol=1e-12)
 
 
 def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajectory) -> None:
@@ -230,6 +380,8 @@ def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> N
     recorder.environment = env
     recorder.env_id = 0
     recorder.episode_id = 0
+    recorder.geometry_table = recorder._geometry_table()
+    recorder.geometry_series_names = tuple(row["series_name"] for row in recorder.geometry_table)
     blueprint = recorder._default_blueprint()
     assert isinstance(blueprint.time_panel, rr.blueprint.TimePanel)
     assert blueprint.time_panel.timeline == "step"
@@ -242,6 +394,102 @@ def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> N
     }
     assert recorder.recording.logs
     assert all(context == expected_context for _, context in recorder.recording.logs)
+
+
+def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None:
+    import rerun as rr
+
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.time_context: dict[str, dict[str, float | int]] = {}
+            self.logs: list[tuple[str, tuple[object, ...], dict[str, object], dict[str, dict[str, float | int]]]] = []
+
+        def set_time(self, timeline: str, **kwargs: float | int) -> None:
+            self.time_context[timeline] = kwargs
+
+        def log(self, entity_path: str, *args: object, **kwargs: object) -> None:
+            self.logs.append((entity_path, args, kwargs, self.time_context.copy()))
+
+    env = _environment(trajectory)
+    recorder = object.__new__(ManoRerunRecorder)
+    recorder.rr = rr
+    recorder.environment = env
+    recorder.env_id = 0
+    recorder.episode_id = 0
+    recorder.geometry_table = recorder._geometry_table()
+    recorder.geometry_series_names = tuple(row["series_name"] for row in recorder.geometry_table)
+    assert len(recorder.geometry_table) == env.model.ngeom
+    assert recorder.geometry_table[0] == {
+        "id": 0,
+        "label": "floor",
+        "series_name": "000:floor",
+        "geom_type": "mjGEOM_PLANE",
+        "body_id": 0,
+        "body_name": "world",
+        "mesh_name": None,
+    }
+    recorder.recording = RecordingStream()
+    recorder._log_static_metadata()
+    blueprint = recorder._default_blueprint()
+    root = blueprint.root_container
+    assert root.contents[0].contents == ["world/**", "target/**"]
+    tabs = root.contents[2]
+    assert isinstance(tabs, rr.blueprint.Tabs)
+    assert tabs.name == "Collision geometry contact forces"
+    assert [view.name for view in tabs.contents] == [
+        "Net magnitude", "World F_x", "World F_y", "World F_z", "Object gravity"
+    ]
+    assert root.contents[1].contents[1].contents == [
+        "contact/count", "contact/object_force_magnitude", "contact/keypoint_force_total", "action/**", "episode/**"
+    ]
+
+    for _ in range(2):
+        env.step(np.zeros((1, 26), dtype=np.float64))
+        assert env.last_transition is not None
+        recorder._record(env.last_transition)
+
+    geometry_paths = [f"contact/geometry_force/world/{component}" for component, _ in (
+        ("magnitude_N", ""), ("x_N", ""), ("y_N", ""), ("z_N", "")
+    )]
+    static_logs = {
+        logged_path: args[0]
+        for logged_path, args, kwargs, _ in recorder.recording.logs
+        if kwargs.get("static")
+    }
+    assert set(geometry_paths).issubset(static_logs)
+    for path in geometry_paths:
+        assert static_logs[path].names.as_arrow_array().to_pylist() == list(recorder.geometry_series_names)
+
+    samples = {
+        path: [args[0] for logged_path, args, kwargs, _ in recorder.recording.logs if logged_path == path and not kwargs.get("static")]
+        for path in geometry_paths
+    }
+    assert all(len(values) == 2 for values in samples.values())
+    for values in samples.values():
+        assert all(value.scalars.as_arrow_array().to_numpy().shape == (env.model.ngeom,) for value in values)
+    zero_geom_ids = np.flatnonzero(
+        np.all(
+            np.stack([value.scalars.as_arrow_array().to_numpy() for value in samples["contact/geometry_force/world/magnitude_N"]]),
+            axis=0,
+        )
+        == 0.0
+    )
+    assert len(zero_geom_ids) > 0
+    for component in geometry_paths:
+        for values in samples[component]:
+            assert np.all(values.scalars.as_arrow_array().to_numpy()[zero_geom_ids] == 0.0)
+
+    gravity_logs = {
+        path: args[0]
+        for path, args, kwargs, _ in recorder.recording.logs
+        if path.startswith("contact/object/gravity/world/") and not kwargs.get("static")
+    }
+    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/x_N"].scalars.as_arrow_array().to_numpy(), (0.0,))
+    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/y_N"].scalars.as_arrow_array().to_numpy(), (0.0,))
+    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/z_N"].scalars.as_arrow_array().to_numpy(), (-1.22625,))
+    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/magnitude_N"].scalars.as_arrow_array().to_numpy(), (1.22625,))
 
 
 def test_rerun_partial_close_preserves_existing_stable_artifact(trajectory, tmp_path) -> None:

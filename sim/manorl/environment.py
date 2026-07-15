@@ -123,6 +123,7 @@ class PhysicalSnapshot:
     fingertip_positions: NDArray[np.float64]
     hand_keypoint_contact_forces: NDArray[np.float64]
     object_contact_force: NDArray[np.float64]
+    geom_contact_force_world_N: NDArray[np.float64]
     contact_count: NDArray[np.int64]
 
 
@@ -144,6 +145,58 @@ class TransitionSnapshot:
     observation: ObservationResult
     reward: RewardDiagnostics
     termination: TerminationResult
+
+
+def _aggregate_geometry_contact_forces(
+    *,
+    count: int,
+    geom: NDArray[np.int64],
+    world: NDArray[np.int64],
+    dimension: NDArray[np.int64],
+    addresses: NDArray[np.int64],
+    nefc: NDArray[np.int64],
+    friction: NDArray[np.float64],
+    frame: NDArray[np.float64],
+    constraint_force: NDArray[np.float64],
+    ngeom: int,
+) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
+    """Decode the final solved pyramidal contact forces into world geom rows."""
+
+    batch = len(nefc)
+    if ngeom < 1 or constraint_force.ndim != 2 or constraint_force.shape[0] != batch:
+        raise ValueError("contact aggregation received incompatible geometry or constraint-force shapes")
+    forces = np.zeros((batch, ngeom, 3), dtype=np.float64)
+    per_world_count = np.zeros(batch, dtype=np.int64)
+    for contact_id in range(count):
+        world_id = int(world[contact_id])
+        if not 0 <= world_id < batch:
+            raise RuntimeError(f"contact {contact_id} references invalid MJX world {world_id}")
+        if int(dimension[contact_id]) != 3:
+            raise RuntimeError("the bounded MANO scene requires condim=3 contacts")
+        address = addresses[contact_id]
+        if np.any(address < 0) or np.any(address >= nefc[world_id]):
+            raise RuntimeError(
+                f"contact {contact_id} has a pyramidal constraint address outside world {world_id}'s solved range"
+            )
+        first_geom, second_geom = map(int, geom[contact_id])
+        if not 0 <= first_geom < ngeom or not 0 <= second_geom < ngeom:
+            raise RuntimeError(f"contact {contact_id} references an invalid MuJoCo geom")
+        pyramid = constraint_force[world_id, address]
+        local_force = np.asarray(
+            (
+                pyramid.sum(),
+                (pyramid[0] - pyramid[1]) * friction[contact_id, 0],
+                (pyramid[2] - pyramid[3]) * friction[contact_id, 1],
+            ),
+            dtype=np.float64,
+        )
+        world_force = local_force @ frame[contact_id]
+        forces[world_id, first_geom] -= world_force
+        forces[world_id, second_geom] += world_force
+        per_world_count[world_id] += 1
+    if not np.all(np.isfinite(forces)):
+        raise RuntimeError("MJX contact decoder produced a non-finite world force")
+    return forces, per_world_count
 
 
 def _normalized_xyzw(quaternions_wxyz: NDArray[object]) -> NDArray[np.float64]:
@@ -276,6 +329,7 @@ class MjxWarpPhysicalProducer:
         NDArray[np.int64],
         NDArray[np.int64],
         NDArray[np.int64],
+        NDArray[np.int64],
         NDArray[np.float64],
         NDArray[np.float64],
         NDArray[np.float64],
@@ -331,9 +385,10 @@ class MjxWarpPhysicalProducer:
         )
         if not all(expected_shapes):
             raise RuntimeError("MJX-Warp private contact buffer shapes differ from the pinned ABI")
-        if np.any(nefc_values >= forces.shape[1]):
+        if np.any(nefc_values < 0) or np.any(nefc_values >= forces.shape[1]):
             raise RuntimeError("MJX-Warp constraint capacity saturated; contact forces are invalid")
-        return count, geom, world, dimension, addresses, friction, frame, forces
+        normalized_nefc = np.full(batch, int(nefc_values[0]), dtype=np.int64) if nefc_values.shape == (1,) else nefc_values
+        return count, geom, world, dimension, addresses, normalized_nefc, friction, frame, forces
 
     def extract(self, data: Any) -> PhysicalSnapshot:
         qpos = np.asarray(data.qpos, dtype=np.float64)
@@ -353,41 +408,21 @@ class MjxWarpPhysicalProducer:
             np.broadcast_to(keypoint_quats[:, fingertip_indices], (batch, len(_FINGERTIP_NAMES), 4)),
             np.broadcast_to(_FINGERTIP_LOCAL_OFFSETS, (batch, len(_FINGERTIP_NAMES), 3)),
         )
-        forces = np.zeros((batch, len(KEYPOINT_NAMES), 3), dtype=np.float64)
-        object_force = np.zeros((batch, 3), dtype=np.float64)
-        count, geom, world, dimension, addresses, friction, frame, constraint_force = self._contact_arrays(data, batch)
-        per_world_count = np.zeros(batch, dtype=np.int64)
-        for contact_id in range(count):
-            world_id = int(world[contact_id])
-            if not 0 <= world_id < batch:
-                raise RuntimeError(f"contact {contact_id} references invalid MJX world {world_id}")
-            if int(dimension[contact_id]) != 3:
-                raise RuntimeError("the bounded MANO scene requires condim=3 contacts")
-            address = addresses[contact_id]
-            if np.any(address < 0) or np.any(address >= constraint_force.shape[1]):
-                raise RuntimeError(f"contact {contact_id} has an invalid pyramidal constraint address")
-            pyramid = constraint_force[world_id, address]
-            local_force = np.asarray(
-                (
-                    pyramid.sum(),
-                    (pyramid[0] - pyramid[1]) * friction[contact_id, 0],
-                    (pyramid[2] - pyramid[3]) * friction[contact_id, 1],
-                ),
-                dtype=np.float64,
-            )
-            world_force = local_force @ frame[contact_id]
-            first, second = (int(geom[contact_id, 0]), int(geom[contact_id, 1]))
-            if first in self.geom_to_keypoint:
-                forces[world_id, self.geom_to_keypoint[first]] -= world_force
-            if second in self.geom_to_keypoint:
-                forces[world_id, self.geom_to_keypoint[second]] += world_force
-            if first in self.object_geom_ids:
-                object_force[world_id] -= world_force
-            if second in self.object_geom_ids:
-                object_force[world_id] += world_force
-            per_world_count[world_id] += 1
-        if not np.all(np.isfinite(forces)) or not np.all(np.isfinite(object_force)):
-            raise RuntimeError("MJX contact decoder produced a non-finite world force")
+        count, geom, world, dimension, addresses, nefc, friction, frame, constraint_force = self._contact_arrays(data, batch)
+        geometry_forces, per_world_count = _aggregate_geometry_contact_forces(
+            count=count,
+            geom=geom,
+            world=world,
+            dimension=dimension,
+            addresses=addresses,
+            nefc=nefc,
+            friction=friction,
+            frame=frame,
+            constraint_force=constraint_force,
+            ngeom=self.model.ngeom,
+        )
+        forces = geometry_forces[:, self.keypoint_geom_ids].copy()
+        object_force = geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
         return PhysicalSnapshot(
             mano_dof_pos=qpos[:, :26].copy(),
             hand_position=xpos[:, self.keypoint_body_ids[0]].copy(),
@@ -399,6 +434,7 @@ class MjxWarpPhysicalProducer:
             fingertip_positions=fingertips,
             hand_keypoint_contact_forces=forces,
             object_contact_force=object_force,
+            geom_contact_force_world_N=geometry_forces,
             contact_count=per_world_count,
         )
 
@@ -505,7 +541,11 @@ class MujocoManoEnvironment:
             dimensions=np.ptp(object_collision_vertices(), axis=0),
         )
         self.object_support_points = object_collision_vertices().copy()
-        self.object_gravity_force = float(self.model.body_mass[self.producer.object_body_id] * abs(self.model.opt.gravity[2]))
+        self.object_gravity_world_force = (
+            np.asarray(self.model.opt.gravity, dtype=np.float64)
+            * float(self.model.body_subtreemass[self.producer.object_body_id])
+        )
+        self.object_gravity_force = float(np.linalg.norm(self.object_gravity_world_force))
         self._point_rngs = [np.random.default_rng(config.point_seed + index) for index in range(config.num_envs)]
         self._static_template = _source_surface_template(42)
         self._dynamic_templates: NDArray[np.float64] | None = None

@@ -15,6 +15,12 @@ from sim.manorl.observations import OBSERVATION_SLICES
 from sim.manorl.rewards import CONTACT_FORCE_THRESHOLD
 
 _FORCE_ARROW_SCALE = 0.002
+_GEOMETRY_FORCE_PATHS = (
+    ("magnitude_N", "Net magnitude"),
+    ("x_N", "World F_x"),
+    ("y_N", "World F_y"),
+    ("z_N", "World F_z"),
+)
 
 
 class ManoRerunRecorder:
@@ -42,6 +48,8 @@ class ManoRerunRecorder:
         self._published = False
         self._recording_open = False
         self._close_result: Path | None = None
+        self.geometry_table = self._geometry_table()
+        self.geometry_series_names = tuple(row["series_name"] for row in self.geometry_table)
         self._start_episode()
 
     def _default_blueprint(self):
@@ -65,10 +73,30 @@ class ManoRerunRecorder:
                     ),
                     blueprint.TimeSeriesView(
                         name="Contacts and actions",
-                        contents=["contact/**", "action/**", "episode/**"],
+                        contents=[
+                            "contact/count",
+                            "contact/object_force_magnitude",
+                            "contact/keypoint_force_total",
+                            "action/**",
+                            "episode/**",
+                        ],
                     ),
                 ),
-                row_shares=[3.0, 1.0],
+                blueprint.Tabs(
+                    *(
+                        blueprint.TimeSeriesView(
+                            name=view_name,
+                            contents=[f"contact/geometry_force/world/{component}"],
+                        )
+                        for component, view_name in _GEOMETRY_FORCE_PATHS
+                    ),
+                    blueprint.TimeSeriesView(
+                        name="Object gravity",
+                        contents=["contact/object/gravity/world/**"],
+                    ),
+                    name="Collision geometry contact forces",
+                ),
+                row_shares=[3.0, 1.0, 2.0],
             ),
             blueprint.TimePanel(timeline="step"),
             auto_layout=False,
@@ -94,6 +122,34 @@ class ManoRerunRecorder:
         os.replace(self.active_path, self.output)
         self._published = True
 
+    def _geometry_table(self) -> list[dict[str, int | str | None]]:
+        environment = self.environment
+        model = environment.model
+        mujoco = environment.mujoco
+        mesh_type = int(mujoco.mjtGeom.mjGEOM_MESH)
+        rows: list[dict[str, int | str | None]] = []
+        for geom_id in range(model.ngeom):
+            geom_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id) or f"geom_{geom_id}"
+            body_id = int(model.geom_bodyid[geom_id])
+            body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id) or f"body_{body_id}"
+            geom_type = int(model.geom_type[geom_id])
+            mesh_name = None
+            if geom_type == mesh_type:
+                mesh_id = int(model.geom_dataid[geom_id])
+                mesh_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_MESH, mesh_id) if mesh_id >= 0 else None
+            rows.append(
+                {
+                    "id": geom_id,
+                    "label": geom_name,
+                    "series_name": f"{geom_id:03d}:{geom_name}",
+                    "geom_type": mujoco.mjtGeom(geom_type).name,
+                    "body_id": body_id,
+                    "body_name": body_name,
+                    "mesh_name": mesh_name,
+                }
+            )
+        return rows
+
     def _log_static_metadata(self) -> None:
         environment = self.environment
         trajectory = environment.trajectories[self.env_id]
@@ -110,6 +166,8 @@ class ManoRerunRecorder:
             "trajectory_length": int(environment.trajectory_lengths[self.env_id]),
             "joint_names": list(JOINT_NAMES),
             "keypoint_names": list(KEYPOINT_NAMES),
+            "collision_geometries": self.geometry_table,
+            "object_gravity_world_N": environment.object_gravity_world_force.tolist(),
             "control_timestep_s": CONTROL_TIMESTEP,
             "physics_substeps": PHYSICS_SUBSTEPS_PER_TARGET,
             "residual_enabled": environment.config.residual_enabled,
@@ -127,6 +185,12 @@ class ManoRerunRecorder:
         self.recording.log("run/metadata", self.rr.TextDocument(json.dumps(metadata, indent=2, sort_keys=True)), static=True)
         for name, value in metadata["thresholds"].items():
             self.recording.log(f"threshold/{name}", self.rr.Scalars(float(value)), static=True)
+        for component, _ in _GEOMETRY_FORCE_PATHS:
+            self.recording.log(
+                f"contact/geometry_force/world/{component}",
+                self.rr.SeriesLines(names=self.geometry_series_names),
+                static=True,
+            )
 
     def record_transition(self) -> None:
         if self._closed:
@@ -153,6 +217,9 @@ class ManoRerunRecorder:
         hand_position = physical.hand_position[env_id]
         object_cloud_local = self.environment.object_point_cloud_local()[env_id]
         keypoint_forces = physical.hand_keypoint_contact_forces[env_id]
+        geometry_forces = physical.geom_contact_force_world_N[env_id]
+        if geometry_forces.shape != (len(self.geometry_series_names), 3):
+            raise RuntimeError("physical geometry force shape no longer matches static Rerun labels")
         force_magnitudes = np.linalg.norm(keypoint_forces, axis=1)
         target_next = min(index + 5, int(self.environment.trajectory_lengths[env_id]) - 1)
         target_position = self.environment.reference_object_pos[env_id, index]
@@ -197,6 +264,24 @@ class ManoRerunRecorder:
             scalar_values[f"reward/{field.name}"] = float(getattr(reward, field.name)[env_id])
         for name, value in scalar_values.items():
             self.recording.log(name, self.rr.Scalars(value))
+        geometry_series = {
+            "magnitude_N": np.linalg.norm(geometry_forces, axis=1),
+            "x_N": geometry_forces[:, 0],
+            "y_N": geometry_forces[:, 1],
+            "z_N": geometry_forces[:, 2],
+        }
+        for component, _ in _GEOMETRY_FORCE_PATHS:
+            self.recording.log(
+                f"contact/geometry_force/world/{component}",
+                self.rr.Scalars(geometry_series[component]),
+            )
+        gravity = self.environment.object_gravity_world_force
+        for component, value in zip(("x_N", "y_N", "z_N"), gravity, strict=True):
+            self.recording.log(f"contact/object/gravity/world/{component}", self.rr.Scalars(float(value)))
+        self.recording.log(
+            "contact/object/gravity/world/magnitude_N",
+            self.rr.Scalars(float(np.linalg.norm(gravity))),
+        )
         self.recording.log(
             "state/arrays",
             self.rr.AnyValues(
