@@ -52,13 +52,16 @@ def view_environment(
     print_every: int,
     training_termination: bool,
     trajectory_name: str,
+    num_envs: int,
 ) -> None:
-    """Run and render one production environment world with residuals disabled."""
+    """Run a batched production environment and render its first world."""
 
     if speed <= 0.0:
         raise ValueError("speed must be positive")
     if print_every < 1:
         raise ValueError("print_every must be positive")
+    if num_envs < 1:
+        raise ValueError("num_envs must be positive")
     _require_graphical_session()
 
     import mujoco
@@ -71,26 +74,28 @@ def view_environment(
     else:
         raise ValueError(f"unsupported viewer trajectory {trajectory_name!r}")
     max_deviation_distance = 0.1 if training_termination else 1_000_000.0
+    contact_capacity = max(128, 31 * num_envs + 64)
     environment = MujocoManoEnvironment(
         trajectory,
         EnvironmentConfig(
             device=device,
-            num_envs=1,
+            num_envs=num_envs,
             residual_enabled=False,
             max_deviation_distance=max_deviation_distance,
+            contact_capacity=contact_capacity,
         ),
     )
     if environment.config.residual_enabled:
         raise RuntimeError("visual environment test must run with residual actions disabled")
     render_data = environment.host_data()
-    zero_action = np.zeros((1, 26), dtype=np.float64)
+    zero_action = np.zeros((num_envs, 26), dtype=np.float64)
     sleep_seconds = CONTROL_TIMESTEP / speed
 
     print(
         "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action "
         f"(trajectory={trajectory.identity.identity}, frames={len(trajectory.q_ref)}, "
-        f"maxDeviationDistance={max_deviation_distance:g}). "
-        "The right-side actuator pane shows the applied mocap ctrl target."
+        f"envs={num_envs}, maxDeviationDistance={max_deviation_distance:g}). "
+        "The viewer renders env 0; all configured environments execute the same batched path."
     )
     with mujoco.viewer.launch_passive(
         environment.model, render_data, show_left_ui=True, show_right_ui=True
@@ -126,6 +131,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="explicit versioned Lance trajectory contract to render",
     )
     parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=1,
+        help="batched environments to execute; viewer renders env 0",
+    )
+    parser.add_argument(
         "--training-termination",
         action="store_true",
         help="use the current training deviation threshold (0.1 m) instead of formal 791-call replay termination",
@@ -154,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         print_every=args.print_every,
         training_termination=args.training_termination,
         trajectory_name=args.trajectory,
+        num_envs=args.num_envs,
     )
     return 0
 

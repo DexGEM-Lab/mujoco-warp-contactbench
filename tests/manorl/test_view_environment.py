@@ -13,6 +13,7 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert args.print_every == 10
     assert args.training_termination is False
     assert args.trajectory == "accepted"
+    assert args.num_envs == 1
 
     one_shot = parse_args(
         [
@@ -24,6 +25,8 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
             "--training-termination",
             "--trajectory",
             "generated-cube1-row-507",
+            "--num-envs",
+            "10",
         ]
     )
     assert one_shot.device == "gpu"
@@ -31,6 +34,7 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert one_shot.speed == 1.0
     assert one_shot.training_termination is True
     assert one_shot.trajectory == "generated-cube1-row-507"
+    assert one_shot.num_envs == 10
 
 
 def test_viewer_requires_a_graphical_session(monkeypatch: pytest.MonkeyPatch) -> None:
