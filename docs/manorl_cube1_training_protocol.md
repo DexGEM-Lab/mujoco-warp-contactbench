@@ -24,11 +24,10 @@ on non-finite values, CUDA failure, or a semantic/reset invariant failure.
 The 64-world Warp broadphase uses `naconmax=2048`: Warp requires at least 31
 contacts per world in this scene, and the remaining 64 slots are margin.
 
-The fast protocol initializes the residual actor mean at zero and `log_std` at
-`-5.0`. This makes the initial deterministic policy equal to the reference
-zero-residual controller and bounds early stochastic exploration. The network
-architecture and PPO objective are unchanged. `--source-initialization` is an
-explicit opt-out for a source-style random actor-head experiment.
+The fast protocol uses the source model initialization: source-compatible
+orthogonal actor/critic MLP initialization, untouched PointNet/condition/FiLM
+initialization, and trainable `log_std=-0.99`. It does not inject a target-only
+action bias or alter the source initial exploration scale.
 
 PPO defers its first update until source contact onset step 250. Earlier
 rollouts are pure tracking phases; optimizing them changes shared actor/critic

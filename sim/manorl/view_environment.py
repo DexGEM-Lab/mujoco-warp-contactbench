@@ -19,18 +19,18 @@ from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.trajectory import load_generated_cube1_row_507, load_reference_trajectory
 
 
-def _telemetry(environment: MujocoManoEnvironment, reward: float, reset: bool) -> str:
-    call = int(environment.progress[0] - 1)
+def _telemetry(environment: MujocoManoEnvironment, env_id: int, reward: float, reset: bool) -> str:
+    call = int(environment.progress[env_id] - 1)
     command_index = max(call - 1, 0)
-    post_index = int(environment.trajectory_steps[0])
+    post_index = int(environment.trajectory_steps[env_id])
     command = np.array2string(
-        environment.last_controller_targets[0],
+        environment.last_controller_targets[env_id],
         precision=3,
         suppress_small=True,
         max_line_width=240,
     )
     return (
-        f"call={call:03d}/{len(environment.trajectory.q_ref) - 2} command_ref={command_index:03d} "
+        f"env={env_id} call={call:03d}/{len(environment.trajectory.q_ref) - 2} command_ref={command_index:03d} "
         f"post_ref={post_index:03d} source_ref={environment.trajectory.source_indices[post_index]:04d} "
         f"reward={reward:.4f} reset={reset} ctrl={command}"
     )
@@ -53,6 +53,7 @@ def view_environment(
     training_termination: bool,
     trajectory_name: str,
     num_envs: int,
+    render_env: int,
 ) -> None:
     """Run a batched production environment and render its first world."""
 
@@ -62,6 +63,8 @@ def view_environment(
         raise ValueError("print_every must be positive")
     if num_envs < 1:
         raise ValueError("num_envs must be positive")
+    if not 0 <= render_env < num_envs:
+        raise ValueError("render_env must be within the configured batch")
     _require_graphical_session()
 
     import mujoco
@@ -87,7 +90,7 @@ def view_environment(
     )
     if environment.config.residual_enabled:
         raise RuntimeError("visual environment test must run with residual actions disabled")
-    render_data = environment.host_data()
+    render_data = environment.host_data(render_env)
     zero_action = np.zeros((num_envs, 26), dtype=np.float64)
     sleep_seconds = CONTROL_TIMESTEP / speed
 
@@ -95,7 +98,7 @@ def view_environment(
         "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action "
         f"(trajectory={trajectory.identity.identity}, frames={len(trajectory.q_ref)}, "
         f"envs={num_envs}, maxDeviationDistance={max_deviation_distance:g}). "
-        "The viewer renders env 0; all configured environments execute the same batched path."
+        f"The viewer renders env {render_env}; all configured environments execute the same batched path."
     )
     with mujoco.viewer.launch_passive(
         environment.model, render_data, show_left_ui=True, show_right_ui=True
@@ -104,13 +107,16 @@ def view_environment(
         while viewer.is_running():
             started = time.perf_counter()
             _, rewards, resets, _ = environment.step(zero_action)
-            mujoco.mj_copyData(render_data, environment.model, environment.host_data())
+            mujoco.mj_copyData(render_data, environment.model, environment.host_data(render_env))
             viewer.sync()
 
-            call = int(environment.progress[0] - 1)
-            if call % print_every == 0 or bool(resets[0]):
-                print(_telemetry(environment, float(rewards[0]), bool(resets[0])), flush=True)
-            if bool(resets[0]) and not loop:
+            call = int(environment.progress[render_env] - 1)
+            if call % print_every == 0 or bool(resets[render_env]):
+                print(
+                    _telemetry(environment, render_env, float(rewards[render_env]), bool(resets[render_env])),
+                    flush=True,
+                )
+            if bool(resets[render_env]) and not loop:
                 return
             time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
 
@@ -136,6 +142,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1,
         help="batched environments to execute; viewer renders env 0",
     )
+    parser.add_argument("--render-env", type=int, default=0, help="batched env index mirrored into the viewer")
     parser.add_argument(
         "--training-termination",
         action="store_true",
@@ -166,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         training_termination=args.training_termination,
         trajectory_name=args.trajectory,
         num_envs=args.num_envs,
+        render_env=args.render_env,
     )
     return 0
 

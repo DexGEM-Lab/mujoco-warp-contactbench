@@ -21,7 +21,6 @@ from sim.manorl.trajectory import load_reference_trajectory
 
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
 WARP_CONTACT_CAPACITY_MARGIN = 64
-RESIDUAL_SAFE_INITIAL_LOG_STD = -5.0
 
 @dataclass(frozen=True)
 class TrainingBudget:
@@ -29,7 +28,6 @@ class TrainingBudget:
     updates: int = 64
     wall_clock_seconds: float = 20.0 * 60.0
     seed: int = 42
-    residual_safe_warm_start: bool = True
 
     @property
     def transitions(self) -> int:
@@ -204,11 +202,6 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     # Updating PPO on their zero reward signal moves the shared actor/critic
     # representation before the policy has any controllable consequence.
     runtime.agent.cfg.learning_starts = physical.contact_start_frame
-    if budget.residual_safe_warm_start:
-        with torch.no_grad():
-            runtime.model.actor_head.weight.zero_()
-            runtime.model.actor_head.bias.zero_()
-            runtime.model.log_std.fill_(RESIDUAL_SAFE_INITIAL_LOG_STD)
     zero_baseline = _evaluate(runtime, "zero")
     untrained = _evaluate(runtime, "policy")
     updates, transitions, elapsed = _train(runtime, budget)
@@ -243,9 +236,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         "trajectory": "cube1_01_009",
         "checkpoint_conversion": "out_of_scope",
         "initialization": {
-            "residual_safe_warm_start": budget.residual_safe_warm_start,
-            "actor_mean": "zero" if budget.residual_safe_warm_start else "source_default",
-            "initial_log_std": RESIDUAL_SAFE_INITIAL_LOG_STD if budget.residual_safe_warm_start else -0.99,
+            "actor_mean": "source_default",
+            "initial_log_std": -0.99,
             "ppo_learning_rate": ppo_config.learning_rate,
         },
         "learning_starts": runtime.agent.cfg.learning_starts,
@@ -283,11 +275,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--wall-clock-seconds", type=float, default=20.0 * 60.0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--source-initialization",
-        action="store_true",
-        help="disable the zero-residual/-5 log-std warm start used by the fast single-trajectory protocol",
-    )
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0:
         parser.error("updates, num-envs, and wall-clock-seconds must be positive")
@@ -298,7 +285,6 @@ def main(argv: list[str] | None = None) -> int:
             args.updates,
             args.wall_clock_seconds,
             args.seed,
-            residual_safe_warm_start=not args.source_initialization,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
