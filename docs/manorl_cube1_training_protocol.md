@@ -20,8 +20,9 @@ than being simulated using cube geometry.
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
-- Training uses `residual_enabled=True`, current-source early phase of 100
-  steps, and source deviation termination of 0.1 m.
+- Training defaults to `residual_enabled=True`; pass `--no-residual-enabled`
+  only for source-reference diagnostics. It uses the current-source early phase
+  of 100 steps and source deviation termination of 0.1 m.
 
 ## Fixed Budget
 
@@ -114,8 +115,13 @@ resets; it does not start a Rerun GUI.
 JAX_PLATFORMS=cpu /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m sim.manorl.view_environment \
   --device cpu --object cube1 --gesture 03 --num-envs 8 --render-env 0 \
-  --loop --rerun-output outputs/manorl/cube1_03_latest.rrd
+  --residual-enabled --loop --rerun-output outputs/manorl/cube1_03_latest.rrd
 ```
+
+Residual action processing is enabled by default in viewer, standalone
+recorder, and training CLIs. Pass `--no-residual-enabled` to explicitly use
+source-reference diagnostic mode. The normal viewer supplies zero 26D actions,
+so enabling the mode alone does not alter its reference-following motion.
 
 From a second terminal, inspect the latest published env-0 episode without
 altering the MuJoCo viewer:

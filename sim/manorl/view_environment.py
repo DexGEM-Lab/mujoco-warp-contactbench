@@ -1,4 +1,4 @@
-"""Interactively test the actual residual-off cube1 MJX-Warp environment.
+"""Interactively test the actual cube1 MJX-Warp environment.
 
 This uses :class:`MujocoManoEnvironment`, not the narrow reference-replay
 helper. The default viewer mirrors one MJX state into native ``MjData``;
@@ -235,6 +235,7 @@ def view_environment(
     object_type: str | None,
     gesture: str | None,
     rerun_output: Path | None,
+    residual_enabled: bool,
 ) -> None:
     """Run a batched production environment and render its first world."""
 
@@ -282,20 +283,18 @@ def view_environment(
         EnvironmentConfig(
             device=device,
             num_envs=num_envs,
-            residual_enabled=False,
+            residual_enabled=residual_enabled,
             max_deviation_distance=max_deviation_distance,
             contact_capacity=contact_capacity,
         ),
     )
-    if environment.config.residual_enabled:
-        raise RuntimeError("visual environment test must run with residual actions disabled")
     recorder = None if rerun_output is None else ManoRerunRecorder(environment, rerun_output, env_id=0)
     render_data = environment.host_data(render_env)
     zero_action = np.zeros((num_envs, 26), dtype=np.float64)
     sleep_seconds = CONTROL_TIMESTEP / speed
 
     print(
-        "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action "
+        f"Testing MujocoManoEnvironment with residual_enabled={residual_enabled} and zero 26D action "
         f"(trajectory={trajectory_label}, envs={num_envs}, "
         f"maxDeviationDistance={max_deviation_distance:g}). "
         f"The viewer renders env {render_env}; all configured environments execute the same batched path."
@@ -372,6 +371,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="render the first N batched worlds as tiles in one MuJoCo GLFW window",
     )
     parser.add_argument(
+        "--residual-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable 26D residual action processing; use --no-residual-enabled for source-reference diagnostics",
+    )
+    parser.add_argument(
         "--training-termination",
         action="store_true",
         help="use the current training deviation threshold (0.1 m) instead of formal 791-call replay termination",
@@ -411,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         object_type=args.object_type,
         gesture=args.gesture,
         rerun_output=args.rerun_output,
+        residual_enabled=args.residual_enabled,
     )
     return 0
 

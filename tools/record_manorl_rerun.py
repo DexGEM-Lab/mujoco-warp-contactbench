@@ -37,6 +37,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-id", type=int, default=0)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
+    parser.add_argument(
+        "--residual-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable 26D residual action processing; use --no-residual-enabled for source-reference diagnostics",
+    )
     parser.add_argument("--training-termination", action="store_true")
     parser.add_argument("--open-rerun", action="store_true", help="open the published .rrd after recording")
     args = parser.parse_args(argv)
@@ -50,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         EnvironmentConfig(
             device=args.device,
             num_envs=args.num_envs,
-            residual_enabled=False,
+            residual_enabled=args.residual_enabled,
             max_deviation_distance=0.1 if args.training_termination else 1_000_000.0,
             contact_capacity=max(128, 31 * args.num_envs + 64),
         ),

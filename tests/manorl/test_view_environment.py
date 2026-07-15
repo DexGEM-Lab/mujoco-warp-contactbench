@@ -12,6 +12,7 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert args.loop is True
     assert args.print_every == 10
     assert args.training_termination is False
+    assert args.residual_enabled is True
     assert args.trajectory == "accepted"
     assert args.num_envs == 1
     assert args.render_env == 0
@@ -28,6 +29,7 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
             "--speed",
             "1.0",
             "--training-termination",
+            "--no-residual-enabled",
             "--trajectory",
             "generated-cube1-row-507",
             "--num-envs",
@@ -48,6 +50,7 @@ def test_viewer_cli_is_residual_off_and_loops_by_default() -> None:
     assert one_shot.loop is False
     assert one_shot.speed == 1.0
     assert one_shot.training_termination is True
+    assert one_shot.residual_enabled is False
     assert one_shot.trajectory == "generated-cube1-row-507"
     assert one_shot.num_envs == 10
     assert one_shot.render_env == 9

@@ -95,23 +95,25 @@ python -m sim.manorl.replay_reference \
 This diagnostic separates controller instability from contact geometry. It is
 not a fallback data path and still requires the exact Lance dataset.
 
-### View the residual-off environment test
+### View the environment test
 
 From a desktop terminal with an X11/Wayland graphical session, open the
 interactive MuJoCo viewer for the actual `MujocoManoEnvironment` test path. It
 uses the fixed cube1 row `cube1_01_009`, source command schedule
-`0,0,1,...,789`, and `residual_enabled=False`; each zero 26D input action is
-therefore ignored by the residual ABI and the source mocap command is applied.
-The MuJoCo right-side actuator pane shows the current `ctrl` target; the
-terminal prints the complete command vector and source/reference indices.
+`0,0,1,...,789`, and `residual_enabled=True` by default. The viewer supplies a
+zero 26D action, so its controller target still follows the source mocap
+reference. The MuJoCo right-side actuator pane shows the current `ctrl` target;
+the terminal prints the complete command vector and source/reference indices.
 
 ```bash
 conda activate manorl_mujoco
-JAX_PLATFORMS=cpu python -m sim.manorl.view_environment --device cpu --speed 0.25
+JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
+  --device cpu --speed 0.25 --residual-enabled
 ```
 
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
-single 791-call replay.
+single 791-call replay. Use `--no-residual-enabled` for an explicit
+source-reference diagnostic mode.
 
 To inspect the explicitly selected generated cube1 Lance row 507 under current
 training termination semantics, use the same production environment with its
