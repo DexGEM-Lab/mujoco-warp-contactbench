@@ -98,10 +98,19 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
 
 ### Optional W&B Tracking
 
-W&B tracking is disabled unless `--wandb true` is passed. An enabled run uses
-`project=one_policy`, `group=s02`, and the authenticated default account when
-`--wandb-entity` is left empty. Its name defaults to the output prefix plus the
-selected object and gesture; its default tags are `manorl,mujoco,skrl`.
+W&B tracking is disabled unless `--wandb true` is passed. Provision the exact
+training interpreter from the locked W&B release before enabling it:
+
+```bash
+/home/jay/anaconda3/envs/manorl_mujoco/bin/uv pip install \
+  --python /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  "wandb==0.28.0"
+```
+
+An enabled run uses `project=one_policy`, `group=s02`, and the authenticated
+default account when `--wandb-entity` is left empty. Its name defaults to the
+output prefix plus the selected object and gesture; its default tags are
+`manorl,mujoco,skrl`.
 
 ```bash
   --wandb true \
@@ -111,13 +120,15 @@ selected object and gesture; its default tags are `manorl,mujoco,skrl`.
 ```
 
 The training process initializes one W&B run after resolving trajectory
-assignments and devices. It records the complete serializable training/PPO/raw
-reward configuration, logs each PPO update against monotonic environment
-transitions, writes the zero/untrained/trained evaluation summaries and final
-acceptance values, then uploads the native checkpoint and sidecar, metrics JSON,
-evaluation trace, and a completed Rerun recording when one exists. An enabled
-run fails on W&B initialization or logging errors; normal completion and raised
-training errors both finish the run.
+assignments and devices. It creates the output parent before initialization and
+passes it as W&B's local directory, so SDK state is stored at
+`<output-parent>/wandb` under ignored training outputs rather than the repository
+root. It records the complete serializable training/PPO/raw reward configuration,
+logs each PPO update against monotonic environment transitions, writes the
+zero/untrained/trained evaluation summaries and final acceptance values, then
+uploads the native checkpoint and sidecar, metrics JSON, evaluation trace, and a
+completed Rerun recording when one exists. An enabled run fails on W&B
+initialization or logging errors; cleanup failures do not mask a training error.
 
 To record one actual training world without changing PPO actions, rollout
 memory, or updates, add a Rerun output path. `--rerun-stride 4` records env 0

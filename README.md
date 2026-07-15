@@ -147,8 +147,15 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --object cube1 --gesture 03 --num-envs 64 --updates 64
 ```
 
-To create one W&B run using the authenticated default account, add explicit
-tracking options. No API key or credentials belong in this repository:
+To create one W&B run using the authenticated default account, provision the
+locked SDK in the documented training interpreter, then add explicit tracking
+options. No API key or credentials belong in this repository:
+
+```bash
+/home/jay/anaconda3/envs/manorl_mujoco/bin/uv pip install \
+  --python /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  "wandb==0.28.0"
+```
 
 ```bash
   --wandb true --wandb-project one_policy --wandb-group s02 \
@@ -156,9 +163,11 @@ tracking options. No API key or credentials belong in this repository:
 ```
 
 An omitted W&B name is derived from the output prefix, object, and gesture. The
-run logs PPO updates by environment transitions, records zero/untrained/trained
-evaluation summaries and final acceptance values, then uploads the checkpoint
-and sidecar, metrics JSON, evaluation trace, and any completed Rerun recording.
+SDK cache is stored at `<output-parent>/wandb`, so the documented
+`outputs/manorl/...` prefixes keep it under ignored outputs. The run logs PPO
+updates by environment transitions, records zero/untrained/trained evaluation
+summaries and final acceptance values, then uploads the checkpoint and sidecar,
+metrics JSON, evaluation trace, and any completed Rerun recording.
 
 To inspect the explicitly selected generated cube1 Lance row 507 under current
 training termination semantics, use the same production environment with its

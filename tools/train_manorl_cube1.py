@@ -116,6 +116,8 @@ def _wandb_run(
     if not budget.wandb.enabled:
         yield None, None
         return
+    wandb_dir = output.parent
+    wandb_dir.mkdir(parents=True, exist_ok=True)
     try:
         import wandb
     except ImportError as exc:
@@ -128,6 +130,7 @@ def _wandb_run(
             name=_wandb_run_name(output, budget),
             tags=list(budget.wandb.tags),
             config=config,
+            dir=str(wandb_dir),
         )
     except Exception as exc:
         raise RuntimeError("W&B initialization failed") from exc
@@ -135,11 +138,17 @@ def _wandb_run(
         raise RuntimeError("W&B initialization returned no run")
     try:
         yield run, wandb
-    except BaseException:
-        run.finish(exit_code=1)
+    except BaseException as body_error:
+        try:
+            run.finish(exit_code=1)
+        except BaseException as cleanup_error:
+            body_error.add_note(f"W&B cleanup after training failure also failed: {cleanup_error!r}")
         raise
     else:
-        run.finish()
+        try:
+            run.finish()
+        except BaseException as cleanup_error:
+            raise RuntimeError("W&B cleanup after successful training failed") from cleanup_error
 
 
 def _log_wandb_update(run: Any, update: dict[str, float]) -> None:

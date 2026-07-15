@@ -35,12 +35,15 @@ class FakeRun:
         self.summary: dict[str, object] = {}
         self.finished: list[dict[str, object]] = []
         self.artifacts: list[FakeArtifact] = []
+        self.finish_error: BaseException | None = None
 
     def log(self, values: dict[str, object], *, step: int) -> None:
         self.logs.append((values, step))
 
     def finish(self, **kwargs: object) -> None:
         self.finished.append(kwargs)
+        if self.finish_error is not None:
+            raise self.finish_error
 
     def log_artifact(self, artifact: FakeArtifact) -> None:
         self.artifacts.append(artifact)
@@ -94,6 +97,7 @@ def test_wandb_defaults_and_overrides_map_to_init(monkeypatch: pytest.MonkeyPatc
         "name": "cube1_03-cube1-01",
         "tags": ["manorl", "mujoco", "skrl"],
         "config": {"seed": 42},
+        "dir": "outputs/manorl",
     }]
     assert fake.run.finished == [{}]
 
@@ -130,16 +134,46 @@ def test_wandb_initialization_failure_is_explicit(monkeypatch: pytest.MonkeyPatc
             pass
 
 
-def test_wandb_finish_marks_exception_and_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wandb_failure_cleanup_preserves_training_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     fake = FakeWandb()
+    fake.run.finish_error = OSError("cleanup unavailable")
     monkeypatch.setitem(sys.modules, "wandb", fake)
 
-    with pytest.raises(RuntimeError, match="training failed"):
+    with pytest.raises(RuntimeError, match="training failed") as raised:
         with tool._wandb_run(output=Path("output"), budget=_budget(tool), config={}):
             raise RuntimeError("training failed")
 
     assert fake.run.finished == [{"exit_code": 1}]
+    assert "cleanup unavailable" in "\n".join(raised.value.__notes__)
+
+
+def test_wandb_successful_body_propagates_cleanup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _load_tool()
+    fake = FakeWandb()
+    fake.run.finish_error = OSError("cleanup unavailable")
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+
+    with pytest.raises(RuntimeError, match="cleanup after successful training") as raised:
+        with tool._wandb_run(output=Path("output"), budget=_budget(tool), config={}):
+            pass
+
+    assert isinstance(raised.value.__cause__, OSError)
+    assert fake.run.finished == [{}]
+
+
+def test_wandb_uses_output_parent_without_root_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    tool = _load_tool()
+    fake = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    output = tmp_path / "training-output" / "cube1"
+
+    with tool._wandb_run(output=output, budget=_budget(tool), config={}):
+        pass
+
+    assert output.parent.is_dir()
+    assert fake.init_calls[0]["dir"] == str(output.parent)
+    assert not (tmp_path / "wandb").exists()
 
 
 def test_wandb_config_is_complete_and_json_serializable() -> None:
