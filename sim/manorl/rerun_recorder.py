@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import fields
 import json
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -18,7 +17,7 @@ _FORCE_ARROW_SCALE = 0.002
 
 
 class ManoRerunRecorder:
-    """Write immutable environment transitions for one selected vector world."""
+    """Write one immutable Rerun artifact for each episode of a selected world."""
 
     def __init__(self, environment: MujocoManoEnvironment, output: str | Path, *, env_id: int = 0) -> None:
         if not isinstance(environment, MujocoManoEnvironment):
@@ -32,20 +31,74 @@ class ManoRerunRecorder:
         self.environment = environment
         self.env_id = env_id
         self.rr = rr
-        self.recording = rr.RecordingStream("manorl_mujoco")
         self.output = Path(output)
         self.output.parent.mkdir(parents=True, exist_ok=True)
-        self.recording.save(self.output)
         self.episode_id = 0
+        self.episode_paths: list[Path] = []
+        self._closed = False
+        self._start_episode()
+
+    def _episode_path(self) -> Path:
+        suffix = self.output.suffix or ".rrd"
+        stem = self.output.stem if self.output.suffix else self.output.name
+        return self.output.with_name(f"{stem}.episode_{self.episode_id:04d}{suffix}")
+
+    def _default_blueprint(self):
+        blueprint = self.rr.blueprint
+        return blueprint.Blueprint(
+            blueprint.Vertical(
+                blueprint.Spatial3DView(
+                    name="Object, hand, and point cloud",
+                    contents=[
+                        "world/object", "target/object", "world/object_point_cloud",
+                        "world/hand", "world/hand_keypoints", "world/fingertips", "world/contact_force",
+                    ],
+                    eye_controls=blueprint.EyeControls3D(
+                        kind=blueprint.components.Eye3DKind.Orbital,
+                        tracking_entity="world/object",
+                        speed=0.1,
+                    ),
+                    line_grid=False,
+                ),
+                blueprint.Horizontal(
+                    blueprint.TimeSeriesView(
+                        name="Reward and termination",
+                        contents=["reward/**", "termination/**", "reset/**"],
+                    ),
+                    blueprint.TimeSeriesView(
+                        name="Contacts and actions",
+                        contents=["contact/**", "action/**", "episode/**"],
+                    ),
+                ),
+                row_shares=[3.0, 1.0],
+            ),
+            auto_layout=False,
+            auto_views=False,
+            collapse_panels=False,
+        )
+
+    def _start_episode(self) -> None:
+        self.current_path = self._episode_path()
+        self.recording = self.rr.RecordingStream("manorl_mujoco")
+        self.recording.save(self.current_path, default_blueprint=self._default_blueprint())
+        self.episode_paths.append(self.current_path)
         self._log_static_metadata()
+
+    def _finish_episode(self) -> None:
+        self.recording.flush()
+        self.recording.disconnect()
 
     def _log_static_metadata(self) -> None:
         environment = self.environment
         trajectory = environment.trajectories[self.env_id]
+        identity_parts = trajectory.identity.identity.split("_")
         metadata = {
-            "schema": "manorl.rerun.v1",
+            "schema": "manorl.rerun.v2",
             "env_id": self.env_id,
+            "episode_id": self.episode_id,
             "trajectory_identity": trajectory.identity.identity,
+            "object_type": identity_parts[0],
+            "gesture": identity_parts[1],
             "trajectory_uuid": trajectory.identity.uuid,
             "trajectory_source_slice": [int(trajectory.source_indices[0]), int(trajectory.source_indices[-1]) + 1],
             "trajectory_length": int(environment.trajectory_lengths[self.env_id]),
@@ -70,9 +123,17 @@ class ManoRerunRecorder:
             self.recording.log(f"threshold/{name}", self.rr.Scalars(float(value)), static=True)
 
     def record_transition(self) -> None:
+        if self._closed:
+            raise RuntimeError("cannot record after close")
         snapshot = self.environment.last_transition
         if snapshot is None:
             raise RuntimeError("record_transition requires one completed environment.step call")
+        # The transition after terminal state has physically applied the delayed
+        # reset. Finalize the prior episode before writing the new reset state.
+        if bool(snapshot.reset_applied[self.env_id]):
+            self._finish_episode()
+            self.episode_id += 1
+            self._start_episode()
         self._record(snapshot)
 
     def _record(self, snapshot: TransitionSnapshot) -> None:
@@ -81,12 +142,6 @@ class ManoRerunRecorder:
         reward = snapshot.reward
         termination = snapshot.termination
         index = int(snapshot.target_indices[env_id])
-        trajectory = self.environment.trajectories[env_id]
-        if bool(snapshot.reset_applied[env_id]):
-            self.episode_id += 1
-        self.recording.set_time("control_call", sequence=snapshot.control_call)
-        self.recording.set_time("simulation", duration=snapshot.control_call * CONTROL_TIMESTEP)
-
         object_position = physical.object_position[env_id]
         hand_position = physical.hand_position[env_id]
         raw_cloud = snapshot.observation.raw[env_id, OBSERVATION_SLICES["object_point_cloud_raw"]].reshape(-1, 3)
@@ -96,10 +151,10 @@ class ManoRerunRecorder:
         target_next = min(index + 5, int(self.environment.trajectory_lengths[env_id]) - 1)
         target_position = self.environment.reference_object_pos[env_id, index]
         target_orientation = self.environment.reference_object_quat_xyzw[env_id, index]
-        trajectory_complete = bool(
-            snapshot.termination.reset[env_id] and not snapshot.termination.deviation_reset[env_id]
-        )
+        trajectory_complete = bool(termination.reset[env_id] and not termination.deviation_reset[env_id])
         target_distance = float(np.linalg.norm(object_position - target_position))
+        self.recording.set_time("control_call", sequence=snapshot.control_call)
+        self.recording.set_time("simulation", duration=snapshot.control_call * CONTROL_TIMESTEP)
 
         self.recording.log("world/object", self.rr.Points3D([object_position], colors=[(45, 190, 100)], radii=[0.012]))
         self.recording.log("world/hand", self.rr.Points3D([hand_position], colors=[(70, 140, 230)], radii=[0.010]))
@@ -126,11 +181,9 @@ class ManoRerunRecorder:
             "reset/applied": float(snapshot.reset_applied[env_id]),
         }
         for field in fields(reward):
-            value = getattr(reward, field.name)[env_id]
-            scalar_values[f"reward/{field.name}"] = float(value)
+            scalar_values[f"reward/{field.name}"] = float(getattr(reward, field.name)[env_id])
         for name, value in scalar_values.items():
             self.recording.log(name, self.rr.Scalars(value))
-
         self.recording.log(
             "state/arrays",
             self.rr.AnyValues(
@@ -154,4 +207,7 @@ class ManoRerunRecorder:
         )
 
     def close(self) -> Path:
-        return self.output
+        if not self._closed:
+            self._finish_episode()
+            self._closed = True
+        return self.current_path

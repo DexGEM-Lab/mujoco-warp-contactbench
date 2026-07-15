@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded CUDA PPO training for the single accepted cube1_01_009 trajectory."""
+"""Bounded CUDA PPO training for a selected object/gesture Lance trajectory batch."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
-from sim.manorl.trajectory import load_reference_trajectory
+from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
 
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
 WARP_CONTACT_CAPACITY_MARGIN = 64
@@ -32,6 +32,8 @@ class TrainingBudget:
     rerun_output: str | None = None
     rerun_env_id: int = 0
     rerun_stride: int = 1
+    object_type: str = "cube1"
+    gesture: str = "01"
 
     @property
     def transitions(self) -> int:
@@ -183,8 +185,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     metrics_path = output.with_suffix(".json")
     trace_path = output.with_suffix(".eval.npz")
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
-    artifacts = (checkpoint, metrics_path, trace_path) + ((rerun_path,) if rerun_path is not None else ())
-    if any(path.exists() for path in artifacts):
+    artifacts = (checkpoint, metrics_path, trace_path)
+    rerun_existing = [] if rerun_path is None else list(rerun_path.parent.glob(f"{rerun_path.stem}.episode_*.rrd"))
+    if any(path.exists() for path in artifacts) or rerun_existing:
         raise FileExistsError("refusing to replace an existing training artifact prefix")
     torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)
@@ -194,8 +197,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         128,
         WARP_BROADPHASE_CONTACTS_PER_WORLD * budget.num_envs + WARP_CONTACT_CAPACITY_MARGIN,
     )
+    selection = TrajectorySelection(object_type=budget.object_type, gesture=budget.gesture)
+    trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
     physical = MujocoManoEnvironment(
-        load_reference_trajectory(),
+        trajectories,
         EnvironmentConfig(
             num_envs=budget.num_envs,
             device="gpu",
@@ -222,12 +227,13 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     updates, transitions, elapsed = _train(runtime, budget, recorder)
     if recorder is not None:
         recorder.close()
+    rerun_episode_paths = [] if recorder is None else [str(path) for path in recorder.episode_paths]
     save_skrl_checkpoint(runtime.agent, checkpoint, runtime_config=runtime.checkpoint_metadata())
     # Evaluate exactly what a user will later load. skrl preprocessor/module
     # state may differ in-process after PPO training, so a fresh native load is
     # the reproducibility boundary rather than an implementation detail.
     evaluation_physical = MujocoManoEnvironment(
-        load_reference_trajectory(),
+        trajectories,
         EnvironmentConfig(
             num_envs=budget.num_envs,
             device="gpu",
@@ -250,7 +256,15 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     )
     result = {
         "schema": "manorl.cube1_fast_training.v1",
-        "trajectory": "cube1_01_009",
+        "trajectory_selection": {
+            "object": selection.object_type,
+            "gesture": selection.action_id,
+            "assignments": [
+                {"env_id": env_id, "identity": item.identity.identity, "row_index": item.identity.row_index,
+                 "uuid": item.identity.uuid, "source_slice": [item.identity.source_start, item.identity.source_stop]}
+                for env_id, item in enumerate(trajectories.trajectories)
+            ],
+        },
         "checkpoint_conversion": "out_of_scope",
         "initialization": {
             "actor_mean": "source_default",
@@ -281,7 +295,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         "artifacts": {
             "checkpoint": str(checkpoint),
             "evaluation_trace": str(trace_path),
-            "rerun": str(rerun_path) if rerun_path is not None else None,
+            "rerun_episodes": rerun_episode_paths,
         },
     }
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
     parser.add_argument("--rerun-env-id", type=int, default=0)
     parser.add_argument("--rerun-stride", type=int, default=1)
+    parser.add_argument("--object", dest="object_type", default="cube1")
+    parser.add_argument("--gesture", default="01")
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0 or args.rerun_stride < 1:
         parser.error("updates, num-envs, wall-clock-seconds, and rerun-stride must be positive")
@@ -314,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
             str(args.rerun_output.resolve()) if args.rerun_output is not None else None,
             args.rerun_env_id,
             args.rerun_stride,
+            args.object_type,
+            args.gesture,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))

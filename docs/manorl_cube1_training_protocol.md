@@ -2,10 +2,17 @@
 
 ## Scope
 
-This experiment trains from scratch on exactly the accepted Lance trajectory:
-dataset version 132, row 1, `cube1_01_009`, source slice `[440,1232)`. It is a
-single-trajectory convergence demonstration, not a multi-object or
-generalization result. Isaac rl-games checkpoints are not inputs.
+This experiment trains from scratch from a versioned Lance selector. The user
+chooses one object and one gesture/action ID; the target discovers every fully
+pre/post-padded matching row, sorts by source trajectory identity, and assigns
+world `i` to candidate `i % candidate_count`. Assignments are fixed across
+normal episode resets and reported in metrics/Rerun metadata. The formal
+reference fixture remains `cube1_01_009`; it is not the training-data default.
+Isaac rl-games checkpoints are not inputs. The catalog can inspect assignments
+for every object/action present in Lance. Physical MJX execution currently has
+an object runtime for `cube1`; another selected object is reported with its
+actual assigned Lance identities and then rejected before simulation, rather
+than being simulated using cube geometry.
 
 ## Preconditions
 
@@ -63,7 +70,9 @@ checkpoint input:
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
-  --output outputs/manorl/cube1_01_009_scratch_run \
+  --output outputs/manorl/cube1_03_scratch_run \
+  --object cube1 \
+  --gesture 03 \
   --num-envs 64 \
   --updates 64 \
   --wall-clock-seconds 1200
@@ -74,16 +83,24 @@ memory, or updates, add a Rerun output path. `--rerun-stride 4` records env 0
 once every four vector control calls:
 
 ```bash
-  --rerun-output outputs/manorl/cube1_01_009_scratch_run.rrd \
+  --rerun-output outputs/manorl/cube1_03_scratch_run.rrd \
   --rerun-env-id 0 \
   --rerun-stride 4
 ```
 
-Open the resulting file with `/home/jay/anaconda3/envs/manorl_mujoco/bin/rerun outputs/manorl/cube1_01_009_scratch_run.rrd`.
-The control-call timeline remains monotonic across delayed resets; it records
-actual state, target, 26D action/controller target, 64-point object cloud, hand
-keypoints, contact force vectors, named reward terms, reset causes, and the
-thresholds used by that run.
+Each completed env-0 episode is atomically written as
+`cube1_03_scratch_run.episode_0000.rrd`, then
+`cube1_03_scratch_run.episode_0001.rrd`, and so on. Open an artifact with:
+
+```bash
+/home/jay/anaconda3/envs/manorl_mujoco/bin/rerun \
+  outputs/manorl/cube1_03_scratch_run.episode_0000.rrd
+```
+
+The embedded Rerun blueprint explicitly displays the object point cloud and
+tracks the object with an orbital camera. It records actual state, target, 26D
+action/controller target, hand keypoints, contact force vectors, named reward
+terms, reset causes, and the thresholds used by that episode.
 
 ## Artifacts
 

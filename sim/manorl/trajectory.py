@@ -132,8 +132,6 @@ class TrajectoryBatch:
             raise ValueError("trajectory batch must be non-empty")
         if any(not isinstance(trajectory, ReferenceTrajectory) for trajectory in self.trajectories):
             raise TypeError("trajectory batch must contain ReferenceTrajectory values")
-        if any(trajectory.identity.identity.split("_")[0] != OBJECT_TYPE for trajectory in self.trajectories):
-            raise ValueError("trajectory batch must contain only cube1 trajectories")
 
     @property
     def num_envs(self) -> int:
@@ -142,6 +140,42 @@ class TrajectoryBatch:
     @property
     def lengths(self) -> NDArray[np.int64]:
         return _immutable(np.asarray([len(trajectory.q_ref) for trajectory in self.trajectories]), dtype=np.int64)
+
+
+@dataclass(frozen=True)
+class TrajectorySelection:
+    """Versioned Lance query matching the source object/action selection contract."""
+
+    object_type: str
+    gesture: str
+    dataset_path: Path = Path(TRAJECTORY_IDENTITY.dataset_path)
+    expected_dataset_version: int = EXPECTED_DATASET_VERSION
+    pre_padding: int = GENERATED_PADDING
+    post_padding: int = GENERATED_PADDING
+
+    def __post_init__(self) -> None:
+        if not self.object_type or "_" in self.object_type:
+            raise ValueError("object_type must be a non-empty Lance scene name")
+        if not self.gesture.isdigit() or not 1 <= int(self.gesture) <= 50:
+            raise ValueError("gesture must be a source action id in [1, 50]")
+        if self.pre_padding < 0 or self.post_padding < 0:
+            raise ValueError("trajectory padding must be non-negative")
+
+    @property
+    def action_id(self) -> str:
+        return self.gesture.zfill(2)
+
+
+@dataclass(frozen=True)
+class EnvTrajectoryAssignment:
+    """Stable provenance for the fixed trajectory owned by one vector environment."""
+
+    env_id: int
+    trajectory: ReferenceTrajectory
+
+    @property
+    def identity(self) -> TrajectoryIdentity:
+        return self.trajectory.identity
 
 
 def _derive_identity(row: dict[str, Any]) -> str:
@@ -529,3 +563,154 @@ def load_cube1_action_01_batch10(
         in zip(rows, CUBE1_ACTION_01_BATCH_ROWS, strict=True)
     )
     return TrajectoryBatch(trajectories)
+
+
+def _selection_row_sort_key(row_index_and_row: tuple[int, dict[str, Any]]) -> tuple[str, str, int, int]:
+    row_index, row = row_index_and_row
+    index = row["index"]
+    source_path = str(index.get("source_path", ""))
+    identity = _derive_identity(row)
+    object_type, action_id, sequence = identity.split("_")
+    if index.get("scene") != object_type or str(index.get("gesture", "")).zfill(2) != action_id:
+        raise ValueError(f"Lance index/source_path identity mismatch at row {row_index}: {source_path!r}")
+    if not sequence.isdigit():
+        raise ValueError(f"Lance source_path sequence is not numeric at row {row_index}: {source_path!r}")
+    return object_type, action_id, int(sequence), row_index
+
+
+def _selected_trajectory_from_row(
+    row: dict[str, Any],
+    dataset_version: int,
+    *,
+    row_index: int,
+    selection: TrajectorySelection,
+) -> ReferenceTrajectory:
+    """Decode one fully padded source row selected by object and gesture."""
+
+    index = row["index"]
+    metadata = row["trajectory_metadata"]
+    identity = _derive_identity(row)
+    object_type, action_id, _ = identity.split("_")
+    if object_type != selection.object_type or action_id != selection.action_id:
+        raise ValueError(f"row {row_index} is not {selection.object_type}/{selection.action_id}")
+    if index.get("scene") != object_type or str(index.get("gesture", "")).zfill(2) != action_id:
+        raise ValueError(f"row {row_index} Lance index identity does not match source_path")
+    object_names = metadata.get("object_names")
+    if not isinstance(object_names, list) or object_type not in object_names:
+        raise ValueError(f"row {row_index} does not contain selected object {object_type!r}")
+    object_index = object_names.index(object_type)
+    if metadata.get("hand_names") != ["right"] or len(row.get("hands", [])) != 1:
+        raise ValueError(f"row {row_index} must contain exactly one right hand")
+    if object_index >= len(row.get("objects", [])):
+        raise ValueError(f"row {row_index} selected object index is absent from object state")
+    source_count = int(metadata.get("total_frames", -1))
+    movement = metadata.get("trajectory_info", {}).get("object_move", [])
+    entry = next((item for item in movement if item.get("object_name") == object_type), None)
+    if entry is None:
+        raise ValueError(f"row {row_index} has no object_move entry for {object_type!r}")
+    start_raw, end_raw = int(entry["start_frame"]), int(entry["end_frame"])
+    start, stop = start_raw - selection.pre_padding, end_raw + selection.post_padding
+    if start < 0 or stop > source_count or stop - start < 2:
+        raise ValueError(
+            f"row {row_index} cannot provide [{start_raw}-{selection.pre_padding}, {end_raw}+{selection.post_padding})"
+        )
+    timestamps_all = np.asarray(row["timestamp"], dtype=np.float64)
+    q_all = np.asarray(row["hands"][0]["urdf_dof"], dtype=np.float64)
+    object_pos_all = np.asarray(row["objects"][object_index]["pos"], dtype=np.float64)
+    object_rotvec_all = np.asarray(row["objects"][object_index]["rot_aa"], dtype=np.float64)
+    expected_shapes = {
+        "timestamp": (source_count,),
+        "urdf_dof": (source_count, len(JOINT_NAMES)),
+        "object position": (source_count, 3),
+        "object axis-angle": (source_count, 3),
+    }
+    arrays = {
+        "timestamp": timestamps_all,
+        "urdf_dof": q_all,
+        "object position": object_pos_all,
+        "object axis-angle": object_rotvec_all,
+    }
+    for name, shape in expected_shapes.items():
+        if arrays[name].shape != shape or not np.all(np.isfinite(arrays[name])):
+            raise ValueError(f"row {row_index} has invalid {name}")
+    if np.any(np.diff(timestamps_all) <= 0):
+        raise ValueError(f"row {row_index} timestamps are not strictly increasing")
+    q_ref = q_all[start:stop].copy()
+    q_ref[:, 3:6] = np.unwrap(q_ref[:, 3:6], axis=0, period=2.0 * np.pi)
+    object_pos_raw = object_pos_all[start:stop].copy()
+    object_quat_xyzw = rotvec_to_xyzw(object_rotvec_all[start:stop])
+    z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0]) if object_type == OBJECT_TYPE else 0.0
+    object_pos = object_pos_raw.copy()
+    object_pos[:, 2] += z_shift
+    return ReferenceTrajectory(
+        identity=TrajectoryIdentity(
+            dataset_path=str(selection.dataset_path),
+            dataset_version=dataset_version,
+            row_index=row_index,
+            object_index=object_index,
+            uuid=str(index["uuid"]),
+            file_uuid=str(index.get("file_uuid", "")),
+            identity=identity,
+            source_start=start,
+            source_stop=stop,
+            movement_start_raw=start_raw,
+            movement_end_raw=end_raw,
+        ),
+        dataset_version=dataset_version,
+        source_indices=_immutable(np.arange(start, stop), dtype=np.int64),
+        timestamps=_immutable(timestamps_all[start:stop]),
+        q_ref=_immutable(q_ref),
+        object_pos_raw=_immutable(object_pos_raw),
+        object_pos=_immutable(object_pos),
+        object_quat_xyzw=_immutable(object_quat_xyzw),
+        object_z_shift=z_shift,
+    )
+
+
+def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: int) -> TrajectoryBatch:
+    """Load all eligible Lance rows then assign them sequentially to vector worlds.
+
+    The assignment is fixed for the lifetime of the environment: world ``i``
+    owns eligible trajectory ``i % eligible_count`` just as IsaacGym's
+    ``TrajectoryManager(assignment_mode='sequential')`` does.
+    """
+
+    if not isinstance(selection, TrajectorySelection):
+        raise TypeError("selection must be a TrajectorySelection")
+    if num_envs < 1:
+        raise ValueError("num_envs must be positive")
+    if not selection.dataset_path.exists():
+        raise FileNotFoundError(f"Lance dataset is absent: {selection.dataset_path}")
+    try:
+        import lance
+    except ImportError as exc:
+        raise RuntimeError("pylance is required to assign ManoRL trajectories") from exc
+    dataset = lance.dataset(str(selection.dataset_path))
+    version = int(getattr(dataset, "version", -1))
+    if version != selection.expected_dataset_version:
+        raise ValueError(f"dataset version {version} != requested {selection.expected_dataset_version}")
+    index_rows = dataset.to_table(columns=["index"]).to_pylist()
+    candidate_indices = [
+        row_index for row_index, row in enumerate(index_rows)
+        if row["index"].get("scene") == selection.object_type
+        and str(row["index"].get("gesture", "")).zfill(2) == selection.action_id
+        and row["index"].get("is_generated") is False
+    ]
+    if not candidate_indices:
+        raise LookupError(f"no Lance rows match object={selection.object_type!r}, gesture={selection.action_id!r}")
+    rows = dataset.take(candidate_indices, columns=list(LANCE_COLUMNS)).to_pylist()
+    valid: list[tuple[int, ReferenceTrajectory]] = []
+    rejected: list[str] = []
+    for row_index, row in zip(candidate_indices, rows, strict=True):
+        try:
+            valid.append((row_index, _selected_trajectory_from_row(row, version, row_index=row_index, selection=selection)))
+        except ValueError as exc:
+            rejected.append(f"row {row_index}: {exc}")
+    if not valid:
+        detail = "; ".join(rejected[:4])
+        raise LookupError(
+            f"no fully padded Lance rows match object={selection.object_type!r}, gesture={selection.action_id!r}; {detail}"
+        )
+    valid.sort(key=lambda item: _selection_row_sort_key((item[0], rows[candidate_indices.index(item[0])])))
+    eligible = tuple(item[1] for item in valid)
+    return TrajectoryBatch(tuple(eligible[env_id % len(eligible)] for env_id in range(num_envs)))

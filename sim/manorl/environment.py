@@ -28,6 +28,7 @@ from sim.manorl.contracts import (
     KEYPOINT_NAMES,
     OBJECT_BODY_NAME,
     OBJECT_FREE_JOINT_NAME,
+    OBJECT_TYPE,
     PHYSICS_SUBSTEPS_PER_TARGET,
     ServoConfig,
 )
@@ -58,7 +59,16 @@ _FINGERTIP_LOCAL_OFFSETS = np.asarray(
     ),
     dtype=np.float64,
 )
-_SOURCE_GRASP_MAPPING = ASSET_ROOT / "cube1" / "grasp_mapping.yaml"
+_CUBE1_GRASP_ALIASES = {
+    "01": ("thumb3", "index3"),
+    "02": ("thumb3", "index3", "middle3"),
+    "03": ("thumb3", "index3", "middle3", "ring3"),
+    "04": ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    "07": ("thumb3", "index3", "middle3", "ring3"),
+    "09": ("thumb3", "thumb2", "index3", "index2", "middle3", "middle2", "ring3", "ring2", "pinky3", "pinky2"),
+    "10": ("thumb3", "thumb2", "index3", "index2", "middle3", "middle2", "ring3", "ring2"),
+    "18": ("thumb3", "index3"),
+}
 
 
 @dataclass(frozen=True)
@@ -177,25 +187,24 @@ def _dynamic_surface_template(generator: np.random.Generator) -> NDArray[np.floa
     return _source_surface_points(seed)
 
 
-def _load_expected_keypoint_ids() -> NDArray[np.int64]:
-    # This accepted migration has exactly one source-pinned mapping.  Avoid a
-    # parser dependency because the approved local runtime lacks PyYAML even
-    # though it is present in the lock; a future multi-object environment must
-    # replace this exact-content guard with a validated YAML loader.
-    expected = 'cube1:\n  "01": [thumb3, index3]\n'
-    if _SOURCE_GRASP_MAPPING.read_text(encoding="utf-8") != expected:
-        raise ValueError("the pinned cube1 action-01 grasp mapping changed")
-    aliases = ["thumb3", "index3"]
+def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64]:
+    if object_type != OBJECT_TYPE:
+        raise NotImplementedError(
+            f"MuJoCo object runtime is not implemented for {object_type!r}; only {OBJECT_TYPE!r} assets are compiled"
+        )
+    aliases = _CUBE1_GRASP_ALIASES.get(action_id)
+    if aliases is None:
+        raise ValueError(f"no source grasp mapping for object={object_type!r}, gesture={action_id!r}")
     alias_map = {
-        "thumb3": "thumb_ip",
-        "index3": "index_dip",
-        "middle3": "middle_dip",
-        "ring3": "ring_dip",
-        "pinky3": "pinky_dip",
+        "thumb2": "thumb_mcp", "thumb3": "thumb_ip",
+        "index2": "index_pip", "index3": "index_dip",
+        "middle2": "middle_pip", "middle3": "middle_dip",
+        "ring2": "ring_pip", "ring3": "ring_dip",
+        "pinky2": "pinky_pip", "pinky3": "pinky_dip",
     }
-    names = [alias_map.get(str(alias)) for alias in aliases]
+    names = [alias_map.get(alias) for alias in aliases]
     if any(name is None for name in names):
-        raise ValueError("grasp mapping contains an unsupported source keypoint alias")
+        raise ValueError(f"unsupported source keypoint alias in {aliases!r}")
     return np.asarray([KEYPOINT_NAMES.index(name) for name in names], dtype=np.int64)
 
 
@@ -435,6 +444,19 @@ class MujocoManoEnvironment:
         # diagnostics. Production gathers below always use the per-env tables.
         self.trajectory = trajectories[0]
         self.trajectories = tuple(trajectories)
+        identity_parts = [item.identity.identity.split("_") for item in self.trajectories]
+        if any(len(parts) != 3 or not parts[1].isdigit() for parts in identity_parts):
+            raise ValueError("each trajectory identity must be object_action_sequence")
+        object_types = {parts[0] for parts in identity_parts}
+        if len(object_types) != 1:
+            raise NotImplementedError("one MJX batch must use one object runtime; split mixed-object selections first")
+        self.object_type = next(iter(object_types))
+        self.action_ids = np.asarray([int(parts[1]) for parts in identity_parts], dtype=np.int64)
+        if self.object_type != OBJECT_TYPE:
+            raise NotImplementedError(
+                f"selected {self.object_type!r} trajectories are assigned but its MuJoCo object runtime is not yet migrated; "
+                f"available runtime: {OBJECT_TYPE!r}"
+            )
         self.config = config
         self.jax = jax
         self.jp = jax.numpy
@@ -469,14 +491,14 @@ class MujocoManoEnvironment:
         )
         batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
         self.data = jax.vmap(lambda _: single_data)(batch_index)
-        self.expected_keypoint_ids = _load_expected_keypoint_ids()
-        self.expected_contact_mask = expected_contact_mask_from_keypoint_ids(
-            np.broadcast_to(self.expected_keypoint_ids, (config.num_envs, len(self.expected_keypoint_ids))),
-            config.num_envs,
+        self.expected_keypoint_ids = tuple(
+            _expected_keypoint_ids(self.object_type, parts[1]) for parts in identity_parts
         )
+        self.expected_contact_mask = np.zeros((config.num_envs, len(KEYPOINT_NAMES)), dtype=np.float64)
+        for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):
+            self.expected_contact_mask[env_id, keypoint_ids] = 1.0
         self.expected_contact_weights = self.expected_contact_mask.copy()
         self.active_joint_mask = _active_joint_mask(self.expected_contact_mask)
-        self.action_ids = np.ones(config.num_envs, dtype=np.int64)
         self.object_geometry = geometry_encoding(
             object_name="cube1",
             geometry_type="box",

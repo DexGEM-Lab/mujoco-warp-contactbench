@@ -1,42 +1,49 @@
-"""Record actual residual-off ManoRL environment transitions to a Rerun .rrd file."""
+"""Record actual ManoRL transitions for a deterministic Lance trajectory assignment."""
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
 
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.rerun_recorder import ManoRerunRecorder
-from sim.manorl.trajectory import TrajectoryBatch, load_cube1_action_01_batch10, load_reference_trajectory
+from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
 
 
-def _trajectory(name: str):
-    if name == "accepted":
-        return load_reference_trajectory()
-    if name == "accepted-cube1-action-01-batch10":
-        return load_cube1_action_01_batch10()
-    raise ValueError(f"unsupported trajectory {name!r}")
+def _assignment_payload(trajectory_batch) -> list[dict[str, object]]:
+    return [
+        {
+            "env_id": env_id,
+            "identity": trajectory.identity.identity,
+            "row_index": trajectory.identity.row_index,
+            "uuid": trajectory.identity.uuid,
+            "source_slice": [trajectory.identity.source_start, trajectory.identity.source_stop],
+        }
+        for env_id, trajectory in enumerate(trajectory_batch.trajectories)
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True, help="episode files become <stem>.episode_XXXX.rrd")
+    parser.add_argument("--object", dest="object_type", default="cube1")
+    parser.add_argument("--gesture", default="01")
     parser.add_argument("--steps", type=int, default=160)
     parser.add_argument("--env-id", type=int, default=0)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
-    parser.add_argument("--trajectory", choices=("accepted", "accepted-cube1-action-01-batch10"), default="accepted")
     parser.add_argument("--training-termination", action="store_true")
     args = parser.parse_args(argv)
     if args.steps < 1 or args.num_envs < 1:
         parser.error("steps and num-envs must be positive")
-    trajectory = _trajectory(args.trajectory)
-    if isinstance(trajectory, TrajectoryBatch) and args.num_envs != trajectory.num_envs:
-        parser.error(f"{args.trajectory} requires --num-envs {trajectory.num_envs}")
+    selection = TrajectorySelection(object_type=args.object_type, gesture=args.gesture)
+    trajectories = load_assigned_trajectory_batch(selection, num_envs=args.num_envs)
+    print(json.dumps({"selection": {"object": selection.object_type, "gesture": selection.action_id}, "assignments": _assignment_payload(trajectories)}, indent=2))
     environment = MujocoManoEnvironment(
-        trajectory,
+        trajectories,
         EnvironmentConfig(
             device=args.device,
             num_envs=args.num_envs,
@@ -50,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     for _ in range(args.steps):
         environment.step(actions)
         recorder.record_transition()
-    print(recorder.close())
+    recorder.close()
+    print(json.dumps({"episode_artifacts": [str(path) for path in recorder.episode_paths]}, indent=2))
     return 0
 
 

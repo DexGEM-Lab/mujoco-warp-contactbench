@@ -11,6 +11,8 @@ from sim.manorl.contracts import DATASET_PATH, EXPECTED_DATASET_VERSION
 from sim.manorl.trajectory import (
     CUBE1_ACTION_01_BATCH_ROWS,
     LANCE_COLUMNS,
+    TrajectorySelection,
+    load_assigned_trajectory_batch,
     load_cube1_action_01_batch10,
     load_reference_trajectory,
     trajectory_from_row,
@@ -70,6 +72,30 @@ def test_cube1_action_01_batch_has_explicit_distinct_padded_assignments() -> Non
     ]
     assert batch.lengths.tolist() == [790, 792, 774, 815, 797, 771, 780, 739, 726, 743]
     assert len({tuple(trajectory.object_pos[0]) for trajectory in batch.trajectories}) == 10
+
+
+@pytest.mark.integration
+def test_selector_assigns_all_eligible_rows_before_repeating() -> None:
+    available, reason = _dataset_available()
+    if not available:
+        pytest.skip(reason)
+    batch = load_assigned_trajectory_batch(TrajectorySelection("cube1", "01"), num_envs=12)
+    assert [trajectory.identity.row_index for trajectory in batch.trajectories] == [
+        0, 1, 2, 3, 4, 5, 7, 14, 15, 16, 0, 1
+    ]
+    assert {trajectory.identity.identity.split("_")[1] for trajectory in batch.trajectories} == {"01"}
+
+
+@pytest.mark.integration
+def test_selector_accepts_non_default_cube1_gesture() -> None:
+    available, reason = _dataset_available()
+    if not available:
+        pytest.skip(reason)
+    batch = load_assigned_trajectory_batch(TrajectorySelection("cube1", "03"), num_envs=3)
+    assert [trajectory.identity.row_index for trajectory in batch.trajectories] == [71, 72, 74]
+    assert [trajectory.identity.identity for trajectory in batch.trajectories] == [
+        "cube1_03_004", "cube1_03_005", "cube1_03_007"
+    ]
 
 
 def _accepted_fake_row(timestamps: np.ndarray) -> dict[str, object]:
