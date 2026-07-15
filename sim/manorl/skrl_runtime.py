@@ -16,6 +16,7 @@ from skrl.resources.schedulers.torch import KLAdaptiveLR
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
 from sim.manorl.normalization import PointCloudAwareRunningStandardScaler
+from sim.manorl.rewards import REWARD_CONTRACT_ID
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ class ManoSkrlRuntime:
 
     def checkpoint_metadata(self) -> dict[str, object]:
         return {
+            "reward_contract": REWARD_CONTRACT_ID,
             "ppo": asdict(self.config),
             "model_state_dict": self.model.state_dict_manifest(),
             "normalizer": "source_pointcloud_shared_xyz",

@@ -11,8 +11,8 @@ import numpy as np
 
 from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_NAMES, KEYPOINT_NAMES, PHYSICS_SUBSTEPS_PER_TARGET
 from sim.manorl.environment import MujocoManoEnvironment, TransitionSnapshot
-from sim.manorl.observations import OBSERVATION_SLICES
-from sim.manorl.rewards import CONTACT_FORCE_THRESHOLD
+from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, OBSERVATION_SLICES
+from sim.manorl.rewards import REWARD_CONTRACT_ID, REWARD_HAND_OBJECT_THRESHOLD_N
 
 _FORCE_ARROW_SCALE = 0.002
 _GEOMETRY_FORCE_PATHS = (
@@ -181,6 +181,7 @@ class ManoRerunRecorder:
         identity_parts = trajectory.identity.identity.split("_")
         metadata = {
             "schema": "manorl.rerun.v2",
+            "reward_contract": REWARD_CONTRACT_ID,
             "env_id": self.env_id,
             "episode_id": self.episode_id,
             "trajectory_identity": trajectory.identity.identity,
@@ -205,7 +206,8 @@ class ManoRerunRecorder:
             "thresholds": {
                 "max_deviation_distance": environment.config.max_deviation_distance,
                 "deviation_penalty": environment.config.deviation_penalty,
-                "contact_force_threshold": CONTACT_FORCE_THRESHOLD,
+                "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
+                "reward_hand_object_threshold_N": REWARD_HAND_OBJECT_THRESHOLD_N,
                 "contact_start_frame": int(environment.contact_start_frames[self.env_id]),
                 "contact_end_frame": int(environment.contact_end_frames[self.env_id]),
                 "contact_capacity": environment.config.contact_capacity,

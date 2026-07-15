@@ -112,9 +112,11 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     import torch
 
     from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
+    from sim.manorl.rewards import REWARD_CONTRACT_ID
     from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 
     runtime = ManoSkrlRuntime(adapter, ManoPPOConfig.optimizer_smoke())
+    assert runtime.checkpoint_metadata()["reward_contract"] == REWARD_CONTRACT_ID
     rollout = runtime.deterministic_rollout(steps=2)
     assert rollout["steps"] == 2
     assert torch.isfinite(rollout["observations"]).all()

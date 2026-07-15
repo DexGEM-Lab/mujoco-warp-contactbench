@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
 import numpy as np
 import pytest
 
+from sim.manorl.abi import check_termination
 from sim.manorl.assets import OBJECT_MESH
 from sim.manorl.contracts import KEYPOINT_NAMES
 from sim.manorl.environment import (
@@ -17,9 +19,11 @@ from sim.manorl.environment import (
 from sim.manorl.mjx_sim import MujocoCpuReplay
 from sim.manorl.observations import (
     CHECKPOINT_SIDECAR_COMPATIBILITY,
+    CURRENT_SOURCE_COMPATIBILITY,
     OBSERVATION_SLICES,
     quat_rotate_xyzw,
 )
+from sim.manorl.rewards import REWARD_CONTRACT_ID, REWARD_HAND_OBJECT_THRESHOLD_N, compute_rewards
 from sim.manorl.trajectory import load_reference_trajectory
 
 
@@ -243,7 +247,7 @@ def test_pair_filtered_contact_decoder_preserves_geometry_aggregation_and_force_
     np.testing.assert_allclose(geometry.sum(axis=1), 0.0, rtol=0, atol=1e-12)
 
 
-def test_reward_state_wires_filtered_hand_object_forces() -> None:
+def test_reward_state_filters_broad_contacts_before_reward() -> None:
     env = object.__new__(MujocoManoEnvironment)
     env.config = EnvironmentConfig(num_envs=1)
     env.trajectory_lengths = np.asarray([10], dtype=np.int64)
@@ -256,12 +260,11 @@ def test_reward_state_wires_filtered_hand_object_forces() -> None:
     env.cumulative_joint_offset = np.zeros((1, 20), dtype=np.float64)
     env.active_joint_mask = np.zeros((1, 20), dtype=bool)
     env.expected_contact_mask = np.zeros((1, 16), dtype=np.float64)
-    env.expected_contact_weights = np.zeros((1, 16), dtype=np.float64)
+    env.expected_contact_mask[:, 3] = 1.0
+    env.expected_contact_weights = env.expected_contact_mask.copy()
     env.contact_start_frames = np.asarray([3], dtype=np.int64)
     env.contact_end_frames = np.asarray([5], dtype=np.int64)
     all_contact_forces = np.full((1, 16, 3), 100.0, dtype=np.float64)
-    hand_object_forces = np.zeros((1, 16, 3), dtype=np.float64)
-    hand_object_forces[:, 3] = [1.1, 0.0, 0.0]
     physical = PhysicalSnapshot(
         mano_dof_pos=np.zeros((1, 26), dtype=np.float64),
         hand_position=np.zeros((1, 3), dtype=np.float64),
@@ -274,13 +277,30 @@ def test_reward_state_wires_filtered_hand_object_forces() -> None:
         hand_keypoint_contact_forces=all_contact_forces,
         object_contact_force=np.zeros((1, 3), dtype=np.float64),
         geom_contact_force_world_N=np.zeros((1, 1, 3), dtype=np.float64),
-        hand_object_force_on_object_world_N=hand_object_forces,
+        hand_object_force_on_object_world_N=np.zeros((1, 16, 3), dtype=np.float64),
         contact_count=np.zeros(1, dtype=np.int64),
     )
+    termination = check_termination(
+        object_position=physical.object_position,
+        target_position=physical.object_position,
+        progress=np.asarray([4], dtype=np.int64),
+        trajectory_lengths=np.asarray([10], dtype=np.int64),
+        early_mask=np.asarray([False]),
+    )
 
-    reward_state = env._reward_state(physical)
+    broad_only = compute_rewards(
+        env._reward_state(physical), compatibility=CURRENT_SOURCE_COMPATIBILITY, termination=termination
+    )
+    filtered_forces = np.zeros((1, 16, 3), dtype=np.float64)
+    filtered_forces[:, 3] = [1.1, 0.0, 0.0]
+    filtered = compute_rewards(
+        env._reward_state(replace(physical, hand_object_force_on_object_world_N=filtered_forces)),
+        compatibility=CURRENT_SOURCE_COMPATIBILITY,
+        termination=termination,
+    )
 
-    np.testing.assert_allclose(reward_state.hand_object_force_on_object_world_N, hand_object_forces)
+    np.testing.assert_allclose(broad_only.contact, [0.0])
+    np.testing.assert_allclose(filtered.contact, [0.4])
 
 
 def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> None:
@@ -639,6 +659,10 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
         "filter": "only contact rows with exactly one source-mapped hand collision geom and one object collision geom",
         "series": recorder.hand_object_force_series_table,
     }
+    assert metadata["reward_contract"] == REWARD_CONTRACT_ID
+    assert metadata["thresholds"]["observation_contact_threshold_N"] == 2.0
+    assert metadata["thresholds"]["reward_hand_object_threshold_N"] == REWARD_HAND_OBJECT_THRESHOLD_N
+    assert "contact_force_threshold" not in metadata["thresholds"]
 
     samples = {
         path: [args[0] for logged_path, args, kwargs, _ in recorder.recording.logs if logged_path == path and not kwargs.get("static")]

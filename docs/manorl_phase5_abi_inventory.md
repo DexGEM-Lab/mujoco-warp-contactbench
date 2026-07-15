@@ -145,13 +145,15 @@ in the early phase it is action penalty only
 - Axis distance is `scale_axis * exp(-40 * abs(object_axis-target_axis))` with
   `(x, y, z) = (0.5, 0.5, 2.0)`
   (`distance_reward_calculator.py:42-73, 76-108`).
-- Distance components are gated by weighted expected contact reward during the
-  inclusive contact window, use `maxContactReward=0.4` after it, and are zero
-  before it (`reward_calculator.py:147-207`). Contact also requires the
-  object contact magnitude to differ from gravity force by more than `0.25`.
-- Contact reward is weighted-correct expected contacts divided by expected
-  weight sum, multiplied by `0.4`; no expected contacts produces zero
-  (`utils/contact_reward_jit.py:15-67`).
+- The source distance/contact equations are retained as historical evidence,
+  but target contact eligibility is a distinct contract: it uses only strict
+  pair-filtered hand-on-object forces, not the aggregate source contact tensor
+  or the source object-force-versus-gravity gate.
+- Target contract `target_hand_object_contact_v1` awards `0.4` times the
+  weighted fraction of expected keypoints whose filtered world-force norm is
+  strictly greater than `1.0 N`; no expected contacts produces zero. Contact
+  remains gated by the inclusive movement window, and distance remains gated
+  by the resulting proportional contact reward.
 - Rotation uses XYZW angular error in degrees and the configured three-piece
   function, then `0.4 * value - 0.1`; the per-object/action disabled mask
   forces zero (`rotation_reward_calculator.py:46-83, 86-161`).
@@ -161,13 +163,15 @@ in the early phase it is action penalty only
   window (`reward_calculator.py:209-229`). Survival is `0.001`.
 
 Target owner is `sim/manorl/rewards.py`. The deterministic equation layer is
-implemented as a pure resolved-state calculation: it receives source-order
-keypoint forces, expected masks/weights, object contact/gravity values,
+implemented as a pure resolved-state calculation: it receives the strict
+`hand_object_force_on_object_world_N` tensor, expected masks/weights,
 trajectory-window values, and the `sim/manorl/abi.py` termination result.
-`tests/manorl/test_observations_rewards.py` fixes the component equations,
-window boundaries, historical/current early-phase variants, and the final
-deviation-penalty ordering. It does not establish MuJoCo producers for those
-inputs; contact aggregation and trajectory-window mapping remain unresolved.
+Observations intentionally continue to use aggregate source-order keypoint
+forces with their separate `2.0 N` feature threshold. The source semantic
+fixture verifies observation, action, and termination evidence; its reward
+fields are reference-only because it lacks pair-filtered hand-object forces.
+`tests/manorl/test_observations_rewards.py` fixes proportional weighting,
+strict threshold, zero-expected, window, and deviation-penalty behavior.
 
 ## Policy, normalization, inference, and checkpoint ABI
 
@@ -240,12 +244,14 @@ evaluation choice as clipped normalized actor mean. That is a target contract,
 not an inferred rl-games player behavior.
 
 Target checkpoint I/O saves and reloads native skrl policy/value, optimizer,
-and normalizer state with a configuration sidecar. It explicitly rejects an
-rl-games top-level `model`/`env_state` checkpoint; no parameter, normalizer, or
-optimizer conversion is implemented. Required evidence before any source
-compatibility claim remains frozen-normalizer preprocessing equivalence and
-deterministic mu/value equivalence on a captured 476D batch. Training and
-evaluation are outside this slice.
+and normalizer state with a configuration sidecar. Every native sidecar records
+`reward_contract: target_hand_object_contact_v1`; a missing or different value
+fails before load, so a checkpoint trained under an older objective cannot
+silently resume. It explicitly rejects an rl-games top-level `model`/`env_state`
+checkpoint; no parameter, normalizer, or optimizer conversion is implemented.
+Required evidence before any source compatibility claim remains frozen-normalizer
+preprocessing equivalence and deterministic mu/value equivalence on a captured
+476D batch. Training and evaluation are outside this slice.
 
 ## Unresolved-owner audit
 
@@ -262,11 +268,11 @@ unknown.
 | 26D residual transform, active-joint masking, early phase | Yes | `sim/manorl/abi.py` | Deterministic tensor cases for clipping, masking, transition step, accumulation, and limits. |
 | Target application and MuJoCo batched stepping | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/environment.py` | Focused source-counter test and two-world CPU smoke cover action/target/two-substep ordering. |
 | Reset, progress, completion, deviation penalty | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/abi.py`, `environment.py` | Focused terminal-observation/delayed-reset fixture and 791-call CPU episode smoke. |
-| Rewards and contact-window timing | Yes for bounded cube1 state production and equations | `sim/manorl/environment.py`, `rewards.py` | Source raw movement `[690,982]` maps to inclusive sliced window `[250,542]`; cross-simulator reward parity remains required before policy claims. |
+| Rewards and contact-window timing | Target-specific `target_hand_object_contact_v1` | `sim/manorl/environment.py`, `rewards.py` | Source raw movement `[690,982]` maps to inclusive sliced window `[250,542]`; strict pair-filtered forces, weighted fractions, exact 1 N exclusion, and broad-contact isolation are tested. Source reward equality is non-comparable because the fixture lacks pair-filtered forces. |
 | Privileged/state inputs | Yes: absent in this configuration | `sim/manorl/environment.py` | Assert no `states` output until a source config declares `numStates > 0`. |
 | Network, PointNet/FiLM preprocessing, and normalization | Yes | `sim/manorl/model.py`, `normalization.py` | Source module namespace/shape and shared-XYZ statistics are tested; frozen-normalizer and deterministic-mu equivalence on a captured source batch remain required. |
 | Inference action selection and skrl adapter | No local Mano source defines the downstream rl-games player choice | `sim/manorl/gymnasium_env.py`, `skrl_runtime.py` | Target policy mode is explicitly clipped normalized mean; deterministic CPU/CUDA physics rollouts and a stochastic PPO update smoke pass. No rl-games evaluation equivalence is claimed. |
-| Checkpoint and optimizer migration | File layout known; target conversion deliberately absent | `sim/manorl/checkpoint.py` | Native skrl I/O round trip passes and rl-games format is explicitly rejected. Conversion would still require a key/shape report and loaded mu/value equivalence. |
+| Checkpoint and optimizer migration | File layout known; target conversion deliberately absent | `sim/manorl/checkpoint.py` | Native skrl I/O round trip requires `target_hand_object_contact_v1`; missing or mismatched reward contracts and rl-games inputs are rejected. Conversion would still require a key/shape report and loaded mu/value equivalence. |
 | Current-source versus checkpoint-sidecar training settings | Yes: they differ in named fields above | `sim/manorl/observations.py` / future `config.py` | Pure compatibility variants explicitly select current (100/static/250) or historical checkpoint (50/dynamic/200); serialize the selection before an environment or checkpoint claim. |
 
 ## Gate disposition

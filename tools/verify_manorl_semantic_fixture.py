@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-fast target-side verifier for a source MANOHand semantic fixture."""
+"""Verify comparable source semantics and classify target-only reward evidence."""
 
 from __future__ import annotations
 
@@ -17,10 +17,27 @@ from sim.manorl.observations import (
     PointCloudTemplate,
     build_observation,
 )
-from sim.manorl.rewards import RewardState, compute_rewards
+from sim.manorl.rewards import REWARD_CONTRACT_ID
 from tools.isaacgym_reference_trace import validate_semantic_fixture_schema
 
 ATOL = 5.0e-5
+_SOURCE_REWARD_REFERENCE_FIELDS = (
+    "reward_total",
+    "reward_distance_x",
+    "reward_distance_y",
+    "reward_distance_z",
+    "reward_rotation",
+    "reward_action_penalty",
+    "reward_position_penalty",
+    "reward_joint_penalty",
+    "reward_contact",
+    "reward_object_stability",
+    "reward_object_speed",
+)
+_SOURCE_REWARD_NONCOMPARABILITY = (
+    "source records aggregate hand_keypoint_contact_forces and object-wide/gravity forces, "
+    "but not pair-filtered hand-object forces required by target_hand_object_contact_v1"
+)
 
 
 def _scalar(arrays: dict[str, np.ndarray], name: str, row: int) -> Any:
@@ -102,7 +119,7 @@ def _observation_result(arrays: dict[str, np.ndarray], row: int) -> float:
     return _assert_close("raw_observation", target.raw[0], _row(arrays, "source_raw_observation", row))
 
 
-def _reward_result(arrays: dict[str, np.ndarray], metadata: dict[str, Any], row: int) -> dict[str, float]:
+def _termination_result(arrays: dict[str, np.ndarray], metadata: dict[str, Any], row: int) -> dict[str, float]:
     config = metadata["configuration"]
     termination = check_termination(
         object_position=_row(arrays, "object_position", row)[None, :],
@@ -116,41 +133,27 @@ def _reward_result(arrays: dict[str, np.ndarray], metadata: dict[str, Any], row:
         max_deviation_distance=float(config["maxDeviationDistance"]),
         deviation_penalty=float(config["deviationPenalty"]),
     )
-    state = RewardState(
-        object_position=_row(arrays, "object_position", row)[None, :],
-        target_object_position=_row(arrays, "target_object_position", row)[None, :],
-        object_orientation_xyzw=_row(arrays, "object_orientation_xyzw", row)[None, :],
-        target_object_orientation_xyzw=_row(arrays, "target_object_orientation_xyzw", row)[None, :],
-        cumulative_offset=_row(arrays, "cumulative_offset", row)[None, :],
-        cumulative_joint_offset=_row(arrays, "cumulative_joint_offset", row)[None, :],
-        active_joint_mask=_row(arrays, "active_joint_mask", row)[None, :],
-        hand_keypoint_contact_forces=_row(arrays, "hand_keypoint_contact_forces", row)[None, :, :],
-        expected_contact_mask=_row(arrays, "expected_contact_mask", row)[None, :],
-        expected_contact_weights=_row(arrays, "expected_contact_weights", row)[None, :],
-        object_contact_force=_row(arrays, "object_contact_force", row)[None, :],
-        object_gravity_force=np.asarray([_scalar(arrays, "object_gravity_force", row)]),
-        object_linear_velocity=_row(arrays, "object_linear_velocity", row)[None, :],
-        trajectory_steps=np.asarray([_scalar(arrays, "trajectory_step", row)], dtype=np.int64),
-        contact_start_frames=np.asarray([_scalar(arrays, "contact_start_frame", row)], dtype=np.int64),
-        contact_end_frames=np.asarray([_scalar(arrays, "contact_end_frame", row)], dtype=np.int64),
-        rotation_disabled_mask=np.asarray([_scalar(arrays, "rotation_disabled_mask", row)], dtype=bool),
-        early_phase_starts=np.asarray([_scalar(arrays, "early_phase_start", row)], dtype=np.int64),
-    )
-    reward = compute_rewards(state, compatibility=CURRENT_SOURCE_COMPATIBILITY, termination=termination)
-    names = {
-        "reward_total": reward.total[0],
-        "reward_distance_x": reward.distance_x[0],
-        "reward_distance_y": reward.distance_y[0],
-        "reward_distance_z": reward.distance_z[0],
-        "reward_rotation": reward.rotation[0],
-        "reward_action_penalty": reward.action_penalty[0],
-        "reward_position_penalty": reward.position_penalty[0],
-        "reward_joint_penalty": reward.joint_penalty[0],
-        "reward_contact": reward.contact[0],
-        "reward_object_stability": reward.object_stability[0],
-        "reward_object_speed": reward.object_speed[0],
+    expected = {
+        "reset": bool(_scalar(arrays, "reset", row)),
+        "deviation_reset": bool(_scalar(arrays, "deviation_reset", row)),
+        "deviation_penalty": float(_scalar(arrays, "deviation_penalty", row)),
     }
-    return {name: _assert_close(name, actual, _scalar(arrays, name, row)) for name, actual in names.items()}
+    actual = {
+        "reset": bool(termination.reset[0]),
+        "deviation_reset": bool(termination.deviation_reset[0]),
+        "deviation_penalty": float(termination.deviation_penalty[0]),
+    }
+    if actual["reset"] != expected["reset"] or actual["deviation_reset"] != expected["deviation_reset"]:
+        raise AssertionError(f"termination state differs: {actual!r} != {expected!r}")
+    return {
+        "reset": 0.0,
+        "deviation_reset": 0.0,
+        "deviation_penalty": _assert_close("termination.deviation_penalty", actual["deviation_penalty"], expected["deviation_penalty"]),
+    }
+
+
+def _source_reward_reference(arrays: dict[str, np.ndarray], row: int) -> dict[str, float]:
+    return {name: float(_scalar(arrays, name, row)) for name in _SOURCE_REWARD_REFERENCE_FIELDS}
 
 
 def _verify_termination_discriminator(metadata: dict[str, Any]) -> dict[str, float]:
@@ -193,20 +196,28 @@ def verify(path: Path) -> dict[str, Any]:
     if config["useResidualActions"] is not True or config["earlyPhaseMocapSteps"] != 100:
         raise AssertionError("semantic fixture is not current-source residual configuration")
     results: dict[str, dict[str, float]] = {}
+    source_reward_reference: dict[str, dict[str, float]] = {}
     for row in range(len(arrays["physical_call"])):
         key = f"{int(arrays['physical_call'][row])}:{int(arrays['sample_kind'][row])}"
         if arrays["sample_kind"][row] == 0:
             results[key] = {
                 **{f"action.{name}": value for name, value in _action_result(arrays, row).items()},
                 "observation.raw": _observation_result(arrays, row),
-                **{f"reward.{name}": value for name, value in _reward_result(arrays, metadata, row).items()},
+                **{f"termination.{name}": value for name, value in _termination_result(arrays, metadata, row).items()},
             }
+            source_reward_reference[key] = _source_reward_reference(arrays, row)
         else:
             # Source resets after the final post-step; this record is a state
             # transition witness, not the reward/action output of call 790.
             results[key] = {"delayed_reset_observation.raw": _observation_result(arrays, row)}
     return {
         "fixture": str(npz_path),
+        "reward_contract": {
+            "id": REWARD_CONTRACT_ID,
+            "source_reward_fields": "reference_only_non_comparable",
+            "reason": _SOURCE_REWARD_NONCOMPARABILITY,
+        },
+        "source_reward_reference_by_sample": source_reward_reference,
         "verified_samples": len(results),
         "max_abs_by_sample": results,
         "termination_discriminator_max_abs": _verify_termination_discriminator(metadata),

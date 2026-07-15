@@ -16,7 +16,14 @@ than being simulated using cube geometry.
 
 ## Preconditions
 
-- The source semantic fixture and target verifier must pass.
+- The source semantic fixture and target verifier must pass for source action,
+  observation, and termination evidence. Its source reward fields are
+  reference-only: the fixture lacks pair-filtered hand-object forces and cannot
+  establish reward equality.
+- Training uses target reward contract `target_hand_object_contact_v1`: expected
+  hand-object contacts receive weighted proportional credit only when their
+  pair-filtered world-force norm is strictly greater than `1.0 N`. The unchanged
+  observation contact encoding uses its separate `2.0 N` threshold.
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
@@ -62,7 +69,10 @@ controller diagnostic, not a learned-policy comparator.
 
 The trained row is always evaluated from a fresh runtime after loading the
 native checkpoint. It is the executable artifact a user receives, and avoids
-reporting train-process-only normalizer or BatchNorm state.
+reporting train-process-only normalizer or BatchNorm state. Native checkpoint
+sidecars must declare `reward_contract: target_hand_object_contact_v1`; missing
+or mismatched contracts fail before resume rather than silently changing the
+training objective.
 
 ## Launch
 
@@ -137,5 +147,7 @@ altering the MuJoCo viewer:
 ## Artifacts
 
 Write config, metrics, native skrl checkpoint, and a compact evaluation trace
-under a unique `outputs/manorl/` prefix. The post-training viewer consumes the
-native checkpoint and renders the same actual `MujocoManoEnvironment` path.
+under a unique `outputs/manorl/` prefix. The checkpoint sidecar records the
+`target_hand_object_contact_v1` reward boundary. The post-training viewer
+consumes the same actual `MujocoManoEnvironment` path and reports separate
+observation and reward contact thresholds in Rerun metadata.

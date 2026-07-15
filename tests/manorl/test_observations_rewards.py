@@ -23,7 +23,12 @@ from sim.manorl.observations import (
     geometry_encoding,
     object_category,
 )
-from sim.manorl.rewards import RewardState, compute_rewards
+from sim.manorl.rewards import (
+    REWARD_CONTRACT_ID,
+    REWARD_HAND_OBJECT_THRESHOLD_N,
+    RewardState,
+    compute_rewards,
+)
 
 
 def _static_point_cloud() -> PointCloudTemplate:
@@ -280,6 +285,33 @@ def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None
     assert "object_contact_force" not in RewardState.__dataclass_fields__
     assert "object_gravity_force" not in RewardState.__dataclass_fields__
     assert "object_contact_gate" not in diagnostics.__dataclass_fields__
+    assert REWARD_CONTRACT_ID == "target_hand_object_contact_v1"
+    assert REWARD_HAND_OBJECT_THRESHOLD_N == 1.0
+
+
+def test_reward_contact_preserves_nonuniform_weights_and_zero_expected_contacts() -> None:
+    state = _reward_state(batch=2)
+    weights = np.zeros((2, 16), dtype=np.float64)
+    weights[0, 3] = 1.0
+    weights[0, 15] = 3.0
+    forces = np.full((2, 16, 3), 3.0, dtype=np.float64)
+    forces[0, 15] = 0.0
+    mask = state.expected_contact_mask.copy()
+    mask[1] = 0.0
+    state = replace(
+        state,
+        hand_object_force_on_object_world_N=forces,
+        expected_contact_mask=mask,
+        expected_contact_weights=weights,
+    )
+    diagnostics = compute_rewards(
+        state,
+        compatibility=CURRENT_SOURCE_COMPATIBILITY,
+        termination=_termination_for(state, CURRENT_SOURCE_COMPATIBILITY),
+    )
+
+    np.testing.assert_allclose(diagnostics.raw_contact, [0.1, 0.0])
+    np.testing.assert_allclose(diagnostics.contact, [0.1, 0.0])
 
 
 def test_reward_compatibility_rotation_and_termination_interaction() -> None:

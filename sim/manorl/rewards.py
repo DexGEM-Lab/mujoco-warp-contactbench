@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
@@ -15,6 +16,10 @@ from sim.manorl.observations import (
     _finite_tensor,
 )
 from sim.manorl.abi import TerminationResult
+
+
+REWARD_CONTRACT_ID: Final = "target_hand_object_contact_v1"
+REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = 1.0
 
 
 @dataclass(frozen=True)
@@ -37,7 +42,7 @@ class RewardConfig:
     joint_penalty_scale: float = 10.0
     reference_joint_count: float = 8.0
     max_contact_reward: float = 0.4
-    contact_force_threshold: float = 1.0
+    contact_force_threshold: float = REWARD_HAND_OBJECT_THRESHOLD_N
     max_object_stability_reward: float = 0.4
     object_stability_reference_speed: float = 0.1
     survival_reward: float = 0.001

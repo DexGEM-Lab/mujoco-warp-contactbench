@@ -1582,8 +1582,8 @@ def run(
                 },
                 "termination_discriminator": termination_discriminator,
                 "purpose": (
-                    "resolved source inputs and named reward terms for target-side observation/action/reward verification; "
-                    "not a cross-simulator physical-state equality claim"
+                    "resolved source inputs for target-side observation/action/termination verification; "
+                    "source reward terms are reference-only because pair-filtered hand-object forces are unavailable"
                 ),
             })
             # ``run`` changes cwd to the read-only source runtime. Reuse the

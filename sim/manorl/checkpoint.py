@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
+from sim.manorl.rewards import REWARD_CONTRACT_ID
+
 if TYPE_CHECKING:
     from skrl.agents.torch.ppo import PPO
 
@@ -53,6 +55,7 @@ def save_skrl_checkpoint(agent: "PPO", path: str | Path, *, runtime_config: dict
     agent.save(str(checkpoint))
     payload = {
         "format": CHECKPOINT_FORMAT,
+        "reward_contract": REWARD_CONTRACT_ID,
         "runtime_config": runtime_config,
         "checkpoint_file": checkpoint.name,
     }
@@ -76,5 +79,14 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
         raise CheckpointFormatError("checkpoint sidecar is not valid JSON") from exc
     if metadata.get("format") != CHECKPOINT_FORMAT or metadata.get("checkpoint_file") != checkpoint.name:
         raise CheckpointFormatError("checkpoint sidecar does not describe this native ManoRL skrl format")
+    reward_contract = metadata.get("reward_contract")
+    if reward_contract is None:
+        raise CheckpointFormatError(
+            "checkpoint reward contract is missing; checkpoints predating target_hand_object_contact_v1 cannot resume"
+        )
+    if reward_contract != REWARD_CONTRACT_ID:
+        raise CheckpointFormatError(
+            f"checkpoint reward contract {reward_contract!r} != required {REWARD_CONTRACT_ID!r}"
+        )
     agent.load(str(checkpoint))
     return checkpoint
