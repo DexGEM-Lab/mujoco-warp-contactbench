@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 
@@ -36,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
     parser.add_argument("--training-termination", action="store_true")
+    parser.add_argument("--no-viewer", action="store_true", help="do not launch the Rerun GUI after recording")
     args = parser.parse_args(argv)
     if args.steps < 1 or args.num_envs < 1:
         parser.error("steps and num-envs must be positive")
@@ -57,7 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     for _ in range(args.steps):
         environment.step(actions)
         recorder.record_transition()
-    print(json.dumps({"rerun_artifact": str(recorder.close())}, indent=2))
+    artifact = recorder.close()
+    print(json.dumps({"rerun_artifact": str(artifact)}, indent=2))
+    if not args.no_viewer:
+        viewer = Path(sys.executable).with_name("rerun")
+        if not viewer.exists():
+            raise RuntimeError(f"Rerun viewer executable is absent: {viewer}")
+        subprocess.Popen([str(viewer), str(artifact)], stdin=subprocess.DEVNULL)
     return 0
 
 

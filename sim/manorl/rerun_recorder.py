@@ -47,16 +47,13 @@ class ManoRerunRecorder:
             blueprint.Vertical(
                 blueprint.Spatial3DView(
                     name="Object, hand, and point cloud",
-                    contents=[
-                        "world/object", "target/object", "world/object_point_cloud",
-                        "world/hand", "world/hand_keypoints", "world/fingertips", "world/contact_force",
-                    ],
+                    contents=["world/**", "target/**"],
                     eye_controls=blueprint.EyeControls3D(
                         kind=blueprint.components.Eye3DKind.Orbital,
                         tracking_entity="world/object",
                         speed=0.1,
                     ),
-                    line_grid=False,
+                    line_grid=True,
                 ),
                 blueprint.Horizontal(
                     blueprint.TimeSeriesView(
@@ -77,7 +74,8 @@ class ManoRerunRecorder:
 
     def _start_episode(self) -> None:
         self.recording = self.rr.RecordingStream("manorl_mujoco")
-        self.recording.save(self.active_path, default_blueprint=self._default_blueprint())
+        self.recording.save(self.active_path)
+        self.recording.send_blueprint(self._default_blueprint(), make_active=True, make_default=True)
         self._log_static_metadata()
 
     def _publish_episode(self) -> None:
@@ -142,8 +140,7 @@ class ManoRerunRecorder:
         index = int(snapshot.target_indices[env_id])
         object_position = physical.object_position[env_id]
         hand_position = physical.hand_position[env_id]
-        raw_cloud = snapshot.observation.raw[env_id, OBSERVATION_SLICES["object_point_cloud_raw"]].reshape(-1, 3)
-        object_cloud_world = raw_cloud + hand_position
+        object_cloud_local = self.environment.object_point_cloud_local()[env_id]
         keypoint_forces = physical.hand_keypoint_contact_forces[env_id]
         force_magnitudes = np.linalg.norm(keypoint_forces, axis=1)
         target_next = min(index + 5, int(self.environment.trajectory_lengths[env_id]) - 1)
@@ -154,11 +151,18 @@ class ManoRerunRecorder:
         self.recording.set_time("control_call", sequence=snapshot.control_call)
         self.recording.set_time("simulation", duration=snapshot.control_call * CONTROL_TIMESTEP)
 
-        self.recording.log("world/object", self.rr.Points3D([object_position], colors=[(45, 190, 100)], radii=[0.012]))
+        self.recording.log(
+            "world/object",
+            self.rr.Transform3D(
+                translation=object_position,
+                quaternion=self.rr.Quaternion(xyzw=physical.object_orientation_xyzw[env_id]),
+            ),
+        )
+        self.recording.log("world/object/center", self.rr.Points3D([[0.0, 0.0, 0.0]], colors=[(45, 190, 100)], radii=[0.012]))
         self.recording.log("world/hand", self.rr.Points3D([hand_position], colors=[(70, 140, 230)], radii=[0.010]))
         self.recording.log("world/hand_keypoints", self.rr.Points3D(physical.hand_keypoint_positions[env_id], colors=[(255, 180, 70)], radii=0.004))
         self.recording.log("world/fingertips", self.rr.Points3D(physical.fingertip_positions[env_id], colors=[(250, 100, 100)], radii=0.006))
-        self.recording.log("world/object_point_cloud", self.rr.Points3D(object_cloud_world, colors=[(120, 220, 240)], radii=0.0025))
+        self.recording.log("world/object/point_cloud", self.rr.Points3D(object_cloud_local, colors=[(80, 245, 255)], radii=0.005))
         self.recording.log("world/contact_force", self.rr.Arrows3D(origins=physical.hand_keypoint_positions[env_id], vectors=keypoint_forces * _FORCE_ARROW_SCALE, colors=[(240, 80, 220)], radii=0.0015))
         self.recording.log("target/object", self.rr.Points3D([target_position], colors=[(240, 80, 80)], radii=[0.010]))
 

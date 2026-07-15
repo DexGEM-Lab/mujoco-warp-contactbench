@@ -158,6 +158,23 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     np.testing.assert_allclose(env.last_physical.object_position[0], trajectory.object_pos[0], atol=1e-7)
 
 
+def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajectory) -> None:
+    env = _environment(trajectory)
+    env.step(np.zeros((1, 26), dtype=np.float64))
+    assert env.last_physical is not None
+    world_cloud = env.object_point_cloud_world()
+    template = env._point_template()
+    local = np.asarray(template.local_points, dtype=np.float64) * np.asarray(template.scale, dtype=np.float64)
+    expected = quat_rotate_xyzw(
+        np.broadcast_to(env.last_physical.object_orientation_xyzw[:, None, :], (1, 64, 4)),
+        np.broadcast_to(local, (1, 64, 3)),
+    ) + env.last_physical.object_position[:, None, :]
+    np.testing.assert_allclose(world_cloud, expected, rtol=0.0, atol=1e-12)
+    assert env.last_observation is not None
+    normalized_hand_relative = env.last_observation.raw[:, OBSERVATION_SLICES["object_point_cloud_raw"]].reshape(1, 64, 3)
+    assert not np.allclose(world_cloud, normalized_hand_relative + env.last_physical.hand_position[:, None, :])
+
+
 def test_transition_snapshot_preserves_action_reference_and_rerun_artifact(trajectory, tmp_path) -> None:
     from sim.manorl.rerun_recorder import ManoRerunRecorder
 

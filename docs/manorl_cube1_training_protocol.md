@@ -91,7 +91,9 @@ once every four vector control calls:
 The default recording is env 0 only. It keeps one stable artifact:
 `cube1_03_scratch_run.rrd`. The recorder writes the active episode privately,
 then atomically replaces that path when the next delayed reset is applied; it
-does not retain an episode archive. Open the latest completed recording with:
+does not retain an episode archive. The standalone test recorder launches the
+Rerun GUI by default; use `--no-viewer` only for automated/headless runs. Open
+the latest completed recording with:
 
 ```bash
 /home/jay/anaconda3/envs/manorl_mujoco/bin/rerun \
