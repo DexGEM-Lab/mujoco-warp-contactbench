@@ -48,13 +48,19 @@ status, final object-target distance, maximum object-target distance, and
 contact-window reward. Under the source 0.1 m training deviation threshold the
 zero-residual reference baseline currently resets near call 287, so the short
 run is accepted when the trained policy is finite, exceeds the untrained return,
-and survives beyond that zero-reference call count. Completing all 791 calls is
+and does not reset before that zero-reference call count. Completing all 791 calls is
 reported as a stretch result, not silently assumed. The reference baseline is a
 controller diagnostic, not a learned-policy comparator.
 
 The trained row is always evaluated from a fresh runtime after loading the
 native checkpoint. It is the executable artifact a user receives, and avoids
 reporting train-process-only normalizer or BatchNorm state.
+
+The optional `--wrist-y-warm-start 0.15` is evidence-derived, not a source
+weight import: a fixed-action sweep found it raises return from 22.846 to
+24.981 while retaining the source call-287 deviation boundary. It initializes
+only the target actor mean and reduces PPO learning rate to `1e-5`; the result
+records this intervention explicitly.
 
 ## Artifacts
 
