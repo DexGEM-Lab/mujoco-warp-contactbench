@@ -101,6 +101,12 @@ To apply an opt-in time cap, add `--wall-clock-seconds <positive-seconds>`.
 The cap may stop the run before the fixed 64-update, 196,608-transition budget
 is complete.
 
+For the 2,500-update Server2 run, add `--checkpoint-interval-updates 100`.
+After every 100 completed PPO updates, the dedicated output directory receives
+`checkpoint-000100.pt` and `checkpoint-000100.pt.json`. `last.pt` and its
+sidecar copy the most recently completed periodic or final checkpoint; the
+legacy final `<output>.pt` checkpoint remains separate.
+
 ### Optional W&B Tracking
 
 W&B tracking is disabled unless `--wandb true` is passed. Provision the exact
@@ -191,8 +197,11 @@ altering the MuJoCo viewer:
 
 ## Artifacts
 
-Write config, metrics, native skrl checkpoint, and a compact evaluation trace
-under a unique `outputs/manorl/` prefix. The checkpoint sidecar records the
+Write config, metrics, a final native skrl checkpoint, and a compact evaluation
+trace under a unique output prefix. A requested periodic cadence writes numbered
+native checkpoints in the output directory; their sidecars include completed
+update and environment-transition progress. `last.pt` and its sidecar copy the
+most recent completed checkpoint. Every checkpoint sidecar records the
 environment and raw-1.0x PPO reward boundaries. The post-training viewer
 consumes the same actual `MujocoManoEnvironment` path and reports separate
 observation/reward contact thresholds plus the raw PPO reward scale in Rerun
