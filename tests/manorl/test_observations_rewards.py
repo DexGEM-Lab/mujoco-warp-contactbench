@@ -103,11 +103,9 @@ def _reward_state(batch: int = 1, *, steps: np.ndarray | None = None) -> RewardS
         cumulative_offset=np.tile([[0.01, 0.0, 0.0]], (batch, 1)),
         cumulative_joint_offset=joint_offset,
         active_joint_mask=active,
-        hand_keypoint_contact_forces=forces,
+        hand_object_force_on_object_world_N=forces,
         expected_contact_mask=mask,
-        expected_contact_weights=np.ones((batch, 16)),
-        object_contact_force=np.tile([[1.3, 0.0, 0.0]], (batch, 1)),
-        object_gravity_force=np.ones(batch),
+        expected_contact_weights=mask.copy(),
         object_linear_velocity=np.zeros((batch, 3)),
         trajectory_steps=steps,
         contact_start_frames=np.full(batch, 100, dtype=np.int64),
@@ -260,14 +258,28 @@ def test_reward_terms_and_windows_match_source_equations() -> None:
     np.testing.assert_allclose(window.distance_gate, [0.0, 0.4, 0.4])
     np.testing.assert_allclose(window.object_stability, [0.0, 0.0, 0.4])
     np.testing.assert_allclose(window.total, [0.208, 1.808, 1.808])
-    blocked = replace(window_state, object_contact_force=np.tile([[1.1, 0.0, 0.0]], (3, 1)))
-    blocked_result = compute_rewards(
-        blocked,
-        compatibility=CHECKPOINT_SIDECAR_COMPATIBILITY,
-        termination=_termination_for(blocked, CHECKPOINT_SIDECAR_COMPATIBILITY),
+
+
+def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None:
+    state = _reward_state(batch=3)
+    forces = np.zeros((3, 16, 3), dtype=np.float64)
+    forces[1, 3] = [1.000001, 0.0, 0.0]
+    forces[1, 15] = [1.0, 0.0, 0.0]
+    forces[2, 3] = [1.000001, 0.0, 0.0]
+    forces[2, 15] = [0.0, 1.000001, 0.0]
+    state = replace(state, hand_object_force_on_object_world_N=forces)
+    diagnostics = compute_rewards(
+        state,
+        compatibility=CURRENT_SOURCE_COMPATIBILITY,
+        termination=_termination_for(state, CURRENT_SOURCE_COMPATIBILITY),
     )
-    np.testing.assert_allclose(blocked_result.contact, 0.0)
-    np.testing.assert_allclose(blocked_result.distance_gate, [0.0, 0.0, 0.4])
+
+    np.testing.assert_allclose(diagnostics.raw_contact, [0.0, 0.2, 0.4])
+    np.testing.assert_allclose(diagnostics.contact, [0.0, 0.2, 0.4])
+    np.testing.assert_allclose(diagnostics.distance_gate, [0.0, 0.2, 0.4])
+    assert "object_contact_force" not in RewardState.__dataclass_fields__
+    assert "object_gravity_force" not in RewardState.__dataclass_fields__
+    assert "object_contact_gate" not in diagnostics.__dataclass_fields__
 
 
 def test_reward_compatibility_rotation_and_termination_interaction() -> None:
@@ -318,8 +330,12 @@ def test_reward_inputs_and_termination_result_fail_fast() -> None:
     termination = _termination_for(state, CURRENT_SOURCE_COMPATIBILITY)
     with pytest.raises(TypeError, match="RewardState"):
         compute_rewards(None, compatibility=CURRENT_SOURCE_COMPATIBILITY, termination=termination)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="object_gravity_force"):
-        compute_rewards(replace(state, object_gravity_force=np.array([np.nan])), compatibility=CURRENT_SOURCE_COMPATIBILITY, termination=termination)
+    with pytest.raises(ValueError, match="hand_object_force_on_object_world_N"):
+        compute_rewards(
+            replace(state, hand_object_force_on_object_world_N=np.zeros((1, 15, 3))),
+            compatibility=CURRENT_SOURCE_COMPATIBILITY,
+            termination=termination,
+        )
     with pytest.raises(ValueError, match="expected_contact_weights"):
         compute_rewards(replace(state, expected_contact_weights=np.ones((1, 15))), compatibility=CURRENT_SOURCE_COMPATIBILITY, termination=termination)
     bad_termination = replace(termination, reset=np.array([False, False]))

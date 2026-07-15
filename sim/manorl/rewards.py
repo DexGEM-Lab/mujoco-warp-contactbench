@@ -13,7 +13,6 @@ from sim.manorl.observations import (
     _batch_vector,
     _finite_batch,
     _finite_tensor,
-    extract_contact_features,
 )
 from sim.manorl.abi import TerminationResult
 
@@ -38,8 +37,7 @@ class RewardConfig:
     joint_penalty_scale: float = 10.0
     reference_joint_count: float = 8.0
     max_contact_reward: float = 0.4
-    contact_force_threshold: float = CONTACT_FORCE_THRESHOLD
-    object_contact_gravity_margin: float = 0.25
+    contact_force_threshold: float = 1.0
     max_object_stability_reward: float = 0.4
     object_stability_reference_speed: float = 0.1
     survival_reward: float = 0.001
@@ -54,11 +52,9 @@ class RewardState:
     cumulative_offset: NDArray[np.float64]
     cumulative_joint_offset: NDArray[np.float64]
     active_joint_mask: NDArray[np.bool_]
-    hand_keypoint_contact_forces: NDArray[np.float64]
+    hand_object_force_on_object_world_N: NDArray[np.float64]
     expected_contact_mask: NDArray[np.float64]
     expected_contact_weights: NDArray[np.float64]
-    object_contact_force: NDArray[np.float64]
-    object_gravity_force: NDArray[np.float64]
     object_linear_velocity: NDArray[np.float64]
     trajectory_steps: NDArray[np.int64]
     contact_start_frames: NDArray[np.int64]
@@ -82,7 +78,6 @@ class RewardDiagnostics:
     action_penalty: NDArray[np.float64]
     raw_contact: NDArray[np.float64]
     contact: NDArray[np.float64]
-    object_contact_gate: NDArray[np.bool_]
     distance_gate: NDArray[np.float64]
     object_stability: NDArray[np.float64]
     object_speed: NDArray[np.float64]
@@ -127,10 +122,11 @@ def compute_rewards(
     target_orientation = _finite_batch("target_object_orientation_xyzw", state.target_object_orientation_xyzw, 4)
     cumulative_offset = _finite_batch("cumulative_offset", state.cumulative_offset, 3)
     cumulative_joint = _finite_batch("cumulative_joint_offset", state.cumulative_joint_offset, 20)
-    contact_forces = _finite_tensor("hand_keypoint_contact_forces", state.hand_keypoint_contact_forces, (16, 3), batch)
+    hand_object_forces = _finite_tensor(
+        "hand_object_force_on_object_world_N", state.hand_object_force_on_object_world_N, (16, 3), batch
+    )
     expected_mask = _finite_batch("expected_contact_mask", state.expected_contact_mask, 16)
     expected_weights = _finite_batch("expected_contact_weights", state.expected_contact_weights, 16)
-    object_contact = _finite_batch("object_contact_force", state.object_contact_force, 3)
     object_velocity = _finite_batch("object_linear_velocity", state.object_linear_velocity, 3)
     active = np.asarray(state.active_joint_mask, dtype=bool)
     rotation_disabled = np.asarray(state.rotation_disabled_mask, dtype=bool)
@@ -140,14 +136,12 @@ def compute_rewards(
         ("target_object_position", target_position), ("object_orientation_xyzw", object_orientation),
         ("target_object_orientation_xyzw", target_orientation), ("cumulative_offset", cumulative_offset),
         ("cumulative_joint_offset", cumulative_joint), ("expected_contact_mask", expected_mask),
-        ("expected_contact_weights", expected_weights), ("object_contact_force", object_contact),
-        ("object_linear_velocity", object_velocity),
+        ("expected_contact_weights", expected_weights), ("object_linear_velocity", object_velocity),
     ):
         if len(values) != batch:
             raise ValueError(f"{name} batch size must match object_position")
     if np.any((expected_mask != 0.0) & (expected_mask != 1.0)) or np.any(expected_weights < 0.0):
         raise ValueError("expected contact masks must be binary and weights non-negative")
-    gravity = _batch_vector("object_gravity_force", state.object_gravity_force, batch)
     deviation_penalty = _batch_vector("termination.deviation_penalty", termination.deviation_penalty, batch)
     deviation_reset = np.asarray(termination.deviation_reset, dtype=bool)
     reset = np.asarray(termination.reset, dtype=bool)
@@ -187,15 +181,16 @@ def compute_rewards(
     position_penalty = -config.action_penalty_scale * config.position_penalty_weight * position_base
     joint_penalty = -config.action_penalty_scale * config.joint_penalty_weight * joint_base
     action_penalty = position_penalty + joint_penalty
-    contacts = extract_contact_features(contact_forces, threshold=config.contact_force_threshold)
+    contact_magnitudes = np.linalg.norm(hand_object_forces, axis=-1)
     weighted_expected = np.sum(expected_mask * expected_weights, axis=1)
-    weighted_correct = np.sum((contacts.magnitude > config.contact_force_threshold) * expected_mask * expected_weights, axis=1)
+    weighted_correct = np.sum(
+        (contact_magnitudes > config.contact_force_threshold) * expected_mask * expected_weights, axis=1
+    )
     raw_contact = np.divide(
         weighted_correct, weighted_expected, out=np.zeros(batch, dtype=np.float64), where=weighted_expected > 0
     ) * config.max_contact_reward
-    object_contact_gate = np.abs(np.linalg.norm(object_contact, axis=1) - gravity) > config.object_contact_gravity_margin
     within_window = (steps >= starts) & (steps <= ends)
-    contact = np.where(within_window & object_contact_gate, raw_contact, 0.0)
+    contact = np.where(within_window, raw_contact, 0.0)
     valid_window = ends >= starts
     distance_gate = np.where(within_window & valid_window, contact, 0.0)
     distance_gate = np.where((steps > ends) & valid_window, config.max_contact_reward, distance_gate)
@@ -216,7 +211,7 @@ def compute_rewards(
         ungated_distance_x=ungated_x, ungated_distance_y=ungated_y, ungated_distance_z=ungated_z,
         rotation=rotation, position_penalty=position_penalty, joint_penalty=joint_penalty,
         action_penalty=action_penalty, raw_contact=raw_contact, contact=contact,
-        object_contact_gate=object_contact_gate, distance_gate=distance_gate,
+        distance_gate=distance_gate,
         object_stability=object_stability, object_speed=object_speed, survival=survival,
         early_phase=early_phase, deviation_penalty=deviation_penalty,
     )

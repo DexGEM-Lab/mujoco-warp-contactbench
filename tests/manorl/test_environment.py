@@ -10,6 +10,7 @@ from sim.manorl.contracts import KEYPOINT_NAMES
 from sim.manorl.environment import (
     EnvironmentConfig,
     MujocoManoEnvironment,
+    PhysicalSnapshot,
     _aggregate_geometry_contact_forces,
     _decode_contact_forces,
 )
@@ -240,6 +241,46 @@ def test_pair_filtered_contact_decoder_preserves_geometry_aggregation_and_force_
     np.testing.assert_allclose(geometry, legacy_geometry, rtol=0, atol=1e-12)
     np.testing.assert_array_equal(counts, legacy_counts)
     np.testing.assert_allclose(geometry.sum(axis=1), 0.0, rtol=0, atol=1e-12)
+
+
+def test_reward_state_wires_filtered_hand_object_forces() -> None:
+    env = object.__new__(MujocoManoEnvironment)
+    env.config = EnvironmentConfig(num_envs=1)
+    env.trajectory_lengths = np.asarray([10], dtype=np.int64)
+    env.trajectory_steps = np.asarray([4], dtype=np.int64)
+    env.reference_object_pos = np.zeros((1, 10, 3), dtype=np.float64)
+    env.reference_object_quat_xyzw = np.tile(
+        np.asarray([0.0, 0.0, 0.0, 1.0], dtype=np.float64), (1, 10, 1)
+    )
+    env.cumulative_offset = np.zeros((1, 3), dtype=np.float64)
+    env.cumulative_joint_offset = np.zeros((1, 20), dtype=np.float64)
+    env.active_joint_mask = np.zeros((1, 20), dtype=bool)
+    env.expected_contact_mask = np.zeros((1, 16), dtype=np.float64)
+    env.expected_contact_weights = np.zeros((1, 16), dtype=np.float64)
+    env.contact_start_frames = np.asarray([3], dtype=np.int64)
+    env.contact_end_frames = np.asarray([5], dtype=np.int64)
+    all_contact_forces = np.full((1, 16, 3), 100.0, dtype=np.float64)
+    hand_object_forces = np.zeros((1, 16, 3), dtype=np.float64)
+    hand_object_forces[:, 3] = [1.1, 0.0, 0.0]
+    physical = PhysicalSnapshot(
+        mano_dof_pos=np.zeros((1, 26), dtype=np.float64),
+        hand_position=np.zeros((1, 3), dtype=np.float64),
+        hand_orientation_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        object_position=np.zeros((1, 3), dtype=np.float64),
+        object_orientation_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        object_linear_velocity=np.zeros((1, 3), dtype=np.float64),
+        hand_keypoint_positions=np.zeros((1, 16, 3), dtype=np.float64),
+        fingertip_positions=np.zeros((1, 5, 3), dtype=np.float64),
+        hand_keypoint_contact_forces=all_contact_forces,
+        object_contact_force=np.zeros((1, 3), dtype=np.float64),
+        geom_contact_force_world_N=np.zeros((1, 1, 3), dtype=np.float64),
+        hand_object_force_on_object_world_N=hand_object_forces,
+        contact_count=np.zeros(1, dtype=np.int64),
+    )
+
+    reward_state = env._reward_state(physical)
+
+    np.testing.assert_allclose(reward_state.hand_object_force_on_object_world_N, hand_object_forces)
 
 
 def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> None:
