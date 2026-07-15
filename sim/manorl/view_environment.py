@@ -14,9 +14,9 @@ import time
 
 import numpy as np
 
-from sim.manorl.contracts import CONTROL_STEP_COUNT, CONTROL_TIMESTEP
+from sim.manorl.contracts import CONTROL_TIMESTEP
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
-from sim.manorl.trajectory import load_reference_trajectory
+from sim.manorl.trajectory import load_generated_cube1_row_507, load_reference_trajectory
 
 
 def _telemetry(environment: MujocoManoEnvironment, reward: float, reset: bool) -> str:
@@ -30,7 +30,7 @@ def _telemetry(environment: MujocoManoEnvironment, reward: float, reset: bool) -
         max_line_width=240,
     )
     return (
-        f"call={call:03d}/{CONTROL_STEP_COUNT - 1} command_ref={command_index:03d} "
+        f"call={call:03d}/{len(environment.trajectory.q_ref) - 2} command_ref={command_index:03d} "
         f"post_ref={post_index:03d} source_ref={environment.trajectory.source_indices[post_index]:04d} "
         f"reward={reward:.4f} reset={reset} ctrl={command}"
     )
@@ -45,7 +45,13 @@ def _require_graphical_session() -> None:
 
 
 def view_environment(
-    *, device: str, speed: float, loop: bool, print_every: int, training_termination: bool
+    *,
+    device: str,
+    speed: float,
+    loop: bool,
+    print_every: int,
+    training_termination: bool,
+    trajectory_name: str,
 ) -> None:
     """Run and render one production environment world with residuals disabled."""
 
@@ -58,9 +64,15 @@ def view_environment(
     import mujoco
     import mujoco.viewer
 
+    if trajectory_name == "accepted":
+        trajectory = load_reference_trajectory()
+    elif trajectory_name == "generated-cube1-row-507":
+        trajectory = load_generated_cube1_row_507()
+    else:
+        raise ValueError(f"unsupported viewer trajectory {trajectory_name!r}")
     max_deviation_distance = 0.1 if training_termination else 1_000_000.0
     environment = MujocoManoEnvironment(
-        load_reference_trajectory(),
+        trajectory,
         EnvironmentConfig(
             device=device,
             num_envs=1,
@@ -76,7 +88,8 @@ def view_environment(
 
     print(
         "Testing MujocoManoEnvironment with residual_enabled=False and zero residual action "
-        f"(maxDeviationDistance={max_deviation_distance:g}). "
+        f"(trajectory={trajectory.identity.identity}, frames={len(trajectory.q_ref)}, "
+        f"maxDeviationDistance={max_deviation_distance:g}). "
         "The right-side actuator pane shows the applied mocap ctrl target."
     )
     with mujoco.viewer.launch_passive(
@@ -104,7 +117,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--speed",
         type=float,
         default=0.25,
-        help="Simulation speed multiplier; 0.25 makes the 3.955 second trajectory visible over about 16 seconds.",
+        help="Simulation speed multiplier; 0.25 makes a source control trajectory easy to inspect.",
+    )
+    parser.add_argument(
+        "--trajectory",
+        choices=("accepted", "generated-cube1-row-507"),
+        default="accepted",
+        help="explicit versioned Lance trajectory contract to render",
     )
     parser.add_argument(
         "--training-termination",
@@ -115,7 +134,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--loop",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Continue through the environment's source-compatible delayed reset after call 790.",
+        help="Continue through the environment's source-compatible delayed reset after terminal.",
     )
     parser.add_argument(
         "--print-every",
@@ -134,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         loop=args.loop,
         print_every=args.print_every,
         training_termination=args.training_termination,
+        trajectory_name=args.trajectory,
     )
     return 0
 

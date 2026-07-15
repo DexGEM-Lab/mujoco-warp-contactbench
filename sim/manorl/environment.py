@@ -24,7 +24,6 @@ from sim.manorl.abi import (
 )
 from sim.manorl.assets import ASSET_ROOT, compile_model, object_collision_vertices
 from sim.manorl.contracts import (
-    CONTROL_STEP_COUNT,
     FLOOR_TOP_Z,
     KEYPOINT_NAMES,
     MOVEMENT_RAW_RANGE,
@@ -389,8 +388,8 @@ class MujocoManoEnvironment:
             raise TypeError("trajectory must be a ReferenceTrajectory")
         if not isinstance(config, EnvironmentConfig):
             raise TypeError("config must be an EnvironmentConfig")
-        if len(trajectory.q_ref) != CONTROL_STEP_COUNT + 1:
-            raise ValueError("environment requires the accepted 792-frame source trajectory")
+        if len(trajectory.q_ref) < 2:
+            raise ValueError("environment requires at least two source references")
         try:
             import jax
             from mujoco import mjx
@@ -446,8 +445,8 @@ class MujocoManoEnvironment:
         )
         self.object_support_points = object_collision_vertices().copy()
         self.object_gravity_force = float(self.model.body_mass[self.producer.object_body_id] * abs(self.model.opt.gravity[2]))
-        self.contact_start_frame = int(MOVEMENT_RAW_RANGE[0] - trajectory.source_indices[0])
-        self.contact_end_frame = int(MOVEMENT_RAW_RANGE[1] - trajectory.source_indices[0])
+        self.contact_start_frame = int(trajectory.identity.movement_start_raw - trajectory.source_indices[0])
+        self.contact_end_frame = int(trajectory.identity.movement_end_raw - trajectory.source_indices[0])
         if not 0 <= self.contact_start_frame <= self.contact_end_frame < len(trajectory.q_ref):
             raise ValueError("accepted raw movement window does not map into trajectory space")
         self._point_rngs = [np.random.default_rng(config.point_seed + index) for index in range(config.num_envs)]

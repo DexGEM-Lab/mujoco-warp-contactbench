@@ -101,6 +101,24 @@ JAX_PLATFORMS=cpu python -m sim.manorl.view_environment --device cpu --speed 0.2
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
 single 791-call replay.
 
+To inspect the explicitly selected generated cube1 Lance row 507 under current
+training termination semantics, use the same production environment with its
+separate versioned selector:
+
+```bash
+JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
+  --device cpu \
+  --trajectory generated-cube1-row-507 \
+  --training-termination \
+  --loop \
+  --speed 0.25
+```
+
+This selector binds generated Lance version 236, row 507, UUID
+`00f45dd5-6699-5be1-8948-d6f7b623da48`, and source window `[17,735)`. It is a
+generated cube1 test trajectory, not a claim that the dataset identifies source
+gesture `01`.
+
 The accepted input is row 1 of:
 
 ```text

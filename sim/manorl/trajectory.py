@@ -25,6 +25,15 @@ from sim.manorl.contracts import (
 )
 
 LANCE_COLUMNS = ("index", "trajectory_metadata", "timestamp", "hands", "objects")
+GENERATED_CUBE1_DATASET_PATH = Path(
+    "/mnt/nas-222-project/mocap/dataAugmentation/for_retargeting/new_all_with_keypoints/"
+    "lance_new_all_generated_mano/new_all_generated_mano.lance"
+)
+GENERATED_CUBE1_DATASET_VERSION = 236
+GENERATED_CUBE1_ROW_INDEX = 507
+GENERATED_CUBE1_UUID = "00f45dd5-6699-5be1-8948-d6f7b623da48"
+GENERATED_CUBE1_MOVEMENT = (267, 541)
+GENERATED_PADDING = 250
 
 
 def _immutable(array: NDArray[np.floating[Any]], *, dtype: Any = np.float64) -> NDArray[Any]:
@@ -71,9 +80,9 @@ class ReferenceTrajectory:
     object_z_shift: float
 
     def __post_init__(self) -> None:
-        expected = REFERENCE_FRAME_COUNT
+        expected = int(self.source_indices.shape[0])
         shapes = {
-            "source_indices": self.source_indices.shape == (expected,),
+            "source_indices": expected >= 2,
             "timestamps": self.timestamps.shape == (expected,),
             "q_ref": self.q_ref.shape == (expected, len(JOINT_NAMES)),
             "object_pos_raw": self.object_pos_raw.shape == (expected, 3),
@@ -240,3 +249,117 @@ def load_reference_trajectory(
     if len(rows) != 1:
         raise ValueError(f"dataset.take returned {len(rows)} rows, expected exactly one")
     return trajectory_from_row(rows[0], dataset_version)
+
+
+def generated_cube1_row_507_from_row(row: dict[str, Any], dataset_version: int) -> ReferenceTrajectory:
+    """Build the explicitly selected generated cube1 trajectory.
+
+    The generated dataset does not carry a source ``gesture``/``source_path``
+    label, so this selector deliberately binds a versioned row and UUID rather
+    than claiming it is the accepted ``cube1_01_009`` source action.
+    """
+
+    if dataset_version != GENERATED_CUBE1_DATASET_VERSION:
+        raise ValueError(
+            f"generated dataset version {dataset_version} != {GENERATED_CUBE1_DATASET_VERSION}"
+        )
+    index = row["index"]
+    metadata = row["trajectory_metadata"]
+    if index.get("uuid") != GENERATED_CUBE1_UUID or index.get("scene") != OBJECT_TYPE:
+        raise ValueError("generated row does not match the selected cube1 UUID/scene")
+    if index.get("is_generated") is not True:
+        raise ValueError("selected generated row must declare is_generated=true")
+    if metadata.get("object_names") != [OBJECT_TYPE] or metadata.get("hand_names") != ["right"]:
+        raise ValueError("selected generated row must contain one right hand and cube1")
+    if int(metadata.get("total_frames", -1)) != 735 or int(metadata.get("data_fps", -1)) != 100:
+        raise ValueError("selected generated row frame/fps contract changed")
+    movement = metadata.get("trajectory_info", {}).get("object_move")
+    expected_movement = [
+        {"object_name": OBJECT_TYPE, "start_frame": GENERATED_CUBE1_MOVEMENT[0], "end_frame": GENERATED_CUBE1_MOVEMENT[1]}
+    ]
+    if movement != expected_movement:
+        raise ValueError(f"selected generated row movement changed: {movement!r}")
+    if len(row["hands"]) != 1 or len(row["objects"]) != 1:
+        raise ValueError("selected generated row must contain one hand and one object")
+
+    source_count = int(metadata["total_frames"])
+    timestamps_all = np.asarray(row["timestamp"], dtype=np.float64)
+    q_all = np.asarray(row["hands"][0]["urdf_dof"], dtype=np.float64)
+    object_pos_all = np.asarray(row["objects"][0]["pos"], dtype=np.float64)
+    object_rotvec_all = np.asarray(row["objects"][0]["rot_aa"], dtype=np.float64)
+    expected_shapes = {
+        "timestamp": (source_count,),
+        "urdf_dof": (source_count, len(JOINT_NAMES)),
+        "object position": (source_count, 3),
+        "object axis-angle": (source_count, 3),
+    }
+    arrays = {
+        "timestamp": timestamps_all,
+        "urdf_dof": q_all,
+        "object position": object_pos_all,
+        "object axis-angle": object_rotvec_all,
+    }
+    for name, expected_shape in expected_shapes.items():
+        if arrays[name].shape != expected_shape or not np.all(np.isfinite(arrays[name])):
+            raise ValueError(f"generated {name} is not finite with shape {expected_shape}")
+    if np.any(np.diff(timestamps_all) <= 0):
+        raise ValueError("generated source timestamps are not strictly increasing")
+
+    movement_start, movement_end = GENERATED_CUBE1_MOVEMENT
+    start = max(0, movement_start - GENERATED_PADDING)
+    stop = min(source_count, movement_end + GENERATED_PADDING)
+    if stop - start < 2:
+        raise ValueError("generated movement window does not provide two replay references")
+    q_ref = q_all[start:stop].copy()
+    q_ref[:, 3:6] = np.unwrap(q_ref[:, 3:6], axis=0, period=2.0 * np.pi)
+    object_pos_raw = object_pos_all[start:stop].copy()
+    object_quat_xyzw = rotvec_to_xyzw(object_rotvec_all[start:stop])
+    z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0])
+    object_pos = object_pos_raw.copy()
+    object_pos[:, 2] += z_shift
+    identity = TrajectoryIdentity(
+        dataset_path=str(GENERATED_CUBE1_DATASET_PATH),
+        dataset_version=dataset_version,
+        row_index=GENERATED_CUBE1_ROW_INDEX,
+        object_index=0,
+        uuid=GENERATED_CUBE1_UUID,
+        file_uuid="",
+        identity="cube1_generated_row_507",
+        source_start=start,
+        source_stop=stop,
+        movement_start_raw=movement_start,
+        movement_end_raw=movement_end,
+    )
+    return ReferenceTrajectory(
+        identity=identity,
+        dataset_version=dataset_version,
+        source_indices=_immutable(np.arange(start, stop), dtype=np.int64),
+        timestamps=_immutable(timestamps_all[start:stop]),
+        q_ref=_immutable(q_ref),
+        object_pos_raw=_immutable(object_pos_raw),
+        object_pos=_immutable(object_pos),
+        object_quat_xyzw=_immutable(object_quat_xyzw),
+        object_z_shift=z_shift,
+    )
+
+
+def load_generated_cube1_row_507(
+    dataset_path: str | Path = GENERATED_CUBE1_DATASET_PATH,
+) -> ReferenceTrajectory:
+    """Load exactly the selected generated cube1 row 507 from Lance version 236."""
+
+    path = Path(dataset_path)
+    if not path.exists():
+        raise FileNotFoundError(f"generated Lance dataset is absent: {path}")
+    try:
+        import lance
+    except ImportError as exc:
+        raise RuntimeError("pylance is required to read the generated trajectory") from exc
+    dataset = lance.dataset(str(path))
+    version = int(getattr(dataset, "version", -1))
+    if version != GENERATED_CUBE1_DATASET_VERSION:
+        raise ValueError(f"generated dataset version {version} != {GENERATED_CUBE1_DATASET_VERSION}")
+    rows = dataset.take([GENERATED_CUBE1_ROW_INDEX], columns=list(LANCE_COLUMNS)).to_pylist()
+    if len(rows) != 1:
+        raise ValueError("generated dataset did not return exactly row 507")
+    return generated_cube1_row_507_from_row(rows[0], version)
