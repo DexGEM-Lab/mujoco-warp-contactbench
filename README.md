@@ -57,8 +57,10 @@ The local uv environment is useful for CPU checks and development. GPU execution
 
 The first migration slice is isolated under `sim/manorl/`. It reads one settled
 trajectory without `lance_manager`, builds a MuJoCo model from curated source
-URDF/collision assets, and runs residual-off reference control. It does not
-implement observations, rewards, SKRL training, or checkpoint conversion.
+URDF/collision assets, and runs residual-off reference control. The current
+ManoRL path implements observations, target rewards, native SKRL PPO training,
+and native checkpoint round trips; conversion from Isaac rl-games checkpoints
+remains deliberately unsupported.
 
 Copying the PhysX drive values into an external MuJoCo torque law was falsified
 in free space: the explicit damping kick drove the maximum DOF velocity to about
@@ -129,6 +131,34 @@ Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
 single 791-call replay. Both runtime controls default to `true`: use
 `--use_residual false` for source-reference diagnostics and `--terminal false`
 for formal source-horizon termination only.
+
+### ManoRL PPO Training
+
+The Cube1 fast-training contract is documented in
+[`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
+PPO optimizes the raw environment reward at `1.0x`; it intentionally does not
+reuse IsaacGym's `0.5x` reward shaper. Run the fixed 64-world budget with W&B
+tracking disabled by default:
+
+```bash
+JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.train_manorl_cube1 \
+  --output outputs/manorl/cube1_03_scratch_run \
+  --object cube1 --gesture 03 --num-envs 64 --updates 64
+```
+
+To create one W&B run using the authenticated default account, add explicit
+tracking options. No API key or credentials belong in this repository:
+
+```bash
+  --wandb true --wandb-project one_policy --wandb-group s02 \
+  --wandb-tags manorl,mujoco,skrl
+```
+
+An omitted W&B name is derived from the output prefix, object, and gesture. The
+run logs PPO updates by environment transitions, records zero/untrained/trained
+evaluation summaries and final acceptance values, then uploads the checkpoint
+and sidecar, metrics JSON, evaluation trace, and any completed Rerun recording.
 
 To inspect the explicitly selected generated cube1 Lance row 507 under current
 training termination semantics, use the same production environment with its

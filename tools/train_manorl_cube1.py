@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Iterator, Literal
 
 import numpy as np
 import torch
@@ -24,6 +25,18 @@ from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_
 
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
 WARP_CONTACT_CAPACITY_MARGIN = 64
+DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
+
+
+@dataclass(frozen=True)
+class WandbOptions:
+    enabled: bool = False
+    project: str = "one_policy"
+    group: str = "s02"
+    entity: str = ""
+    name: str | None = None
+    tags: tuple[str, ...] = DEFAULT_WANDB_TAGS
+
 
 @dataclass(frozen=True)
 class TrainingBudget:
@@ -38,6 +51,7 @@ class TrainingBudget:
     gesture: str = "01"
     residual_enabled: bool = True
     terminal: bool = True
+    wandb: WandbOptions = WandbOptions()
 
     @property
     def transitions(self) -> int:
@@ -59,6 +73,115 @@ class EvaluationResult:
     completed_horizon: bool
     rewards_by_call: list[float]
     object_target_distance_by_call: list[float]
+
+
+def _wandb_run_name(output: Path, budget: TrainingBudget) -> str:
+    return budget.wandb.name or f"{output.name}-{budget.object_type}-{budget.gesture}"
+
+
+def _parse_wandb_tags(values: list[str]) -> tuple[str, ...]:
+    tags = tuple(tag.strip() for value in values for tag in value.split(",") if tag.strip())
+    return tags or DEFAULT_WANDB_TAGS
+
+
+def _wandb_config(
+    *,
+    budget: TrainingBudget,
+    ppo_config: ManoPPOConfig,
+    trajectory_assignments: list[dict[str, object]],
+    device: dict[str, object],
+) -> dict[str, object]:
+    config = {
+        "training_budget": {**asdict(budget), "planned_transitions": budget.transitions},
+        "ppo_config": asdict(ppo_config),
+        "reward": {
+            "environment_contract": REWARD_CONTRACT_ID,
+            "ppo_contract": PPO_REWARD_CONTRACT_ID,
+            "ppo_scale": PPO_REWARD_SCALE,
+            "isaacgym_ppo_scale": 0.5,
+        },
+        "trajectory_assignments": trajectory_assignments,
+        "device": device,
+    }
+    try:
+        return json.loads(json.dumps(config, sort_keys=True))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("W&B config must be JSON-serializable") from exc
+
+
+@contextmanager
+def _wandb_run(
+    *, output: Path, budget: TrainingBudget, config: dict[str, object]
+) -> Iterator[tuple[Any | None, Any | None]]:
+    if not budget.wandb.enabled:
+        yield None, None
+        return
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError("W&B is enabled but the wandb package is unavailable") from exc
+    try:
+        run = wandb.init(
+            project=budget.wandb.project,
+            entity=budget.wandb.entity or None,
+            group=budget.wandb.group,
+            name=_wandb_run_name(output, budget),
+            tags=list(budget.wandb.tags),
+            config=config,
+        )
+    except Exception as exc:
+        raise RuntimeError("W&B initialization failed") from exc
+    if run is None:
+        raise RuntimeError("W&B initialization returned no run")
+    try:
+        yield run, wandb
+    except BaseException:
+        run.finish(exit_code=1)
+        raise
+    else:
+        run.finish()
+
+
+def _log_wandb_update(run: Any, update: dict[str, float]) -> None:
+    transitions = int(update["environment_transitions"])
+    run.log(
+        {
+            "global_step": transitions,
+            "transitions": transitions,
+            "update": int(update["update"]),
+            "reward_mean": update["reward_mean"],
+            "action_abs_mean": update["action_abs_mean"],
+            "reset_count": update["reset_count"],
+            "elapsed_seconds": update["elapsed_seconds"],
+        },
+        step=transitions,
+    )
+
+
+def _evaluation_metrics(result: EvaluationResult) -> dict[str, object]:
+    return {
+        f"evaluation/{result.mode}/{key}": value
+        for key, value in asdict(result).items()
+        if key not in {"rewards_by_call", "object_target_distance_by_call", "mode"}
+    }
+
+
+def _log_wandb_evaluations(run: Any, results: list[EvaluationResult], *, transitions: int) -> None:
+    metrics: dict[str, object] = {"global_step": transitions, "transitions": transitions}
+    for result in results:
+        metrics.update(_evaluation_metrics(result))
+    run.log(metrics, step=transitions)
+    run.summary.update(metrics)
+
+
+def _log_wandb_artifacts(run: Any, wandb: Any, *, output: Path, paths: list[Path]) -> None:
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"cannot log missing W&B artifacts: {', '.join(str(path) for path in missing)}")
+    artifact = wandb.Artifact(name=f"{output.name}-artifacts", type="manorl-training")
+    for path in paths:
+        artifact.add_file(str(path), name=path.name)
+    run.log_artifact(artifact)
 
 
 def _assert_cuda_runtime() -> None:
@@ -123,7 +246,10 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "policy"]) -> Eval
 
 
 def _train(
-    runtime: ManoSkrlRuntime, budget: TrainingBudget, recorder: ManoRerunRecorder | None = None
+    runtime: ManoSkrlRuntime,
+    budget: TrainingBudget,
+    recorder: ManoRerunRecorder | None = None,
+    on_update: Callable[[dict[str, float]], None] | None = None,
 ) -> tuple[list[dict[str, float]], int, float]:
     environment = runtime.gymnasium_env.environment
     config = runtime.config
@@ -169,14 +295,17 @@ def _train(
             global_timestep += 1
         if not all(torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):
             raise RuntimeError(f"PPO update {update} produced non-finite model parameters")
-        updates.append({
+        update_metrics = {
             "update": float(update + 1),
             "environment_transitions": float((update + 1) * config.rollouts * environment.config.num_envs),
             "reward_mean": float(torch.cat(rewards).mean().item()),
             "action_abs_mean": float(torch.cat(action_magnitudes).mean().item()),
             "reset_count": float(reset_count),
             "elapsed_seconds": time.monotonic() - started,
-        })
+        }
+        updates.append(update_metrics)
+        if on_update is not None:
+            on_update(update_metrics)
     return updates, global_timestep * environment.config.num_envs, time.monotonic() - started
 
 
@@ -220,101 +349,140 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config)
     if runtime.device != "cuda":
         raise RuntimeError(f"skrl runtime must train on CUDA, got {runtime.device!r}")
-    # The first two 48-step rollouts are entirely source-defined pure mocap.
-    # Updating PPO on their zero reward signal moves the shared actor/critic
-    # representation before the policy has any controllable consequence.
-    runtime.agent.cfg.learning_starts = physical.contact_start_frame
-    zero_baseline = _evaluate(runtime, "zero")
-    untrained = _evaluate(runtime, "policy")
-    recorder = (
-        ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
-        if rerun_path is not None
-        else None
-    )
-    try:
-        updates, transitions, elapsed = _train(runtime, budget, recorder)
-    finally:
-        published_rerun = None if recorder is None else recorder.close()
-    rerun_artifact = None if published_rerun is None else str(published_rerun)
-    save_skrl_checkpoint(runtime.agent, checkpoint, runtime_config=runtime.checkpoint_metadata())
-    # Evaluate exactly what a user will later load. skrl preprocessor/module
-    # state may differ in-process after PPO training, so a fresh native load is
-    # the reproducibility boundary rather than an implementation detail.
-    evaluation_physical = MujocoManoEnvironment(
-        trajectories,
-        EnvironmentConfig(
-            num_envs=budget.num_envs,
-            device="gpu",
-            residual_enabled=budget.residual_enabled,
-            max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
-            contact_capacity=contact_capacity,
-        ),
-    )
-    evaluation_runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(evaluation_physical), ppo_config)
-    load_skrl_checkpoint(evaluation_runtime.agent, checkpoint)
-    trained = _evaluate(evaluation_runtime, "policy")
-    np.savez_compressed(
-        trace_path,
-        zero_reward=np.asarray(zero_baseline.rewards_by_call, dtype=np.float32),
-        untrained_reward=np.asarray(untrained.rewards_by_call, dtype=np.float32),
-        trained_reward=np.asarray(trained.rewards_by_call, dtype=np.float32),
-        zero_object_target_distance=np.asarray(zero_baseline.object_target_distance_by_call, dtype=np.float32),
-        untrained_object_target_distance=np.asarray(untrained.object_target_distance_by_call, dtype=np.float32),
-        trained_object_target_distance=np.asarray(trained.object_target_distance_by_call, dtype=np.float32),
-    )
-    result = {
-        "schema": "manorl.cube1_fast_training.v1",
-        "trajectory_selection": {
-            "object": selection.object_type,
-            "gesture": selection.action_id,
-            "assignments": [
-                {"env_id": env_id, "identity": item.identity.identity, "row_index": item.identity.row_index,
-                 "uuid": item.identity.uuid, "source_slice": [item.identity.source_start, item.identity.source_stop]}
-                for env_id, item in enumerate(trajectories.trajectories)
-            ],
-        },
-        "checkpoint_conversion": "out_of_scope",
-        "initialization": {
-            "actor_mean": "source_default",
-            "initial_log_std": -0.99,
-            "ppo_learning_rate": ppo_config.learning_rate,
-        },
-        "reward": {
-            "environment_contract": REWARD_CONTRACT_ID,
-            "ppo_contract": PPO_REWARD_CONTRACT_ID,
-            "ppo_scale": PPO_REWARD_SCALE,
-            "isaacgym_ppo_scale": 0.5,
-        },
-        "learning_starts": runtime.agent.cfg.learning_starts,
-        "budget": {
-            **asdict(budget),
-            "planned_transitions": budget.transitions,
-            "warp_contact_capacity": contact_capacity,
-        },
-        "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},
-        "device": {"torch": torch.__version__, "torch_cuda": torch.version.cuda, "skrl": runtime.device, "jax": physical.jax.default_backend()},
-        "baseline": asdict(zero_baseline),
-        "untrained": asdict(untrained),
-        "trained": asdict(trained),
-        "acceptance": {
-            "trained_completed_horizon": trained.completed_horizon,
-            "trained_calls_not_before_zero_reference": trained.calls >= zero_baseline.calls,
-            "trained_return_exceeds_untrained": trained.return_mean > untrained.return_mean,
-            "accepted": (
-                trained.calls >= zero_baseline.calls
-                and trained.return_mean > untrained.return_mean
-            ),
-        },
-        "updates": updates,
-        "artifacts": {
-            "checkpoint": str(checkpoint),
-            "evaluation_trace": str(trace_path),
-            "rerun": rerun_artifact,
-        },
+    trajectory_assignments = [
+        {
+            "env_id": env_id,
+            "identity": item.identity.identity,
+            "row_index": item.identity.row_index,
+            "uuid": item.identity.uuid,
+            "source_slice": [item.identity.source_start, item.identity.source_stop],
+        }
+        for env_id, item in enumerate(trajectories.trajectories)
+    ]
+    device = {
+        "torch": torch.__version__,
+        "torch_cuda": torch.version.cuda,
+        "skrl": runtime.device,
+        "jax": physical.jax.default_backend(),
     }
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return result
+    wandb_config = _wandb_config(
+        budget=budget,
+        ppo_config=ppo_config,
+        trajectory_assignments=trajectory_assignments,
+        device=device,
+    )
+    with _wandb_run(output=output, budget=budget, config=wandb_config) as (wandb_run, wandb):
+        # The first two 48-step rollouts are entirely source-defined pure mocap.
+        # Updating PPO on their zero reward signal moves the shared actor/critic
+        # representation before the policy has any controllable consequence.
+        runtime.agent.cfg.learning_starts = physical.contact_start_frame
+        zero_baseline = _evaluate(runtime, "zero")
+        untrained = _evaluate(runtime, "policy")
+        if wandb_run is not None:
+            _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], transitions=0)
+        recorder = (
+            ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
+            if rerun_path is not None
+            else None
+        )
+        try:
+            updates, transitions, elapsed = _train(
+                runtime,
+                budget,
+                recorder,
+                on_update=None if wandb_run is None else lambda update: _log_wandb_update(wandb_run, update),
+            )
+        finally:
+            published_rerun = None if recorder is None else recorder.close()
+        rerun_artifact = None if published_rerun is None else str(published_rerun)
+        save_skrl_checkpoint(runtime.agent, checkpoint, runtime_config=runtime.checkpoint_metadata())
+        # Evaluate exactly what a user will later load. skrl preprocessor/module
+        # state may differ in-process after PPO training, so a fresh native load is
+        # the reproducibility boundary rather than an implementation detail.
+        evaluation_physical = MujocoManoEnvironment(
+            trajectories,
+            EnvironmentConfig(
+                num_envs=budget.num_envs,
+                device="gpu",
+                residual_enabled=budget.residual_enabled,
+                max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
+                contact_capacity=contact_capacity,
+            ),
+        )
+        evaluation_runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(evaluation_physical), ppo_config)
+        load_skrl_checkpoint(evaluation_runtime.agent, checkpoint)
+        trained = _evaluate(evaluation_runtime, "policy")
+        np.savez_compressed(
+            trace_path,
+            zero_reward=np.asarray(zero_baseline.rewards_by_call, dtype=np.float32),
+            untrained_reward=np.asarray(untrained.rewards_by_call, dtype=np.float32),
+            trained_reward=np.asarray(trained.rewards_by_call, dtype=np.float32),
+            zero_object_target_distance=np.asarray(zero_baseline.object_target_distance_by_call, dtype=np.float32),
+            untrained_object_target_distance=np.asarray(untrained.object_target_distance_by_call, dtype=np.float32),
+            trained_object_target_distance=np.asarray(trained.object_target_distance_by_call, dtype=np.float32),
+        )
+        result = {
+            "schema": "manorl.cube1_fast_training.v1",
+            "trajectory_selection": {
+                "object": selection.object_type,
+                "gesture": selection.action_id,
+                "assignments": trajectory_assignments,
+            },
+            "checkpoint_conversion": "out_of_scope",
+            "initialization": {
+                "actor_mean": "source_default",
+                "initial_log_std": -0.99,
+                "ppo_learning_rate": ppo_config.learning_rate,
+            },
+            "reward": {
+                "environment_contract": REWARD_CONTRACT_ID,
+                "ppo_contract": PPO_REWARD_CONTRACT_ID,
+                "ppo_scale": PPO_REWARD_SCALE,
+                "isaacgym_ppo_scale": 0.5,
+            },
+            "learning_starts": runtime.agent.cfg.learning_starts,
+            "budget": {
+                **asdict(budget),
+                "planned_transitions": budget.transitions,
+                "warp_contact_capacity": contact_capacity,
+            },
+            "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},
+            "device": device,
+            "baseline": asdict(zero_baseline),
+            "untrained": asdict(untrained),
+            "trained": asdict(trained),
+            "acceptance": {
+                "trained_completed_horizon": trained.completed_horizon,
+                "trained_calls_not_before_zero_reference": trained.calls >= zero_baseline.calls,
+                "trained_return_exceeds_untrained": trained.return_mean > untrained.return_mean,
+                "accepted": (
+                    trained.calls >= zero_baseline.calls
+                    and trained.return_mean > untrained.return_mean
+                ),
+            },
+            "updates": updates,
+            "artifacts": {
+                "checkpoint": str(checkpoint),
+                "evaluation_trace": str(trace_path),
+                "rerun": rerun_artifact,
+            },
+        }
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if wandb_run is not None:
+            _log_wandb_evaluations(wandb_run, [trained], transitions=transitions)
+            acceptance_metrics = {
+                "global_step": transitions,
+                "transitions": transitions,
+                **{f"acceptance/{key}": value for key, value in result["acceptance"].items()},
+            }
+            wandb_run.log(acceptance_metrics, step=transitions)
+            wandb_run.summary.update(acceptance_metrics)
+            artifact_paths = [checkpoint, checkpoint.with_suffix(checkpoint.suffix + ".json"), metrics_path, trace_path]
+            if published_rerun is not None:
+                artifact_paths.append(published_rerun)
+            _log_wandb_artifacts(wandb_run, wandb, output=output, paths=artifact_paths)
+        return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -331,6 +499,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gesture", default="01")
     parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
+    parser.add_argument("--wandb", type=parse_cli_bool, default=False, metavar="{true,false}")
+    parser.add_argument("--wandb-project", default="one_policy")
+    parser.add_argument("--wandb-group", default="s02")
+    parser.add_argument("--wandb-entity", default="")
+    parser.add_argument("--wandb-name")
+    parser.add_argument("--wandb-tags", action="append", default=[], metavar="TAG[,TAG...]")
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0 or args.rerun_stride < 1:
         parser.error("updates, num-envs, wall-clock-seconds, and rerun-stride must be positive")
@@ -350,6 +524,14 @@ def main(argv: list[str] | None = None) -> int:
             args.gesture,
             args.use_residual,
             args.terminal,
+            WandbOptions(
+                enabled=args.wandb,
+                project=args.wandb_project,
+                group=args.wandb_group,
+                entity=args.wandb_entity,
+                name=args.wandb_name,
+                tags=_parse_wandb_tags(args.wandb_tags),
+            ),
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
