@@ -70,6 +70,7 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
     checkpoint = Path(path)
     if not checkpoint.is_file():
         raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
+    _load_modules(checkpoint, device=agent.device)
     metadata_file = _metadata_path(checkpoint)
     if not metadata_file.is_file():
         raise CheckpointFormatError("native skrl checkpoint sidecar is required")
@@ -100,6 +101,5 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
         raise CheckpointFormatError(
             f"checkpoint PPO reward contract {ppo_reward_contract!r} != required {PPO_REWARD_CONTRACT_ID!r}"
         )
-    _load_modules(checkpoint, device=agent.device)
     agent.load(str(checkpoint))
     return checkpoint
