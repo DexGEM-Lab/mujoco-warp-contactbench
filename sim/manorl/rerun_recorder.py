@@ -22,6 +22,7 @@ _GEOMETRY_FORCE_PATHS = (
     ("z_N", "World F_z"),
 )
 _HAND_OBJECT_FORCE_PATH = "contact/hand_object_force/on_object/magnitude_N"
+_OBJECT_GRAVITY_MAGNITUDE_PATH = "contact/object/gravity/world/magnitude_N"
 
 
 class ManoRerunRecorder:
@@ -103,7 +104,10 @@ class ManoRerunRecorder:
                 ),
                 blueprint.TimeSeriesView(
                     name="ManoHand-object contact forces",
-                    contents=[_HAND_OBJECT_FORCE_PATH],
+                    contents=[_HAND_OBJECT_FORCE_PATH, _OBJECT_GRAVITY_MAGNITUDE_PATH],
+                    overrides={
+                        _OBJECT_GRAVITY_MAGNITUDE_PATH: self.rr.SeriesLines.from_fields(names="Object gravity"),
+                    },
                 ),
                 row_shares=[3.0, 1.0, 2.0, 1.0],
             ),
@@ -315,7 +319,7 @@ class ManoRerunRecorder:
         for component, value in zip(("x_N", "y_N", "z_N"), gravity, strict=True):
             self.recording.log(f"contact/object/gravity/world/{component}", self.rr.Scalars(float(value)))
         self.recording.log(
-            "contact/object/gravity/world/magnitude_N",
+            _OBJECT_GRAVITY_MAGNITUDE_PATH,
             self.rr.Scalars(float(np.linalg.norm(gravity))),
         )
         self.recording.log(

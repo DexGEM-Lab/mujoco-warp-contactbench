@@ -477,6 +477,11 @@ def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> N
     blueprint = recorder._default_blueprint()
     assert isinstance(blueprint.time_panel, rr.blueprint.TimePanel)
     assert blueprint.time_panel.timeline == "step"
+    hand_object_view = blueprint.root_container.contents[3]
+    assert hand_object_view.contents == [
+        "contact/hand_object_force/on_object/magnitude_N",
+        "contact/object/gravity/world/magnitude_N",
+    ]
 
     recorder.recording = RecordingStream()
     recorder._record(snapshot)
@@ -543,10 +548,18 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
         "contact/count", "contact/object_force_magnitude", "contact/keypoint_force_total", "action/**", "episode/**"
     ]
     hand_object_path = "contact/hand_object_force/on_object/magnitude_N"
+    gravity_magnitude_path = "contact/object/gravity/world/magnitude_N"
     hand_object_view = root.contents[3]
     assert hand_object_view.name == "ManoHand-object contact forces"
-    assert hand_object_view.contents == [hand_object_path]
+    assert hand_object_view.contents == [hand_object_path, gravity_magnitude_path]
+    gravity_series = hand_object_view.visualizer_overrides[gravity_magnitude_path]
+    assert gravity_series.names.as_arrow_array().to_pylist() == ["Object gravity"]
+    assert len(recorder.hand_object_force_series_names) + len(
+        gravity_series.names.as_arrow_array().to_pylist()
+    ) == len(KEYPOINT_NAMES) + 1 == 17
+    assert tabs.contents[-1].contents == ["contact/object/gravity/world/**"]
     assert all(hand_object_path not in view.contents for view in tabs.contents)
+    assert gravity_magnitude_path not in root.contents[1].contents[1].contents
     assert hand_object_path not in root.contents[1].contents[1].contents
 
     expected_hand_object_magnitudes = []
@@ -617,14 +630,28 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
             assert np.all(values.scalars.as_arrow_array().to_numpy()[zero_geom_ids] == 0.0)
 
     gravity_logs = {
-        path: args[0]
-        for path, args, kwargs, _ in recorder.recording.logs
-        if path.startswith("contact/object/gravity/world/") and not kwargs.get("static")
+        path: [args[0] for logged_path, args, kwargs, _ in recorder.recording.logs if logged_path == path and not kwargs.get("static")]
+        for path in (
+            "contact/object/gravity/world/x_N",
+            "contact/object/gravity/world/y_N",
+            "contact/object/gravity/world/z_N",
+            gravity_magnitude_path,
+        )
     }
-    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/x_N"].scalars.as_arrow_array().to_numpy(), (0.0,))
-    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/y_N"].scalars.as_arrow_array().to_numpy(), (0.0,))
-    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/z_N"].scalars.as_arrow_array().to_numpy(), (-1.22625,))
-    np.testing.assert_allclose(gravity_logs["contact/object/gravity/world/magnitude_N"].scalars.as_arrow_array().to_numpy(), (1.22625,))
+    assert all(len(samples) == 2 for samples in gravity_logs.values())
+    np.testing.assert_allclose(
+        gravity_logs["contact/object/gravity/world/x_N"][-1].scalars.as_arrow_array().to_numpy(), (0.0,)
+    )
+    np.testing.assert_allclose(
+        gravity_logs["contact/object/gravity/world/y_N"][-1].scalars.as_arrow_array().to_numpy(), (0.0,)
+    )
+    np.testing.assert_allclose(
+        gravity_logs["contact/object/gravity/world/z_N"][-1].scalars.as_arrow_array().to_numpy(), (-1.22625,)
+    )
+    np.testing.assert_allclose(
+        gravity_logs[gravity_magnitude_path][-1].scalars.as_arrow_array().to_numpy(), (1.22625,)
+    )
+    assert gravity_magnitude_path not in static_logs
 
 
 def test_rerun_partial_close_preserves_existing_stable_artifact(trajectory, tmp_path) -> None:

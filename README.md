@@ -117,10 +117,11 @@ elapsed seconds. The `Collision geometry contact forces` tab records one
 continuous world-frame net force series per compiled collision geom, including
 inactive geoms and the floor; its static metadata table maps deterministic geom
 IDs to labels, bodies, and mesh assets. The separate `ManoHand-object contact
-forces` pane has exactly 16 source-order curves: each is the net world-frame
-force magnitude exerted on the object by one mapped hand collision geom, with
-floor and non-hand-object rows excluded. The all-geometry tab records cube
-gravity as `body_subtreemass * gravity` in N. The stable `.rrd` changes only
+forces` pane combines the 16 source-order hand-contact magnitude curves with an
+`Object gravity` magnitude reference; each hand curve is the net world-frame
+force exerted on the object by one mapped hand collision geom, with floor and
+non-hand-object rows excluded. The all-geometry tab records cube gravity as
+`body_subtreemass * gravity` in N. The stable `.rrd` changes only
 after the delayed reset is applied; interrupting the run discards its active
 partial episode.
 
