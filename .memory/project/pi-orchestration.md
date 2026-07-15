@@ -58,7 +58,14 @@ parent-child relationship; delegation and intercom establish coordination.
 6. A `case/*/*` task merges into its owning `feat/*`; a `feat/*` task first
    merges current `dev`, then is the only task type the coordinator integrates
    into `dev`. The coordinator verifies the combined state.
-7. Start subsequent work as a new task; never reuse the primary shared cwd for
+7. After integrating a feature, the coordinator verifies cleanliness and
+   preserves its linked worktree plus ignored outputs and audit artifacts by
+   detaching that worktree at the integrated commit, then normally deletes the
+   completed `feat/*` branch ref. Do not retain an integrated `feat/*` ref at
+   the current `dev` SHA: GitGuard can otherwise attribute a later `dev` sync
+   to that stale feature ref. Clean up a delivered `case/*/*` after its parent
+   feature under the same coordinator ownership and preservation rules.
+8. Start subsequent work as a new task; never reuse the primary shared cwd for
    concurrent implementation.
 
 GitGuard enforces the local branch topology and catches accidental workflow
