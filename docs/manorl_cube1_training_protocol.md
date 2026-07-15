@@ -56,12 +56,6 @@ The trained row is always evaluated from a fresh runtime after loading the
 native checkpoint. It is the executable artifact a user receives, and avoids
 reporting train-process-only normalizer or BatchNorm state.
 
-The optional `--wrist-y-warm-start 0.15` is evidence-derived, not a source
-weight import: a fixed-action sweep found it raises return from 22.846 to
-24.981 while retaining the source call-287 deviation boundary. It initializes
-only the target actor mean and reduces PPO learning rate to `1e-5`; the result
-records this intervention explicitly.
-
 ## Artifacts
 
 Write config, metrics, native skrl checkpoint, and a compact evaluation trace

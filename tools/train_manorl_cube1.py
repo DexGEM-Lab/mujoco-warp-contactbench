@@ -22,7 +22,6 @@ from sim.manorl.trajectory import load_reference_trajectory
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
 WARP_CONTACT_CAPACITY_MARGIN = 64
 RESIDUAL_SAFE_INITIAL_LOG_STD = -5.0
-TEACHER_PPO_LEARNING_RATE = 1.0e-5
 
 @dataclass(frozen=True)
 class TrainingBudget:
@@ -31,7 +30,6 @@ class TrainingBudget:
     wall_clock_seconds: float = 20.0 * 60.0
     seed: int = 42
     residual_safe_warm_start: bool = True
-    wrist_y_warm_start: float = 0.0
 
     @property
     def transitions(self) -> int:
@@ -198,9 +196,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             contact_capacity=contact_capacity,
         ),
     )
-    ppo_config = ManoPPOConfig(
-        learning_rate=TEACHER_PPO_LEARNING_RATE if budget.wrist_y_warm_start else ManoPPOConfig().learning_rate
-    )
+    ppo_config = ManoPPOConfig()
     runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config)
     if runtime.device != "cuda":
         raise RuntimeError(f"skrl runtime must train on CUDA, got {runtime.device!r}")
@@ -212,7 +208,6 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         with torch.no_grad():
             runtime.model.actor_head.weight.zero_()
             runtime.model.actor_head.bias.zero_()
-            runtime.model.actor_head.bias[1] = budget.wrist_y_warm_start
             runtime.model.log_std.fill_(RESIDUAL_SAFE_INITIAL_LOG_STD)
     zero_baseline = _evaluate(runtime, "zero")
     untrained = _evaluate(runtime, "policy")
@@ -249,10 +244,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         "checkpoint_conversion": "out_of_scope",
         "initialization": {
             "residual_safe_warm_start": budget.residual_safe_warm_start,
-            "actor_mean": "wrist_y_teacher" if budget.wrist_y_warm_start else (
-                "zero" if budget.residual_safe_warm_start else "source_default"
-            ),
-            "wrist_y_warm_start": budget.wrist_y_warm_start,
+            "actor_mean": "zero" if budget.residual_safe_warm_start else "source_default",
             "initial_log_std": RESIDUAL_SAFE_INITIAL_LOG_STD if budget.residual_safe_warm_start else -0.99,
             "ppo_learning_rate": ppo_config.learning_rate,
         },
@@ -292,12 +284,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wall-clock-seconds", type=float, default=20.0 * 60.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--wrist-y-warm-start",
-        type=float,
-        default=0.0,
-        help="evidence-derived initial actor mean for residual wrist Y; enables a 1e-5 PPO learning rate",
-    )
-    parser.add_argument(
         "--source-initialization",
         action="store_true",
         help="disable the zero-residual/-5 log-std warm start used by the fast single-trajectory protocol",
@@ -305,8 +291,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0:
         parser.error("updates, num-envs, and wall-clock-seconds must be positive")
-    if not -1.0 <= args.wrist_y_warm_start <= 1.0:
-        parser.error("--wrist-y-warm-start must be within the source clipped action range [-1, 1]")
     result = run(
         args.output,
         TrainingBudget(
@@ -315,7 +299,6 @@ def main(argv: list[str] | None = None) -> int:
             args.wall_clock_seconds,
             args.seed,
             residual_safe_warm_start=not args.source_initialization,
-            wrist_y_warm_start=args.wrist_y_warm_start,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
