@@ -148,8 +148,8 @@ def test_train_saves_periodic_native_checkpoints_and_updates_last(
 
     assert len(updates) == 5
     assert checkpoint_paths == [
-        tmp_path / "checkpoint-000002.pt",
-        tmp_path / "checkpoint-000004.pt",
+        output / "checkpoint-000002.pt",
+        output / "checkpoint-000004.pt",
     ]
     assert not output.with_suffix(".pt").exists()
     for checkpoint, completed_updates in zip(checkpoint_paths, [2, 4], strict=True):
@@ -165,7 +165,7 @@ def test_train_saves_periodic_native_checkpoints_and_updates_last(
         tool.load_skrl_checkpoint(runtime.agent, checkpoint)
         assert runtime.agent.loaded_checkpoint == str(checkpoint)
 
-    last_checkpoint = tmp_path / "last.pt"
+    last_checkpoint = output / "last.pt"
     assert last_checkpoint.read_bytes() == checkpoint_paths[-1].read_bytes()
     last_metadata = json.loads(last_checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
     assert last_metadata["checkpoint_file"] == "last.pt"
@@ -174,12 +174,12 @@ def test_train_saves_periodic_native_checkpoints_and_updates_last(
     assert runtime.agent.loaded_checkpoint == str(last_checkpoint)
 
     final_checkpoint = output.with_suffix(".pt")
-    tool.save_skrl_checkpoint(
+    tool._save_checkpoint_atomically(
         runtime.agent,
         final_checkpoint,
         runtime_config=tool._checkpoint_runtime_config(runtime, updates[-1]),
     )
-    tool._update_last_checkpoint(final_checkpoint)
+    tool._update_last_checkpoint(output, final_checkpoint)
     assert last_checkpoint.read_bytes() == final_checkpoint.read_bytes()
     final_last_metadata = json.loads(last_checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
     assert final_last_metadata["checkpoint_file"] == "last.pt"
@@ -187,6 +187,84 @@ def test_train_saves_periodic_native_checkpoints_and_updates_last(
 
     with pytest.raises(FileExistsError, match="periodic checkpoint artifact"):
         tool._maybe_save_periodic_checkpoint(runtime, output, 2, updates[1])
+
+
+def test_periodic_checkpoint_namespaces_isolate_sibling_output_prefixes(tmp_path: Path) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.checkpoint_metadata = lambda: {"runtime": "fake"}
+    update = {"update": 100.0, "environment_transitions": 4_800.0}
+    first_output = tmp_path / "first" / "training"
+    second_output = tmp_path / "second" / "training"
+
+    first_checkpoint = tool._maybe_save_periodic_checkpoint(runtime, first_output, 100, update)
+    second_checkpoint = tool._maybe_save_periodic_checkpoint(runtime, second_output, 100, update)
+
+    assert first_checkpoint == first_output / "checkpoint-000100.pt"
+    assert second_checkpoint == second_output / "checkpoint-000100.pt"
+    assert first_checkpoint != second_checkpoint
+    assert (first_output / "last.pt").is_file()
+    assert (second_output / "last.pt").is_file()
+
+
+def test_checkpoint_publication_failures_preserve_complete_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.checkpoint_metadata = lambda: {"runtime": "fake"}
+    output = tmp_path / "training"
+    first_update = {"update": 2.0, "environment_transitions": 96.0}
+    second_update = {"update": 4.0, "environment_transitions": 192.0}
+    initial_checkpoint = tool._save_periodic_checkpoint(runtime, output, first_update)
+    last_checkpoint = tool._update_last_checkpoint(output, initial_checkpoint)
+    last_sidecar = last_checkpoint.with_suffix(".pt.json")
+    previous_payload = last_checkpoint.read_bytes()
+    previous_sidecar = last_sidecar.read_bytes()
+    next_checkpoint = tool._save_periodic_checkpoint(runtime, output, second_update)
+    original_replace = tool.os.replace
+
+    def fail_last_payload(source: Path, destination: Path) -> None:
+        if destination == last_checkpoint:
+            raise OSError("injected last payload publication failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(tool.os, "replace", fail_last_payload)
+    with pytest.raises(OSError, match="last payload"):
+        tool._update_last_checkpoint(output, next_checkpoint)
+    assert last_checkpoint.read_bytes() == previous_payload
+    assert last_sidecar.read_bytes() == previous_sidecar
+    tool.load_skrl_checkpoint(runtime.agent, last_checkpoint)
+    assert runtime.agent.loaded_checkpoint == str(last_checkpoint)
+    assert not list(output.glob(".last.pt.*.tmp*"))
+
+    def fail_last_sidecar(source: Path, destination: Path) -> None:
+        if destination == last_sidecar:
+            raise OSError("injected last sidecar publication failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(tool.os, "replace", fail_last_sidecar)
+    with pytest.raises(OSError, match="last sidecar"):
+        tool._update_last_checkpoint(output, next_checkpoint)
+    assert last_checkpoint.read_bytes() == next_checkpoint.read_bytes()
+    assert last_sidecar.read_bytes() == previous_sidecar
+    tool.load_skrl_checkpoint(runtime.agent, last_checkpoint)
+    assert runtime.agent.loaded_checkpoint == str(last_checkpoint)
+
+    failed_output = tmp_path / "failed"
+    failed_checkpoint = failed_output / "checkpoint-000002.pt"
+
+    def fail_numbered_payload(source: Path, destination: Path) -> None:
+        if destination == failed_checkpoint:
+            raise OSError("injected numbered payload publication failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(tool.os, "replace", fail_numbered_payload)
+    with pytest.raises(OSError, match="numbered payload"):
+        tool._save_periodic_checkpoint(runtime, failed_output, first_update)
+    assert not failed_checkpoint.exists()
+    assert not failed_checkpoint.with_suffix(".pt.json").exists()
+    assert not list(failed_output.glob(".checkpoint-000002.pt.*.tmp*"))
 
 
 def test_train_with_wall_clock_cap_stops_before_an_update(monkeypatch: pytest.MonkeyPatch) -> None:

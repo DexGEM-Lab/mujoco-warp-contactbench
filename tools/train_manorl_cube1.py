@@ -7,11 +7,13 @@ import argparse
 from contextlib import contextmanager
 import json
 import math
+import os
 import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -325,11 +327,11 @@ def _train(
 
 
 def _numbered_checkpoint_path(output: Path, completed_updates: int) -> Path:
-    return output.parent / f"checkpoint-{completed_updates:06d}.pt"
+    return output / f"checkpoint-{completed_updates:06d}.pt"
 
 
 def _last_checkpoint_path(output: Path) -> Path:
-    return output.parent / "last.pt"
+    return output / "last.pt"
 
 
 def _checkpoint_runtime_config(runtime: ManoSkrlRuntime, update: dict[str, float]) -> dict[str, object]:
@@ -342,14 +344,53 @@ def _checkpoint_runtime_config(runtime: ManoSkrlRuntime, update: dict[str, float
     }
 
 
-def _update_last_checkpoint(checkpoint: Path) -> Path:
-    last_checkpoint = checkpoint.parent / "last.pt"
-    checkpoint_sidecar = checkpoint.with_suffix(checkpoint.suffix + ".json")
-    last_sidecar = last_checkpoint.with_suffix(last_checkpoint.suffix + ".json")
+def _checkpoint_sidecar_path(checkpoint: Path) -> Path:
+    return checkpoint.with_suffix(checkpoint.suffix + ".json")
+
+
+def _temporary_checkpoint_path(checkpoint: Path) -> Path:
+    return checkpoint.with_name(f".{checkpoint.name}.{uuid4().hex}.tmp")
+
+
+def _save_checkpoint_atomically(
+    agent: Any, checkpoint: Path, *, runtime_config: dict[str, object]
+) -> Path:
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    temporary_checkpoint = _temporary_checkpoint_path(checkpoint)
+    temporary_sidecar = _checkpoint_sidecar_path(temporary_checkpoint)
+    sidecar = _checkpoint_sidecar_path(checkpoint)
+    try:
+        save_skrl_checkpoint(agent, temporary_checkpoint, runtime_config=runtime_config)
+        metadata = json.loads(temporary_sidecar.read_text(encoding="utf-8"))
+        metadata["checkpoint_file"] = checkpoint.name
+        temporary_sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary_checkpoint, checkpoint)
+        os.replace(temporary_sidecar, sidecar)
+    finally:
+        temporary_checkpoint.unlink(missing_ok=True)
+        temporary_sidecar.unlink(missing_ok=True)
+    return checkpoint
+
+
+def _update_last_checkpoint(output: Path, checkpoint: Path) -> Path:
+    output.mkdir(parents=True, exist_ok=True)
+    last_checkpoint = _last_checkpoint_path(output)
+    checkpoint_sidecar = _checkpoint_sidecar_path(checkpoint)
+    last_sidecar = _checkpoint_sidecar_path(last_checkpoint)
+    temporary_checkpoint = _temporary_checkpoint_path(last_checkpoint)
+    temporary_sidecar = _checkpoint_sidecar_path(temporary_checkpoint)
     metadata = json.loads(checkpoint_sidecar.read_text(encoding="utf-8"))
     metadata["checkpoint_file"] = last_checkpoint.name
-    shutil.copyfile(checkpoint, last_checkpoint)
-    last_sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        shutil.copyfile(checkpoint, temporary_checkpoint)
+        temporary_sidecar.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # Replacing payload first keeps the existing sidecar valid for either
+        # complete native payload if interruption occurs before its update.
+        os.replace(temporary_checkpoint, last_checkpoint)
+        os.replace(temporary_sidecar, last_sidecar)
+    finally:
+        temporary_checkpoint.unlink(missing_ok=True)
+        temporary_sidecar.unlink(missing_ok=True)
     return last_checkpoint
 
 
@@ -357,10 +398,10 @@ def _save_periodic_checkpoint(
     runtime: ManoSkrlRuntime, output: Path, update: dict[str, float]
 ) -> Path:
     checkpoint = _numbered_checkpoint_path(output, int(update["update"]))
-    sidecar = checkpoint.with_suffix(checkpoint.suffix + ".json")
+    sidecar = _checkpoint_sidecar_path(checkpoint)
     if checkpoint.exists() or sidecar.exists():
         raise FileExistsError(f"refusing to replace periodic checkpoint artifact: {checkpoint}")
-    return save_skrl_checkpoint(
+    return _save_checkpoint_atomically(
         runtime.agent, checkpoint, runtime_config=_checkpoint_runtime_config(runtime, update)
     )
 
@@ -375,7 +416,7 @@ def _maybe_save_periodic_checkpoint(
     if checkpoint_interval_updates is None or completed_updates % checkpoint_interval_updates != 0:
         return None
     checkpoint = _save_periodic_checkpoint(runtime, output, update)
-    _update_last_checkpoint(checkpoint)
+    _update_last_checkpoint(output, checkpoint)
     return checkpoint
 
 
@@ -384,19 +425,14 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     if output.suffix:
         raise ValueError("--output must be a prefix without a suffix")
     output = output.resolve()
-    if output.name == "last" or output.name.startswith("checkpoint-"):
-        raise ValueError("--output basename must not use the reserved checkpoint namespace")
     checkpoint = output.with_suffix(".pt")
     last_checkpoint = _last_checkpoint_path(output)
     metrics_path = output.with_suffix(".json")
     trace_path = output.with_suffix(".eval.npz")
-    periodic_existing = list(output.parent.glob("checkpoint-*.pt*"))
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
     artifacts = (
         checkpoint,
-        checkpoint.with_suffix(checkpoint.suffix + ".json"),
-        last_checkpoint,
-        last_checkpoint.with_suffix(last_checkpoint.suffix + ".json"),
+        _checkpoint_sidecar_path(checkpoint),
         metrics_path,
         trace_path,
     )
@@ -405,9 +441,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         rerun_path.with_name(f".{rerun_path.stem}.active{rerun_path.suffix or '.rrd'}"),
     ]
     if (
-        any(path.exists() for path in artifacts)
+        output.exists()
+        or any(path.exists() for path in artifacts)
         or any(path.exists() for path in rerun_existing)
-        or periodic_existing
     ):
         raise FileExistsError("refusing to replace an existing training artifact prefix")
     torch.manual_seed(budget.seed)
@@ -495,10 +531,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "update": float(len(updates)),
             "environment_transitions": float(transitions),
         }
-        save_skrl_checkpoint(
+        _save_checkpoint_atomically(
             runtime.agent, checkpoint, runtime_config=_checkpoint_runtime_config(runtime, final_update)
         )
-        _update_last_checkpoint(checkpoint)
+        _update_last_checkpoint(output, checkpoint)
         # Evaluate exactly what a user will later load. skrl preprocessor/module
         # state may differ in-process after PPO training, so a fresh native load is
         # the reproducibility boundary rather than an implementation detail.
@@ -585,15 +621,15 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             wandb_run.summary.update(acceptance_metrics)
             artifact_paths = [
                 checkpoint,
-                checkpoint.with_suffix(checkpoint.suffix + ".json"),
+                _checkpoint_sidecar_path(checkpoint),
                 last_checkpoint,
-                last_checkpoint.with_suffix(last_checkpoint.suffix + ".json"),
+                _checkpoint_sidecar_path(last_checkpoint),
                 metrics_path,
                 trace_path,
             ]
             for periodic_checkpoint in periodic_checkpoints:
                 artifact_paths.extend(
-                    [periodic_checkpoint, periodic_checkpoint.with_suffix(periodic_checkpoint.suffix + ".json")]
+                    [periodic_checkpoint, _checkpoint_sidecar_path(periodic_checkpoint)]
                 )
             if published_rerun is not None:
                 artifact_paths.append(published_rerun)
