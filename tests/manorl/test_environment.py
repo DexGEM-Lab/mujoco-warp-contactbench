@@ -181,7 +181,7 @@ def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajector
     assert not np.allclose(world_cloud, normalized_hand_relative + env.last_physical.hand_position[:, None, :])
 
 
-def test_transition_snapshot_preserves_action_reference_and_rerun_artifact(trajectory, tmp_path) -> None:
+def test_transition_snapshot_preserves_action_reference_and_partial_rerun_close(trajectory, tmp_path) -> None:
     from sim.manorl.rerun_recorder import ManoRerunRecorder
 
     env = _environment(trajectory)
@@ -197,7 +197,9 @@ def test_transition_snapshot_preserves_action_reference_and_rerun_artifact(traje
     np.testing.assert_allclose(snapshot.controller_targets, env.last_controller_targets)
     recorder = ManoRerunRecorder(env, tmp_path / "env0.rrd")
     recorder.record_transition()
-    assert recorder.close().stat().st_size > 0
+    assert recorder.close() is None
+    assert not recorder.output.exists()
+    assert not recorder.active_path.exists()
 
 
 def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> None:
@@ -242,6 +244,53 @@ def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> N
     assert all(context == expected_context for _, context in recorder.recording.logs)
 
 
+def test_rerun_partial_close_preserves_existing_stable_artifact(trajectory, tmp_path) -> None:
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    output = tmp_path / "episodes.rrd"
+    sentinel = b"stable episode must survive partial close"
+    output.write_bytes(sentinel)
+    env = _environment(trajectory)
+    recorder = ManoRerunRecorder(env, output)
+    env.step(np.zeros((1, 26), dtype=np.float64))
+    recorder.record_transition()
+
+    assert recorder.close() is None
+    assert output.read_bytes() == sentinel
+    assert not recorder.active_path.exists()
+
+
+def test_rerun_close_disconnects_fresh_active_stream_once(tmp_path) -> None:
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.flushes = 0
+            self.disconnects = 0
+
+        def flush(self) -> None:
+            self.flushes += 1
+
+        def disconnect(self) -> None:
+            self.disconnects += 1
+
+    recorder = object.__new__(ManoRerunRecorder)
+    recorder.output = tmp_path / "episodes.rrd"
+    recorder.active_path = tmp_path / ".episodes.active.rrd"
+    recorder.active_path.write_bytes(b"fresh active episode")
+    recorder.recording = RecordingStream()
+    recorder._published = True
+    recorder._recording_open = True
+    recorder._closed = False
+    recorder._close_result = None
+
+    assert recorder.close() == recorder.output
+    assert recorder.close() == recorder.output
+    assert recorder.recording.flushes == 1
+    assert recorder.recording.disconnects == 1
+    assert not recorder.active_path.exists()
+
+
 def test_rerun_finalizes_terminal_episode_before_delayed_reset(trajectory, tmp_path) -> None:
     from sim.manorl.rerun_recorder import ManoRerunRecorder
 
@@ -255,15 +304,19 @@ def test_rerun_finalizes_terminal_episode_before_delayed_reset(trajectory, tmp_p
     recorder.record_transition()
     assert recorder.active_path.exists()
     assert not recorder.output.exists()
+
     env.step(np.zeros((1, 26), dtype=np.float64))
     assert env.last_transition is not None
     assert bool(env.last_transition.reset_applied[0])
     recorder.record_transition()
     assert recorder.output.name == "episodes.rrd"
-    assert recorder.output.stat().st_size > 0
+    stable_bytes = recorder.output.read_bytes()
+    assert stable_bytes
     assert recorder.active_path.exists()
-    recorder.close()
-    assert recorder.output.stat().st_size > 0
+
+    assert recorder.close() == recorder.output
+    assert recorder.close() == recorder.output
+    assert recorder.output.read_bytes() == stable_bytes
     assert not recorder.active_path.exists()
 
 

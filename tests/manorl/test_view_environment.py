@@ -80,9 +80,10 @@ def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
     ("mode_args", "expected_residual_enabled", "expected_terminal"),
     [([], True, True), (["--use_residual", "false", "--terminal", "false"], False, False)],
 )
-def test_record_rerun_cli_parses_runtime_modes(
+def test_record_rerun_cli_reports_null_without_reset_completed_episode(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
     mode_args: list[str],
     expected_residual_enabled: bool,
     expected_terminal: bool,
@@ -104,8 +105,8 @@ def test_record_rerun_cli_parses_runtime_modes(
         def record_transition(self) -> None:
             pass
 
-        def close(self) -> Path:
-            return tmp_path / "recording.rrd"
+        def close(self) -> Path | None:
+            return None
 
     monkeypatch.setattr(
         record_manorl_rerun,
@@ -121,6 +122,18 @@ def test_record_rerun_cli_parses_runtime_modes(
     ) == 0
     assert captured_configs[0].residual_enabled is expected_residual_enabled
     assert (captured_configs[0].max_deviation_distance == 0.1) is expected_terminal
+    assert '"rerun_artifact": null' in capsys.readouterr().out
+
+
+def test_viewer_reports_missing_reset_completed_rerun_artifact(capsys: pytest.CaptureFixture[str]) -> None:
+    from sim.manorl.view_environment import _close_rerun_recorder
+
+    class FakeRecorder:
+        def close(self) -> Path | None:
+            return None
+
+    assert _close_rerun_recorder(FakeRecorder()) is None
+    assert capsys.readouterr().out == "No reset-complete Rerun episode was published.\n"
 
 
 @pytest.mark.parametrize(

@@ -18,7 +18,7 @@ _FORCE_ARROW_SCALE = 0.002
 
 
 class ManoRerunRecorder:
-    """Publish only the latest selected-world episode to one stable Rerun path."""
+    """Publish reset-completed selected-world episodes to one stable Rerun path."""
 
     def __init__(self, environment: MujocoManoEnvironment, output: str | Path, *, env_id: int = 0) -> None:
         if not isinstance(environment, MujocoManoEnvironment):
@@ -39,6 +39,9 @@ class ManoRerunRecorder:
         stem = self.output.stem if self.output.suffix else self.output.name
         self.active_path = self.output.with_name(f".{stem}.active{suffix}")
         self._closed = False
+        self._published = False
+        self._recording_open = False
+        self._close_result: Path | None = None
         self._start_episode()
 
     def _default_blueprint(self):
@@ -74,15 +77,22 @@ class ManoRerunRecorder:
         )
 
     def _start_episode(self) -> None:
+        if self._recording_open:
+            raise RuntimeError("cannot start an episode while a recording stream is open")
         self.recording = self.rr.RecordingStream("manorl_mujoco")
         self.recording.save(self.active_path)
+        self._recording_open = True
         self.recording.send_blueprint(self._default_blueprint(), make_active=True, make_default=True)
         self._log_static_metadata()
 
     def _publish_episode(self) -> None:
+        if not self._recording_open:
+            raise RuntimeError("cannot publish without an open recording stream")
         self.recording.flush()
         self.recording.disconnect()
+        self._recording_open = False
         os.replace(self.active_path, self.output)
+        self._published = True
 
     def _log_static_metadata(self) -> None:
         environment = self.environment
@@ -209,8 +219,13 @@ class ManoRerunRecorder:
             ),
         )
 
-    def close(self) -> Path:
+    def close(self) -> Path | None:
         if not self._closed:
-            self._publish_episode()
+            if self._recording_open:
+                self.recording.flush()
+                self.recording.disconnect()
+                self._recording_open = False
+            self.active_path.unlink(missing_ok=True)
+            self._close_result = self.output if self._published else None
             self._closed = True
-        return self.output
+        return self._close_result

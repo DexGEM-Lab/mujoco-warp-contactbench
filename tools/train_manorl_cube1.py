@@ -230,8 +230,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         if rerun_path is not None
         else None
     )
-    updates, transitions, elapsed = _train(runtime, budget, recorder)
-    rerun_artifact = None if recorder is None else str(recorder.close())
+    try:
+        updates, transitions, elapsed = _train(runtime, budget, recorder)
+    finally:
+        published_rerun = None if recorder is None else recorder.close()
+    rerun_artifact = None if published_rerun is None else str(published_rerun)
     save_skrl_checkpoint(runtime.agent, checkpoint, runtime_config=runtime.checkpoint_metadata())
     # Evaluate exactly what a user will later load. skrl preprocessor/module
     # state may differ in-process after PPO training, so a fresh native load is

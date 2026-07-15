@@ -222,6 +222,15 @@ def _view_tiled(
         glfw.terminate()
 
 
+def _close_rerun_recorder(recorder: ManoRerunRecorder) -> Path | None:
+    artifact = recorder.close()
+    if artifact is None:
+        print("No reset-complete Rerun episode was published.", flush=True)
+    else:
+        print(f"Rerun artifact: {artifact}", flush=True)
+    return artifact
+
+
 def view_environment(
     *,
     device: str,
@@ -312,7 +321,7 @@ def view_environment(
             )
         finally:
             if recorder is not None:
-                print(f"Rerun artifact: {recorder.close()}", flush=True)
+                _close_rerun_recorder(recorder)
         return
     try:
         with mujoco.viewer.launch_passive(
@@ -338,7 +347,7 @@ def view_environment(
                 time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
     finally:
         if recorder is not None:
-            print(f"Rerun artifact: {recorder.close()}", flush=True)
+            _close_rerun_recorder(recorder)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

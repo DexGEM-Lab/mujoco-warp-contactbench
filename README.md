@@ -113,7 +113,8 @@ JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
 
 When `--rerun-output` records the same environment run, its charts open on the
 `step` timeline. Select `simulation` in Rerun's time panel to chart against
-elapsed seconds.
+elapsed seconds. The stable `.rrd` changes only after the delayed reset is
+applied; interrupting the run discards its active partial episode.
 
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
 single 791-call replay. Both runtime controls default to `true`: use

@@ -59,12 +59,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     recorder = ManoRerunRecorder(environment, args.output, env_id=args.env_id)
     actions = np.zeros((args.num_envs, 26), dtype=np.float64)
-    for _ in range(args.steps):
-        environment.step(actions)
-        recorder.record_transition()
-    artifact = recorder.close()
-    print(json.dumps({"rerun_artifact": str(artifact)}, indent=2))
+    try:
+        for _ in range(args.steps):
+            environment.step(actions)
+            recorder.record_transition()
+    finally:
+        artifact = recorder.close()
+    print(json.dumps({"rerun_artifact": None if artifact is None else str(artifact)}, indent=2))
     if args.open_rerun:
+        if artifact is None:
+            print("No reset-complete Rerun episode was published; Rerun viewer was not opened.")
+            return 0
         viewer = Path(sys.executable).with_name("rerun")
         if not viewer.exists():
             raise RuntimeError(f"Rerun viewer executable is absent: {viewer}")
