@@ -90,6 +90,7 @@ def test_adapter_and_skrl_wrapper_preserve_vector_tensor_boundary(adapter: ManoG
     assert adapter.metadata["autoreset_mode"].value == "NextStep"
 
     runtime = ManoSkrlRuntime(adapter, ManoPPOConfig.optimizer_smoke())
+    assert runtime.agent.cfg.rewards_shaper is None
     wrapped_observations, _ = runtime.env.reset()
     actions = runtime.deterministic_actions(wrapped_observations)
     assert actions.shape == (1, ACTION_DIM)
@@ -112,11 +113,13 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     import torch
 
     from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
-    from sim.manorl.rewards import REWARD_CONTRACT_ID
+    from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
     from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 
     runtime = ManoSkrlRuntime(adapter, ManoPPOConfig.optimizer_smoke())
     assert runtime.checkpoint_metadata()["reward_contract"] == REWARD_CONTRACT_ID
+    assert runtime.checkpoint_metadata()["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
+    assert runtime.checkpoint_metadata()["ppo_reward_scale"] == PPO_REWARD_SCALE
     rollout = runtime.deterministic_rollout(steps=2)
     assert rollout["steps"] == 2
     assert torch.isfinite(rollout["observations"]).all()
@@ -150,6 +153,7 @@ def test_checkpoint_rejects_rl_games_and_one_sample_update(adapter: ManoGymnasiu
 
 
 def test_source_ppo_batch_divisibility_is_explicit() -> None:
+    from sim.manorl.rewards import PPO_REWARD_SCALE
     from sim.manorl.skrl_runtime import ManoPPOConfig
 
     config = ManoPPOConfig().skrl_config(num_envs=64, device="cpu")
@@ -157,5 +161,7 @@ def test_source_ppo_batch_divisibility_is_explicit() -> None:
     assert config["mini_batches"] == 3
     assert config["time_limit_bootstrap"] is True
     assert config["value_loss_scale"] == 4.0
+    assert "rewards_shaper" not in config
+    assert PPO_REWARD_SCALE == 1.0
     with pytest.raises(ValueError, match="must divide"):
         ManoPPOConfig().skrl_config(num_envs=1, device="cpu")

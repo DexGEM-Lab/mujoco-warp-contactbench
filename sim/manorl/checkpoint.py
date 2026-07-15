@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from sim.manorl.rewards import REWARD_CONTRACT_ID
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 
 if TYPE_CHECKING:
     from skrl.agents.torch.ppo import PPO
 
 
-CHECKPOINT_FORMAT = "manorl.skrl.ppo.v1"
+CHECKPOINT_FORMAT = "manorl.skrl.ppo.v2"
 _REQUIRED_MODULES = frozenset({"policy", "value", "optimizer", "observation_preprocessor", "value_preprocessor"})
 
 
@@ -56,6 +56,7 @@ def save_skrl_checkpoint(agent: "PPO", path: str | Path, *, runtime_config: dict
     payload = {
         "format": CHECKPOINT_FORMAT,
         "reward_contract": REWARD_CONTRACT_ID,
+        "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
         "runtime_config": runtime_config,
         "checkpoint_file": checkpoint.name,
     }
@@ -69,7 +70,6 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
     checkpoint = Path(path)
     if not checkpoint.is_file():
         raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
-    _load_modules(checkpoint, device=agent.device)
     metadata_file = _metadata_path(checkpoint)
     if not metadata_file.is_file():
         raise CheckpointFormatError("native skrl checkpoint sidecar is required")
@@ -78,7 +78,10 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
     except (OSError, json.JSONDecodeError) as exc:
         raise CheckpointFormatError("checkpoint sidecar is not valid JSON") from exc
     if metadata.get("format") != CHECKPOINT_FORMAT or metadata.get("checkpoint_file") != checkpoint.name:
-        raise CheckpointFormatError("checkpoint sidecar does not describe this native ManoRL skrl format")
+        raise CheckpointFormatError(
+            "checkpoint sidecar does not describe the native ManoRL skrl v2 raw-1.0x reward format; "
+            "legacy 0.5x-reward checkpoints cannot resume"
+        )
     reward_contract = metadata.get("reward_contract")
     if reward_contract is None:
         raise CheckpointFormatError(
@@ -88,5 +91,15 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
         raise CheckpointFormatError(
             f"checkpoint reward contract {reward_contract!r} != required {REWARD_CONTRACT_ID!r}"
         )
+    ppo_reward_contract = metadata.get("ppo_reward_contract")
+    if ppo_reward_contract is None:
+        raise CheckpointFormatError(
+            "checkpoint PPO reward contract is missing; checkpoints predating raw 1.0x PPO rewards cannot resume"
+        )
+    if ppo_reward_contract != PPO_REWARD_CONTRACT_ID:
+        raise CheckpointFormatError(
+            f"checkpoint PPO reward contract {ppo_reward_contract!r} != required {PPO_REWARD_CONTRACT_ID!r}"
+        )
+    _load_modules(checkpoint, device=agent.device)
     agent.load(str(checkpoint))
     return checkpoint

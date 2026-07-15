@@ -12,7 +12,12 @@ import numpy as np
 from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_NAMES, KEYPOINT_NAMES, PHYSICS_SUBSTEPS_PER_TARGET
 from sim.manorl.environment import MujocoManoEnvironment, TransitionSnapshot
 from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, OBSERVATION_SLICES
-from sim.manorl.rewards import REWARD_CONTRACT_ID, REWARD_HAND_OBJECT_THRESHOLD_N
+from sim.manorl.rewards import (
+    PPO_REWARD_CONTRACT_ID,
+    PPO_REWARD_SCALE,
+    REWARD_CONTRACT_ID,
+    REWARD_HAND_OBJECT_THRESHOLD_N,
+)
 
 _FORCE_ARROW_SCALE = 0.002
 _GEOMETRY_FORCE_PATHS = (
@@ -182,6 +187,8 @@ class ManoRerunRecorder:
         metadata = {
             "schema": "manorl.rerun.v2",
             "reward_contract": REWARD_CONTRACT_ID,
+            "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
+            "ppo_reward_scale": PPO_REWARD_SCALE,
             "env_id": self.env_id,
             "episode_id": self.episode_id,
             "trajectory_identity": trajectory.identity.identity,

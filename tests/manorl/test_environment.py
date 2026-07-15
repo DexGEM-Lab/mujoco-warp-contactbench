@@ -660,6 +660,8 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
         "series": recorder.hand_object_force_series_table,
     }
     assert metadata["reward_contract"] == REWARD_CONTRACT_ID
+    assert metadata["ppo_reward_contract"] == "target_hand_object_contact_v1_raw_ppo_reward_1x_v1"
+    assert metadata["ppo_reward_scale"] == 1.0
     assert metadata["thresholds"]["observation_contact_threshold_N"] == 2.0
     assert metadata["thresholds"]["reward_hand_object_threshold_N"] == REWARD_HAND_OBJECT_THRESHOLD_N
     assert "contact_force_threshold" not in metadata["thresholds"]

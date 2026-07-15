@@ -18,6 +18,7 @@ from sim.manorl.cli import parse_cli_bool
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.rerun_recorder import ManoRerunRecorder
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
 
@@ -277,6 +278,12 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "actor_mean": "source_default",
             "initial_log_std": -0.99,
             "ppo_learning_rate": ppo_config.learning_rate,
+        },
+        "reward": {
+            "environment_contract": REWARD_CONTRACT_ID,
+            "ppo_contract": PPO_REWARD_CONTRACT_ID,
+            "ppo_scale": PPO_REWARD_SCALE,
+            "isaacgym_ppo_scale": 0.5,
         },
         "learning_starts": runtime.agent.cfg.learning_starts,
         "budget": {

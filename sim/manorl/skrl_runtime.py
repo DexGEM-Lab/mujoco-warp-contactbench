@@ -16,7 +16,7 @@ from skrl.resources.schedulers.torch import KLAdaptiveLR
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
 from sim.manorl.normalization import PointCloudAwareRunningStandardScaler
-from sim.manorl.rewards import REWARD_CONTRACT_ID
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,6 @@ class ManoPPOConfig:
     learning_rate: float = 3.0e-4
     kl_threshold: float = 0.016
     grad_norm_clip: float = 1.0
-    reward_scale: float = 0.5
     time_limit_bootstrap: bool = True
 
     def __post_init__(self) -> None:
@@ -73,19 +72,13 @@ class ManoPPOConfig:
             "entropy_loss_scale": self.entropy_loss_scale,
             "value_loss_scale": self.value_loss_scale,
             "time_limit_bootstrap": self.time_limit_bootstrap,
-            "rewards_shaper": scale_rewards,
+            # skrl defaults rewards_shaper to None. Omitting the key is the
+            # raw-environment-reward contract, not an identity callback.
             # Target AMP execution is a device policy, not a PPO semantic. It
             # remains off for deterministic CPU smoke coverage.
             "mixed_precision": False,
             "experiment": {"write_interval": 0, "checkpoint_interval": 0},
         }
-
-
-def scale_rewards(rewards: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
-    """Preserve the source reward-shaper scale without hiding it in config."""
-
-    del timestep, timesteps
-    return rewards * 0.5
 
 
 class ManoSkrlRuntime:
@@ -118,6 +111,8 @@ class ManoSkrlRuntime:
     def checkpoint_metadata(self) -> dict[str, object]:
         return {
             "reward_contract": REWARD_CONTRACT_ID,
+            "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
+            "ppo_reward_scale": PPO_REWARD_SCALE,
             "ppo": asdict(self.config),
             "model_state_dict": self.model.state_dict_manifest(),
             "normalizer": "source_pointcloud_shared_xyz",

@@ -24,6 +24,11 @@ than being simulated using cube geometry.
   hand-object contacts receive weighted proportional credit only when their
   pair-filtered world-force norm is strictly greater than `1.0 N`. The unchanged
   observation contact encoding uses its separate `2.0 N` threshold.
+- PPO optimizes that environment reward at raw `1.0x` under
+  `target_hand_object_contact_v1_raw_ppo_reward_1x_v1`; no skrl reward shaper
+  is configured. This intentionally diverges from the sibling IsaacGym setup's
+  fixed `0.5x` shaper. Native checkpoints from that legacy objective are
+  rejected before load.
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
@@ -69,10 +74,11 @@ controller diagnostic, not a learned-policy comparator.
 
 The trained row is always evaluated from a fresh runtime after loading the
 native checkpoint. It is the executable artifact a user receives, and avoids
-reporting train-process-only normalizer or BatchNorm state. Native checkpoint
-sidecars must declare `reward_contract: target_hand_object_contact_v1`; missing
-or mismatched contracts fail before resume rather than silently changing the
-training objective.
+reporting train-process-only normalizer or BatchNorm state. Native checkpoint sidecars must declare both
+`reward_contract: target_hand_object_contact_v1` and
+`ppo_reward_contract: target_hand_object_contact_v1_raw_ppo_reward_1x_v1`.
+Missing or mismatched contracts fail before resume rather than silently changing
+the training objective.
 
 ## Launch
 
@@ -148,6 +154,7 @@ altering the MuJoCo viewer:
 
 Write config, metrics, native skrl checkpoint, and a compact evaluation trace
 under a unique `outputs/manorl/` prefix. The checkpoint sidecar records the
-`target_hand_object_contact_v1` reward boundary. The post-training viewer
+environment and raw-1.0x PPO reward boundaries. The post-training viewer
 consumes the same actual `MujocoManoEnvironment` path and reports separate
-observation and reward contact thresholds in Rerun metadata.
+observation/reward contact thresholds plus the raw PPO reward scale in Rerun
+metadata.

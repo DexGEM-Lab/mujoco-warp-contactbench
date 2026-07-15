@@ -234,8 +234,10 @@ float64 moments plus shared XYZ point moments under the source buffer names.
 The skrl runtime explicitly maps the current source PPO objective: 48 rollout
 steps, 1024-sample minibatches, three learning epochs, `gamma=0.99`,
 `lambda=0.95`, clipping `0.2`, entropy `0.001`, critic coefficient `4.0`,
-learning rate `3e-4`, KL threshold `0.016`, gradient norm `1.0`, reward scale
-`0.5`, and timeout bootstrapping. Its 1024-sample minibatch must divide the
+learning rate `3e-4`, KL threshold `0.016`, gradient norm `1.0`, raw environment
+reward scale `1.0`, and timeout bootstrapping. skrl receives no reward shaper;
+this intentionally diverges from the sibling IsaacGym configuration's fixed
+`0.5x` shaper. Its 1024-sample minibatch must divide the
 configured rollout batch; a two-sample `optimizer_smoke` is deliberately
 separate from training and disables only KL early-stop so it can demonstrate a
 finite optimizer step. The adapter exposes the source terminal observation,
@@ -245,9 +247,10 @@ not an inferred rl-games player behavior.
 
 Target checkpoint I/O saves and reloads native skrl policy/value, optimizer,
 and normalizer state with a configuration sidecar. Every native sidecar records
-`reward_contract: target_hand_object_contact_v1`; a missing or different value
-fails before load, so a checkpoint trained under an older objective cannot
-silently resume. It explicitly rejects an rl-games top-level `model`/`env_state`
+`reward_contract: target_hand_object_contact_v1` and
+`ppo_reward_contract: target_hand_object_contact_v1_raw_ppo_reward_1x_v1`; a
+missing or different value fails before load, so a checkpoint trained under an
+older objective cannot silently resume. It explicitly rejects an rl-games top-level `model`/`env_state`
 checkpoint; no parameter, normalizer, or optimizer conversion is implemented.
 Required evidence before any source compatibility claim remains frozen-normalizer
 preprocessing equivalence and deterministic mu/value equivalence on a captured

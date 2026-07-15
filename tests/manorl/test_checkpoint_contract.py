@@ -13,7 +13,7 @@ import sys
 import torch
 
 from sim.manorl.checkpoint import CheckpointFormatError, load_skrl_checkpoint, save_skrl_checkpoint
-from sim.manorl.rewards import REWARD_CONTRACT_ID
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 
 
 class Agent:
@@ -47,6 +47,7 @@ agent = Agent()
 save_skrl_checkpoint(agent, checkpoint, runtime_config={"reward_contract": REWARD_CONTRACT_ID})
 metadata = json.loads(sidecar(checkpoint).read_text(encoding="utf-8"))
 assert metadata["reward_contract"] == REWARD_CONTRACT_ID
+assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
 load_skrl_checkpoint(agent, checkpoint)
 assert agent.loaded == str(checkpoint)
 
@@ -69,6 +70,26 @@ except CheckpointFormatError as exc:
     assert "reward contract" in str(exc) and "required" in str(exc)
 else:
     raise AssertionError("mismatched reward contract was accepted")
+
+legacy = dict(metadata)
+legacy["format"] = "manorl.skrl.ppo.v1"
+sidecar(checkpoint).write_text(json.dumps(legacy), encoding="utf-8")
+try:
+    load_skrl_checkpoint(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "legacy 0.5x-reward checkpoints" in str(exc)
+else:
+    raise AssertionError("legacy reward-scale checkpoint was accepted")
+
+missing_ppo = dict(metadata)
+missing_ppo.pop("ppo_reward_contract")
+sidecar(checkpoint).write_text(json.dumps(missing_ppo), encoding="utf-8")
+try:
+    load_skrl_checkpoint(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "PPO reward contract is missing" in str(exc)
+else:
+    raise AssertionError("missing PPO reward contract was accepted")
 '''
     result = subprocess.run(
         [sys.executable, "-c", script, str(tmp_path)],
