@@ -137,6 +137,11 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     terminal_obs, _, done, terminal_extras = env.step(zero)
     np.testing.assert_array_equal(done, [True])
     np.testing.assert_array_equal(terminal_extras["time_outs"], [False])
+    assert env.last_transition is not None
+    np.testing.assert_array_equal(env.last_transition.command_reference_indices, [789])
+    np.testing.assert_array_equal(env.last_transition.target_indices, [790])
+    np.testing.assert_array_equal(env.last_transition.reset_applied, [False])
+    np.testing.assert_array_equal(env.last_transition.termination.reset, [True])
     np.testing.assert_array_equal(env.progress, [791])
     np.testing.assert_array_equal(env.trajectory_steps, [790])
     np.testing.assert_allclose(
@@ -144,10 +149,32 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     )
     _, _, next_done, _ = env.step(zero)
     np.testing.assert_array_equal(next_done, [False])
+    assert env.last_transition is not None
+    np.testing.assert_array_equal(env.last_transition.reset_applied, [True])
+    np.testing.assert_array_equal(env.last_transition.target_indices, [0])
     np.testing.assert_array_equal(env.progress, [0])
     np.testing.assert_array_equal(env.trajectory_steps, [0])
     assert env.last_physical is not None
     np.testing.assert_allclose(env.last_physical.object_position[0], trajectory.object_pos[0], atol=1e-7)
+
+
+def test_transition_snapshot_preserves_action_reference_and_rerun_artifact(trajectory, tmp_path) -> None:
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    env = _environment(trajectory)
+    action = np.zeros((1, 26), dtype=np.float64)
+    action[0, 1] = 0.25
+    env.step(action)
+    snapshot = env.last_transition
+    assert snapshot is not None
+    assert snapshot.control_call == 0
+    np.testing.assert_allclose(snapshot.raw_actions, action)
+    np.testing.assert_array_equal(snapshot.command_reference_indices, [0])
+    np.testing.assert_allclose(snapshot.command_targets, trajectory.q_ref[[0]])
+    np.testing.assert_allclose(snapshot.controller_targets, env.last_controller_targets)
+    recorder = ManoRerunRecorder(env, tmp_path / "env0.rrd")
+    recorder.record_transition()
+    assert recorder.close().stat().st_size > 0
 
 
 def test_residual_core_masks_inactive_fingers_in_live_environment(trajectory) -> None:

@@ -55,6 +55,36 @@ The trained row is always evaluated from a fresh runtime after loading the
 native checkpoint. It is the executable artifact a user receives, and avoids
 reporting train-process-only normalizer or BatchNorm state.
 
+## Launch
+
+Start a scratch run with the source-compatible model initialization and no
+checkpoint input:
+
+```bash
+JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.train_manorl_cube1 \
+  --output outputs/manorl/cube1_01_009_scratch_run \
+  --num-envs 64 \
+  --updates 64 \
+  --wall-clock-seconds 1200
+```
+
+To record one actual training world without changing PPO actions, rollout
+memory, or updates, add a Rerun output path. `--rerun-stride 4` records env 0
+once every four vector control calls:
+
+```bash
+  --rerun-output outputs/manorl/cube1_01_009_scratch_run.rrd \
+  --rerun-env-id 0 \
+  --rerun-stride 4
+```
+
+Open the resulting file with `/home/jay/anaconda3/envs/manorl_mujoco/bin/rerun outputs/manorl/cube1_01_009_scratch_run.rrd`.
+The control-call timeline remains monotonic across delayed resets; it records
+actual state, target, 26D action/controller target, 64-point object cloud, hand
+keypoints, contact force vectors, named reward terms, reset causes, and the
+thresholds used by that run.
+
 ## Artifacts
 
 Write config, metrics, native skrl checkpoint, and a compact evaluation trace

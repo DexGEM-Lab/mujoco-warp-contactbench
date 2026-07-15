@@ -16,6 +16,7 @@ import torch
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
+from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 from sim.manorl.trajectory import load_reference_trajectory
 
@@ -28,6 +29,9 @@ class TrainingBudget:
     updates: int = 64
     wall_clock_seconds: float = 20.0 * 60.0
     seed: int = 42
+    rerun_output: str | None = None
+    rerun_env_id: int = 0
+    rerun_stride: int = 1
 
     @property
     def transitions(self) -> int:
@@ -112,7 +116,9 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "policy"]) -> Eval
     raise RuntimeError(f"{mode} evaluation did not terminate at the source horizon")
 
 
-def _train(runtime: ManoSkrlRuntime, budget: TrainingBudget) -> tuple[list[dict[str, float]], int, float]:
+def _train(
+    runtime: ManoSkrlRuntime, budget: TrainingBudget, recorder: ManoRerunRecorder | None = None
+) -> tuple[list[dict[str, float]], int, float]:
     environment = runtime.gymnasium_env.environment
     config = runtime.config
     runtime.agent.enable_training_mode(True)
@@ -132,6 +138,8 @@ def _train(runtime: ManoSkrlRuntime, budget: TrainingBudget) -> tuple[list[dict[
                     observations, None, timestep=global_timestep, timesteps=budget.transitions
                 )
             next_observations, reward, terminated, truncated, infos = runtime.env.step(actions)
+            if recorder is not None and global_timestep % budget.rerun_stride == 0:
+                recorder.record_transition()
             if not torch.isfinite(next_observations).all() or not torch.isfinite(reward).all():
                 raise RuntimeError(f"non-finite rollout value at global timestep {global_timestep}")
             runtime.agent.record_transition(
@@ -174,7 +182,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     checkpoint = output.with_suffix(".pt")
     metrics_path = output.with_suffix(".json")
     trace_path = output.with_suffix(".eval.npz")
-    if any(path.exists() for path in (checkpoint, metrics_path, trace_path)):
+    rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
+    artifacts = (checkpoint, metrics_path, trace_path) + ((rerun_path,) if rerun_path is not None else ())
+    if any(path.exists() for path in artifacts):
         raise FileExistsError("refusing to replace an existing training artifact prefix")
     torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)
@@ -204,7 +214,14 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     runtime.agent.cfg.learning_starts = physical.contact_start_frame
     zero_baseline = _evaluate(runtime, "zero")
     untrained = _evaluate(runtime, "policy")
-    updates, transitions, elapsed = _train(runtime, budget)
+    recorder = (
+        ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
+        if rerun_path is not None
+        else None
+    )
+    updates, transitions, elapsed = _train(runtime, budget, recorder)
+    if recorder is not None:
+        recorder.close()
     save_skrl_checkpoint(runtime.agent, checkpoint, runtime_config=runtime.checkpoint_metadata())
     # Evaluate exactly what a user will later load. skrl preprocessor/module
     # state may differ in-process after PPO training, so a fresh native load is
@@ -261,7 +278,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             ),
         },
         "updates": updates,
-        "artifacts": {"checkpoint": str(checkpoint), "evaluation_trace": str(trace_path)},
+        "artifacts": {
+            "checkpoint": str(checkpoint),
+            "evaluation_trace": str(trace_path),
+            "rerun": str(rerun_path) if rerun_path is not None else None,
+        },
     }
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -275,9 +296,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--wall-clock-seconds", type=float, default=20.0 * 60.0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
+    parser.add_argument("--rerun-env-id", type=int, default=0)
+    parser.add_argument("--rerun-stride", type=int, default=1)
     args = parser.parse_args(argv)
-    if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0:
-        parser.error("updates, num-envs, and wall-clock-seconds must be positive")
+    if args.updates < 1 or args.num_envs < 1 or args.wall_clock_seconds <= 0 or args.rerun_stride < 1:
+        parser.error("updates, num-envs, wall-clock-seconds, and rerun-stride must be positive")
+    if not 0 <= args.rerun_env_id < args.num_envs:
+        parser.error("rerun-env-id must be within num-envs")
     result = run(
         args.output,
         TrainingBudget(
@@ -285,6 +311,9 @@ def main(argv: list[str] | None = None) -> int:
             args.updates,
             args.wall_clock_seconds,
             args.seed,
+            str(args.rerun_output.resolve()) if args.rerun_output is not None else None,
+            args.rerun_env_id,
+            args.rerun_stride,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))

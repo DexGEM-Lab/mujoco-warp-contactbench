@@ -116,6 +116,26 @@ class PhysicalSnapshot:
     contact_count: NDArray[np.int64]
 
 
+@dataclass(frozen=True)
+class TransitionSnapshot:
+    """Immutable evidence for one complete control transition, including delayed reset state."""
+
+    control_call: int
+    raw_actions: NDArray[np.float64]
+    command_reference_indices: NDArray[np.int64]
+    command_targets: NDArray[np.float64]
+    processed_targets: NDArray[np.float64]
+    controller_targets: NDArray[np.float64]
+    reset_applied: NDArray[np.bool_]
+    progress: NDArray[np.int64]
+    trajectory_steps: NDArray[np.int64]
+    target_indices: NDArray[np.int64]
+    physical: PhysicalSnapshot
+    observation: ObservationResult
+    reward: RewardDiagnostics
+    termination: TerminationResult
+
+
 def _normalized_xyzw(quaternions_wxyz: NDArray[object]) -> NDArray[np.float64]:
     quaternions = wxyz_to_xyzw(np.asarray(quaternions_wxyz, dtype=np.float64))
     norm = np.linalg.norm(quaternions, axis=-1, keepdims=True)
@@ -478,6 +498,8 @@ class MujocoManoEnvironment:
         self.last_reward: RewardDiagnostics | None = None
         self.last_termination: TerminationResult | None = None
         self.last_controller_targets = np.zeros((config.num_envs, 26), dtype=np.float64)
+        self.control_call = 0
+        self.last_transition: TransitionSnapshot | None = None
         self.reset()
 
     def _build_reference_tables(self) -> None:
@@ -677,12 +699,13 @@ class MujocoManoEnvironment:
         if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
             raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
         mocap_indices = self._target_indices()
+        mocap_targets = self._reference_gather(self.reference_q, mocap_indices)
         action_result = process_residual_actions(
             actions,
             trajectory_steps=self.trajectory_steps,
             cumulative_offset=self.cumulative_offset,
             cumulative_joint_offset=self.cumulative_joint_offset,
-            mocap_targets=self._reference_gather(self.reference_q, mocap_indices),
+            mocap_targets=mocap_targets,
             joint_lower=self.joint_lower,
             joint_upper=self.joint_upper,
             active_joint_mask=self.active_joint_mask,
@@ -735,6 +758,23 @@ class MujocoManoEnvironment:
         self.last_observation = observation
         self.last_termination = termination
         self.last_reward = reward
+        self.last_transition = TransitionSnapshot(
+            control_call=self.control_call,
+            raw_actions=actions.copy(),
+            command_reference_indices=mocap_indices.copy(),
+            command_targets=mocap_targets.copy(),
+            processed_targets=action_result.targets.copy(),
+            controller_targets=controller_targets.copy(),
+            reset_applied=pending_reset.copy(),
+            progress=self.progress.copy(),
+            trajectory_steps=self.trajectory_steps.copy(),
+            target_indices=self._target_indices().copy(),
+            physical=physical,
+            observation=observation,
+            reward=reward,
+            termination=termination,
+        )
+        self.control_call += 1
         # ``episode_length`` is a rollout/statistics setting in this source
         # slice, not an independent physics horizon. A source trajectory end
         # or deviation is therefore a terminal transition, never a timeout.
