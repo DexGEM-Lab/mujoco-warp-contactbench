@@ -32,6 +32,18 @@ assets/mano_hand_s02 -> git@192.168.10.116:ai/group-ai-public/group-sim-assets/m
 3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
 ```
 
+## Pi Task Worktrees
+
+From the primary worktree, create a feature task, linked worktree, and matching Pi session with:
+
+```bash
+scripts/start_pi_task.sh feat controller-sync
+```
+
+Use `feature` as an alias for `feat`, or `scripts/start_pi_task.sh case <context> <topic>` for case work. Add `--dry-run` to inspect without changing Git or `--no-launch` to create the branch and worktree without starting Pi. The enforced branch topology and naming rules are in [`.git-guard/contribution.md`](.git-guard/contribution.md).
+
+After this feature is merged into `dev` and the primary worktree is switched to `dev`, run `.git-guard/enable.sh` there to enable hooks repository-locally. GitGuard is a local accidental-workflow guard, not a security boundary.
+
 ## Local uv Environment
 
 ```bash
