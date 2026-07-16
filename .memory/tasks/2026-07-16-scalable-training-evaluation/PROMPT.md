@@ -10,13 +10,14 @@ Both GPU2 and an otherwise empty GPU3 completed one 4096x48 PPO update at about 
 
 ## Required behavior
 
-- Decouple evaluation vector count from training vector count through a validated CLI/budget field, defaulting to `min(training_num_envs, 128)` unless explicitly set.
+- Decouple evaluation vector count from training vector count through a validated CLI/budget field, defaulting to `min(training_num_envs, 128)`. Explicit values must remain within `1..min(training_num_envs, 128)` so the original duplicate-4096 OOM cannot be requested through this bounded path.
 - Zero, untrained-policy, and trained-policy evaluations must use the same evaluation count and same trajectory assignment prefix.
 - The untrained evaluation must represent the exact policy/value/normalizer/optimizer initialization used to start training. Preserve this with a native checkpoint load boundary rather than relying on repeated RNG initialization.
-- Final trained evaluation must continue to use a fresh runtime loaded from the final native checkpoint.
+- Final trained evaluation must continue to use a fresh runtime loaded from the final native checkpoint. Release the initial evaluator before training so at most one bounded evaluator coexists with the training runtime.
 - Evaluation-only PPO minibatch configuration must be valid for its vector batch; record training and evaluation counts/configs distinctly and do not change the training minibatch or PPO update semantics.
 - Avoid leaving temporary checkpoint artifacts after success; preserve explicit failures rather than silently falling back.
-- Update docs and focused tests.
+- Preserve the existing W&B `evaluation/policy/*` time series as a backward-compatible alias while adding unambiguous `evaluation/untrained/*` and `evaluation/trained/*` keys.
+- Update docs and focused tests, including a real native checkpoint payload loaded into two destination agents with all required modules verified.
 
 ## Constraints
 
