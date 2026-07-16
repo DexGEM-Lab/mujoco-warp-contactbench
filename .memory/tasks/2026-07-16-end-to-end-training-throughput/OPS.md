@@ -157,3 +157,35 @@
   1.582 ms vectorized, 60.349x, with maximum absolute difference 3.55e-15. The
   two-step CPU runtime equivalence matched at `atol=1e-12`. Focused validation
   passed 7 decoder/device tests and 27 environment/device tests.
+- 2026-07-16T18:26:48+08:00: Attempted to build the new isolated mirror
+  `/home/jay/dexrobot/FromSSH/manoRL_mujoco-benchmarks/feat-end-to-end-training-throughput-00918e5`
+  from remote primary `/home/jay/dexrobot/FromSSH/manoRL_mujoco`, but rsync
+  failed with `No space left on device` while copying
+  `assets/all_assets/Assets/sim/DexYCB/010_potted_meat_can/textured.obj`.
+  Remote `/mnt/user-home` reported 2.0T total, 100% used, 18M available; the
+  partial mirror reached 1.7G and has no outputs. No feature overlay, benchmark
+  child, sampler, or GPU process started. No prior artifact was deleted.
+- 2026-07-16T18:37:55+08:00: Recreated the new mirror at
+  `/home/jay/dexrobot/FromSSH/manoRL_mujoco-benchmarks/feat-end-to-end-training-throughput-00918e5`
+  with `cp -al` from old mirror
+  `/home/jay/dexrobot/FromSSH/manoRL_mujoco-benchmarks/feat-end-to-end-training-throughput-b7f1171`.
+  Removed only the new clone's hardlinked `outputs/` directory, overlaid committed
+  `sim/manorl/environment.py` and `tests/manorl/test_device_resident_controls.py`
+  without `--inplace`, and uploaded commit `00918e59c2045374a6f50e727a5c950c0fbe6966`
+  provenance. Old mirror feature hashes and its 74-file outputs manifest matched
+  before and after exactly.
+- 2026-07-16T18:37:55+08:00: Existing v3 child harness validation completed all
+  16 stepping children (GPU0/GPU3 x repeats 0/1 x four modes), each with unique
+  JSON, stdout/stderr, sampler, and provenance artifacts; all child exits were 0,
+  occupancy checks passed, and the completion marker was written. New output root:
+  `/home/jay/dexrobot/FromSSH/manoRL_mujoco-benchmarks/feat-end-to-end-training-throughput-00918e5/outputs/manorl/bench_phase1_vectorized_00918e5_20260716_1826`.
+  The comparison artifact is `comparison_old_prevectorized.json`; 9 of 16 new cells
+  had matching old pre-vectorized artifacts, with median throughput ratio 2.7287x.
+  Seven new cells had no matching old artifact and were not used in that comparison;
+  prior incomplete/failure artifacts remain excluded.
+- 2026-07-16T18:37:55+08:00: New validation summary reports static contact
+  capacity 63,552 and example profiled nacon sample count 48, mean 13,756.625,
+  p50 12,697, p95 18,692.5, max 18,836. Raw `efc__force` is float32 shape
+  `(2048,512)` nbytes 4,194,304; host materialization is float64 shape
+  `(2048,512)` nbytes 8,388,608. These are raw-buffer/materialization bytes only,
+  not PCIe-transfer measurements. Summary artifact: `validation_summary.json`.
