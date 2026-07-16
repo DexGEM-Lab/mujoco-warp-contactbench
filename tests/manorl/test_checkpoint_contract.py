@@ -104,8 +104,13 @@ except CheckpointFormatError as exc:
     assert agent.loaded is None
 else:
     raise AssertionError("missing environment contract was accepted")
-load_skrl_checkpoint_for_inference(agent, checkpoint)
-assert agent.loaded == str(checkpoint)
+try:
+    load_skrl_checkpoint_for_inference(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "environment contract is missing" in str(exc)
+    assert agent.loaded is None
+else:
+    raise AssertionError("inference accepted a missing environment contract")
 
 mismatched_environment = dict(metadata)
 mismatched_environment["environment_contract"] = "legacy_residual_xyz_0p005_v1"
@@ -118,6 +123,13 @@ except CheckpointFormatError as exc:
     assert agent.loaded is None
 else:
     raise AssertionError("mismatched environment contract was accepted")
+try:
+    load_skrl_checkpoint_for_inference(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "environment contract" in str(exc) and "required" in str(exc)
+    assert agent.loaded is None
+else:
+    raise AssertionError("inference accepted a mismatched environment contract")
 '''
     result = subprocess.run(
         [sys.executable, "-c", script, str(tmp_path)],

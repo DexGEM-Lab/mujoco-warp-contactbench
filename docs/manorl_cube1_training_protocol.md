@@ -30,9 +30,9 @@ than being simulated using cube geometry.
 - PPO optimizes that environment reward at raw `1.0x` under
   `target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`;
   no skrl reward shaper is configured. This intentionally diverges from the
-  sibling IsaacGym setup's fixed `0.5x` shaper. Existing v1 checkpoints remain
-  valid for inference-only visualization, but strict training resume rejects
-  their retired objective contracts.
+  sibling IsaacGym setup's fixed `0.5x` shaper. Native loads, including
+  inference-only visualization, reject sidecars that do not declare the current
+  environment/control contract.
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
@@ -100,9 +100,9 @@ state. Native checkpoint sidecars must declare both
 `reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2` and
 `ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`, and
 `environment_contract: target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p15_v1`.
-Missing or mismatched contracts fail before resume rather than silently changing
-the training objective. Existing v1 sidecars are accepted only by the
-inference-only loader used for visualization, not by strict resume loading.
+Missing or mismatched environment contracts fail before `agent.load` for both
+resume and inference, so a visualization cannot silently run under different
+control or terminal dynamics.
 
 ## Launch
 

@@ -16,8 +16,8 @@ The same policy/checkpoint executed under this mapping produces different physic
 
 Target defaults now bind normalized XYZ residuals to `(0.003, 0.003, 0.003)`, gamma `0.9`, and `+/-0.03 m`, while rotation, joint mapping, the 26D `[-1, 1]` Box, and the 100-step early phase remain unchanged. Terminal-enabled environment, train/evaluation, viewer, and recorder constructors resolve `0.15 m`; diagnostic terminal-disabled paths remain unbounded. The strict reset predicate remains `distance > threshold`.
 
-`ENVIRONMENT_CONTRACT_ID` identifies this control/termination behavior independently of reward contracts. Native v2 sidecars save it; strict resume rejects missing or mismatched values before `agent.load`, and inference remains compatible with a native old sidecar missing only this field. Runtime, W&B, metrics, and Rerun metadata serialize the identifier and resolved mapping.
+`ENVIRONMENT_CONTRACT_ID` identifies this control/termination behavior independently of reward contracts. Native v2 sidecars save it; every native checkpoint loader, including inference, rejects missing or mismatched values before `agent.load`. Runtime, W&B, metrics, and Rerun metadata serialize the identifier and resolved mapping.
 
 ## Decisive validation
 
-Focused configured-runtime tests cover recurrence/caps in both signs, exact and above threshold behavior with early suppression, unchanged rotation/joint/action Box behavior, terminal constructor defaults, strict checkpoint compatibility, inference legacy compatibility, W&B serialization, and Rerun metadata.
+Focused configured-runtime tests cover recurrence/caps in both signs, exact and above threshold behavior with early suppression, unchanged rotation/joint/action Box behavior, terminal constructor defaults, missing/mismatched checkpoint compatibility rejection for resume and inference before `agent.load`, W&B serialization, and Rerun metadata.
