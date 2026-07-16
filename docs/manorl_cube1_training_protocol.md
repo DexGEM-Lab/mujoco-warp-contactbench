@@ -78,9 +78,19 @@ and does not reset before that zero-reference call count. Completing all 791 cal
 reported as a stretch result, not silently assumed. The reference baseline is a
 controller diagnostic, not a learned-policy comparator.
 
-The trained row is always evaluated from a fresh runtime after loading the
-native checkpoint. It is the executable artifact a user receives, and avoids
-reporting train-process-only normalizer or BatchNorm state. Native checkpoint sidecars must declare both
+Evaluation uses `min(--num-envs, 128)` worlds by default; pass
+`--evaluation-num-envs <positive-count>` to override that bounded count. The
+zero, untrained, and trained rows all use the same evaluation trajectory prefix.
+Their evaluation-only PPO configuration selects the largest divisor shared by
+the training minibatch and evaluation rollout batch, while the training PPO
+configuration and update semantics remain unchanged. The initial training
+policy, value, optimizer, and normalizer state is written to an owned temporary
+native checkpoint, loaded for the untrained row, then loaded again immediately
+before training. That temporary checkpoint and sidecar are removed after the
+boundary completes. The trained row is always evaluated from a fresh bounded
+runtime after loading the final native checkpoint. It is the executable artifact
+a user receives, and avoids reporting train-process-only normalizer or BatchNorm
+state. Native checkpoint sidecars must declare both
 `reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2` and
 `ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`.
 Missing or mismatched contracts fail before resume rather than silently changing

@@ -187,6 +187,8 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
         budget=budget,
         ppo_config=tool.ManoPPOConfig(),
         trajectory_assignments=[{"env_id": 0, "identity": "cube1_01_009", "row_index": 1}],
+        evaluation_ppo_config=tool.ManoPPOConfig(minibatch_size=768),
+        evaluation_trajectory_assignments=[{"env_id": 0, "identity": "cube1_01_009", "row_index": 1}],
         device={"torch": "2.13.0", "skrl": "cuda", "jax": "gpu"},
     )
 
@@ -195,6 +197,8 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["training_budget"]["wall_clock_seconds"] is None
     assert config["reward"]["ppo_scale"] == 1.0
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
+    assert config["evaluation"]["num_envs"] == 64
+    assert config["evaluation"]["ppo_config"]["minibatch_size"] == 768
     assert config["device"]["skrl"] == "cuda"
 
 

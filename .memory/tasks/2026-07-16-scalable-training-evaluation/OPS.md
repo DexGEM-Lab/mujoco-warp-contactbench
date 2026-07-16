@@ -1,0 +1,4 @@
+# Operations Evidence
+
+- 2026-07-16T12:35:32+08:00: Coordinator created feature from dev e9c2e01 after two discriminating Server2 preflights. GPU2 and empty GPU3 each completed 4096 env x 48 rollout and one PPO update (~10.5k transitions/s), then failed only after final checkpoint when a second 4096-world fresh evaluation runtime attempted a 275,930,880-byte Warp allocation. No worker changes or tests yet.
+- 2026-07-16T13:10:00+08:00: Implemented bounded evaluation construction: resolved evaluation count defaults to min(training, 128), an explicit positive CLI override is serialized, and evaluation minibatches use gcd(training minibatch, evaluation rollout batch). Added native initial-checkpoint load boundary and focused fake-runtime tests for 4096/128 construction and checkpoint sequence. No GPU process was started.

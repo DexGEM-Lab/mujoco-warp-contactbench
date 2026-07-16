@@ -518,3 +518,126 @@ def test_cli_rejects_invalid_explicit_wall_clock_cap(
         tool.main(arguments)
 
     assert "wall-clock-seconds must be a finite positive value when provided" in capsys.readouterr().err
+
+
+def test_evaluation_budget_defaults_to_bounded_prefix_and_uses_valid_minibatch() -> None:
+    tool = _load_tool()
+
+    training = tool.TrainingBudget(num_envs=4096, minibatch_size=4096)
+    small = tool.TrainingBudget(num_envs=64)
+    override = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=96, minibatch_size=4096)
+
+    assert training.resolved_evaluation_num_envs == 128
+    assert small.resolved_evaluation_num_envs == 64
+    assert override.resolved_evaluation_num_envs == 96
+    assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=128).minibatch_size == 2048
+    assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=96).minibatch_size == 512
+    with pytest.raises(ValueError, match="evaluation_num_envs must be positive"):
+        _ = tool.TrainingBudget(evaluation_num_envs=0).resolved_evaluation_num_envs
+
+
+def test_cli_serializes_default_and_override_evaluation_counts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tool = _load_tool()
+    captured = []
+    monkeypatch.setattr(tool, "run", lambda output, budget: captured.append(budget) or {})
+
+    tool.main(["--output", str(tmp_path / "default"), "--num-envs", "4096", "--minibatch-size", "4096"])
+    assert captured[-1].resolved_evaluation_num_envs == 128
+    tool.main([
+        "--output", str(tmp_path / "override"), "--num-envs", "4096", "--minibatch-size", "4096",
+        "--evaluation-num-envs", "96",
+    ])
+    assert captured[-1].resolved_evaluation_num_envs == 96
+    with pytest.raises(SystemExit, match="2"):
+        tool.main(["--output", str(tmp_path / "invalid"), "--evaluation-num-envs", "0"])
+    assert "evaluation-num-envs must be positive when provided" in capsys.readouterr().err
+
+
+def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    constructions: list[tuple[str, int, int]] = []
+    loads: list[tuple[str, str]] = []
+    modes: list[tuple[str, str]] = []
+
+    class Runtime:
+        def __init__(self, name: str, config: object) -> None:
+            self.name = name
+            self.device = "cuda"
+            self.config = config
+            self.agent = SimpleNamespace(name=name, cfg=SimpleNamespace(learning_starts=None))
+            self.gymnasium_env = SimpleNamespace(environment=None)
+            self.model = SimpleNamespace(parameters=lambda: [])
+
+        def checkpoint_metadata(self) -> dict[str, object]:
+            return {"runtime": self.name}
+
+    class Physical:
+        def __init__(self, config: object) -> None:
+            self.config = config
+            self.contact_start_frame = 250
+            self.jax = SimpleNamespace(default_backend=lambda: "gpu")
+
+    def trajectories(_: object, *, num_envs: int) -> SimpleNamespace:
+        return SimpleNamespace(num_envs=num_envs)
+
+    def build_physical(_: object, config: object) -> Physical:
+        return Physical(config)
+
+    def build_runtime(physical: Physical, config: object) -> Runtime:
+        name = "training" if not constructions else f"evaluation-{len(constructions)}"
+        constructions.append((name, physical.config.num_envs, config.minibatch_size))
+        return Runtime(name, config)
+
+    def assignments(trajectory_batch: SimpleNamespace) -> list[dict[str, object]]:
+        return [{"env_id": index, "identity": f"prefix-{index}"} for index in range(trajectory_batch.num_envs)]
+
+    def save(_: object, path: Path, **__: object) -> Path:
+        return path
+
+    def evaluate(runtime: Runtime, mode: str) -> object:
+        modes.append((runtime.name, mode))
+        return tool.EvaluationResult(mode, 1, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, False, False, True, [1.0], [0.0])
+
+    monkeypatch.setattr(tool, "_assert_cuda_runtime", lambda: None)
+    monkeypatch.setattr(tool, "load_assigned_trajectory_batch", trajectories)
+    monkeypatch.setattr(tool, "MujocoManoEnvironment", build_physical)
+    monkeypatch.setattr(tool, "ManoGymnasiumVectorEnv", lambda physical: physical)
+    monkeypatch.setattr(tool, "ManoSkrlRuntime", build_runtime)
+    monkeypatch.setattr(tool, "_trajectory_assignments", assignments)
+    monkeypatch.setattr(tool, "_save_checkpoint_atomically", save)
+    monkeypatch.setattr(tool, "_update_last_checkpoint", lambda output, checkpoint: output / "last.pt")
+    monkeypatch.setattr(tool, "load_skrl_checkpoint", lambda agent, path: loads.append((agent.name, path.name)) or path)
+    monkeypatch.setattr(tool, "_evaluate", evaluate)
+    monkeypatch.setattr(tool, "_train", lambda *args, **kwargs: ([], 0, 0.0))
+
+    result = tool.run(tmp_path / "run", tool.TrainingBudget(num_envs=4096, updates=1, minibatch_size=4096))
+
+    assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048), ("evaluation-2", 128, 2048)]
+    assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-2", "trained")]
+    assert loads[0][0] == "evaluation-1" and loads[1][0] == "training"
+    assert loads[0][1] == loads[1][1] and loads[0][1].startswith(".initial-")
+    assert loads[2] == ("evaluation-2", "run.pt")
+    assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
+    assert result["budget"]["evaluation_num_envs"] == 128
+    assert not list((tmp_path / "run").glob(".initial-*"))
+
+
+def test_owned_initial_checkpoint_cleans_up_after_failure_and_refuses_collisions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    with pytest.raises(RuntimeError, match="interrupted"):
+        with tool._owned_initial_checkpoint(tmp_path) as checkpoint:
+            tool._checkpoint_sidecar_path(checkpoint).write_text("sidecar", encoding="utf-8")
+            raise RuntimeError("interrupted")
+    assert not list(tmp_path.glob(".initial-*"))
+
+    monkeypatch.setattr(tool, "uuid4", lambda: SimpleNamespace(hex="collision"))
+    (tmp_path / ".initial-collision.pt").touch()
+    with pytest.raises(RuntimeError, match="could not reserve"):
+        with tool._owned_initial_checkpoint(tmp_path):
+            pass
