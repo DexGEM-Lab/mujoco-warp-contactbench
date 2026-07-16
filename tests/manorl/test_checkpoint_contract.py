@@ -12,7 +12,8 @@ import sys
 
 import torch
 
-from sim.manorl.checkpoint import CheckpointFormatError, load_skrl_checkpoint, save_skrl_checkpoint
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
+from sim.manorl.checkpoint import CheckpointFormatError, load_skrl_checkpoint, load_skrl_checkpoint_for_inference, save_skrl_checkpoint
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 
 
@@ -48,6 +49,7 @@ save_skrl_checkpoint(agent, checkpoint, runtime_config={"reward_contract": REWAR
 metadata = json.loads(sidecar(checkpoint).read_text(encoding="utf-8"))
 assert metadata["reward_contract"] == REWARD_CONTRACT_ID
 assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
+assert metadata["environment_contract"] == ENVIRONMENT_CONTRACT_ID
 load_skrl_checkpoint(agent, checkpoint)
 assert agent.loaded == str(checkpoint)
 
@@ -90,6 +92,44 @@ except CheckpointFormatError as exc:
     assert "PPO reward contract is missing" in str(exc)
 else:
     raise AssertionError("missing PPO reward contract was accepted")
+
+legacy_environment = dict(metadata)
+legacy_environment.pop("environment_contract")
+sidecar(checkpoint).write_text(json.dumps(legacy_environment), encoding="utf-8")
+agent.loaded = None
+try:
+    load_skrl_checkpoint(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "environment contract is missing" in str(exc)
+    assert agent.loaded is None
+else:
+    raise AssertionError("missing environment contract was accepted")
+try:
+    load_skrl_checkpoint_for_inference(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "environment contract is missing" in str(exc)
+    assert agent.loaded is None
+else:
+    raise AssertionError("inference accepted a missing environment contract")
+
+mismatched_environment = dict(metadata)
+mismatched_environment["environment_contract"] = "legacy_residual_xyz_0p005_v1"
+sidecar(checkpoint).write_text(json.dumps(mismatched_environment), encoding="utf-8")
+agent.loaded = None
+try:
+    load_skrl_checkpoint(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "environment contract" in str(exc) and "required" in str(exc)
+    assert agent.loaded is None
+else:
+    raise AssertionError("mismatched environment contract was accepted")
+try:
+    load_skrl_checkpoint_for_inference(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "environment contract" in str(exc) and "required" in str(exc)
+    assert agent.loaded is None
+else:
+    raise AssertionError("inference accepted a mismatched environment contract")
 '''
     result = subprocess.run(
         [sys.executable, "-c", script, str(tmp_path)],

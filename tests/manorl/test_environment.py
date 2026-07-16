@@ -664,6 +664,9 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     assert metadata["reward_contract"] == REWARD_CONTRACT_ID
     assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert metadata["ppo_reward_scale"] == 1.0
+    assert metadata["environment_contract"] == "target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p15_v1"
+    assert metadata["residual_action"]["position_scale"] == [0.003, 0.003, 0.003]
+    assert metadata["residual_action"]["max_position_offset"] == 0.03
     assert metadata["thresholds"]["observation_contact_threshold_N"] == 2.0
     assert metadata["thresholds"]["reward_hand_object_threshold_N"] == REWARD_HAND_OBJECT_THRESHOLD_N
     assert "contact_force_threshold" not in metadata["thresholds"]

@@ -309,7 +309,7 @@ def test_record_rerun_cli_reports_null_without_reset_completed_episode(
         ["--output", str(tmp_path / "recording.rrd"), "--steps", "1", *mode_args]
     ) == 0
     assert captured_configs[0].residual_enabled is expected_residual_enabled
-    assert (captured_configs[0].max_deviation_distance == 0.1) is expected_terminal
+    assert (captured_configs[0].max_deviation_distance == 0.15) is expected_terminal
     assert '"rerun_artifact": null' in capsys.readouterr().out
 
 

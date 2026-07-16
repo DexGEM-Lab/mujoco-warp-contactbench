@@ -10,6 +10,7 @@ import sys
 
 import numpy as np
 
+from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.cli import parse_cli_bool
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.rerun_recorder import ManoRerunRecorder
@@ -53,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             num_envs=args.num_envs,
             residual_enabled=args.use_residual,
-            max_deviation_distance=0.1 if args.terminal else 1_000_000.0,
+            max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if args.terminal else 1_000_000.0,
             contact_capacity=max(128, 31 * args.num_envs + 64),
         ),
     )

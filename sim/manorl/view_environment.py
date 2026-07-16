@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
+from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.cli import parse_cli_bool
 from sim.manorl.contracts import CONTROL_TIMESTEP
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
@@ -504,7 +505,7 @@ def view_environment(
         raise ValueError(
             f"{trajectory_name} requires --num-envs {trajectory.num_envs}, got {num_envs}"
         )
-    max_deviation_distance = 0.1 if terminal else 1_000_000.0
+    max_deviation_distance = TARGET_MAX_DEVIATION_DISTANCE if terminal else 1_000_000.0
     contact_capacity = max(128, 31 * num_envs + 64)
     environment = MujocoManoEnvironment(
         trajectory,
@@ -608,7 +609,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=parse_cli_bool,
         default=True,
         metavar="{true,false}",
-        help="use the 0.1 m training deviation threshold (default: true)",
+        help="use the 0.15 m target training deviation threshold (default: true)",
     )
     parser.add_argument(
         "--loop",

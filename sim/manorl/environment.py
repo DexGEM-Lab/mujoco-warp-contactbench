@@ -17,6 +17,7 @@ from numpy.typing import NDArray
 
 from sim.manorl.abi import (
     ResidualActionConfig,
+    TARGET_MAX_DEVIATION_DISTANCE,
     TerminationResult,
     check_termination,
     early_phase_mask,
@@ -81,7 +82,7 @@ class EnvironmentConfig:
     compatibility: ObservationCompatibility = CURRENT_SOURCE_COMPATIBILITY
     residual_enabled: bool = True
     residual_action: ResidualActionConfig = ResidualActionConfig()
-    max_deviation_distance: float = 0.10
+    max_deviation_distance: float = TARGET_MAX_DEVIATION_DISTANCE
     deviation_penalty: float = 0.0
     episode_length: int = 600
     contact_capacity: int = CONTACT_CAPACITY

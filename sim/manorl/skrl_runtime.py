@@ -13,6 +13,7 @@ from skrl.memories.torch import RandomMemory
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
 from sim.manorl.normalization import PointCloudAwareRunningStandardScaler
@@ -113,6 +114,12 @@ class ManoSkrlRuntime:
             "reward_contract": REWARD_CONTRACT_ID,
             "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
             "ppo_reward_scale": PPO_REWARD_SCALE,
+            "environment_contract": ENVIRONMENT_CONTRACT_ID,
+            "environment": {
+                "residual_enabled": self.gymnasium_env.environment.config.residual_enabled,
+                "residual_action": asdict(self.gymnasium_env.environment.config.residual_action),
+                "max_deviation_distance": self.gymnasium_env.environment.config.max_deviation_distance,
+            },
             "ppo": asdict(self.config),
             "model_state_dict": self.model.state_dict_manifest(),
             "normalizer": "source_pointcloud_shared_xyz",

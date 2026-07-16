@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 
 if TYPE_CHECKING:
@@ -57,6 +58,7 @@ def save_skrl_checkpoint(agent: "PPO", path: str | Path, *, runtime_config: dict
         "format": CHECKPOINT_FORMAT,
         "reward_contract": REWARD_CONTRACT_ID,
         "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
+        "environment_contract": ENVIRONMENT_CONTRACT_ID,
         "runtime_config": runtime_config,
         "checkpoint_file": checkpoint.name,
     }
@@ -86,14 +88,25 @@ def _load_metadata(checkpoint: Path) -> dict[str, Any]:
     return metadata
 
 
+def _validate_environment_contract(metadata: dict[str, Any]) -> None:
+    environment_contract = metadata.get("environment_contract")
+    if not isinstance(environment_contract, str) or not environment_contract:
+        raise CheckpointFormatError("checkpoint environment contract is missing")
+    if environment_contract != ENVIRONMENT_CONTRACT_ID:
+        raise CheckpointFormatError(
+            f"checkpoint environment contract {environment_contract!r} != required {ENVIRONMENT_CONTRACT_ID!r}"
+        )
+
+
 def load_skrl_checkpoint_for_inference(agent: "PPO", path: str | Path) -> Path:
-    """Load a native checkpoint for visualization without accepting it for resume."""
+    """Load a native checkpoint for visualization under the current environment contract."""
 
     checkpoint = Path(path)
     if not checkpoint.is_file():
         raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
     _load_modules(checkpoint, device=agent.device)
-    _load_metadata(checkpoint)
+    metadata = _load_metadata(checkpoint)
+    _validate_environment_contract(metadata)
     agent.load(str(checkpoint))
     return checkpoint
 
@@ -116,5 +129,6 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
         raise CheckpointFormatError(
             f"checkpoint PPO reward contract {ppo_reward_contract!r} != required {PPO_REWARD_CONTRACT_ID!r}"
         )
+    _validate_environment_contract(metadata)
     agent.load(str(checkpoint))
     return checkpoint
