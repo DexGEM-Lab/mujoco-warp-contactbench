@@ -114,3 +114,46 @@
   undefined `source_commit` name and the next had a quote typo in a diagnostic
   branch. Neither changed mirror files or outputs. The simplified rerun completed
   the same manifest and seven-file hash checks successfully.
+- 2026-07-16T17:59:25+08:00: Frozen remote evidence state. Formal runner log
+  `/tmp/manorl-phase1-formal.log` stopped after eight GPU0 stepping cells and the
+  one GPU3 first-block stepping cell; no PPO cell ran. Stop reason was allowed-GPU
+  contention from PID `2072971`, user `zjx`, command
+  `/mnt/user-home/zjx/miniconda3/envs/seq2seq_retarget/bin/python
+  tools/diffusion/sample_diffusion.py ... --device cuda` on GPU3. The runner
+  exited failed-closed; no process was killed. GPU3 later became idle, but the
+  runner was not resumed. Preserve root
+  `/home/jay/dexrobot/FromSSH/manoRL_mujoco-benchmarks/feat-end-to-end-training-throughput-b7f1171/outputs/manorl/bench_phase1_gpu_blocks_20260716_1750`,
+  its manifest, and all raw JSON/log/smi/provenance artifacts.
+- Missing evidence cells are GPU3's remaining 11 stepping cells, GPU0 repeat 2's
+  four stepping cells, and all PPO cells. The target PPO block is 24 cells total
+  (GPU0/GPU3 x repeats 0/1/2 x four modes); zero PPO cells are valid. This partial
+  run is not benchmark completion and no statistics are reported from it.
+- 2026-07-16T18:04:39+08:00: Later GPU0-only continuation was explicitly
+  stopped before execution. A local `/tmp/run_gpu0_completion_49b2baf.sh` draft
+  was written but never transferred, launched, or used; no child process or
+  sampler started, and no remote artifact changed. The blocker remains the
+  reviewer freeze after GPU3 contention; preserve the partial root and wait for
+  explicit direction before any resume.
+- 2026-07-16T18:17:22+08:00: Implemented only the local vectorized contact
+  decoder change in `sim/manorl/environment.py`, retaining the original loop as
+  `_decode_contact_forces_reference` for equivalence tests. On a 12-contact,
+  4-world randomized valid fixture, numerical max absolute difference was 0;
+  40-call median timing was 93.325 us for the reference and 60.956 us for the
+  vectorized decoder (1.531x median speedup). Focused decoder/device tests passed
+  6/6; environment plus device-control tests passed 27/27. No remote command,
+  source optimization outside the decoder, PPO/profile change, or commit was made.
+- 2026-07-16T18:21:52+08:00: Independent realistic decoder microbenchmark on
+  batch=2048, count=13756, ngeom=21, nefc=512 reported reference median
+  95.462 ms and vectorized median 1.582 ms, a 60.349x median speedup. Maximum
+  absolute difference was 3.5527e-15; allclose and output-count assertions passed.
+  Independent runtime equivalence used two identical CPU
+  `MujocoManoEnvironment` instances for two identical steps, running the
+  vectorized decoder on one and temporarily monkeypatching the module decoder
+  to `_decode_contact_forces_reference` only while stepping the other. Observation,
+  reward, reset, timeout, physical positions, and contact/force fields matched at
+  `atol=1e-12`.
+- 2026-07-16T18:22:30+08:00: Confirmed decoder-only evidence summary: the realistic
+  2,048-world/13,756-contact microbenchmark measured 95.462 ms reference versus
+  1.582 ms vectorized, 60.349x, with maximum absolute difference 3.55e-15. The
+  two-step CPU runtime equivalence matched at `atol=1e-12`. Focused validation
+  passed 7 decoder/device tests and 27 environment/device tests.

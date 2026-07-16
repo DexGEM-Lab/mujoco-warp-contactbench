@@ -288,7 +288,7 @@ def _aggregate_geometry_contact_forces(
     return forces, per_world_count
 
 
-def _decode_contact_forces(
+def _decode_contact_forces_reference(
     *,
     count: int,
     geom: NDArray[np.int64],
@@ -352,6 +352,115 @@ def _decode_contact_forces(
         elif second_keypoint is not None and first_keypoint is None and first_geom in object_geom_ids:
             hand_object_forces[world_id, second_keypoint] -= world_force
         per_world_count[world_id] += 1
+    if not np.all(np.isfinite(geometry_forces)) or not np.all(np.isfinite(hand_object_forces)):
+        raise RuntimeError("MJX contact decoder produced a non-finite world force")
+    return geometry_forces, hand_object_forces, per_world_count
+
+
+def _decode_contact_forces(
+    *,
+    count: int,
+    geom: NDArray[np.int64],
+    world: NDArray[np.int64],
+    dimension: NDArray[np.int64],
+    addresses: NDArray[np.int64],
+    nefc: NDArray[np.int64],
+    friction: NDArray[np.float64],
+    frame: NDArray[np.float64],
+    constraint_force: NDArray[np.float64],
+    ngeom: int,
+    keypoint_geom_ids: Sequence[int],
+    object_geom_ids: set[int],
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
+    """Vectorized contact decoding with the loop implementation retained for tests."""
+
+    batch = len(nefc)
+    if count < 0:
+        raise ValueError("contact decoder requires a non-negative contact count")
+    if ngeom < 1 or constraint_force.ndim != 2 or constraint_force.shape[0] != batch:
+        raise ValueError("contact decoder received incompatible geometry or constraint-force shapes")
+    if len(keypoint_geom_ids) != len(KEYPOINT_NAMES) or len(set(keypoint_geom_ids)) != len(KEYPOINT_NAMES):
+        raise ValueError("contact decoder requires one source-order collision geom per keypoint")
+    keypoint_geom_id_set = set(keypoint_geom_ids)
+    if any(not 0 <= geom_id < ngeom for geom_id in keypoint_geom_id_set | object_geom_ids):
+        raise ValueError("contact decoder received an invalid keypoint or object geom")
+    if keypoint_geom_id_set & object_geom_ids:
+        raise ValueError("contact decoder requires disjoint hand and object collision geoms")
+
+    if np.asarray(geom).ndim != 2 or np.asarray(geom).shape[0] < count or np.asarray(geom).shape[1] != 2:
+        raise RuntimeError("contact decoder received an invalid geom-pair buffer shape")
+    if np.asarray(world).ndim != 1 or len(world) < count:
+        raise RuntimeError("contact decoder received an invalid world buffer shape")
+    if np.asarray(dimension).ndim != 1 or len(dimension) < count:
+        raise RuntimeError("contact decoder received an invalid dimension buffer shape")
+    if np.asarray(addresses).ndim != 2 or np.asarray(addresses).shape[0] < count or np.asarray(addresses).shape[1] != 4:
+        raise RuntimeError("contact decoder received an invalid address buffer shape")
+    if np.asarray(friction).ndim != 2 or np.asarray(friction).shape[0] < count or np.asarray(friction).shape[1] < 2:
+        raise RuntimeError("contact decoder received an invalid friction buffer shape")
+    frame_array = np.asarray(frame)
+    if frame_array.ndim != 3 or frame_array.shape[0] < count or frame_array.shape[1:] != (3, 3):
+        raise RuntimeError("contact decoder received an invalid frame buffer shape")
+
+    active_world = np.asarray(world[:count], dtype=np.int64)
+    active_dimension = np.asarray(dimension[:count], dtype=np.int64)
+    active_addresses = np.asarray(addresses[:count], dtype=np.int64)
+    active_geom = np.asarray(geom[:count], dtype=np.int64)
+    if np.any(active_world < 0) or np.any(active_world >= batch):
+        invalid = int(np.flatnonzero((active_world < 0) | (active_world >= batch))[0])
+        raise RuntimeError(f"contact {invalid} references invalid MJX world {int(active_world[invalid])}")
+    if np.any(active_dimension != 3):
+        raise RuntimeError("the bounded MANO scene requires condim=3 contacts")
+    if np.any(active_addresses < 0) or np.any(active_addresses >= nefc[active_world, None]):
+        invalid = int(np.flatnonzero(
+            np.any((active_addresses < 0) | (active_addresses >= nefc[active_world, None]), axis=1)
+        )[0])
+        raise RuntimeError(
+            f"contact {invalid} has a pyramidal constraint address outside world "
+            f"{int(active_world[invalid])}'s solved range"
+        )
+    if active_geom.shape != (count, 2):
+        raise RuntimeError("contact decoder received an invalid geom-pair buffer shape")
+    if np.any(active_geom < 0) or np.any(active_geom >= ngeom):
+        invalid = int(np.flatnonzero(
+            np.any((active_geom < 0) | (active_geom >= ngeom), axis=1)
+        )[0]) if count else 0
+        raise RuntimeError(f"contact {invalid} references an invalid MuJoCo geom")
+
+    geometry_forces = np.zeros((batch, ngeom, 3), dtype=np.float64)
+    hand_object_forces = np.zeros((batch, len(KEYPOINT_NAMES), 3), dtype=np.float64)
+    if count:
+        pyramid = constraint_force[active_world[:, None], active_addresses]
+        active_friction = np.asarray(friction[:count], dtype=np.float64)
+        local_force = np.column_stack(
+            (
+                pyramid.sum(axis=1),
+                (pyramid[:, 0] - pyramid[:, 1]) * active_friction[:, 0],
+                (pyramid[:, 2] - pyramid[:, 3]) * active_friction[:, 1],
+            )
+        )
+        world_force = np.einsum("ni,nij->nj", local_force, np.asarray(frame[:count], dtype=np.float64))
+        np.add.at(geometry_forces, (active_world, active_geom[:, 0]), -world_force)
+        np.add.at(geometry_forces, (active_world, active_geom[:, 1]), world_force)
+
+        keypoint_lookup = np.full(ngeom, -1, dtype=np.int64)
+        keypoint_lookup[np.asarray(keypoint_geom_ids, dtype=np.int64)] = np.arange(len(KEYPOINT_NAMES))
+        first_keypoint = keypoint_lookup[active_geom[:, 0]]
+        second_keypoint = keypoint_lookup[active_geom[:, 1]]
+        object_geom_array = np.asarray(sorted(object_geom_ids), dtype=np.int64)
+        first_hand = (first_keypoint >= 0) & (second_keypoint < 0) & np.isin(active_geom[:, 1], object_geom_array)
+        second_hand = (second_keypoint >= 0) & (first_keypoint < 0) & np.isin(active_geom[:, 0], object_geom_array)
+        np.add.at(
+            hand_object_forces,
+            (active_world[first_hand], first_keypoint[first_hand]),
+            world_force[first_hand],
+        )
+        np.add.at(
+            hand_object_forces,
+            (active_world[second_hand], second_keypoint[second_hand]),
+            -world_force[second_hand],
+        )
+
+    per_world_count = np.bincount(active_world, minlength=batch).astype(np.int64, copy=False)
     if not np.all(np.isfinite(geometry_forces)) or not np.all(np.isfinite(hand_object_forces)):
         raise RuntimeError("MJX contact decoder produced a non-finite world force")
     return geometry_forces, hand_object_forces, per_world_count
