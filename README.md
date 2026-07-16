@@ -173,6 +173,37 @@ its fixed sidecar records compatibility only. Exact progress remains in the
 immutable numbered and final checkpoint sidecars. Sibling output prefixes have
 independent checkpoint namespaces.
 
+Training stdout defaults to compact human summaries. Exact completed episode
+returns are first flushed to `<output>.episodes.jsonl.partial`, then summarized
+as count/mean/min/max; successful completion atomically publishes
+`<output>.episodes.jsonl`. Use `--console-format json` for the original JSON
+stdout event stream and final JSON result. Existing or active captured logs can
+be summarized without restarting training:
+
+```bash
+/home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  tools/watch_manorl_training.py outputs/manorl/server2.train.log --follow
+```
+
+For a local CUDA desktop session, the 8-world visual wrapper opens a tiled
+MuJoCo view of the actual PPO rollout worlds. It uses the target interpreter,
+8 training/evaluation worlds, one 384-sample minibatch, W&B off, a unique output
+prefix, and accepts extra trainer arguments after its defaults:
+
+```bash
+JAX_PLATFORMS=cuda scripts/train_manorl_cube1_visual.sh --updates 64
+```
+
+`--headless true` remains the default for the trainer. With `--headless false`,
+`--viewer-envs` must be within `--num-envs` and `--viewer-stride` is positive.
+The viewer mirrors post-step states only; it never selects actions or advances
+physics. It uses the same tiled controls as the standalone viewer: left-drag
+rotate, right-drag horizontal pan, middle-drag vertical pan, wheel zoom, and R
+reset. Close its window (or press Esc) to finish the active complete PPO
+rollout/update, then publish the normal checkpoint, evaluation, and artifacts.
+The graphical path requires `DISPLAY` or `WAYLAND_DISPLAY`; it still requires
+CUDA Torch and MJX-Warp, and has no CPU fallback.
+
 To create one W&B run using the authenticated default account, provision the
 locked SDK in the documented training interpreter, then add explicit tracking
 options. No API key or credentials belong in this repository:

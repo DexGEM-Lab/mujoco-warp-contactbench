@@ -168,12 +168,15 @@ for `total`, `distance_x`, `distance_y`, `distance_z`, `rotation`,
 update, `episode_return_mean`. It also records instantaneous and cumulative
 environment transitions per second for each PPO update, plus final throughput.
 Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
-record with parallel `env_ids` and exact `returns` arrays to stdout and
+record with parallel `env_ids` and exact `returns` arrays to
 `<output>.episodes.jsonl`; active records first accumulate in
 `<output>.episodes.jsonl.partial`, which is preserved after an interruption and
 atomically published only after successful training. This JSONL is the complete
 per-episode evidence while W&B receives one update-level return histogram rather
-than a log call for every episode. Histogram samples are retained only for the
+than a log call for every episode. Human stdout prints only completed count,
+mean, minimum, and maximum after the JSONL flush. `--console-format json`
+preserves the original JSON stdout records and final result for machine
+consumers. Histogram samples are retained only for the
 current update, bounded by one rollout batch (196,608 values at 4096 worlds and
 48 rollout steps), then discarded. W&B artifacts include that episode JSONL
 alongside the checkpoint and
@@ -206,6 +209,32 @@ the latest completed recording from another terminal with:
 /home/jay/anaconda3/envs/manorl_mujoco/bin/rerun \
   outputs/manorl/cube1_03_scratch_run.rrd
 ```
+
+A current or completed captured trainer log can be summarized without touching
+the training process:
+
+```bash
+/home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  tools/watch_manorl_training.py outputs/manorl/server2.train.log --follow
+```
+
+For local CUDA/X11-or-Wayland visual PPO training, run the 8-world wrapper:
+
+```bash
+JAX_PLATFORMS=cuda scripts/train_manorl_cube1_visual.sh --updates 64
+```
+
+It sets `--num-envs 8 --evaluation-num-envs 8 --minibatch-size 384`, W&B off,
+and `--headless false` with an eight-world tile view. Extra arguments follow the
+wrapper defaults and a timestamp/pid output prefix avoids collisions. The
+training viewer mirrors state after the trainer's own vector step, never calls
+policy or environment step methods, and renders every `--viewer-stride` steps.
+Its controls are left-drag rotate, right-drag horizontal pan, middle-drag
+vertical pan, wheel zoom, and R reset. Close the window or press Esc to request
+graceful exit after the current full rollout/update; regular checkpoint,
+evaluation, JSONL, and artifact publication
+then proceed. It requires a CUDA-capable training environment plus `DISPLAY` or
+`WAYLAND_DISPLAY`; no CPU fallback exists.
 
 The embedded Rerun blueprint explicitly displays the object point cloud and
 tracks the object with an orbital camera. It records actual state, target, 26D

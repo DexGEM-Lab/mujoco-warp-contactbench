@@ -13,7 +13,7 @@ import shutil
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal, Protocol
 from uuid import uuid4
 
 import numpy as np
@@ -55,6 +55,16 @@ class WandbOptions:
     tags: tuple[str, ...] = DEFAULT_WANDB_TAGS
 
 
+class TrainingObserver(Protocol):
+    """Render post-step state without owning PPO stepping or policy actions."""
+
+    close_requested: bool
+
+    def observe(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class TrainingBudget:
     num_envs: int = 64
@@ -72,6 +82,10 @@ class TrainingBudget:
     checkpoint_interval_updates: int | None = None
     minibatch_size: int = ManoPPOConfig().minibatch_size
     evaluation_num_envs: int | None = None
+    headless: bool = True
+    viewer_envs: int = 1
+    viewer_stride: int = 1
+    console_format: Literal["human", "json"] = "human"
 
     @property
     def transitions(self) -> int:
@@ -287,11 +301,58 @@ def _completed_episode_record(
     }
 
 
-def _write_episode_record(episode_file: Any, record: dict[str, object]) -> None:
+def _write_episode_record(
+    episode_file: Any, record: dict[str, object], *, console_format: Literal["human", "json"] = "json"
+) -> None:
+    """Flush exact return arrays durably before rendering their console summary."""
+
     serialized = json.dumps(record, sort_keys=True, separators=(",", ":"))
     episode_file.write(serialized + "\n")
     episode_file.flush()
-    print(serialized, flush=True)
+    _emit_console(console_format, "completed_episodes", record)
+
+
+def _format_completed_episode_record(record: dict[str, object]) -> str:
+    returns = np.asarray(record["returns"], dtype=np.float64)
+    return (
+        f"episodes update={record['update']} rollout_step={record['update_step']} "
+        f"count={returns.size} mean={returns.mean():.4f} min={returns.min():.4f} max={returns.max():.4f}"
+    )
+
+
+def _format_training_update(update: dict[str, Any]) -> str:
+    episode = ""
+    if "episode_return_mean" in update:
+        episode = f" episodes={int(update['completed_episode_count'])} return_mean={update['episode_return_mean']:.4f}"
+    return (
+        f"update={int(update['update'])} transitions={int(update['environment_transitions'])} "
+        f"reward={update['reward_mean']:.4f} contact={update['contact']:.4f} "
+        f"resets={int(update['reset_count'])} speed={update['update_environment_transitions_per_second']:.1f}/s "
+        f"elapsed={update['elapsed_seconds']:.1f}s{episode}"
+    )
+
+
+def _emit_console(console_format: Literal["human", "json"], event: str, payload: dict[str, Any]) -> None:
+    if console_format == "json":
+        if event == "completed_episodes":
+            print(json.dumps(payload, sort_keys=True, separators=(",", ":")), flush=True)
+        else:
+            print(json.dumps({"event": event, **payload}, sort_keys=True), flush=True)
+        return
+    if event == "completed_episodes":
+        print(_format_completed_episode_record(payload), flush=True)
+    elif event == "training_update":
+        print(_format_training_update(payload["metrics"]), flush=True)
+    elif event == "checkpoint":
+        print(f"checkpoint update={int(payload['update'])} path={payload['path']}", flush=True)
+    elif event == "training_complete":
+        throughput = payload["throughput"]
+        print(
+            f"training complete transitions={int(throughput['environment_transitions'])} "
+            f"elapsed={throughput['elapsed_seconds']:.1f}s "
+            f"speed={throughput['final_environment_transitions_per_second']:.1f}/s",
+            flush=True,
+        )
 
 
 def _assert_cuda_runtime() -> None:
@@ -361,6 +422,7 @@ def _train(
     recorder: ManoRerunRecorder | None = None,
     on_update: Callable[[dict[str, Any]], None] | None = None,
     on_completed_episodes: Callable[[dict[str, object]], None] | None = None,
+    observer: TrainingObserver | None = None,
 ) -> tuple[list[dict[str, Any]], int, float]:
     environment = runtime.gymnasium_env.environment
     config = runtime.config
@@ -387,6 +449,8 @@ def _train(
                     observations, None, timestep=global_timestep, timesteps=budget.transitions
                 )
             next_observations, reward, terminated, truncated, infos = runtime.env.step(actions)
+            if observer is not None:
+                observer.observe()
             if recorder is not None and global_timestep % budget.rerun_stride == 0:
                 recorder.record_transition()
             if not torch.isfinite(next_observations).all() or not torch.isfinite(reward).all():
@@ -463,6 +527,9 @@ def _train(
         updates.append(_public_update_metrics(update_metrics))
         if on_update is not None:
             on_update(update_metrics)
+        # A GLFW close is a request to stop after this complete PPO rollout.
+        if observer is not None and observer.close_requested:
+            break
     return updates, global_timestep * environment.config.num_envs, time.monotonic() - started
 
 
@@ -539,6 +606,21 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
         }
         for env_id, item in enumerate(trajectories.trajectories)
     ]
+
+
+def _build_training_observer(
+    environment: MujocoManoEnvironment, budget: TrainingBudget
+) -> TrainingObserver | None:
+    if budget.headless:
+        return None
+    from sim.manorl.view_environment import TrainingViewer
+
+    return TrainingViewer(
+        environment,
+        tile_envs=budget.viewer_envs,
+        stride=budget.viewer_stride,
+        quiet=budget.console_format == "json",
+    )
 
 
 def _build_evaluation_runtime(
@@ -741,11 +823,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         gc.collect()
         if wandb_run is not None:
             _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], transitions=0)
-        recorder = (
-            ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
-            if rerun_path is not None
-            else None
-        )
+        recorder: ManoRerunRecorder | None = None
+        observer: TrainingObserver | None = None
+        published_rerun: Path | None = None
         periodic_checkpoints: list[Path] = []
 
         def on_update(update: dict[str, Any]) -> None:
@@ -754,28 +834,51 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             )
             if periodic_checkpoint is not None:
                 periodic_checkpoints.append(periodic_checkpoint)
-            print(json.dumps({"event": "training_update", "metrics": _public_update_metrics(update)}, sort_keys=True))
+                _emit_console(
+                    budget.console_format,
+                    "checkpoint",
+                    {"update": update["update"], "path": str(periodic_checkpoint)},
+                )
+            _emit_console(
+                budget.console_format,
+                "training_update",
+                {"metrics": _public_update_metrics(update)},
+            )
             if wandb_run is not None:
                 _log_wandb_update(wandb_run, wandb, update)
 
-        episodes_path.parent.mkdir(parents=True, exist_ok=True)
-        with _episode_records_file(episodes_path) as episode_file:
-            try:
+        try:
+            recorder = (
+                ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
+                if rerun_path is not None
+                else None
+            )
+            observer = _build_training_observer(physical, budget)
+            episodes_path.parent.mkdir(parents=True, exist_ok=True)
+            with _episode_records_file(episodes_path) as episode_file:
                 updates, transitions, elapsed = _train(
                     runtime,
                     budget,
                     recorder,
                     on_update=on_update,
-                    on_completed_episodes=lambda record: _write_episode_record(episode_file, record),
+                    on_completed_episodes=lambda record: _write_episode_record(
+                        episode_file, record, console_format=budget.console_format
+                    ),
+                    observer=observer,
                 )
+        finally:
+            try:
+                if observer is not None:
+                    observer.close()
             finally:
-                published_rerun = None if recorder is None else recorder.close()
+                if recorder is not None:
+                    published_rerun = recorder.close()
         throughput = {
             "environment_transitions": transitions,
             "elapsed_seconds": elapsed,
             "final_environment_transitions_per_second": _transitions_per_second(transitions, elapsed),
         }
-        print(json.dumps({"event": "training_complete", "throughput": throughput}, sort_keys=True))
+        _emit_console(budget.console_format, "training_complete", {"throughput": throughput})
         rerun_artifact = None if published_rerun is None else str(published_rerun)
         final_update = {
             "update": float(len(updates)),
@@ -905,6 +1008,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gesture", default="01")
     parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
+    parser.add_argument("--headless", type=parse_cli_bool, default=True, metavar="{true,false}")
+    parser.add_argument("--viewer-envs", type=int, default=1, help="number of training worlds to tile when headless=false")
+    parser.add_argument("--viewer-stride", type=int, default=1, help="render every N completed vector steps when headless=false")
+    parser.add_argument("--console-format", choices=("human", "json"), default="human")
     parser.add_argument("--wandb", type=parse_cli_bool, default=False, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
@@ -929,6 +1036,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("wall-clock-seconds must be a finite positive value when provided")
     if not 0 <= args.rerun_env_id < args.num_envs:
         parser.error("rerun-env-id must be within num-envs")
+    if not 1 <= args.viewer_envs <= args.num_envs:
+        parser.error("viewer-envs must be within num-envs")
+    if args.viewer_stride < 1:
+        parser.error("viewer-stride must be positive")
     result = run(
         args.output,
         TrainingBudget(
@@ -954,9 +1065,16 @@ def main(argv: list[str] | None = None) -> int:
             args.checkpoint_interval_updates,
             args.minibatch_size,
             args.evaluation_num_envs,
+            args.headless,
+            args.viewer_envs,
+            args.viewer_stride,
+            args.console_format,
         ),
     )
-    print(json.dumps(result, indent=2, sort_keys=True))
+    if args.console_format == "json":
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"artifacts metrics={args.output.with_suffix('.json')} checkpoint={args.output.with_suffix('.pt')}", flush=True)
     return 0
 
 

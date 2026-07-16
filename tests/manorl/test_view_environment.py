@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from sim.manorl.view_environment import _tile_layout, parse_args
@@ -17,6 +19,188 @@ def _load_tool(name: str):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _fake_graphics(*, fail_context: bool = False) -> tuple[object, object, dict[str, object]]:
+    state: dict[str, object] = {"callbacks": {}, "moves": [], "updates": [], "renders": [], "destroy": 0, "terminate": 0, "closed": False}
+    window = object()
+
+    def callback(name: str):
+        return lambda _, value: state["callbacks"].__setitem__(name, value)
+
+    glfw = SimpleNamespace(
+        PRESS=1,
+        MOUSE_BUTTON_LEFT=0,
+        MOUSE_BUTTON_MIDDLE=1,
+        MOUSE_BUTTON_RIGHT=2,
+        KEY_ESCAPE=256,
+        KEY_R=82,
+        init=lambda: True,
+        create_window=lambda *_: window,
+        make_context_current=lambda _: None,
+        swap_interval=lambda _: None,
+        set_mouse_button_callback=callback("mouse"),
+        set_cursor_pos_callback=callback("cursor"),
+        set_scroll_callback=callback("scroll"),
+        set_key_callback=callback("key"),
+        get_cursor_pos=lambda _: (10.0, 20.0),
+        get_window_size=lambda _: (100, 100),
+        get_framebuffer_size=lambda _: (1600, 900),
+        window_should_close=lambda _: state["closed"],
+        set_window_should_close=lambda _, value: state.__setitem__("closed", value),
+        swap_buffers=lambda _: None,
+        poll_events=lambda: None,
+        destroy_window=lambda _: state.__setitem__("destroy", state["destroy"] + 1),
+        terminate=lambda: state.__setitem__("terminate", state["terminate"] + 1),
+    )
+
+    class Camera:
+        def __init__(self) -> None:
+            self.type = None
+            self.azimuth = self.elevation = self.distance = 0.0
+            self.lookat = np.zeros(3)
+
+    class Option:
+        pass
+
+    class Scene:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+    class Context:
+        def __init__(self, *_: object, **__: object) -> None:
+            if fail_context:
+                raise RuntimeError("context failed")
+
+    class Rect:
+        def __init__(self, *values: int) -> None:
+            self.values = values
+
+    mujoco = SimpleNamespace(
+        MjvCamera=Camera,
+        MjvOption=Option,
+        MjvScene=Scene,
+        MjrContext=Context,
+        MjrRect=Rect,
+        mjtCamera=SimpleNamespace(mjCAMERA_FREE="free"),
+        mjtFontScale=SimpleNamespace(mjFONTSCALE_150="scale"),
+        mjtCatBit=SimpleNamespace(mjCAT_ALL="all"),
+        mjtFont=SimpleNamespace(mjFONT_NORMAL="font"),
+        mjtGridPos=SimpleNamespace(mjGRID_TOPLEFT="grid"),
+        mjtMouse=SimpleNamespace(
+            mjMOUSE_ROTATE_V="rotate", mjMOUSE_MOVE_H="move_h", mjMOUSE_MOVE_V="move_v", mjMOUSE_ZOOM="zoom"
+        ),
+        mjv_defaultCamera=lambda _: None,
+        mjv_defaultOption=lambda _: None,
+        mjv_moveCamera=lambda _, action, dx, dy, __, ___: state["moves"].append((action, dx, dy)),
+        mjv_updateScene=lambda *_: state["updates"].append("scene"),
+        mjr_rectangle=lambda *_: None,
+        mjr_render=lambda *_: state["renders"].append("render"),
+        mjr_overlay=lambda *_: None,
+    )
+    return glfw, mujoco, state
+
+
+def _training_environment() -> tuple[object, dict[str, int]]:
+    calls = {"host": 0}
+    visual = SimpleNamespace(
+        rgba=SimpleNamespace(fog=np.zeros(4), haze=np.zeros(4)),
+        headlight=SimpleNamespace(ambient=np.zeros(3), diffuse=np.zeros(3), specular=np.zeros(3)),
+    )
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=2),
+        model=SimpleNamespace(vis=visual),
+        trajectories=[SimpleNamespace(identity=SimpleNamespace(identity=f"env-{index}")) for index in range(2)],
+    )
+    def host_data_batch() -> list[object]:
+        calls["host"] += 1
+        return [object(), object()]
+    environment.host_data_batch = host_data_batch
+    return environment, calls
+
+
+def test_training_viewer_renders_states_without_stepping_and_preserves_controls(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sim.manorl.view_environment as viewer
+
+    glfw, mujoco, state = _fake_graphics()
+    monkeypatch.setitem(sys.modules, "glfw", glfw)
+    monkeypatch.setitem(sys.modules, "mujoco", mujoco)
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    environment, calls = _training_environment()
+    training_viewer = viewer.TrainingViewer(environment, tile_envs=2)
+
+    training_viewer.render()
+    assert calls == {"host": 1}
+    assert state["updates"] == ["scene", "scene"]
+    assert state["renders"] == ["render", "render"]
+
+    callbacks = state["callbacks"]
+    callbacks["mouse"](None, glfw.MOUSE_BUTTON_LEFT, glfw.PRESS, 0)
+    callbacks["cursor"](None, 20.0, 30.0)
+    callbacks["mouse"](None, glfw.MOUSE_BUTTON_LEFT, 0, 0)
+    callbacks["mouse"](None, glfw.MOUSE_BUTTON_RIGHT, glfw.PRESS, 0)
+    callbacks["cursor"](None, 30.0, 40.0)
+    callbacks["mouse"](None, glfw.MOUSE_BUTTON_RIGHT, 0, 0)
+    callbacks["mouse"](None, glfw.MOUSE_BUTTON_MIDDLE, glfw.PRESS, 0)
+    callbacks["cursor"](None, 40.0, 50.0)
+    callbacks["scroll"](None, 0.0, 2.0)
+    training_viewer._camera.distance = 9.0
+    callbacks["key"](None, glfw.KEY_R, 0, glfw.PRESS, 0)
+    callbacks["key"](None, glfw.KEY_ESCAPE, 0, glfw.PRESS, 0)
+
+    assert [move[0] for move in state["moves"]] == ["rotate", "move_h", "move_v", "zoom"]
+    assert training_viewer._camera.distance == 1.2
+    assert training_viewer.close_requested is False
+    training_viewer.render()
+    assert training_viewer.close_requested is True
+    training_viewer.close()
+    training_viewer.close()
+    assert state["destroy"] == 1 and state["terminate"] == 1
+
+
+def test_training_viewer_quiet_mode_emits_no_stdout(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    glfw, mujoco, _ = _fake_graphics()
+    monkeypatch.setitem(sys.modules, "glfw", glfw)
+    monkeypatch.setitem(sys.modules, "mujoco", mujoco)
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    environment, _ = _training_environment()
+    training_viewer = viewer.TrainingViewer(environment, tile_envs=2, quiet=True)
+
+    assert capsys.readouterr().out == ""
+    training_viewer.close()
+
+
+def test_training_viewer_window_failure_terminates_glfw_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sim.manorl.view_environment as viewer
+
+    glfw, mujoco, state = _fake_graphics()
+    glfw.create_window = lambda *_: None
+    monkeypatch.setitem(sys.modules, "glfw", glfw)
+    monkeypatch.setitem(sys.modules, "mujoco", mujoco)
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    environment, _ = _training_environment()
+
+    with pytest.raises(RuntimeError, match="could not create GLFW window"):
+        viewer.TrainingViewer(environment, tile_envs=2)
+    assert state["destroy"] == 0 and state["terminate"] == 1
+
+
+def test_training_viewer_constructor_failure_releases_glfw_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sim.manorl.view_environment as viewer
+
+    glfw, mujoco, state = _fake_graphics(fail_context=True)
+    monkeypatch.setitem(sys.modules, "glfw", glfw)
+    monkeypatch.setitem(sys.modules, "mujoco", mujoco)
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    environment, _ = _training_environment()
+
+    with pytest.raises(RuntimeError, match="context failed"):
+        viewer.TrainingViewer(environment, tile_envs=2)
+    assert state["destroy"] == 1 and state["terminate"] == 1
 
 
 def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
