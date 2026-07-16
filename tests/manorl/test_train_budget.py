@@ -206,6 +206,13 @@ def test_console_formatters_keep_human_returns_compact_and_json_compatible(
     assert json.loads(capsys.readouterr().out) == record
     tool._emit_console("json", "training_update", {"metrics": {"update": 1.0}})
     assert json.loads(capsys.readouterr().out) == {"event": "training_update", "metrics": {"update": 1.0}}
+    tool._emit_console("json", "checkpoint", {"update": 1.0, "path": "checkpoint-000001.pt"})
+    assert json.loads(capsys.readouterr().out) == {
+        "event": "checkpoint", "update": 1.0, "path": "checkpoint-000001.pt"
+    }
+    throughput = {"environment_transitions": 48, "elapsed_seconds": 2.0}
+    tool._emit_console("json", "training_complete", {"throughput": throughput})
+    assert json.loads(capsys.readouterr().out) == {"event": "training_complete", "throughput": throughput}
 
 
 def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -533,6 +540,17 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert captured[-1][1].minibatch_size == 4096
 
 
+def test_json_console_mode_preserves_final_main_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tool = _load_tool()
+    result = {"schema": "manorl.cube1_fast_training.v1", "updates": [{"update": 1.0}]}
+    monkeypatch.setattr(tool, "run", lambda *_: result)
+
+    assert tool.main(["--output", str(tmp_path / "json"), "--console-format", "json"]) == 0
+    assert json.loads(capsys.readouterr().out) == result
+
+
 def test_cli_configures_human_console_and_validates_training_viewer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -640,6 +658,60 @@ def test_cli_serializes_default_and_override_evaluation_counts(
     with pytest.raises(SystemExit, match="2"):
         tool.main(["--output", str(tmp_path / "invalid-small"), "--num-envs", "64", "--evaluation-num-envs", "65"])
     assert "evaluation-num-envs must be within 1..64 when provided" in capsys.readouterr().err
+
+
+def test_run_closes_recorder_when_training_viewer_construction_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    recorder_closed: list[bool] = []
+
+    class Runtime:
+        device = "cuda"
+        def __init__(self, config: object) -> None:
+            self.config = config
+            self.agent = SimpleNamespace(cfg=SimpleNamespace(learning_starts=None))
+            self.model = SimpleNamespace(parameters=lambda: [])
+            self.gymnasium_env = SimpleNamespace(environment=None)
+        def checkpoint_metadata(self) -> dict[str, object]:
+            return {"runtime": "test"}
+
+    class Physical:
+        def __init__(self, config: object) -> None:
+            self.config = config
+            self.contact_start_frame = 1
+            self.jax = SimpleNamespace(default_backend=lambda: "gpu")
+
+    class Recorder:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+        def close(self) -> None:
+            recorder_closed.append(True)
+            return None
+
+    def evaluation(*_: object, **__: object) -> tuple[Runtime, object, list[dict[str, object]]]:
+        config = tool.ManoPPOConfig(minibatch_size=1)
+        return Runtime(config), config, []
+
+    monkeypatch.setattr(tool, "_assert_cuda_runtime", lambda: None)
+    monkeypatch.setattr(tool, "load_assigned_trajectory_batch", lambda *args, **kwargs: object())
+    monkeypatch.setattr(tool, "MujocoManoEnvironment", lambda _, config: Physical(config))
+    monkeypatch.setattr(tool, "ManoGymnasiumVectorEnv", lambda physical: physical)
+    monkeypatch.setattr(tool, "ManoSkrlRuntime", lambda _, config: Runtime(config))
+    monkeypatch.setattr(tool, "_build_evaluation_runtime", evaluation)
+    monkeypatch.setattr(tool, "_trajectory_assignments", lambda _: [])
+    monkeypatch.setattr(tool, "_save_checkpoint_atomically", lambda _, path, **__: path)
+    monkeypatch.setattr(tool, "load_skrl_checkpoint", lambda *_: None)
+    monkeypatch.setattr(tool, "_evaluate", lambda _, mode: tool.EvaluationResult(mode, 1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, False, False, True, [], []))
+    monkeypatch.setattr(tool, "ManoRerunRecorder", Recorder)
+    monkeypatch.setattr(tool, "_build_training_observer", lambda *_: (_ for _ in ()).throw(RuntimeError("viewer failed")))
+
+    with pytest.raises(RuntimeError, match="viewer failed"):
+        tool.run(
+            tmp_path / "run",
+            tool.TrainingBudget(num_envs=1, updates=1, minibatch_size=1, rerun_output=str(tmp_path / "run.rrd")),
+        )
+    assert recorder_closed == [True]
 
 
 def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(

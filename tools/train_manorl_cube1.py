@@ -820,12 +820,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         gc.collect()
         if wandb_run is not None:
             _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], transitions=0)
-        recorder = (
-            ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
-            if rerun_path is not None
-            else None
-        )
-        observer = _build_training_observer(physical, budget)
+        recorder: ManoRerunRecorder | None = None
+        observer: TrainingObserver | None = None
+        published_rerun: Path | None = None
         periodic_checkpoints: list[Path] = []
 
         def on_update(update: dict[str, Any]) -> None:
@@ -847,9 +844,15 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             if wandb_run is not None:
                 _log_wandb_update(wandb_run, wandb, update)
 
-        episodes_path.parent.mkdir(parents=True, exist_ok=True)
-        with _episode_records_file(episodes_path) as episode_file:
-            try:
+        try:
+            recorder = (
+                ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
+                if rerun_path is not None
+                else None
+            )
+            observer = _build_training_observer(physical, budget)
+            episodes_path.parent.mkdir(parents=True, exist_ok=True)
+            with _episode_records_file(episodes_path) as episode_file:
                 updates, transitions, elapsed = _train(
                     runtime,
                     budget,
@@ -860,10 +863,13 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                     ),
                     observer=observer,
                 )
-            finally:
+        finally:
+            try:
                 if observer is not None:
                     observer.close()
-                published_rerun = None if recorder is None else recorder.close()
+            finally:
+                if recorder is not None:
+                    published_rerun = recorder.close()
         throughput = {
             "environment_transitions": transitions,
             "elapsed_seconds": elapsed,

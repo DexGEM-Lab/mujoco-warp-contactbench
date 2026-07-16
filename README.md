@@ -197,7 +197,9 @@ JAX_PLATFORMS=cuda scripts/train_manorl_cube1_visual.sh --updates 64
 `--headless true` remains the default for the trainer. With `--headless false`,
 `--viewer-envs` must be within `--num-envs` and `--viewer-stride` is positive.
 The viewer mirrors post-step states only; it never selects actions or advances
-physics. Close its window (or press Esc) to finish the active complete PPO
+physics. It uses the same tiled controls as the standalone viewer: left-drag
+rotate, right-drag horizontal pan, middle-drag vertical pan, wheel zoom, and R
+reset. Close its window (or press Esc) to finish the active complete PPO
 rollout/update, then publish the normal checkpoint, evaluation, and artifacts.
 The graphical path requires `DISPLAY` or `WAYLAND_DISPLAY`; it still requires
 CUDA Torch and MJX-Warp, and has no CPU fallback.

@@ -229,8 +229,10 @@ and `--headless false` with an eight-world tile view. Extra arguments follow the
 wrapper defaults and a timestamp/pid output prefix avoids collisions. The
 training viewer mirrors state after the trainer's own vector step, never calls
 policy or environment step methods, and renders every `--viewer-stride` steps.
-Close the window or press Esc to request graceful exit after the current full
-rollout/update; regular checkpoint, evaluation, JSONL, and artifact publication
+Its controls are left-drag rotate, right-drag horizontal pan, middle-drag
+vertical pan, wheel zoom, and R reset. Close the window or press Esc to request
+graceful exit after the current full rollout/update; regular checkpoint,
+evaluation, JSONL, and artifact publication
 then proceed. It requires a CUDA-capable training environment plus `DISPLAY` or
 `WAYLAND_DISPLAY`; no CPU fallback exists.
 

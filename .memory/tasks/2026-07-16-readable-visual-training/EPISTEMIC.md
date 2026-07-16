@@ -10,10 +10,12 @@ Separate durable/machine telemetry from human presentation. Keep exact JSONL and
 
 ## Current claim
 
-`TrainingViewer.render` reads only `host_data_batch()` and MuJoCo/GLFW rendering APIs. `_train` calls its observer after `runtime.env.step`, then checks `close_requested` only after all configured rollout steps, so a close cannot produce a partial PPO update. The normal post-rollout path still writes final checkpoint, evaluation, metrics, JSONL publication, Rerun finalization, and W&B artifacts. An eight-world rollout has 384 samples, so minibatch 384 is the direct valid one-minibatch local configuration.
+`TrainingViewer.render` reads only `host_data_batch()` and MuJoCo/GLFW rendering APIs. It shares standalone tiled controls: left-drag rotate, right-drag horizontal pan, middle-drag vertical pan, wheel zoom, R reset, and Esc/window close. Its constructor owns GLFW transactionally after `glfw.init`: any subsequent setup error invokes idempotent `close`, which destroys an existing window and terminates GLFW once.
 
-Human console output summarizes completed episodes after their exact JSONL line is flushed; explicit JSON mode preserves raw episode records, update/complete event schemas, and final JSON result. The watcher parses a line at a time and summarizes large return arrays without echoing them.
+`_train` calls its observer after `runtime.env.step`, then checks `close_requested` only after all configured rollout steps, so a close cannot produce a partial PPO update. `run` owns recorder and viewer in nested cleanup so a viewer construction failure still closes the recorder. The normal post-rollout path still writes final checkpoint, evaluation, metrics, JSONL publication, Rerun finalization, and W&B artifacts. An eight-world rollout has 384 samples, so minibatch 384 is the direct valid one-minibatch local configuration.
+
+Human console output summarizes completed episodes after their exact JSONL line is flushed; explicit JSON mode preserves raw episode/checkpoint/update/complete events and final JSON result. The watcher parses one line at a time and summarizes large legacy return records without echoing their arrays.
 
 ## Decisive validation
 
-Focused tests prove rollout-boundary close behavior, renderer source has no step ownership, compact formatter behavior and JSON compatibility, giant-record watcher behavior, and CLI viewer validation. GUI behavior remains conditional on an available graphical session.
+Fake GLFW/MuJoCo tests prove render behavior without stepping, all controls, idempotent close, and partial-constructor cleanup. Focused tests also prove recorder cleanup after viewer-construction failure, rollout-boundary close behavior, JSON shapes including final main output, giant legacy-record watcher aggregates, and CLI viewer validation. GUI behavior remains conditional on an available graphical session.

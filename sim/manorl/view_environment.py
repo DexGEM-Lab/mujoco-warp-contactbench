@@ -162,6 +162,55 @@ def _configure_tiled_visuals(model: object) -> None:
     model.vis.headlight.specular[:] = (0.28, 0.30, 0.34)
 
 
+def _install_tiled_controls(
+    *, glfw: Any, mujoco: Any, window: object, model: object, camera: object, scene: object
+) -> None:
+    """Install the shared tiled-view camera controls on one GLFW window."""
+
+    mouse_state = {"left": False, "middle": False, "right": False, "x": 0.0, "y": 0.0}
+
+    def mouse_button_callback(_: object, button: int, action: int, __: int) -> None:
+        pressed = action == glfw.PRESS
+        if button == glfw.MOUSE_BUTTON_LEFT:
+            mouse_state["left"] = pressed
+        elif button == glfw.MOUSE_BUTTON_MIDDLE:
+            mouse_state["middle"] = pressed
+        elif button == glfw.MOUSE_BUTTON_RIGHT:
+            mouse_state["right"] = pressed
+        mouse_state["x"], mouse_state["y"] = glfw.get_cursor_pos(window)
+
+    def cursor_pos_callback(_: object, x: float, y: float) -> None:
+        window_width, window_height = glfw.get_window_size(window)
+        dx = (x - mouse_state["x"]) / max(window_width, 1)
+        dy = (y - mouse_state["y"]) / max(window_height, 1)
+        mouse_state["x"], mouse_state["y"] = x, y
+        if mouse_state["left"]:
+            action = mujoco.mjtMouse.mjMOUSE_ROTATE_V
+        elif mouse_state["middle"]:
+            action = mujoco.mjtMouse.mjMOUSE_MOVE_V
+        elif mouse_state["right"]:
+            action = mujoco.mjtMouse.mjMOUSE_MOVE_H
+        else:
+            return
+        mujoco.mjv_moveCamera(model, action, dx, -dy, scene, camera)
+
+    def scroll_callback(_: object, __: float, yoffset: float) -> None:
+        mujoco.mjv_moveCamera(model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0, -0.05 * yoffset, scene, camera)
+
+    def key_callback(_: object, key: int, __: int, action: int, ___: int) -> None:
+        if action != glfw.PRESS:
+            return
+        if key == glfw.KEY_ESCAPE:
+            glfw.set_window_should_close(window, True)
+        elif key == glfw.KEY_R:
+            _reset_tiled_camera(camera)
+
+    glfw.set_mouse_button_callback(window, mouse_button_callback)
+    glfw.set_cursor_pos_callback(window, cursor_pos_callback)
+    glfw.set_scroll_callback(window, scroll_callback)
+    glfw.set_key_callback(window, key_callback)
+
+
 class TrainingViewer:
     """Tiled post-step renderer for PPO training; it never advances simulation."""
 
@@ -176,35 +225,41 @@ class TrainingViewer:
 
         self._environment, self._tile_envs, self._stride = environment, tile_envs, stride
         self._glfw, self._mujoco, self._frames, self.close_requested = glfw, mujoco, 0, False
+        self._window: object | None = None
+        self._glfw_initialized = False
         self._width, self._height = 1600, 900
         if not glfw.init():
             raise RuntimeError("GLFW initialization failed for tiled MuJoCo rendering")
-        self._window = glfw.create_window(self._width, self._height, f"ManoRL training ({tile_envs} envs)", None, None)
-        if self._window is None:
-            glfw.terminate()
-            raise RuntimeError("could not create GLFW window for tiled MuJoCo rendering")
-        glfw.make_context_current(self._window)
-        glfw.swap_interval(1)
-        _configure_tiled_visuals(environment.model)
-        self._camera = mujoco.MjvCamera()
-        mujoco.mjv_defaultCamera(self._camera)
-        self._camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-        _reset_tiled_camera(self._camera)
-        self._option = mujoco.MjvOption()
-        mujoco.mjv_defaultOption(self._option)
-        self._scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
-        self._context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
-        self._viewports = _tile_layout(tile_envs, width=self._width, height=self._height)
-        glfw.set_key_callback(self._window, self._key_callback)
-        print("Training viewer: press R to reset camera; close the window or press Esc to stop after the current PPO update.", flush=True)
-
-    def _key_callback(self, _: object, key: int, __: int, action: int, ___: int) -> None:
-        if action != self._glfw.PRESS:
-            return
-        if key == self._glfw.KEY_ESCAPE:
-            self._glfw.set_window_should_close(self._window, True)
-        elif key == self._glfw.KEY_R:
+        self._glfw_initialized = True
+        try:
+            self._window = glfw.create_window(
+                self._width, self._height, f"ManoRL training ({tile_envs} envs)", None, None
+            )
+            if self._window is None:
+                raise RuntimeError("could not create GLFW window for tiled MuJoCo rendering")
+            glfw.make_context_current(self._window)
+            glfw.swap_interval(1)
+            _configure_tiled_visuals(environment.model)
+            self._camera = mujoco.MjvCamera()
+            mujoco.mjv_defaultCamera(self._camera)
+            self._camera.type = mujoco.mjtCamera.mjCAMERA_FREE
             _reset_tiled_camera(self._camera)
+            self._option = mujoco.MjvOption()
+            mujoco.mjv_defaultOption(self._option)
+            self._scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
+            self._context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+            self._viewports = _tile_layout(tile_envs, width=self._width, height=self._height)
+            _install_tiled_controls(
+                glfw=glfw, mujoco=mujoco, window=self._window, model=environment.model,
+                camera=self._camera, scene=self._scene,
+            )
+        except BaseException as setup_error:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                setup_error.add_note(f"TrainingViewer cleanup also failed: {cleanup_error!r}")
+            raise
+        print("Training viewer controls: left-drag rotate | right-drag pan horizontal | middle-drag pan vertical | wheel zoom | R reset | Esc close", flush=True)
 
     def render(self) -> None:
         """Mirror and render current states only; training owns all step calls."""
@@ -237,10 +292,18 @@ class TrainingViewer:
         self.render()
 
     def close(self) -> None:
-        if getattr(self, "_window", None) is not None:
-            self._glfw.destroy_window(self._window)
-            self._window = None
-            self._glfw.terminate()
+        """Release any initialized GLFW resources exactly once."""
+
+        window = self._window
+        glfw_initialized = self._glfw_initialized
+        self._window = None
+        self._glfw_initialized = False
+        try:
+            if window is not None:
+                self._glfw.destroy_window(window)
+        finally:
+            if glfw_initialized:
+                self._glfw.terminate()
 
 
 def _view_tiled(
@@ -278,50 +341,9 @@ def _view_tiled(
     context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
     sleep_seconds = CONTROL_TIMESTEP / speed
     viewports = _tile_layout(tile_envs, width=width, height=height)
-    mouse_state = {"left": False, "middle": False, "right": False, "x": 0.0, "y": 0.0}
-
-    def mouse_button_callback(_: object, button: int, action: int, __: int) -> None:
-        pressed = action == glfw.PRESS
-        if button == glfw.MOUSE_BUTTON_LEFT:
-            mouse_state["left"] = pressed
-        elif button == glfw.MOUSE_BUTTON_MIDDLE:
-            mouse_state["middle"] = pressed
-        elif button == glfw.MOUSE_BUTTON_RIGHT:
-            mouse_state["right"] = pressed
-        mouse_state["x"], mouse_state["y"] = glfw.get_cursor_pos(window)
-
-    def cursor_pos_callback(_: object, x: float, y: float) -> None:
-        window_width, window_height = glfw.get_window_size(window)
-        dx = (x - mouse_state["x"]) / max(window_width, 1)
-        dy = (y - mouse_state["y"]) / max(window_height, 1)
-        mouse_state["x"], mouse_state["y"] = x, y
-        if mouse_state["left"]:
-            action = mujoco.mjtMouse.mjMOUSE_ROTATE_V
-        elif mouse_state["middle"]:
-            action = mujoco.mjtMouse.mjMOUSE_MOVE_V
-        elif mouse_state["right"]:
-            action = mujoco.mjtMouse.mjMOUSE_MOVE_H
-        else:
-            return
-        mujoco.mjv_moveCamera(environment.model, action, dx, -dy, scene, camera)
-
-    def scroll_callback(_: object, __: float, yoffset: float) -> None:
-        mujoco.mjv_moveCamera(
-            environment.model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0, -0.05 * yoffset, scene, camera
-        )
-
-    def key_callback(_: object, key: int, __: int, action: int, ___: int) -> None:
-        if action != glfw.PRESS:
-            return
-        if key == glfw.KEY_ESCAPE:
-            glfw.set_window_should_close(window, True)
-        elif key == glfw.KEY_R:
-            _reset_tiled_camera(camera)
-
-    glfw.set_mouse_button_callback(window, mouse_button_callback)
-    glfw.set_cursor_pos_callback(window, cursor_pos_callback)
-    glfw.set_scroll_callback(window, scroll_callback)
-    glfw.set_key_callback(window, key_callback)
+    _install_tiled_controls(
+        glfw=glfw, mujoco=mujoco, window=window, model=environment.model, camera=camera, scene=scene
+    )
     print("Tiled controls: left-drag rotate | right-drag pan horizontal | middle-drag pan vertical | wheel zoom | R reset | Esc close")
     try:
         while not glfw.window_should_close(window):
