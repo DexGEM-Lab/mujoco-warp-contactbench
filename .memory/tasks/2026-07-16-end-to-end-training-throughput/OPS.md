@@ -43,3 +43,51 @@
   --steps 2 --repeats 1 --profile-phases` completed all four modes and emitted all
   required phase keys. The missing fixture is a validation gap, not a profiling
   failure.
+
+- 2026-07-16T17:34:09+08:00: Repaired Phase 1 attribution locally without a
+  commit or remote experiment. `tools/benchmark_manorl_device_controls.py` now
+  requires provenance plus a v3 schema, launches every mode/repeat in a fresh
+  child process, preserves child stdout/stderr/JSON artifacts, rejects stale
+  schema/legacy invocation, and publishes the aggregate only after all children
+  succeed. The per-sample child no longer calls `jax.clear_caches`; process exit
+  owns JAX/Warp lifecycle. CPU subprocess validation recorded four distinct child
+  PIDs and passed fail-closed tests for nonzero child exit, missing JSON, and stale
+  provenance/schema.
+- 2026-07-16T17:34:09+08:00: Added opt-in attribution for action NumPy
+  materialization, full runtime `env.step`, skrl action tensor-to-NumPy and
+  NumPy response-to-tensor conversions, split state/contact-buffer/Python decode,
+  reset indexed writes versus full-batch forward, trainer finite checks, reset
+  `.item()`, host telemetry, all `post_interaction` calls, and only actual PPO
+  rollout-boundary calls. Contact profiling records per-step `nacon`, mean/p50/p95/max,
+  capacity, raw buffer metadata, and host materialization metadata without naming
+  PCIe traffic. `TrainingBudget`/CLI now independently select diagnostics, with
+  `None` preserving the prior inverse-of-controls default.
+- 2026-07-16T17:34:09+08:00: Local validation passed:
+  `JAX_PLATFORMS=cpu /home/jay/anaconda3/envs/manorl_mujoco/bin/python -m pytest
+  -q tests/manorl/test_benchmark_device_controls.py
+  tests/manorl/test_device_resident_controls.py tests/manorl/test_train_budget.py
+  tests/manorl/test_environment.py tests/manorl/test_model_runtime.py
+  tests/manorl/test_train_wandb.py` -> 84 passed; `python -m py_compile
+  sim/manorl/environment.py sim/manorl/skrl_runtime.py
+  tools/benchmark_manorl_device_controls.py tools/train_manorl_cube1.py` and
+  `git diff --check` passed.
+- 2026-07-16T17:34:09+08:00: Attempted isolated mirror refresh at
+  `jay@192.168.9.220:/home/jay/dexrobot/FromSSH/manoRL_mujoco-benchmarks/feat-end-to-end-training-throughput-b7f1171`.
+  The explicit rsync transfers completed for `sim/manorl`, owned tools, tests,
+  and a provenance artifact, but the final remote hash verification stopped at
+  `zsh:1: command not found: python`. Under the current no-remote boundary no
+  retry or benchmark was issued; the mirror must be rehashed/refreshed after this
+  expanded attribution diff before any experiment.
+- 2026-07-16T17:37:37+08:00: Reviewer reported that protected Server2 GPU3
+  PID `1570368` was stopped after update 639. Its checkpoint and `last.pt` remain,
+  but Ctrl-C ended with `IOT instruction core dumped`; classify this as abnormal,
+  non-graceful termination and exclude it from all benchmark statistics. GPU3 is
+  now released. Future benchmark execution is restricted to physical GPU0 and
+  GPU3; GPU1/GPU2 are forbidden.
+- 2026-07-16T17:37:37+08:00: Balanced evidence design is two GPU blocks (GPU0,
+  GPU3), with every mode/repeat sampled independently on both blocks. Each cell
+  gets its own Python process, output prefix, and utilization/memory sampler;
+  mode order is randomized/interleaved independently per GPU and repeat. A fresh
+  occupancy check precedes every child, and any GPU0/GPU3 contention or any GPU1/
+  GPU2 use aborts the run. No remote process was launched from this worker after
+  the local gate; reviewer approval remains the execution boundary.

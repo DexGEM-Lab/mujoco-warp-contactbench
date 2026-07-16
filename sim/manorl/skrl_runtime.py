@@ -5,15 +5,24 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+import gymnasium
 import torch
 
 from skrl.agents.torch.ppo import PPO
 from skrl.envs.wrappers.torch import wrap_env
+from skrl.envs.wrappers.torch.gymnasium_envs import GymnasiumWrapper
 from skrl.memories.torch import RandomMemory
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.resources.schedulers.torch import KLAdaptiveLR
+from skrl.utils.spaces.torch import (
+    flatten_tensorized_space,
+    tensorize_space,
+    unflatten_tensorized_space,
+    untensorize_space,
+)
 
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
+from sim.manorl.environment import PhaseTimings
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
 from sim.manorl.normalization import PointCloudAwareRunningStandardScaler
@@ -37,6 +46,7 @@ class ManoPPOConfig:
     kl_threshold: float = 0.016
     grad_norm_clip: float = 1.0
     time_limit_bootstrap: bool = True
+    profile_phases: bool = False
 
     def __post_init__(self) -> None:
         if self.rollouts < 1 or self.minibatch_size < 1 or self.learning_epochs < 1:
@@ -82,6 +92,53 @@ class ManoPPOConfig:
         }
 
 
+class ProfiledGymnasiumWrapper(GymnasiumWrapper):
+    """Profile skrl's two host/device conversion boundaries without altering its default wrapper."""
+
+    def __init__(self, env: Any) -> None:
+        super().__init__(env)
+        self.phase_timings = PhaseTimings(enabled=True)
+
+    def _synchronize(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
+    def phase_profile(self) -> dict[str, dict[str, float | int]]:
+        return self.phase_timings.summary()
+
+    def reset_phase_profile(self) -> None:
+        self.phase_timings.reset()
+
+    def step(
+        self, actions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+        action_started = self.phase_timings.start("skrl_cuda_action_to_numpy", self._synchronize)
+        actions = untensorize_space(
+            self.action_space,
+            unflatten_tensorized_space(self.action_space, actions),
+            squeeze_batch_dimension=not self._vectorized,
+        )
+        if self._vectorized and isinstance(self.action_space, gymnasium.spaces.Discrete):
+            actions = actions.flatten()
+        self.phase_timings.stop("skrl_cuda_action_to_numpy", action_started, self._synchronize)
+
+        observation, reward, terminated, truncated, info = self._env.step(actions)
+
+        response_started = self.phase_timings.start("skrl_numpy_response_to_cuda", self._synchronize)
+        observation = flatten_tensorized_space(
+            tensorize_space(self.observation_space, observation, device=self.device)
+        )
+        reward = torch.tensor(reward, device=self.device, dtype=torch.float32).view(self.num_envs, -1)
+        terminated = torch.tensor(terminated, device=self.device, dtype=torch.bool).view(self.num_envs, -1)
+        truncated = torch.tensor(truncated, device=self.device, dtype=torch.bool).view(self.num_envs, -1)
+        self.phase_timings.stop("skrl_numpy_response_to_cuda", response_started, self._synchronize)
+
+        if self._vectorized:
+            self._observation = observation
+            self._info = info
+        return observation, reward, terminated, truncated, info
+
+
 class ManoSkrlRuntime:
     """One shared model, source-normalizers, and skrl PPO over the vector adapter."""
 
@@ -92,7 +149,11 @@ class ManoSkrlRuntime:
             raise TypeError("config must be a ManoPPOConfig")
         self.gymnasium_env = environment
         self.config = config
-        self.env = wrap_env(environment, wrapper="gymnasium", verbose=False)
+        self.env = (
+            ProfiledGymnasiumWrapper(environment)
+            if config.profile_phases
+            else wrap_env(environment, wrapper="gymnasium", verbose=False)
+        )
         self.device = str(self.env.device)
         self.model = ManoActorCritic(
             self.env.observation_space, self.env.state_space, self.env.action_space, device=self.device
@@ -108,6 +169,15 @@ class ManoSkrlRuntime:
             cfg=config.skrl_config(num_envs=environment.num_envs, device=self.device),
         )
         self.agent.init()
+
+    def conversion_phase_profile(self) -> dict[str, dict[str, float | int]]:
+        profile = getattr(self.env, "phase_profile", None)
+        return profile() if callable(profile) else {}
+
+    def reset_conversion_phase_profile(self) -> None:
+        reset_profile = getattr(self.env, "reset_phase_profile", None)
+        if callable(reset_profile):
+            reset_profile()
 
     def checkpoint_metadata(self) -> dict[str, object]:
         return {

@@ -159,6 +159,33 @@ class PhaseTimings:
 
 
 @dataclass(frozen=True)
+class MaterializedState:
+    qpos: NDArray[np.float64]
+    qvel: NDArray[np.float64]
+    xpos: NDArray[np.float64]
+    xquat: NDArray[np.float64]
+    keypoints: NDArray[np.float64]
+    keypoint_quats: NDArray[np.float64]
+    fingertips: NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class MaterializedContactBuffers:
+    count: int
+    capacity: int
+    geom: NDArray[np.int64]
+    world: NDArray[np.int64]
+    dimension: NDArray[np.int64]
+    addresses: NDArray[np.int64]
+    nefc: NDArray[np.int64]
+    friction: NDArray[np.float64]
+    frame: NDArray[np.float64]
+    constraint_force: NDArray[np.float64]
+    raw_metadata: dict[str, dict[str, object]]
+    host_metadata: dict[str, dict[str, object]]
+
+
+@dataclass(frozen=True)
 class PhysicalSnapshot:
     """Source-order physical values extracted from one batched MJX state."""
 
@@ -197,6 +224,16 @@ class TransitionSnapshot:
     reward: RewardDiagnostics
     episode_return: NDArray[np.float64]
     termination: TerminationResult
+
+
+def _array_metadata(value: Any) -> dict[str, object]:
+    shape = tuple(int(item) for item in value.shape)
+    dtype = np.dtype(value.dtype)
+    return {
+        "dtype": str(dtype),
+        "shape": list(shape),
+        "bytes": int(np.prod(shape, dtype=np.int64)) * dtype.itemsize,
+    }
 
 
 def _aggregate_geometry_contact_forces(
@@ -443,20 +480,39 @@ class MjxWarpPhysicalProducer:
             raise ValueError("the bounded cube contract requires exactly one object collision geom")
         if self.object_geom_ids & set(self.keypoint_geom_ids):
             raise ValueError("source hand and object collision geoms must be disjoint")
+        self.reset_profile()
 
-    def _contact_arrays(
-        self, data: Any, batch: int
-    ) -> tuple[
-        int,
-        NDArray[np.int64],
-        NDArray[np.int64],
-        NDArray[np.int64],
-        NDArray[np.int64],
-        NDArray[np.int64],
-        NDArray[np.float64],
-        NDArray[np.float64],
-        NDArray[np.float64],
-    ]:
+    def reset_profile(self) -> None:
+        self._profile_nacon: list[int] = []
+        self._profile_capacity: int | None = None
+        self._profile_raw_metadata: dict[str, dict[str, object]] = {}
+        self._profile_host_metadata: dict[str, dict[str, object]] = {}
+
+    def contact_profile(self) -> dict[str, object]:
+        if not self._profile_nacon:
+            return {}
+        counts = np.asarray(self._profile_nacon, dtype=np.float64)
+        return {
+            "nacon_per_step": list(self._profile_nacon),
+            "nacon": {
+                "calls": len(self._profile_nacon),
+                "mean": float(counts.mean()),
+                "p50": float(np.percentile(counts, 50)),
+                "p95": float(np.percentile(counts, 95)),
+                "max": int(counts.max()),
+            },
+            "capacity": self._profile_capacity,
+            "raw_buffers": self._profile_raw_metadata,
+            "raw_buffer_bytes": sum(int(item["bytes"]) for item in self._profile_raw_metadata.values()),
+            "host_materialization": self._profile_host_metadata,
+            "host_materialization_bytes": sum(
+                int(item["bytes"]) for item in self._profile_host_metadata.values()
+            ),
+        }
+
+    def materialize_contact_buffers(
+        self, data: Any, batch: int, *, record_profile: bool = False
+    ) -> MaterializedContactBuffers:
         impl = data._impl
         required = (
             "nacon",
@@ -475,23 +531,29 @@ class MjxWarpPhysicalProducer:
                 "the installed MJX-Warp contact ABI is incompatible with this producer: "
                 + ", ".join(missing)
             )
-        nacon = np.asarray(impl.nacon, dtype=np.int64).reshape(-1)
+        raw_values = {name: getattr(impl, name) for name in required}
+        raw_metadata = (
+            {name: _array_metadata(value) for name, value in raw_values.items()}
+            if record_profile
+            else {}
+        )
+        nacon = np.asarray(raw_values["nacon"], dtype=np.int64).reshape(-1)
         if nacon.shape != (1,):
             raise RuntimeError(f"MJX-Warp global contact count must have shape (1,), got {nacon.shape}")
         count = int(nacon[0])
-        nefc_values = np.asarray(impl.nefc, dtype=np.int64).reshape(-1)
+        nefc_values = np.asarray(raw_values["nefc"], dtype=np.int64).reshape(-1)
         if nefc_values.shape not in {(1,), (batch,)}:
             raise RuntimeError(
                 "MJX-Warp constraint count must be scalar or one value per world, "
                 f"got {nefc_values.shape}"
             )
-        geom = np.asarray(impl.contact__geom, dtype=np.int64)
-        world = np.asarray(impl.contact__worldid, dtype=np.int64)
-        dimension = np.asarray(impl.contact__dim, dtype=np.int64)
-        addresses = np.asarray(impl.contact__efc_address, dtype=np.int64)
-        friction = np.asarray(impl.contact__friction, dtype=np.float64)
-        frame = np.asarray(impl.contact__frame, dtype=np.float64)
-        forces = np.asarray(impl.efc__force, dtype=np.float64)
+        geom = np.asarray(raw_values["contact__geom"], dtype=np.int64)
+        world = np.asarray(raw_values["contact__worldid"], dtype=np.int64)
+        dimension = np.asarray(raw_values["contact__dim"], dtype=np.int64)
+        addresses = np.asarray(raw_values["contact__efc_address"], dtype=np.int64)
+        friction = np.asarray(raw_values["contact__friction"], dtype=np.float64)
+        frame = np.asarray(raw_values["contact__frame"], dtype=np.float64)
+        forces = np.asarray(raw_values["efc__force"], dtype=np.float64)
         capacity = len(geom)
         if not 0 <= count <= capacity:
             raise RuntimeError(f"MJX-Warp contact count {count} exceeds allocated capacity {capacity}")
@@ -510,10 +572,46 @@ class MjxWarpPhysicalProducer:
             raise RuntimeError("MJX-Warp private contact buffer shapes differ from the pinned ABI")
         if np.any(nefc_values < 0) or np.any(nefc_values >= forces.shape[1]):
             raise RuntimeError("MJX-Warp constraint capacity saturated; contact forces are invalid")
-        normalized_nefc = np.full(batch, int(nefc_values[0]), dtype=np.int64) if nefc_values.shape == (1,) else nefc_values
-        return count, geom, world, dimension, addresses, normalized_nefc, friction, frame, forces
+        normalized_nefc = (
+            np.full(batch, int(nefc_values[0]), dtype=np.int64)
+            if nefc_values.shape == (1,)
+            else nefc_values
+        )
+        host_metadata = {}
+        if record_profile:
+            host_values = {
+                "nacon": nacon,
+                "nefc": nefc_values,
+                "contact__geom": geom,
+                "contact__worldid": world,
+                "contact__dim": dimension,
+                "contact__efc_address": addresses,
+                "contact__friction": friction,
+                "contact__frame": frame,
+                "efc__force": forces,
+            }
+            host_metadata = {name: _array_metadata(value) for name, value in host_values.items()}
+        if record_profile:
+            self._profile_nacon.append(count)
+            self._profile_capacity = capacity
+            self._profile_raw_metadata = raw_metadata
+            self._profile_host_metadata = host_metadata
+        return MaterializedContactBuffers(
+            count=count,
+            capacity=capacity,
+            geom=geom,
+            world=world,
+            dimension=dimension,
+            addresses=addresses,
+            nefc=normalized_nefc,
+            friction=friction,
+            frame=frame,
+            constraint_force=forces,
+            raw_metadata=raw_metadata,
+            host_metadata=host_metadata,
+        )
 
-    def extract(self, data: Any) -> PhysicalSnapshot:
+    def materialize_state(self, data: Any) -> MaterializedState:
         qpos = np.asarray(data.qpos, dtype=np.float64)
         qvel = np.asarray(data.qvel, dtype=np.float64)
         xpos = np.asarray(data.xpos, dtype=np.float64)
@@ -531,33 +629,62 @@ class MjxWarpPhysicalProducer:
             np.broadcast_to(keypoint_quats[:, fingertip_indices], (batch, len(_FINGERTIP_NAMES), 4)),
             np.broadcast_to(_FINGERTIP_LOCAL_OFFSETS, (batch, len(_FINGERTIP_NAMES), 3)),
         )
-        count, geom, world, dimension, addresses, nefc, friction, frame, constraint_force = self._contact_arrays(data, batch)
-        geometry_forces, hand_object_forces, per_world_count = _decode_contact_forces(
-            count=count,
-            geom=geom,
-            world=world,
-            dimension=dimension,
-            addresses=addresses,
-            nefc=nefc,
-            friction=friction,
-            frame=frame,
-            constraint_force=constraint_force,
+        return MaterializedState(qpos, qvel, xpos, xquat, keypoints, keypoint_quats, fingertips)
+
+    def decode_contact_buffers(
+        self, buffers: MaterializedContactBuffers
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
+        return _decode_contact_forces(
+            count=buffers.count,
+            geom=buffers.geom,
+            world=buffers.world,
+            dimension=buffers.dimension,
+            addresses=buffers.addresses,
+            nefc=buffers.nefc,
+            friction=buffers.friction,
+            frame=buffers.frame,
+            constraint_force=buffers.constraint_force,
             ngeom=self.model.ngeom,
             keypoint_geom_ids=self.keypoint_geom_ids,
             object_geom_ids=self.object_geom_ids,
         )
+
+    def extract(
+        self,
+        data: Any,
+        *,
+        timings: PhaseTimings | None = None,
+        synchronize: Any | None = None,
+        record_profile: bool = False,
+    ) -> PhysicalSnapshot:
+        state_started = timings.start("state_materialization", synchronize) if timings is not None else None
+        state = self.materialize_state(data)
+        if timings is not None:
+            timings.stop("state_materialization", state_started, synchronize)
+        contact_started = (
+            timings.start("contact_buffer_materialization", synchronize) if timings is not None else None
+        )
+        buffers = self.materialize_contact_buffers(
+            data, len(state.qpos), record_profile=record_profile
+        )
+        if timings is not None:
+            timings.stop("contact_buffer_materialization", contact_started, synchronize)
+        decode_started = timings.start("python_contact_decode", synchronize) if timings is not None else None
+        geometry_forces, hand_object_forces, per_world_count = self.decode_contact_buffers(buffers)
         forces = geometry_forces[:, self.keypoint_geom_ids].copy()
         object_force = geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
+        if timings is not None:
+            timings.stop("python_contact_decode", decode_started, synchronize)
         return PhysicalSnapshot(
-            mano_dof_pos=qpos[:, :26].copy(),
-            hand_position=xpos[:, self.keypoint_body_ids[0]].copy(),
-            hand_orientation_xyzw=_normalized_xyzw(xquat[:, self.keypoint_body_ids[0]]),
-            hand_keypoint_orientations_xyzw=keypoint_quats,
-            object_position=xpos[:, self.object_body_id].copy(),
-            object_orientation_xyzw=_normalized_xyzw(xquat[:, self.object_body_id]),
-            object_linear_velocity=qvel[:, self.object_qvel_address : self.object_qvel_address + 3].copy(),
-            hand_keypoint_positions=keypoints,
-            fingertip_positions=fingertips,
+            mano_dof_pos=state.qpos[:, :26].copy(),
+            hand_position=state.xpos[:, self.keypoint_body_ids[0]].copy(),
+            hand_orientation_xyzw=_normalized_xyzw(state.xquat[:, self.keypoint_body_ids[0]]),
+            hand_keypoint_orientations_xyzw=state.keypoint_quats,
+            object_position=state.xpos[:, self.object_body_id].copy(),
+            object_orientation_xyzw=_normalized_xyzw(state.xquat[:, self.object_body_id]),
+            object_linear_velocity=state.qvel[:, self.object_qvel_address : self.object_qvel_address + 3].copy(),
+            hand_keypoint_positions=state.keypoints,
+            fingertip_positions=state.fingertips,
             hand_keypoint_contact_forces=forces,
             object_contact_force=object_force,
             geom_contact_force_world_N=geometry_forces,
@@ -696,6 +823,7 @@ class MujocoManoEnvironment:
         self.control_call = 0
         self.last_transition: TransitionSnapshot | None = None
         self.reset()
+        self.reset_phase_profile()
 
     def _build_reference_tables(self) -> None:
         self.trajectory_lengths = np.asarray([len(item.q_ref) for item in self.trajectories], dtype=np.int64)
@@ -820,6 +948,7 @@ class MujocoManoEnvironment:
     def _reset_indices(self, env_ids: NDArray[np.int64]) -> None:
         if len(env_ids) == 0:
             return
+        writes_started = self._phase_start("reset_indexed_writes")
         if self.config.device_resident_controls:
             device_ids = self.jax.device_put(env_ids, self.device)
             self.data = self.data.replace(
@@ -839,7 +968,10 @@ class MujocoManoEnvironment:
                 qvel=self.jax.device_put(self.jp.asarray(qvel), self.device),
                 ctrl=self.jax.device_put(self.jp.asarray(ctrl), self.device),
             )
+        self._phase_stop("reset_indexed_writes", writes_started)
+        forward_started = self._phase_start("reset_full_batch_forward")
         self.data = self._forward_fn(self.data)
+        self._phase_stop("reset_full_batch_forward", forward_started)
         self.progress[env_ids] = 0
         self.trajectory_steps[env_ids] = 0
         self.cumulative_offset[env_ids] = 0.0
@@ -862,6 +994,15 @@ class MujocoManoEnvironment:
         """Return accumulated phase timings without changing production behavior."""
 
         return self.phase_timings.summary()
+
+    def contact_profile(self) -> dict[str, object]:
+        """Return opt-in contact materialization metadata and per-step nacon samples."""
+
+        return self.producer.contact_profile() if self.phase_timings.enabled else {}
+
+    def reset_phase_profile(self) -> None:
+        self.phase_timings.reset()
+        self.producer.reset_profile()
 
     def _target_indices(self) -> NDArray[np.int64]:
         return np.minimum(np.maximum(self.trajectory_steps, 0), self.trajectory_lengths - 1)
@@ -927,7 +1068,12 @@ class MujocoManoEnvironment:
         )
 
     def _refresh_output(self) -> ObservationResult:
-        self.last_physical = self.producer.extract(self.data)
+        self.last_physical = self.producer.extract(
+            self.data,
+            timings=self.phase_timings if self.phase_timings.enabled else None,
+            synchronize=self._profile_sync if self.phase_timings.enabled else None,
+            record_profile=self.phase_timings.enabled,
+        )
         self.last_observation = self._build_observation(self.last_physical)
         return self.last_observation
 
@@ -949,7 +1095,9 @@ class MujocoManoEnvironment:
     def step(
         self, raw_actions: NDArray[object]
     ) -> tuple[dict[str, NDArray[np.float64]], NDArray[np.float64], NDArray[np.bool_], dict[str, NDArray[np.bool_]]]:
+        materialization_phase = self._phase_start("action_numpy_materialization")
         actions = np.asarray(raw_actions, dtype=np.float64)
+        self._phase_stop("action_numpy_materialization", materialization_phase)
         if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
             raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
         action_phase = self._phase_start("action_conversion_processing")
@@ -1005,7 +1153,12 @@ class MujocoManoEnvironment:
             self._reset_indices(np.flatnonzero(pending_reset).astype(np.int64))
         self._phase_stop("delayed_reset_application", reset_phase)
         extraction_phase = self._phase_start("state_contact_extraction")
-        physical = self.producer.extract(self.data)
+        physical = self.producer.extract(
+            self.data,
+            timings=self.phase_timings if self.phase_timings.enabled else None,
+            synchronize=self._profile_sync if self.phase_timings.enabled else None,
+            record_profile=self.phase_timings.enabled,
+        )
         self._phase_stop("state_contact_extraction", extraction_phase)
         early = early_phase_mask(
             self.trajectory_steps,

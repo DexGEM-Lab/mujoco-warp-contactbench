@@ -89,10 +89,17 @@ class TrainingBudget:
     console_format: Literal["human", "json"] = "human"
     device_resident_controls: bool = False
     profile_phases: bool = False
+    capture_transition_diagnostics: bool | None = None
 
     @property
     def transitions(self) -> int:
         return self.num_envs * ManoPPOConfig().rollouts * self.updates
+
+    @property
+    def resolved_capture_transition_diagnostics(self) -> bool:
+        if self.capture_transition_diagnostics is None:
+            return not self.device_resident_controls
+        return self.capture_transition_diagnostics
 
     @property
     def resolved_evaluation_num_envs(self) -> int:
@@ -139,7 +146,11 @@ def _wandb_config(
     device: dict[str, object],
 ) -> dict[str, object]:
     config = {
-        "training_budget": {**asdict(budget), "planned_transitions": budget.transitions},
+        "training_budget": {
+            **asdict(budget),
+            "planned_transitions": budget.transitions,
+            "resolved_capture_transition_diagnostics": budget.resolved_capture_transition_diagnostics,
+        },
         "ppo_config": asdict(ppo_config),
         "evaluation": {
             "num_envs": budget.resolved_evaluation_num_envs,
@@ -429,6 +440,17 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trai
     raise RuntimeError(f"{mode} evaluation did not terminate at the source horizon")
 
 
+def _post_interaction_runs_optimizer(
+    agent: Any, *, timestep: int, fallback_rollout_index: int, fallback_rollouts: int
+) -> bool:
+    cfg = getattr(agent, "cfg", None)
+    rollouts = int(getattr(cfg, "rollouts", fallback_rollouts))
+    learning_starts = int(getattr(cfg, "learning_starts", 0))
+    rollout = int(getattr(agent, "_rollout", fallback_rollout_index))
+    training = bool(getattr(agent, "training", True))
+    return training and not (rollout + 1) % rollouts and timestep >= learning_starts
+
+
 def _train(
     runtime: ManoSkrlRuntime,
     budget: TrainingBudget,
@@ -441,24 +463,56 @@ def _train(
     config = runtime.config
     runtime.agent.enable_training_mode(True)
     observations, _ = runtime.env.reset()
+    if budget.profile_phases:
+        reset_environment_profile = getattr(environment, "reset_phase_profile", None)
+        if callable(reset_environment_profile):
+            reset_environment_profile()
+        reset_conversion_profile = getattr(runtime, "reset_conversion_phase_profile", None)
+        if callable(reset_conversion_profile):
+            reset_conversion_profile()
     started = time.monotonic()
     updates: list[dict[str, Any]] = []
     global_timestep = 0
     profile_totals: dict[str, float] = {}
     profile_counts: dict[str, int] = {}
+    profile_cuda = str(getattr(runtime, "device", getattr(runtime.agent, "device", "cpu"))).startswith("cuda")
+
+    def synchronize() -> None:
+        if profile_cuda:
+            torch.cuda.synchronize()
+
+    def record_phase(name: str, elapsed: float) -> None:
+        profile_totals[name] = profile_totals.get(name, 0.0) + elapsed
+        profile_counts[name] = profile_counts.get(name, 0) + 1
 
     def phase_start(name: str) -> float | None:
         if not budget.profile_phases:
             return None
-        torch.cuda.synchronize()
+        synchronize()
         return time.perf_counter()
 
-    def phase_stop(name: str, started: float | None) -> None:
-        if started is None:
-            return
-        torch.cuda.synchronize()
-        profile_totals[name] = profile_totals.get(name, 0.0) + (time.perf_counter() - started)
-        profile_counts[name] = profile_counts.get(name, 0) + 1
+    def phase_stop(name: str, phase_started: float | None) -> float | None:
+        if phase_started is None:
+            return None
+        synchronize()
+        elapsed = time.perf_counter() - phase_started
+        record_phase(name, elapsed)
+        return elapsed
+
+    def phase_summary() -> dict[str, dict[str, float | int]]:
+        summary = {
+            name: {
+                "total_seconds": total,
+                "calls": profile_counts[name],
+                "mean_seconds": total / profile_counts[name],
+            }
+            for name, total in profile_totals.items()
+        }
+        conversion_profile = getattr(runtime, "conversion_phase_profile", lambda: {})()
+        overlap = set(summary) & set(conversion_profile)
+        if overlap:
+            raise RuntimeError(f"duplicate training phase names: {sorted(overlap)}")
+        return {**summary, **conversion_profile}
     for update in range(budget.updates):
         if (
             budget.wall_clock_seconds is not None
@@ -478,12 +532,19 @@ def _train(
                     observations, None, timestep=global_timestep, timesteps=budget.transitions
                 )
             phase_stop("policy_action", policy_phase)
+            environment_step_phase = phase_start("runtime_env_step")
             next_observations, reward, terminated, truncated, infos = runtime.env.step(actions)
+            phase_stop("runtime_env_step", environment_step_phase)
+            observer_phase = phase_start("observer_and_rerun")
             if observer is not None:
                 observer.observe()
             if recorder is not None and global_timestep % budget.rerun_stride == 0:
                 recorder.record_transition()
-            if not torch.isfinite(next_observations).all() or not torch.isfinite(reward).all():
+            phase_stop("observer_and_rerun", observer_phase)
+            finite_phase = phase_start("rollout_finite_checks")
+            finite_rollout = torch.isfinite(next_observations).all() and torch.isfinite(reward).all()
+            phase_stop("rollout_finite_checks", finite_phase)
+            if not finite_rollout:
                 raise RuntimeError(f"non-finite rollout value at global timestep {global_timestep}")
             recording_phase = phase_start("transition_recording")
             runtime.agent.record_transition(
@@ -500,12 +561,22 @@ def _train(
                 timesteps=budget.transitions,
             )
             phase_stop("transition_recording", recording_phase)
-            ppo_phase = phase_start("ppo_update")
-            runtime.agent.post_interaction(timestep=global_timestep + 1, timesteps=budget.transitions)
-            phase_stop("ppo_update", ppo_phase)
+            interaction_timestep = global_timestep + 1
+            runs_optimizer = _post_interaction_runs_optimizer(
+                runtime.agent,
+                timestep=interaction_timestep,
+                fallback_rollout_index=update_step,
+                fallback_rollouts=config.rollouts,
+            )
+            post_phase = phase_start("post_interaction_all_calls")
+            runtime.agent.post_interaction(timestep=interaction_timestep, timesteps=budget.transitions)
+            post_elapsed = phase_stop("post_interaction_all_calls", post_phase)
+            if runs_optimizer and post_elapsed is not None:
+                record_phase("ppo_optimizer_rollout_boundary", post_elapsed)
             observations = next_observations
             rewards.append(reward.detach())
             action_magnitudes.append(actions.detach().abs())
+            telemetry_phase = phase_start("host_telemetry")
             diagnostics = environment.last_reward
             termination = getattr(environment, "last_termination", None)
             if diagnostics is None:
@@ -531,10 +602,18 @@ def _train(
                     completed=completed,
                     episode_returns=episode_returns,
                 ))
-            reset_count += int((terminated | truncated).sum().item())
+            phase_stop("host_telemetry", telemetry_phase)
+            reset_item_phase = phase_start("reset_count_host_item")
+            reset_increment = int((terminated | truncated).sum().item())
+            phase_stop("reset_count_host_item", reset_item_phase)
+            reset_count += reset_increment
             global_timestep += 1
-        if not all(torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):
+        parameter_finite_phase = phase_start("trainer_parameter_finite_checks")
+        finite_parameters = all(torch.isfinite(parameter).all() for parameter in runtime.model.parameters())
+        phase_stop("trainer_parameter_finite_checks", parameter_finite_phase)
+        if not finite_parameters:
             raise RuntimeError(f"PPO update {update} produced non-finite model parameters")
+        update_telemetry_phase = phase_start("update_host_telemetry")
         component_means = {
             name: float(np.concatenate(values).mean())
             for name, values in reward_components.items()
@@ -565,29 +644,16 @@ def _train(
             # One update retains at most one rollout batch: 48 * 4096 = 196,608
             # values for the target Server2 scale, then this list is discarded.
             update_metrics["episode_return_values"] = completed_episode_returns
+        phase_stop("update_host_telemetry", update_telemetry_phase)
         if budget.profile_phases:
-            update_metrics["training_phase_profile"] = {
-                name: {
-                    "total_seconds": total,
-                    "calls": profile_counts[name],
-                    "mean_seconds": total / profile_counts[name],
-                }
-                for name, total in profile_totals.items()
-            }
+            update_metrics["training_phase_profile"] = phase_summary()
         updates.append(_public_update_metrics(update_metrics))
         if on_update is not None:
             on_update(update_metrics)
         # A GLFW close is a request to stop after this complete PPO rollout.
         if observer is not None and observer.close_requested:
             break
-    runtime.training_phase_profile = {
-        name: {
-            "total_seconds": total,
-            "calls": profile_counts[name],
-            "mean_seconds": total / profile_counts[name],
-        }
-        for name, total in profile_totals.items()
-    }
+    runtime.training_phase_profile = phase_summary() if budget.profile_phases else {}
     return updates, global_timestep * environment.config.num_envs, time.monotonic() - started
 
 
@@ -648,7 +714,7 @@ def _evaluation_ppo_config(training_config: ManoPPOConfig, *, num_envs: int) -> 
     minibatch_size = math.gcd(training_config.minibatch_size, batch_size)
     if minibatch_size < 1:
         raise ValueError("evaluation PPO minibatch has no valid divisor")
-    config = replace(training_config, minibatch_size=minibatch_size)
+    config = replace(training_config, minibatch_size=minibatch_size, profile_phases=False)
     config.skrl_config(num_envs=num_envs, device="cuda")
     return config
 
@@ -833,11 +899,14 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
             contact_capacity=contact_capacity,
             device_resident_controls=budget.device_resident_controls,
-            capture_transition_diagnostics=not budget.device_resident_controls,
+            capture_transition_diagnostics=budget.resolved_capture_transition_diagnostics,
             profile_phases=budget.profile_phases,
         ),
     )
-    ppo_config = ManoPPOConfig(minibatch_size=budget.minibatch_size)
+    ppo_config = ManoPPOConfig(
+        minibatch_size=budget.minibatch_size,
+        profile_phases=budget.profile_phases,
+    )
     ppo_config.skrl_config(num_envs=budget.num_envs, device="cuda")
     runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config)
     if runtime.device != "cuda":
@@ -994,12 +1063,15 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "residual_enabled": physical.config.residual_enabled,
                 "residual_action": asdict(physical.config.residual_action),
                 "max_deviation_distance": physical.config.max_deviation_distance,
+                "device_resident_controls": physical.config.device_resident_controls,
+                "capture_transition_diagnostics": physical.config.capture_transition_diagnostics,
             },
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
             "learning_starts": runtime.agent.cfg.learning_starts,
             "budget": {
                 **asdict(budget),
                 "planned_transitions": budget.transitions,
+                "resolved_capture_transition_diagnostics": budget.resolved_capture_transition_diagnostics,
                 "warp_contact_capacity": contact_capacity,
                 "evaluation_num_envs": budget.resolved_evaluation_num_envs,
                 "evaluation_ppo_config": asdict(evaluation_ppo_config),
@@ -1008,6 +1080,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "throughput": throughput,
             "phase_profile": {
                 "environment": physical.phase_profile() if hasattr(physical, "phase_profile") else {},
+                "contact": physical.contact_profile() if hasattr(physical, "contact_profile") else {},
                 "training": getattr(runtime, "training_phase_profile", {}),
             },
             "device": device,
@@ -1090,7 +1163,14 @@ def main(argv: list[str] | None = None) -> int:
         type=parse_cli_bool,
         default=False,
         metavar="{true,false}",
-        help="keep controller targets and delayed reset writes on the MJX device; disables transition snapshots",
+        help="keep controller targets and delayed reset writes on the MJX device",
+    )
+    parser.add_argument(
+        "--capture-transition-diagnostics",
+        type=parse_cli_bool,
+        default=None,
+        metavar="{true,false}",
+        help="capture transition snapshots independently; default is the inverse of device-resident-controls",
     )
     parser.add_argument(
         "--profile-phases",
@@ -1128,18 +1208,18 @@ def main(argv: list[str] | None = None) -> int:
     result = run(
         args.output,
         TrainingBudget(
-            args.num_envs,
-            args.updates,
-            args.wall_clock_seconds,
-            args.seed,
-            str(args.rerun_output.resolve()) if args.rerun_output is not None else None,
-            args.rerun_env_id,
-            args.rerun_stride,
-            args.object_type,
-            args.gesture,
-            args.use_residual,
-            args.terminal,
-            WandbOptions(
+            num_envs=args.num_envs,
+            updates=args.updates,
+            wall_clock_seconds=args.wall_clock_seconds,
+            seed=args.seed,
+            rerun_output=str(args.rerun_output.resolve()) if args.rerun_output is not None else None,
+            rerun_env_id=args.rerun_env_id,
+            rerun_stride=args.rerun_stride,
+            object_type=args.object_type,
+            gesture=args.gesture,
+            residual_enabled=args.use_residual,
+            terminal=args.terminal,
+            wandb=WandbOptions(
                 enabled=args.wandb,
                 project=args.wandb_project,
                 group=args.wandb_group,
@@ -1147,15 +1227,16 @@ def main(argv: list[str] | None = None) -> int:
                 name=args.wandb_name,
                 tags=_parse_wandb_tags(args.wandb_tags),
             ),
-            args.checkpoint_interval_updates,
-            args.minibatch_size,
-            args.evaluation_num_envs,
-            args.headless,
-            args.viewer_envs,
-            args.viewer_stride,
-            args.console_format,
-            args.device_resident_controls,
-            args.profile_phases,
+            checkpoint_interval_updates=args.checkpoint_interval_updates,
+            minibatch_size=args.minibatch_size,
+            evaluation_num_envs=args.evaluation_num_envs,
+            headless=args.headless,
+            viewer_envs=args.viewer_envs,
+            viewer_stride=args.viewer_stride,
+            console_format=args.console_format,
+            device_resident_controls=args.device_resident_controls,
+            profile_phases=args.profile_phases,
+            capture_transition_diagnostics=args.capture_transition_diagnostics,
         ),
     )
     if args.console_format == "json":
