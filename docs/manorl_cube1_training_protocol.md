@@ -21,14 +21,17 @@ than being simulated using cube geometry.
   reference-only: the fixture lacks pair-filtered hand-object forces and cannot
   establish reward equality.
 - Training uses target reward contract
-  `target_hand_object_contact_no_action_deviation_penalty_v2`: expected
+  `target_hand_object_contact_no_action_deviation_penalty_v3`: expected
   hand-object contacts receive weighted proportional credit only when their
-  pair-filtered world-force norm is strictly greater than `1.0 N`. The unchanged
-  observation contact encoding uses its separate `2.0 N` threshold. Action and
-  one-shot deviation-failure penalties default to zero while deviation still
-  terminates at the target training threshold `0.10 m`.
+  pair-filtered world-force norm is strictly greater than `1.0 N`. The direct
+  contact contribution is `3.0x` its unscaled contact quality, whose maximum
+  remains `0.4`; the distance gate and distance reward components continue to
+  use that unscaled quality. The unchanged observation contact encoding uses its
+  separate `2.0 N` threshold. Action and one-shot deviation-failure penalties
+  default to zero while deviation still terminates at the target training
+  threshold `0.10 m`.
 - PPO optimizes that environment reward at raw `1.0x` under
-  `target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`;
+  `target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3`;
   no skrl reward shaper is configured. This intentionally diverges from the
   sibling IsaacGym setup's fixed `0.5x` shaper. Native loads, including
   inference-only visualization, reject sidecars that do not declare the current
@@ -97,8 +100,8 @@ training begins. The trained row is always evaluated from a fresh bounded
 runtime after loading the final native checkpoint. It is the executable artifact
 a user receives, and avoids reporting train-process-only normalizer or BatchNorm
 state. Native checkpoint sidecars must declare both
-`reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2` and
-`ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`, and
+`reward_contract: target_hand_object_contact_no_action_deviation_penalty_v3` and
+`ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3`, and
 `environment_contract: target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v1`.
 Missing or mismatched environment contracts fail before `agent.load` for both
 resume and inference, so a visualization cannot silently run under different
