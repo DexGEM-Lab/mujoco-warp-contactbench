@@ -47,6 +47,9 @@ class ManoPPOConfig:
     grad_norm_clip: float = 1.0
     time_limit_bootstrap: bool = True
     profile_phases: bool = False
+    # Match the Gym baseline by default. FiLM is an explicit opt-in for
+    # experiments and is persisted in checkpoint metadata.
+    use_film: bool = False
 
     def __post_init__(self) -> None:
         if self.rollouts < 1 or self.minibatch_size < 1 or self.learning_epochs < 1:
@@ -156,7 +159,11 @@ class ManoSkrlRuntime:
         )
         self.device = str(self.env.device)
         self.model = ManoActorCritic(
-            self.env.observation_space, self.env.state_space, self.env.action_space, device=self.device
+            self.env.observation_space,
+            self.env.state_space,
+            self.env.action_space,
+            device=self.device,
+            use_film=config.use_film,
         )
         self.memory = RandomMemory(memory_size=config.rollouts, num_envs=environment.num_envs, device=self.device)
         self.agent = PPO(
@@ -191,6 +198,7 @@ class ManoSkrlRuntime:
                 "max_deviation_distance": self.gymnasium_env.environment.config.max_deviation_distance,
             },
             "ppo": asdict(self.config),
+            "model": {"use_film": self.model.use_film},
             "model_state_dict": self.model.state_dict_manifest(),
             "normalizer": "source_pointcloud_shared_xyz",
             "deterministic_policy_mode": "mean_clipped_to_action_space",

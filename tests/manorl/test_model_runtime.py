@@ -28,7 +28,7 @@ def _model(adapter: ManoGymnasiumVectorEnv) -> ManoActorCritic:
     )
 
 
-def test_model_matches_source_pointnet_film_state_namespace(adapter: ManoGymnasiumVectorEnv) -> None:
+def test_model_defaults_to_source_pointnet_mlp(adapter: ManoGymnasiumVectorEnv) -> None:
     import torch
 
     from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
@@ -38,12 +38,10 @@ def test_model_matches_source_pointnet_film_state_namespace(adapter: ManoGymnasi
     np.testing.assert_array_equal(adapter.single_action_space.high, np.full(ACTION_DIM, 1.0, dtype=np.float32))
     model = _model(adapter)
     keys = set(model.state_dict())
-    assert len(keys) == 41
-    assert "actor_backbone.0.film.film_generator.weight" in keys
-    assert "actor_backbone.1.weight" in keys
-    assert "actor_backbone.3.weight" in keys
-    assert "actor_backbone.5.weight" in keys
-    assert all(".0.weight" not in key for key in keys if key.startswith("actor_backbone."))
+    assert model.use_film is False
+    assert "actor_backbone.0.weight" in keys
+    assert model.actor_backbone[0].in_features == 348
+    assert not any("film_generator" in key for key in keys)
 
     observations = torch.zeros((2, OBSERVATION_DIM), dtype=torch.float32)
     observations[:, 266] = 1.0
@@ -53,6 +51,29 @@ def test_model_matches_source_pointnet_film_state_namespace(adapter: ManoGymnasi
     assert policy_outputs["log_std"].shape == (2, ACTION_DIM)
     assert value.shape == (2, 1)
     assert value_outputs == {}
+
+
+def test_model_can_explicitly_enable_film(adapter: ManoGymnasiumVectorEnv) -> None:
+    import torch
+
+    from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
+    from sim.manorl.model import ManoActorCritic
+
+    model = ManoActorCritic(
+        adapter.single_observation_space,
+        None,
+        adapter.single_action_space,
+        device="cpu",
+        use_film=True,
+    )
+    keys = set(model.state_dict())
+    assert model.use_film is True
+    assert "actor_backbone.0.film.film_generator.weight" in keys
+    observations = torch.zeros((2, OBSERVATION_DIM), dtype=torch.float32)
+    policy, _ = model.compute({"observations": observations}, role="policy")
+    value, _ = model.compute({"observations": observations}, role="value")
+    assert policy.shape == (2, ACTION_DIM)
+    assert value.shape == (2, 1)
 
 
 def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
@@ -128,6 +149,8 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.001, 0.001, 0.003)
     assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.01, 0.01, 0.03)
     assert runtime.checkpoint_metadata()["environment"]["max_deviation_distance"] == 1_000_000.0
+    assert runtime.checkpoint_metadata()["ppo"]["use_film"] is False
+    assert runtime.checkpoint_metadata()["model"]["use_film"] is False
     rollout = runtime.deterministic_rollout(steps=2)
     assert rollout["steps"] == 2
     assert torch.isfinite(rollout["observations"]).all()

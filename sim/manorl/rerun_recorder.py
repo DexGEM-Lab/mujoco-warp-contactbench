@@ -127,6 +127,10 @@ class ManoRerunRecorder:
     def _start_episode(self) -> None:
         if self._recording_open:
             raise RuntimeError("cannot start an episode while a recording stream is open")
+        # A previous process may have left its private stream behind. The
+        # stable output is replaced only after a complete episode is flushed,
+        # so removing this stale temporary file cannot discard a published run.
+        self.active_path.unlink(missing_ok=True)
         self.recording = self.rr.RecordingStream("manorl_mujoco")
         self.recording.save(self.active_path)
         self._recording_open = True
