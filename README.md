@@ -2,12 +2,16 @@
 
 Standalone MJX-Warp sim-to-Lance export repo.
 
-This repo is intentionally decoupled from the larger `contactbench` workspace. The MANO hand asset and `lance_manager` are git submodules. The repo contains MuJoCo scene builders, MJX-Warp contact extraction, direct Lance export, and Docker/runtime helpers.
+This repo is intentionally decoupled from the larger `contactbench` workspace. The
+MANO hand asset, complete source asset collection, and `lance_manager` are git
+submodules. The repo contains MuJoCo scene builders, MJX-Warp contact extraction,
+direct Lance export, and Docker/runtime helpers.
 
 ## Layout
 
 ```text
 assets/mano_hand_s02/        submodule: MANO MJCF/URDF/STL assets used by simulation
+assets/all_assets/           submodule: complete upstream Gym-version asset collection
 3rd_party/lance_manager/     submodule: generated_data Lance writer/schema stack
 sim/                         MJX-Warp simulation, scenarios, schema helpers, and export code
 sim/benchmarks/ball_pit/     deterministic ball-pit scenario and camera helpers
@@ -29,7 +33,19 @@ Current submodules:
 
 ```text
 assets/mano_hand_s02 -> git@192.168.10.116:ai/group-ai-public/group-sim-assets/mano_hand_s02.git
+assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ ead79126589d1abf2362ea30b9d674d9e675a2f9 (fixed pin)
 3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
+```
+
+`assets/all_assets` is the complete, large source asset checkout. The curated
+files under `sim/manorl/runtime_assets/` remain the runtime inputs. When a local
+checkout of `all_assets` already has the pinned objects, it can be used as a
+Git reference to avoid downloading the object database again:
+
+```bash
+git submodule update --init \
+  --reference /path/to/existing/all_assets \
+  assets/all_assets
 ```
 
 ## Pi Task Worktrees
