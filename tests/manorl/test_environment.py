@@ -269,6 +269,9 @@ def test_reward_state_filters_broad_contacts_before_reward() -> None:
         mano_dof_pos=np.zeros((1, 26), dtype=np.float64),
         hand_position=np.zeros((1, 3), dtype=np.float64),
         hand_orientation_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
+        hand_keypoint_orientations_xyzw=np.tile(
+            np.asarray([0.0, 0.0, 0.0, 1.0], dtype=np.float64), (1, 16, 1)
+        ),
         object_position=np.zeros((1, 3), dtype=np.float64),
         object_orientation_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64),
         object_linear_velocity=np.zeros((1, 3), dtype=np.float64),
@@ -311,6 +314,12 @@ def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> N
     np.testing.assert_allclose(
         snapshot.hand_keypoint_positions[0], xpos[np.asarray(env.producer.keypoint_body_ids)]
     )
+    source_orientations = np.asarray(env.data.xquat, dtype=np.float64)[
+        0, np.asarray(env.producer.keypoint_body_ids)
+    ]
+    source_orientations = source_orientations[:, (1, 2, 3, 0)]
+    source_orientations /= np.linalg.norm(source_orientations, axis=1, keepdims=True)
+    np.testing.assert_allclose(snapshot.hand_keypoint_orientations_xyzw[0], source_orientations)
     source_quat = snapshot.hand_orientation_xyzw[0]
     assert np.isclose(np.linalg.norm(source_quat), 1.0)
     fingertip_keypoint_ids = [15, 3, 6, 9, 12]
@@ -552,6 +561,77 @@ def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> N
     }
     assert recorder.recording.logs
     assert all(context == expected_context for _, context in recorder.recording.logs)
+
+
+def test_rerun_logs_urdf_resolved_mano_meshes_and_dynamic_link_transforms(trajectory) -> None:
+    import rerun as rr
+
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    class RecordingStream:
+        def __init__(self) -> None:
+            self.logs: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+        def set_time(self, timeline: str, **kwargs: float | int) -> None:
+            del timeline, kwargs
+
+        def log(self, entity_path: str, *args: object, **kwargs: object) -> None:
+            self.logs.append((entity_path, args, kwargs))
+
+    env = _environment(trajectory)
+    env.step(np.zeros((1, 26), dtype=np.float64))
+    assert env.last_transition is not None
+    recorder = object.__new__(ManoRerunRecorder)
+    recorder.rr = rr
+    recorder.environment = env
+    recorder.env_id = 0
+    recorder.episode_id = 0
+    recorder.geometry_table = recorder._geometry_table()
+    recorder.geometry_series_names = tuple(row["series_name"] for row in recorder.geometry_table)
+    recorder.hand_object_force_series_table = recorder._hand_object_force_series_table()
+    recorder.hand_object_force_series_names = tuple(
+        row["series_name"] for row in recorder.hand_object_force_series_table
+    )
+    recorder.hand_meshes = recorder._hand_meshes()
+    assert len(recorder.hand_meshes) == len(KEYPOINT_NAMES) == 16
+    assert all(mesh["vertex_count"] > 0 and mesh["triangle_count"] > 0 for mesh in recorder.hand_meshes)
+    assert env.last_physical is not None
+    geom_positions = np.asarray(env.data.geom_xpos, dtype=np.float64)[0]
+    geom_rotations = np.asarray(env.data.geom_xmat, dtype=np.float64)[0]
+    for keypoint_id, mesh in enumerate(recorder.hand_meshes):
+        geom_id = int(mesh["geom_id"])
+        mesh_id = int(mesh["mesh_id"])
+        first_vertex = int(env.model.mesh_vertadr[mesh_id])
+        source_vertex = np.asarray(env.model.mesh_vert[first_vertex], dtype=np.float64)
+        expected_world_vertex = geom_rotations[geom_id] @ source_vertex + geom_positions[geom_id]
+        body_orientation = env.last_physical.hand_keypoint_orientations_xyzw[0, keypoint_id]
+        body_position = env.last_physical.hand_keypoint_positions[0, keypoint_id]
+        recorded_world_vertex = quat_rotate_xyzw(
+            body_orientation[None], np.asarray(mesh["vertices"], dtype=np.float64)[:1]
+        )[0] + body_position
+        np.testing.assert_allclose(recorded_world_vertex, expected_world_vertex, rtol=0.0, atol=1e-7)
+
+    recorder.recording = RecordingStream()
+    recorder._log_static_metadata()
+    static_mesh_logs = [
+        (path, args[0])
+        for path, args, kwargs in recorder.recording.logs
+        if kwargs.get("static") is True and args and isinstance(args[0], rr.Mesh3D)
+    ]
+    assert len(static_mesh_logs) == 16
+    assert all(mesh.vertex_positions.as_arrow_array().to_pylist() for _, mesh in static_mesh_logs)
+    assert all(mesh.triangle_indices.as_arrow_array().to_pylist() for _, mesh in static_mesh_logs)
+    static_mesh_paths = {path for path, _ in static_mesh_logs}
+    assert static_mesh_paths == {f"world/mano_hand/{name}" for name in KEYPOINT_NAMES}
+
+    recorder._record(env.last_transition)
+    transform_logs = [
+        path
+        for path, args, kwargs in recorder.recording.logs
+        if path.startswith("world/mano_hand/") and args and isinstance(args[0], rr.Transform3D)
+    ]
+    assert len(transform_logs) == 16
+    assert set(transform_logs) == static_mesh_paths
 
 
 def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None:
