@@ -19,6 +19,23 @@ The branch, linked worktree, Pi display/intercom name, output directory, and fil
 ownership boundary together identify one task. A Pi name alone does not create a
 parent-child relationship; delegation and intercom establish coordination.
 
+## Proportional Task Classification
+
+Classify the request before starting the task lifecycle:
+
+- **T0**: Read-only Q&A, status, inspection, or diagnosis. Answer in the
+  coordinator session without creating a task, worktree, or subagent.
+- **T1**: A localized, reversible code or configuration change. Keep the primary
+  `dev` worktree coordinator-only, use at most one bounded executor in an
+  isolated task worktree, and use focused validation. Do not add an independent
+  critic or run the full suite by default.
+- **T2/T3**: Cross-module contracts, persistence or migration changes, or other
+  high-risk work. Use the full coordinator, worker, review, and integration
+  workflow below.
+
+The classification changes the amount of coordination, not GitGuard, worktree
+isolation, ownership, or branch lifecycle requirements.
+
 ## Coordinator Responsibilities
 
 - Translate the user's objective into features or bounded cases.
@@ -32,6 +49,11 @@ parent-child relationship; delegation and intercom establish coordination.
 - Review commits and evidence, require the feature to sync current `dev`, and
   integrate accepted work into `dev`.
 - Keep the primary `dev` worktree free of feature edits and direct commits.
+
+If an executor reaches its budget and fails once, preserve its partial worktree
+and report the exact failure and available diff. Do not automatically resume the
+executor. Resume only after identifying a concrete missing step or receiving an
+explicit user decision.
 
 ## Worker Responsibilities
 
