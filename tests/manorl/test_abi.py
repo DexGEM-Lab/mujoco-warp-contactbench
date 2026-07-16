@@ -92,7 +92,7 @@ def test_termination_matches_source_polarity_and_early_suppression() -> None:
     )
     np.testing.assert_array_equal(deviation.reset, [True])
     np.testing.assert_array_equal(deviation.deviation_reset, [True])
-    np.testing.assert_allclose(deviation.deviation_penalty, [-25.0])
+    np.testing.assert_allclose(deviation.deviation_penalty, [0.0])
 
 
 def test_control_input_shapes_fail_fast() -> None:

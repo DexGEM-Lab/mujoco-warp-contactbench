@@ -203,6 +203,17 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "reward_mean": 1.0,
         "action_abs_mean": 0.2,
         "reset_count": 3.0,
+        "completed_episode_count": 0.0,
+        "total": 1.0,
+        "distance_x": 0.1,
+        "distance_y": 0.2,
+        "distance_z": 0.3,
+        "rotation": 0.4,
+        "action_penalty": 0.0,
+        "contact": 0.5,
+        "object_stability": 0.6,
+        "survival": 0.001,
+        "deviation_penalty": 0.0,
         "elapsed_seconds": 1.5,
     })
     tool._log_wandb_update(run, {
@@ -211,13 +222,27 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "reward_mean": 2.0,
         "action_abs_mean": 0.3,
         "reset_count": 4.0,
+        "completed_episode_count": 1.0,
+        "episode_return_mean": 12.5,
+        "total": 2.0,
+        "distance_x": 0.2,
+        "distance_y": 0.3,
+        "distance_z": 0.4,
+        "rotation": 0.5,
+        "action_penalty": 0.0,
+        "contact": 0.6,
+        "object_stability": 0.7,
+        "survival": 0.001,
+        "deviation_penalty": 0.0,
         "elapsed_seconds": 3.0,
     })
 
     assert [step for _, step in run.logs] == [3072, 6144]
     assert [metrics["transitions"] for metrics, _ in run.logs] == [3072, 6144]
-    assert all({"reward_mean", "action_abs_mean", "reset_count", "elapsed_seconds", "update"} <= metrics.keys()
+    assert all({"reward_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "total", "distance_x", "distance_y", "distance_z", "rotation", "action_penalty", "contact", "object_stability", "survival", "deviation_penalty"} <= metrics.keys()
                for metrics, _ in run.logs)
+    assert "episode_return_mean" not in run.logs[0][0]
+    assert run.logs[1][0]["episode_return_mean"] == 12.5
 
 
 def test_wandb_evaluation_summaries_include_all_modes() -> None:

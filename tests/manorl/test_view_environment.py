@@ -270,9 +270,14 @@ def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
 
     environment = type("Environment", (), {"config": type("Config", (), {"num_envs": 2})()})()
     checkpoint = tmp_path / "policy.pt"
+    checkpoint.touch()
     monkeypatch.setattr(gymnasium_env, "ManoGymnasiumVectorEnv", FakeAdapter)
     monkeypatch.setattr(skrl_runtime, "ManoSkrlRuntime", FakeRuntime)
-    monkeypatch.setattr(checkpoint_module, "load_skrl_checkpoint", lambda agent, path: captured.update(path=path))
+    monkeypatch.setattr(
+        checkpoint_module,
+        "load_skrl_checkpoint_for_inference",
+        lambda agent, path: captured.update(path=path),
+    )
 
     stepper = _build_checkpoint_stepper(environment, checkpoint)
     assert captured["adapter_environment"] is environment

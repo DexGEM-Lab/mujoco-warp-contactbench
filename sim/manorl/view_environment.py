@@ -89,13 +89,13 @@ def _validate_checkpoint_path(checkpoint: Path) -> Path:
 def _build_checkpoint_stepper(environment: MujocoManoEnvironment, checkpoint: Path) -> ViewerStepper:
     """Load the native policy and reset through its vector wrapper before rendering."""
 
-    from sim.manorl.checkpoint import load_skrl_checkpoint
+    from sim.manorl.checkpoint import load_skrl_checkpoint_for_inference
     from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
     from sim.manorl.skrl_runtime import ManoSkrlRuntime
 
     adapter = ManoGymnasiumVectorEnv(environment)
     runtime = ManoSkrlRuntime(adapter, _inference_ppo_config(environment.config.num_envs))
-    load_skrl_checkpoint(runtime.agent, checkpoint)
+    load_skrl_checkpoint_for_inference(runtime.agent, checkpoint)
     runtime.agent.enable_training_mode(False)
     runtime.model.eval()
     observations, _ = runtime.env.reset()

@@ -18,12 +18,12 @@ from sim.manorl.observations import (
 from sim.manorl.abi import TerminationResult
 
 
-REWARD_CONTRACT_ID: Final = "target_hand_object_contact_v1"
+REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v2"
 REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = 1.0
 # PPO consumes the environment reward directly. This is deliberately distinct
 # from the environment reward equation contract above because it changes the
 # optimized objective while leaving environment diagnostics unchanged.
-PPO_REWARD_CONTRACT_ID: Final = "target_hand_object_contact_v1_raw_ppo_reward_1x_v1"
+PPO_REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2"
 PPO_REWARD_SCALE: Final[float] = 1.0
 
 
@@ -40,7 +40,7 @@ class RewardConfig:
     rotation_segment_2_linear_coeff: float = -0.019206
     rotation_segment_2_constant: float = 0.5
     rotation_segment_3_value: float = -1.0
-    action_penalty_scale: float = 1.0
+    action_penalty_scale: float = 0.0
     position_penalty_weight: float = 0.025
     joint_penalty_weight: float = 0.0085
     position_penalty_scale: float = 100.0

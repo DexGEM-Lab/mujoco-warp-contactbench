@@ -190,7 +190,7 @@ def check_termination(
     trajectory_lengths: NDArray[object],
     early_mask: NDArray[object],
     max_deviation_distance: float = 0.10,
-    deviation_penalty: float = 25.0,
+    deviation_penalty: float = 0.0,
 ) -> TerminationResult:
     """Evaluate exactly the task's trajectory-complete/deviation predicate."""
 
