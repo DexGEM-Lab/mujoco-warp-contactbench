@@ -158,6 +158,22 @@ def test_training_viewer_renders_states_without_stepping_and_preserves_controls(
     assert state["destroy"] == 1 and state["terminate"] == 1
 
 
+def test_training_viewer_quiet_mode_emits_no_stdout(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    glfw, mujoco, _ = _fake_graphics()
+    monkeypatch.setitem(sys.modules, "glfw", glfw)
+    monkeypatch.setitem(sys.modules, "mujoco", mujoco)
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    environment, _ = _training_environment()
+    training_viewer = viewer.TrainingViewer(environment, tile_envs=2, quiet=True)
+
+    assert capsys.readouterr().out == ""
+    training_viewer.close()
+
+
 def test_training_viewer_window_failure_terminates_glfw_once(monkeypatch: pytest.MonkeyPatch) -> None:
     import sim.manorl.view_environment as viewer
 

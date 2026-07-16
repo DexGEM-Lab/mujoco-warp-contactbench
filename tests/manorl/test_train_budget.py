@@ -540,6 +540,36 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert captured[-1][1].minibatch_size == 4096
 
 
+def test_training_observer_quiets_viewer_for_json_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _load_tool()
+    import sim.manorl.view_environment as viewer
+
+    created: list[dict[str, object]] = []
+
+    class FakeViewer:
+        close_requested = False
+        def __init__(self, _environment: object, **kwargs: object) -> None:
+            created.append(kwargs)
+        def observe(self) -> None:
+            pass
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(viewer, "TrainingViewer", FakeViewer)
+    environment = SimpleNamespace()
+    tool._build_training_observer(
+        environment, tool.TrainingBudget(headless=False, console_format="json", viewer_envs=8, viewer_stride=2)
+    )
+    tool._build_training_observer(
+        environment, tool.TrainingBudget(headless=False, console_format="human", viewer_envs=8, viewer_stride=2)
+    )
+
+    assert created == [
+        {"tile_envs": 8, "stride": 2, "quiet": True},
+        {"tile_envs": 8, "stride": 2, "quiet": False},
+    ]
+
+
 def test_json_console_mode_preserves_final_main_result(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

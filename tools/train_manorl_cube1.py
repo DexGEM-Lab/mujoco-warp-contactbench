@@ -616,7 +616,10 @@ def _build_training_observer(
     from sim.manorl.view_environment import TrainingViewer
 
     return TrainingViewer(
-        environment, tile_envs=budget.viewer_envs, stride=budget.viewer_stride
+        environment,
+        tile_envs=budget.viewer_envs,
+        stride=budget.viewer_stride,
+        quiet=budget.console_format == "json",
     )
 
 

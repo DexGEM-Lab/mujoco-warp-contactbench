@@ -214,7 +214,9 @@ def _install_tiled_controls(
 class TrainingViewer:
     """Tiled post-step renderer for PPO training; it never advances simulation."""
 
-    def __init__(self, environment: MujocoManoEnvironment, *, tile_envs: int, stride: int = 1) -> None:
+    def __init__(
+        self, environment: MujocoManoEnvironment, *, tile_envs: int, stride: int = 1, quiet: bool = False
+    ) -> None:
         if not 1 <= tile_envs <= environment.config.num_envs:
             raise ValueError("tile_envs must be within the configured batch")
         if stride < 1:
@@ -259,7 +261,8 @@ class TrainingViewer:
             except BaseException as cleanup_error:
                 setup_error.add_note(f"TrainingViewer cleanup also failed: {cleanup_error!r}")
             raise
-        print("Training viewer controls: left-drag rotate | right-drag pan horizontal | middle-drag pan vertical | wheel zoom | R reset | Esc close", flush=True)
+        if not quiet:
+            print("Training viewer controls: left-drag rotate | right-drag pan horizontal | middle-drag pan vertical | wheel zoom | R reset | Esc close", flush=True)
 
     def render(self) -> None:
         """Mirror and render current states only; training owns all step calls."""
