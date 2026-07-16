@@ -20,9 +20,8 @@ from sim.manorl.abi import TerminationResult
 
 REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v3"
 REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = 1.0
-# PPO consumes the environment reward directly. This is deliberately distinct
-# from the environment reward equation contract above because it changes the
-# optimized objective while leaving environment diagnostics unchanged.
+# PPO consumes the environment reward directly, so its contract is distinct
+# because the PPO reward scale is tracked separately from the environment contract.
 PPO_REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3"
 PPO_REWARD_SCALE: Final[float] = 1.0
 
