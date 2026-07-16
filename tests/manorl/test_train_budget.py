@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import sys
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -532,8 +533,11 @@ def test_evaluation_budget_defaults_to_bounded_prefix_and_uses_valid_minibatch()
     assert override.resolved_evaluation_num_envs == 96
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=128).minibatch_size == 2048
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=96).minibatch_size == 512
-    with pytest.raises(ValueError, match="evaluation_num_envs must be positive"):
-        _ = tool.TrainingBudget(evaluation_num_envs=0).resolved_evaluation_num_envs
+    for invalid in (0, 129, 4096):
+        with pytest.raises(ValueError, match="evaluation_num_envs must be within 1..128"):
+            _ = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=invalid).resolved_evaluation_num_envs
+    with pytest.raises(ValueError, match="evaluation_num_envs must be within 1..64"):
+        _ = tool.TrainingBudget(num_envs=64, evaluation_num_envs=65).resolved_evaluation_num_envs
 
 
 def test_cli_serializes_default_and_override_evaluation_counts(
@@ -550,9 +554,12 @@ def test_cli_serializes_default_and_override_evaluation_counts(
         "--evaluation-num-envs", "96",
     ])
     assert captured[-1].resolved_evaluation_num_envs == 96
+    for invalid in ("0", "129", "4096"):
+        with pytest.raises(SystemExit, match="2"):
+            tool.main(["--output", str(tmp_path / f"invalid-{invalid}"), "--num-envs", "4096", "--evaluation-num-envs", invalid])
     with pytest.raises(SystemExit, match="2"):
-        tool.main(["--output", str(tmp_path / "invalid"), "--evaluation-num-envs", "0"])
-    assert "evaluation-num-envs must be positive when provided" in capsys.readouterr().err
+        tool.main(["--output", str(tmp_path / "invalid-small"), "--num-envs", "64", "--evaluation-num-envs", "65"])
+    assert "evaluation-num-envs must be within 1..64 when provided" in capsys.readouterr().err
 
 
 def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
@@ -562,6 +569,8 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     constructions: list[tuple[str, int, int]] = []
     loads: list[tuple[str, str]] = []
     modes: list[tuple[str, str]] = []
+    released: list[str] = []
+    initial_runtime_ref: list[weakref.ReferenceType[object]] = []
 
     class Runtime:
         def __init__(self, name: str, config: object) -> None:
@@ -589,8 +598,15 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
 
     def build_runtime(physical: Physical, config: object) -> Runtime:
         name = "training" if not constructions else f"evaluation-{len(constructions)}"
+        if name == "evaluation-2":
+            assert released == ["evaluation-1"]
+            assert initial_runtime_ref[0]() is None
         constructions.append((name, physical.config.num_envs, config.minibatch_size))
-        return Runtime(name, config)
+        runtime = Runtime(name, config)
+        if name == "evaluation-1":
+            initial_runtime_ref.append(weakref.ref(runtime))
+            weakref.finalize(runtime, released.append, name)
+        return runtime
 
     def assignments(trajectory_batch: SimpleNamespace) -> list[dict[str, object]]:
         return [{"env_id": index, "identity": f"prefix-{index}"} for index in range(trajectory_batch.num_envs)]

@@ -163,7 +163,8 @@ For an opt-in safety cap that may stop before all 64 updates complete, add
 `--wall-clock-seconds <positive-seconds>`. Evaluation defaults to
 `min(--num-envs, 128)` worlds, so a 4096-world training run performs all three
 comparison rows on the same 128-world trajectory prefix. Override the bounded
-count explicitly with `--evaluation-num-envs <positive-count>` when needed.
+count explicitly with `--evaluation-num-envs <count>` when needed; accepted values are
+within `1..min(--num-envs, 128)`, so evaluation cannot recreate a second full-size runtime.
 
 For a 2,500-update Server2 run, add `--checkpoint-interval-updates 100`. Each
 completed interval writes `<output>/checkpoint-000100.pt` plus its `.pt.json`

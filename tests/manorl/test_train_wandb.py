@@ -260,14 +260,15 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
     assert run.logs[1][0]["episode_return_distribution"] == ("histogram", [9.0, 16.0])
 
 
-def test_wandb_evaluation_summaries_include_all_modes() -> None:
+def test_wandb_evaluation_summaries_preserve_policy_alias_for_both_comparisons() -> None:
     tool = _load_tool()
     run = FakeRun()
-    results = [
-        tool.EvaluationResult(
+
+    def result(mode: str, return_mean: float) -> object:
+        return tool.EvaluationResult(
             mode=mode,
             calls=10,
-            return_mean=1.0,
+            return_mean=return_mean,
             reward_mean=0.1,
             action_abs_mean=0.2,
             final_object_target_distance=0.3,
@@ -279,15 +280,17 @@ def test_wandb_evaluation_summaries_include_all_modes() -> None:
             rewards_by_call=[0.1],
             object_target_distance_by_call=[0.3],
         )
-        for mode in ("zero", "untrained", "trained")
-    ]
 
-    tool._log_wandb_evaluations(run, results, transitions=6144)
+    tool._log_wandb_evaluations(run, [result("zero", 0.0), result("untrained", 1.0)], transitions=0)
+    tool._log_wandb_evaluations(run, [result("trained", 2.0)], transitions=6144)
 
-    assert run.logs[0][1] == 6144
-    assert run.summary["evaluation/zero/return_mean"] == 1.0
-    assert run.summary["evaluation/untrained/return_mean"] == 1.0
-    assert run.summary["evaluation/trained/return_mean"] == 1.0
+    assert [step for _, step in run.logs] == [0, 6144]
+    assert run.logs[0][0]["evaluation/zero/return_mean"] == 0.0
+    assert run.logs[0][0]["evaluation/untrained/return_mean"] == 1.0
+    assert run.logs[0][0]["evaluation/policy/return_mean"] == 1.0
+    assert run.logs[1][0]["evaluation/trained/return_mean"] == 2.0
+    assert run.logs[1][0]["evaluation/policy/return_mean"] == 2.0
+    assert run.summary["evaluation/policy/return_mean"] == 2.0
 
 
 def test_wandb_artifact_contains_existing_training_outputs(tmp_path: Path) -> None:

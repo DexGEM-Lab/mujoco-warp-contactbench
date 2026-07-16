@@ -10,7 +10,7 @@ The failure is deterministic across a contended GPU2 and empty GPU3, at the same
 
 ## Current claim
 
-4096-world training is feasible at about 10.5k environment transitions/s. Evaluation now resolves independently to `min(training_num_envs, 128)` unless explicitly overridden, so training constructs one 4096-world runtime and each fresh evaluation constructs 128 worlds. A temporary, output-owned native checkpoint establishes the initial policy/value/normalizer/optimizer boundary: the bounded untrained runtime and the training runtime load the same checkpoint. The final bounded runtime loads the final native checkpoint. Focused mocked construction/load tests support this claim; a coordinator-owned 4096x1 GPU rerun remains the decisive physical validation.
+4096-world training is feasible at about 10.5k environment transitions/s. Evaluation now resolves independently to `min(training_num_envs, 128)` and explicit values outside `1..min(training_num_envs, 128)` fail, so the bounded path cannot request a second 4096-world runtime. Training constructs one 4096-world runtime and each fresh evaluation constructs 128 worlds. A temporary, output-owned native checkpoint establishes the initial policy/value/normalizer/optimizer boundary: the bounded untrained runtime and the training runtime load the same checkpoint. The initial evaluator is explicitly released before training, then the final bounded runtime loads the final native checkpoint. Focused mocked construction/load and real native module-payload tests support this claim; a coordinator-owned 4096x1 GPU rerun remains the decisive physical validation.
 
 ## Next decisive question
 

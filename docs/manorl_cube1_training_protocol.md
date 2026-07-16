@@ -79,15 +79,18 @@ reported as a stretch result, not silently assumed. The reference baseline is a
 controller diagnostic, not a learned-policy comparator.
 
 Evaluation uses `min(--num-envs, 128)` worlds by default; pass
-`--evaluation-num-envs <positive-count>` to override that bounded count. The
-zero, untrained, and trained rows all use the same evaluation trajectory prefix.
+`--evaluation-num-envs <count>` to override that bounded count only within
+`1..min(--num-envs, 128)`. This prevents a requested evaluation from recreating
+a second full-size training runtime. The zero, untrained, and trained rows all
+use the same evaluation trajectory prefix.
 Their evaluation-only PPO configuration selects the largest divisor shared by
 the training minibatch and evaluation rollout batch, while the training PPO
 configuration and update semantics remain unchanged. The initial training
 policy, value, optimizer, and normalizer state is written to an owned temporary
 native checkpoint, loaded for the untrained row, then loaded again immediately
 before training. That temporary checkpoint and sidecar are removed after the
-boundary completes. The trained row is always evaluated from a fresh bounded
+boundary completes, and the initial bounded runtime is released before
+training begins. The trained row is always evaluated from a fresh bounded
 runtime after loading the final native checkpoint. It is the executable artifact
 a user receives, and avoids reporting train-process-only normalizer or BatchNorm
 state. Native checkpoint sidecars must declare both
@@ -178,7 +181,9 @@ sidecar, metrics JSON, evaluation trace, and a completed Rerun recording when
 one exists. These target-native aggregates are semantically related to IsaacGym
 reward telemetry, but their logger key names are not an identity contract. It
 writes the zero/untrained/trained evaluation summaries and final acceptance
-values, then uploads those artifacts. An enabled run fails on W&B initialization
+values, preserving `evaluation/policy/*` as the untrained and trained policy
+comparison time series for existing dashboards, then uploads those artifacts.
+An enabled run fails on W&B initialization
 or logging errors; cleanup failures do not mask a training error.
 
 To record one actual training world without changing PPO actions, rollout

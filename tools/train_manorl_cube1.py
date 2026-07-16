@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import gc
 import json
 import math
 import os
@@ -78,9 +79,10 @@ class TrainingBudget:
 
     @property
     def resolved_evaluation_num_envs(self) -> int:
-        num_envs = self.evaluation_num_envs if self.evaluation_num_envs is not None else min(self.num_envs, 128)
-        if num_envs < 1:
-            raise ValueError("evaluation_num_envs must be positive")
+        maximum = min(self.num_envs, 128)
+        num_envs = self.evaluation_num_envs if self.evaluation_num_envs is not None else maximum
+        if not 1 <= num_envs <= maximum:
+            raise ValueError(f"evaluation_num_envs must be within 1..{maximum}")
         return num_envs
 
 
@@ -218,7 +220,13 @@ def _evaluation_metrics(result: EvaluationResult) -> dict[str, object]:
 def _log_wandb_evaluations(run: Any, results: list[EvaluationResult], *, transitions: int) -> None:
     metrics: dict[str, object] = {"global_step": transitions, "transitions": transitions}
     for result in results:
-        metrics.update(_evaluation_metrics(result))
+        result_metrics = _evaluation_metrics(result)
+        metrics.update(result_metrics)
+        if result.mode in {"untrained", "trained"}:
+            metrics.update({
+                key.replace(f"evaluation/{result.mode}/", "evaluation/policy/"): value
+                for key, value in result_metrics.items()
+            })
     run.log(metrics, step=transitions)
     run.summary.update(metrics)
 
@@ -727,6 +735,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             # the native policy, value, optimizer, and normalizer state reported
             # by the untrained comparison, independent of RNG construction.
             load_skrl_checkpoint(runtime.agent, initial_checkpoint)
+        # Free the initial bounded physical runtime before training. The final
+        # checkpoint evaluation constructs its own fresh bounded runtime later.
+        del evaluation_runtime
+        gc.collect()
         if wandb_run is not None:
             _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], transitions=0)
         recorder = (
@@ -902,8 +914,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
-    if args.evaluation_num_envs is not None and args.evaluation_num_envs < 1:
-        parser.error("evaluation-num-envs must be positive when provided")
+    evaluation_num_envs_maximum = min(args.num_envs, 128)
+    if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
+        parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")
     try:
         ManoPPOConfig(minibatch_size=args.minibatch_size).skrl_config(num_envs=args.num_envs, device="cuda")
     except ValueError as exc:
