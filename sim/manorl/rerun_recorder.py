@@ -287,7 +287,7 @@ class ManoRerunRecorder:
                 "position_scale": list(environment.config.residual_action.position_scale),
                 "gamma_xy": environment.config.residual_action.gamma_xy,
                 "gamma_z": environment.config.residual_action.gamma_z,
-                "max_position_offset": environment.config.residual_action.max_position_offset,
+                "max_position_offset": list(environment.config.residual_action.max_position_offset),
             },
             "compatibility": environment.config.compatibility.point_template_mode,
             "thresholds": {

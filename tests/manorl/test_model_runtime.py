@@ -125,7 +125,8 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     assert runtime.checkpoint_metadata()["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert runtime.checkpoint_metadata()["ppo_reward_scale"] == PPO_REWARD_SCALE
     assert runtime.checkpoint_metadata()["environment_contract"] == ENVIRONMENT_CONTRACT_ID
-    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.003, 0.003, 0.003)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.001, 0.001, 0.003)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.01, 0.01, 0.03)
     assert runtime.checkpoint_metadata()["environment"]["max_deviation_distance"] == 1_000_000.0
     rollout = runtime.deterministic_rollout(steps=2)
     assert rollout["steps"] == 2

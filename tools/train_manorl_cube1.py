@@ -166,9 +166,9 @@ def _wandb_config(
         "environment": {
             "contract": ENVIRONMENT_CONTRACT_ID,
             "residual_action": {
-                "position_scale": [0.003, 0.003, 0.003],
+                "position_scale": [0.001, 0.001, 0.003],
                 "gamma_xyz": 0.9,
-                "max_position_offset": 0.03,
+                "max_position_offset": [0.01, 0.01, 0.03],
                 "rotation_effective_scale": 0.00025,
             },
             "max_deviation_distance": TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,

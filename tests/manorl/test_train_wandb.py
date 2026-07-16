@@ -196,8 +196,9 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["training_budget"]["planned_transitions"] == budget.transitions
     assert config["training_budget"]["wall_clock_seconds"] is None
     assert config["reward"]["ppo_scale"] == 1.0
-    assert config["environment"]["contract"] == "target_residual_reduced_thumb_authority_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v2"
-    assert config["environment"]["residual_action"]["position_scale"] == [0.003, 0.003, 0.003]
+    assert config["environment"]["contract"] == "target_residual_reduced_thumb_authority_xy_0p001_z_0p003_gamma_0p9_cap_xy_0p01_z_0p03_deviation_0p10_v3"
+    assert config["environment"]["residual_action"]["position_scale"] == [0.001, 0.001, 0.003]
+    assert config["environment"]["residual_action"]["max_position_offset"] == [0.01, 0.01, 0.03]
     assert config["environment"]["max_deviation_distance"] == 0.10
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
     assert config["evaluation"]["num_envs"] == 64
