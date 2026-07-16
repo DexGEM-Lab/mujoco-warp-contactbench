@@ -1,4 +1,4 @@
-"""Source-compatible ManoRL reward equations over resolved environment state."""
+"""ManoRL reward equations over resolved environment state."""
 
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ from sim.manorl.observations import (
 from sim.manorl.abi import TerminationResult
 
 
-REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v2"
+REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v3"
 REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = 1.0
 # PPO consumes the environment reward directly. This is deliberately distinct
 # from the environment reward equation contract above because it changes the
 # optimized objective while leaving environment diagnostics unchanged.
-PPO_REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2"
+PPO_REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3"
 PPO_REWARD_SCALE: Final[float] = 1.0
 
 
@@ -47,6 +47,7 @@ class RewardConfig:
     joint_penalty_scale: float = 10.0
     reference_joint_count: float = 8.0
     max_contact_reward: float = 0.4
+    direct_contact_reward_scale: float = 3.0
     contact_force_threshold: float = REWARD_HAND_OBJECT_THRESHOLD_N
     max_object_stability_reward: float = 0.4
     object_stability_reference_speed: float = 0.1
@@ -200,9 +201,10 @@ def compute_rewards(
         weighted_correct, weighted_expected, out=np.zeros(batch, dtype=np.float64), where=weighted_expected > 0
     ) * config.max_contact_reward
     within_window = (steps >= starts) & (steps <= ends)
-    contact = np.where(within_window, raw_contact, 0.0)
+    windowed_contact = np.where(within_window, raw_contact, 0.0)
+    contact = windowed_contact * config.direct_contact_reward_scale
     valid_window = ends >= starts
-    distance_gate = np.where(within_window & valid_window, contact, 0.0)
+    distance_gate = np.where(within_window & valid_window, windowed_contact, 0.0)
     distance_gate = np.where((steps > ends) & valid_window, config.max_contact_reward, distance_gate)
     distance_x, distance_y, distance_z = ungated_x * distance_gate, ungated_y * distance_gate, ungated_z * distance_gate
     object_speed = np.linalg.norm(object_velocity, axis=1)

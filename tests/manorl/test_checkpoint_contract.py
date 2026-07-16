@@ -64,7 +64,7 @@ else:
     raise AssertionError("missing reward contract was accepted")
 
 incompatible = dict(metadata)
-incompatible["reward_contract"] = "legacy_source_contact_v1"
+incompatible["reward_contract"] = "target_hand_object_contact_no_action_deviation_penalty_v2"
 sidecar(checkpoint).write_text(json.dumps(incompatible), encoding="utf-8")
 try:
     load_skrl_checkpoint(agent, checkpoint)
@@ -72,6 +72,16 @@ except CheckpointFormatError as exc:
     assert "reward contract" in str(exc) and "required" in str(exc)
 else:
     raise AssertionError("mismatched reward contract was accepted")
+
+incompatible_ppo = dict(metadata)
+incompatible_ppo["ppo_reward_contract"] = "target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2"
+sidecar(checkpoint).write_text(json.dumps(incompatible_ppo), encoding="utf-8")
+try:
+    load_skrl_checkpoint(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "PPO reward contract" in str(exc) and "required" in str(exc)
+else:
+    raise AssertionError("mismatched PPO reward contract was accepted")
 
 legacy = dict(metadata)
 legacy["format"] = "manorl.skrl.ppo.v1"

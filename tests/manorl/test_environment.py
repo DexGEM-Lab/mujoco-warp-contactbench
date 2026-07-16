@@ -303,7 +303,7 @@ def test_reward_state_filters_broad_contacts_before_reward() -> None:
     )
 
     np.testing.assert_allclose(broad_only.contact, [0.0])
-    np.testing.assert_allclose(filtered.contact, [0.4])
+    np.testing.assert_allclose(filtered.contact, [1.2])
 
 
 def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> None:
