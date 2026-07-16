@@ -113,7 +113,7 @@ else:
     raise AssertionError("inference accepted a missing environment contract")
 
 mismatched_environment = dict(metadata)
-mismatched_environment["environment_contract"] = "legacy_residual_xyz_0p005_v1"
+mismatched_environment["environment_contract"] = "target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v1"
 sidecar(checkpoint).write_text(json.dumps(mismatched_environment), encoding="utf-8")
 agent.loaded = None
 try:
