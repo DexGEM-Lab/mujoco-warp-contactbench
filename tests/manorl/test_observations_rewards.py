@@ -243,15 +243,15 @@ def test_reward_terms_and_windows_match_source_equations() -> None:
     np.testing.assert_allclose(diagnostics.ungated_distance_z, [2.0])
     np.testing.assert_allclose([diagnostics.distance_x[0], diagnostics.distance_y[0], diagnostics.distance_z[0]], [0.2, 0.2, 0.8])
     np.testing.assert_allclose(diagnostics.rotation, [0.3])
-    np.testing.assert_allclose(diagnostics.position_penalty, [-0.025])
-    np.testing.assert_allclose(diagnostics.joint_penalty, [-0.068])
-    np.testing.assert_allclose(diagnostics.action_penalty, [-0.093])
+    np.testing.assert_allclose(diagnostics.position_penalty, [0.0])
+    np.testing.assert_allclose(diagnostics.joint_penalty, [0.0])
+    np.testing.assert_allclose(diagnostics.action_penalty, [0.0])
     np.testing.assert_allclose(diagnostics.raw_contact, [0.4])
     np.testing.assert_allclose(diagnostics.contact, [0.4])
     np.testing.assert_allclose(diagnostics.distance_gate, [0.4])
     np.testing.assert_allclose(diagnostics.object_stability, [0.0])
     np.testing.assert_allclose(diagnostics.survival, [0.001])
-    np.testing.assert_allclose(diagnostics.total, [1.808])
+    np.testing.assert_allclose(diagnostics.total, [1.901])
 
     window_state = _reward_state(batch=3, steps=np.array([99, 105, 111], dtype=np.int64))
     window = compute_rewards(
@@ -262,7 +262,7 @@ def test_reward_terms_and_windows_match_source_equations() -> None:
     np.testing.assert_allclose(window.contact, [0.0, 0.4, 0.0])
     np.testing.assert_allclose(window.distance_gate, [0.0, 0.4, 0.4])
     np.testing.assert_allclose(window.object_stability, [0.0, 0.0, 0.4])
-    np.testing.assert_allclose(window.total, [0.208, 1.808, 1.808])
+    np.testing.assert_allclose(window.total, [0.301, 1.901, 1.901])
 
 
 def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None:
@@ -285,7 +285,7 @@ def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None
     assert "object_contact_force" not in RewardState.__dataclass_fields__
     assert "object_gravity_force" not in RewardState.__dataclass_fields__
     assert "object_contact_gate" not in diagnostics.__dataclass_fields__
-    assert REWARD_CONTRACT_ID == "target_hand_object_contact_v1"
+    assert REWARD_CONTRACT_ID == "target_hand_object_contact_no_action_deviation_penalty_v2"
     assert REWARD_HAND_OBJECT_THRESHOLD_N == 1.0
 
 
@@ -353,8 +353,8 @@ def test_reward_compatibility_rotation_and_termination_interaction() -> None:
             early_mask=np.array([True]),
         ),
     )
-    np.testing.assert_allclose(penalized.deviation_penalty, [-25.0])
-    np.testing.assert_allclose(penalized.total, without_penalty.total - 25.0)
+    np.testing.assert_allclose(penalized.deviation_penalty, [0.0])
+    np.testing.assert_allclose(penalized.total, without_penalty.total)
 
 
 def test_reward_inputs_and_termination_result_fail_fast() -> None:

@@ -77,9 +77,12 @@ def _load_metadata(checkpoint: Path) -> dict[str, Any]:
             "checkpoint sidecar does not describe the native ManoRL skrl v2 raw-1.0x reward format; "
             "legacy 0.5x-reward checkpoints cannot load"
         )
-    for field in ("reward_contract", "ppo_reward_contract"):
+    for field, display_name in (
+        ("reward_contract", "reward contract"),
+        ("ppo_reward_contract", "PPO reward contract"),
+    ):
         if not isinstance(metadata.get(field), str) or not metadata[field]:
-            raise CheckpointFormatError(f"checkpoint {field.replace('_', ' ')} is missing")
+            raise CheckpointFormatError(f"checkpoint {display_name} is missing")
     return metadata
 
 
