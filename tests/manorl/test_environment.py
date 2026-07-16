@@ -828,6 +828,40 @@ def test_rerun_partial_close_preserves_existing_stable_artifact(trajectory, tmp_
     assert not recorder.active_path.exists()
 
 
+def test_rerun_existing_stable_artifact_is_replaced_after_complete_episode(trajectory, tmp_path) -> None:
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    output = tmp_path / "episodes.rrd"
+    output.write_bytes(b"previous recording")
+    env = _environment(trajectory)
+    recorder = ManoRerunRecorder(env, output)
+    env.progress[:] = len(trajectory.q_ref) - 2
+    env.trajectory_steps[:] = len(trajectory.q_ref) - 3
+
+    env.step(np.zeros((1, 26), dtype=np.float64))
+    recorder.record_transition()
+    env.step(np.zeros((1, 26), dtype=np.float64))
+    recorder.record_transition()
+
+    assert output.read_bytes() != b"previous recording"
+    assert output.read_bytes()
+    recorder.close()
+
+
+def test_rerun_stale_active_stream_is_removed_before_new_recording(trajectory, tmp_path) -> None:
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
+    output = tmp_path / "episodes.rrd"
+    active = tmp_path / ".episodes.active.rrd"
+    active.write_bytes(b"stale active stream")
+    recorder = ManoRerunRecorder(_environment(trajectory), output)
+
+    assert recorder.active_path == active
+    assert active.exists()
+    assert active.read_bytes() != b"stale active stream"
+    recorder.close()
+
+
 def test_rerun_close_disconnects_fresh_active_stream_once(tmp_path) -> None:
     from sim.manorl.rerun_recorder import ManoRerunRecorder
 
