@@ -33,6 +33,7 @@ def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
     assert args.tile_envs == 1
     assert args.object_type is None
     assert args.gesture is None
+    assert args.checkpoint is None
     assert args.rerun_output is None
 
     one_shot = parse_args(
@@ -58,6 +59,8 @@ def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
             "cube1",
             "--gesture",
             "03",
+            "--checkpoint",
+            "outputs/manorl/policy.pt",
             "--rerun-output",
             "outputs/manorl/viewer.rrd",
         ]
@@ -73,6 +76,7 @@ def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
     assert one_shot.tile_envs == 10
     assert one_shot.object_type == "cube1"
     assert one_shot.gesture == "03"
+    assert str(one_shot.checkpoint) == "outputs/manorl/policy.pt"
     assert str(one_shot.rerun_output) == "outputs/manorl/viewer.rrd"
 
 
@@ -171,6 +175,185 @@ def test_tile_layout_covers_non_overlapping_grid() -> None:
         (0, 0, 50, 40),
         (50, 0, 50, 40),
     ]
+
+
+def test_zero_stepper_preserves_zero_batch_actions() -> None:
+    import numpy as np
+
+    from sim.manorl.view_environment import _ZeroActionStepper
+
+    class FakeEnvironment:
+        class config:
+            num_envs = 3
+
+        def __init__(self) -> None:
+            self.actions = None
+
+        def step(self, actions):
+            self.actions = actions
+            return "obs", np.zeros(3), np.zeros(3, dtype=bool), {}
+
+    environment = FakeEnvironment()
+    stepper = _ZeroActionStepper(environment)
+    stepper.step()
+    assert environment.actions.shape == (3, 26)
+    assert environment.actions.dtype == np.float64
+    assert not np.any(environment.actions)
+
+
+def test_checkpoint_stepper_uses_mean_actions_and_wrapped_done_flags() -> None:
+    import torch
+
+    from sim.manorl.view_environment import _CheckpointPolicyStepper
+
+    class FakeWrappedEnv:
+        def step(self, actions):
+            self.actions = actions
+            return torch.tensor([[3.0]]), torch.tensor([1.25]), torch.tensor([False]), torch.tensor([True]), {"x": 1}
+
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.env = FakeWrappedEnv()
+            self.observations = None
+
+        def deterministic_actions(self, observations):
+            self.observations = observations
+            return torch.tensor([[0.4]])
+
+    runtime = FakeRuntime()
+    stepper = _CheckpointPolicyStepper(runtime, torch.tensor([[2.0]]))
+    _, rewards, resets, info = stepper.step()
+    assert torch.equal(runtime.observations, torch.tensor([[2.0]]))
+    assert torch.equal(runtime.env.actions, torch.tensor([[0.4]]))
+    assert rewards.tolist() == [1.25]
+    assert resets.tolist() == [True]
+    assert info == {"x": 1}
+
+
+def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import torch
+
+    from sim.manorl import checkpoint as checkpoint_module
+    from sim.manorl import gymnasium_env, skrl_runtime
+    from sim.manorl.view_environment import _build_checkpoint_stepper
+
+    captured = {}
+
+    class FakeAdapter:
+        def __init__(self, environment) -> None:
+            captured["adapter_environment"] = environment
+
+    class FakeAgent:
+        def enable_training_mode(self, enabled: bool) -> None:
+            captured["training_enabled"] = enabled
+
+    class FakeModel:
+        def eval(self) -> None:
+            captured["eval"] = True
+
+    class FakeWrappedEnv:
+        def reset(self):
+            captured["reset"] = True
+            return torch.zeros((2, 1)), {}
+
+    class FakeRuntime:
+        def __init__(self, adapter, config) -> None:
+            captured["config"] = config
+            self.agent = FakeAgent()
+            self.model = FakeModel()
+            self.env = FakeWrappedEnv()
+
+        def deterministic_actions(self, observations):
+            return observations
+
+    environment = type("Environment", (), {"config": type("Config", (), {"num_envs": 2})()})()
+    checkpoint = tmp_path / "policy.pt"
+    monkeypatch.setattr(gymnasium_env, "ManoGymnasiumVectorEnv", FakeAdapter)
+    monkeypatch.setattr(skrl_runtime, "ManoSkrlRuntime", FakeRuntime)
+    monkeypatch.setattr(checkpoint_module, "load_skrl_checkpoint", lambda agent, path: captured.update(path=path))
+
+    stepper = _build_checkpoint_stepper(environment, checkpoint)
+    assert captured["adapter_environment"] is environment
+    assert captured["path"] == checkpoint
+    assert captured["config"].rollouts == 1
+    assert captured["config"].minibatch_size == 2
+    assert captured["training_enabled"] is False
+    assert captured["eval"] is True
+    assert captured["reset"] is True
+    assert stepper is not None
+
+
+@pytest.mark.parametrize("tile_envs", [1, 2])
+def test_viewer_dispatches_shared_stepper_to_each_renderer(
+    monkeypatch: pytest.MonkeyPatch, tile_envs: int
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    dispatched = {}
+    sentinel_stepper = object()
+
+    class FakeEnvironment:
+        def __init__(self, trajectory, config) -> None:
+            self.config = config
+
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    monkeypatch.setattr(viewer, "load_reference_trajectory", lambda: object())
+    monkeypatch.setattr(viewer, "MujocoManoEnvironment", FakeEnvironment)
+    monkeypatch.setattr(viewer, "_ZeroActionStepper", lambda environment: sentinel_stepper)
+    monkeypatch.setattr(
+        viewer,
+        "_view_single",
+        lambda environment, **kwargs: dispatched.update(renderer="single", **kwargs),
+    )
+    monkeypatch.setattr(
+        viewer,
+        "_view_tiled",
+        lambda environment, **kwargs: dispatched.update(renderer="tiled", **kwargs),
+    )
+
+    viewer.view_environment(
+        device="cpu",
+        speed=1.0,
+        loop=False,
+        print_every=1,
+        terminal=True,
+        trajectory_name="accepted",
+        num_envs=2,
+        render_env=0,
+        tile_envs=tile_envs,
+        object_type=None,
+        gesture=None,
+        rerun_output=None,
+        use_residual=True,
+        checkpoint=None,
+    )
+    assert dispatched["renderer"] == ("single" if tile_envs == 1 else "tiled")
+    assert dispatched["stepper"] is sentinel_stepper
+
+
+def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sim.manorl.view_environment as viewer
+
+    monkeypatch.setattr(viewer, "_require_graphical_session", pytest.fail)
+    with pytest.raises(ValueError, match="requires --use_residual true"):
+        viewer.view_environment(
+            device="cpu",
+            speed=1.0,
+            loop=False,
+            print_every=1,
+            terminal=True,
+            trajectory_name="accepted",
+            num_envs=1,
+            render_env=0,
+            tile_envs=1,
+            object_type=None,
+            gesture=None,
+            rerun_output=None,
+            use_residual=False,
+            checkpoint=Path("policy.pt"),
+        )
 
 
 def test_viewer_requires_a_graphical_session(monkeypatch: pytest.MonkeyPatch) -> None:
