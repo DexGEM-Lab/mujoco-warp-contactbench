@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import time
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
@@ -29,6 +30,76 @@ from sim.manorl.trajectory import (
     load_generated_cube1_row_507,
     load_reference_trajectory,
 )
+
+if TYPE_CHECKING:
+    from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
+
+
+class ViewerStepper(Protocol):
+    """Advance one production environment control step for a viewer frame."""
+
+    def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]: ...
+
+
+class _ZeroActionStepper:
+    """Preserve the reference-command viewer path with a zero residual batch."""
+
+    def __init__(self, environment: MujocoManoEnvironment) -> None:
+        self._environment = environment
+        self._actions = np.zeros((environment.config.num_envs, 26), dtype=np.float64)
+
+    def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]:
+        return self._environment.step(self._actions)
+
+
+class _CheckpointPolicyStepper:
+    """Advance the wrapped environment with deterministic native PPO means."""
+
+    def __init__(self, runtime: ManoSkrlRuntime, observations: Any) -> None:
+        self._runtime = runtime
+        self._observations = observations
+
+    def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]:
+        actions = self._runtime.deterministic_actions(self._observations)
+        observations, rewards, terminated, truncated, info = self._runtime.env.step(actions)
+        self._observations = observations
+        rewards_array = rewards.detach().cpu().numpy().reshape(-1)
+        resets = (terminated | truncated).detach().cpu().numpy().reshape(-1)
+        return observations, rewards_array, resets, info
+
+
+def _inference_ppo_config(num_envs: int) -> ManoPPOConfig:
+    """Create a non-training PPO shell valid for any positive vector batch size."""
+
+    from sim.manorl.skrl_runtime import ManoPPOConfig
+
+    return ManoPPOConfig(rollouts=1, minibatch_size=num_envs, learning_epochs=1)
+
+
+def _validate_checkpoint_path(checkpoint: Path) -> Path:
+    checkpoint = checkpoint.expanduser()
+    if not checkpoint.is_file():
+        raise ValueError(f"checkpoint does not exist: {checkpoint}")
+    sidecar = checkpoint.with_suffix(checkpoint.suffix + ".json")
+    if not sidecar.is_file():
+        raise ValueError(f"native ManoRL checkpoint sidecar is required: {sidecar}")
+    return checkpoint
+
+
+def _build_checkpoint_stepper(environment: MujocoManoEnvironment, checkpoint: Path) -> ViewerStepper:
+    """Load the native policy and reset through its vector wrapper before rendering."""
+
+    from sim.manorl.checkpoint import load_skrl_checkpoint
+    from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
+    from sim.manorl.skrl_runtime import ManoSkrlRuntime
+
+    adapter = ManoGymnasiumVectorEnv(environment)
+    runtime = ManoSkrlRuntime(adapter, _inference_ppo_config(environment.config.num_envs))
+    load_skrl_checkpoint(runtime.agent, checkpoint)
+    runtime.agent.enable_training_mode(False)
+    runtime.model.eval()
+    observations, _ = runtime.env.reset()
+    return _CheckpointPolicyStepper(runtime, observations)
 
 
 def _telemetry(environment: MujocoManoEnvironment, env_id: int, reward: float, reset: bool) -> str:
@@ -94,6 +165,7 @@ def _configure_tiled_visuals(model: object) -> None:
 def _view_tiled(
     environment: MujocoManoEnvironment,
     *,
+    stepper: ViewerStepper,
     tile_envs: int,
     speed: float,
     loop: bool,
@@ -123,7 +195,6 @@ def _view_tiled(
     mujoco.mjv_defaultOption(option)
     scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
     context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
-    zero_action = np.zeros((environment.config.num_envs, 26), dtype=np.float64)
     sleep_seconds = CONTROL_TIMESTEP / speed
     viewports = _tile_layout(tile_envs, width=width, height=height)
     mouse_state = {"left": False, "middle": False, "right": False, "x": 0.0, "y": 0.0}
@@ -174,7 +245,7 @@ def _view_tiled(
     try:
         while not glfw.window_should_close(window):
             started = time.perf_counter()
-            _, rewards, resets, _ = environment.step(zero_action)
+            _, rewards, resets, _ = stepper.step()
             if recorder is not None:
                 recorder.record_transition()
             host_data = environment.host_data_batch()
@@ -222,6 +293,46 @@ def _view_tiled(
         glfw.terminate()
 
 
+def _view_single(
+    environment: MujocoManoEnvironment,
+    *,
+    stepper: ViewerStepper,
+    render_env: int,
+    speed: float,
+    loop: bool,
+    print_every: int,
+    recorder: ManoRerunRecorder | None,
+) -> None:
+    """Render one world while advancing the same action boundary as tiled mode."""
+
+    import mujoco
+    import mujoco.viewer
+
+    render_data = environment.host_data(render_env)
+    sleep_seconds = CONTROL_TIMESTEP / speed
+    with mujoco.viewer.launch_passive(
+        environment.model, render_data, show_left_ui=True, show_right_ui=True
+    ) as viewer:
+        viewer.sync()
+        while viewer.is_running():
+            started = time.perf_counter()
+            _, rewards, resets, _ = stepper.step()
+            if recorder is not None:
+                recorder.record_transition()
+            mujoco.mj_copyData(render_data, environment.model, environment.host_data(render_env))
+            viewer.sync()
+
+            call = int(environment.progress[render_env] - 1)
+            if call % print_every == 0 or bool(resets[render_env]):
+                print(
+                    _telemetry(environment, render_env, float(rewards[render_env]), bool(resets[render_env])),
+                    flush=True,
+                )
+            if bool(resets[render_env]) and not loop:
+                return
+            time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
+
+
 def _close_rerun_recorder(recorder: ManoRerunRecorder) -> Path | None:
     artifact = recorder.close()
     if artifact is None:
@@ -246,6 +357,7 @@ def view_environment(
     gesture: str | None,
     rerun_output: Path | None,
     use_residual: bool,
+    checkpoint: Path | None,
 ) -> None:
     """Run a batched production environment and render its first world."""
 
@@ -259,10 +371,10 @@ def view_environment(
         raise ValueError("render_env must be within the configured batch")
     if not 1 <= tile_envs <= num_envs:
         raise ValueError("tile_envs must be within the configured batch")
+    if checkpoint is not None and not use_residual:
+        raise ValueError("--checkpoint requires --use_residual true so policy actions reach the controller")
+    checkpoint = None if checkpoint is None else _validate_checkpoint_path(checkpoint)
     _require_graphical_session()
-
-    import mujoco
-    import mujoco.viewer
 
     if (object_type is None) != (gesture is None):
         raise ValueError("--object and --gesture must be supplied together")
@@ -299,12 +411,16 @@ def view_environment(
         ),
     )
     recorder = None if rerun_output is None else ManoRerunRecorder(environment, rerun_output, env_id=0)
-    render_data = environment.host_data(render_env)
-    zero_action = np.zeros((num_envs, 26), dtype=np.float64)
-    sleep_seconds = CONTROL_TIMESTEP / speed
+    stepper: ViewerStepper
+    if checkpoint is None:
+        stepper = _ZeroActionStepper(environment)
+        action_source = "zero 26D action"
+    else:
+        stepper = _build_checkpoint_stepper(environment, checkpoint)
+        action_source = f"checkpoint deterministic policy ({checkpoint})"
 
     print(
-        f"Testing MujocoManoEnvironment with use_residual={use_residual}, terminal={terminal}, and zero 26D action "
+        f"Testing MujocoManoEnvironment with use_residual={use_residual}, terminal={terminal}, and {action_source} "
         f"(trajectory={trajectory_label}, envs={num_envs}, "
         f"maxDeviationDistance={max_deviation_distance:g}). "
         f"The viewer renders env {render_env}; all configured environments execute the same batched path."
@@ -313,6 +429,7 @@ def view_environment(
         try:
             _view_tiled(
                 environment,
+                stepper=stepper,
                 tile_envs=tile_envs,
                 speed=speed,
                 loop=loop,
@@ -324,27 +441,15 @@ def view_environment(
                 _close_rerun_recorder(recorder)
         return
     try:
-        with mujoco.viewer.launch_passive(
-            environment.model, render_data, show_left_ui=True, show_right_ui=True
-        ) as viewer:
-            viewer.sync()
-            while viewer.is_running():
-                started = time.perf_counter()
-                _, rewards, resets, _ = environment.step(zero_action)
-                if recorder is not None:
-                    recorder.record_transition()
-                mujoco.mj_copyData(render_data, environment.model, environment.host_data(render_env))
-                viewer.sync()
-
-                call = int(environment.progress[render_env] - 1)
-                if call % print_every == 0 or bool(resets[render_env]):
-                    print(
-                        _telemetry(environment, render_env, float(rewards[render_env]), bool(resets[render_env])),
-                        flush=True,
-                    )
-                if bool(resets[render_env]) and not loop:
-                    return
-                time.sleep(max(0.0, sleep_seconds - (time.perf_counter() - started)))
+        _view_single(
+            environment,
+            stepper=stepper,
+            render_env=render_env,
+            speed=speed,
+            loop=loop,
+            print_every=print_every,
+            recorder=recorder,
+        )
     finally:
         if recorder is not None:
             _close_rerun_recorder(recorder)
@@ -367,6 +472,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--object", dest="object_type", help="Lance object selector; requires --gesture")
     parser.add_argument("--gesture", help="Lance two-digit action selector; requires --object")
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        help="native ManoRL skrl checkpoint; runs deterministic mean policy actions",
+    )
     parser.add_argument(
         "--num-envs",
         type=int,
@@ -430,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         gesture=args.gesture,
         rerun_output=args.rerun_output,
         use_residual=args.use_residual,
+        checkpoint=args.checkpoint,
     )
     return 0
 

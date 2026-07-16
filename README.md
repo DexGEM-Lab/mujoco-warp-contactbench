@@ -132,6 +132,16 @@ single 791-call replay. Both runtime controls default to `true`: use
 `--use_residual false` for source-reference diagnostics and `--terminal false`
 for formal source-horizon termination only.
 
+To render the deterministic mean policy from the copied Server2 checkpoint,
+keep its native `.pt.json` sidecar beside the checkpoint:
+
+```bash
+JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
+  --device gpu \
+  --checkpoint outputs/manorl/server2_best_cube1_01_2500/server2_cube1_01_128env_2500u_20260716_010529.pt \
+  --object cube1 --gesture 01 --num-envs 128 --render-env 0 --no-loop
+```
+
 ### ManoRL PPO Training
 
 The Cube1 fast-training contract is documented in
