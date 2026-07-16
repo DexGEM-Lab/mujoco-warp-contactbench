@@ -122,7 +122,7 @@ while preserving the listed rotation and joint mappings.
 exceeds `0.10` after the early pure-mocap interval. The associated reward
 penalty is `-25.0` only for the deviation condition
 (`tasks/components/termination_manager.py:47-82, 85-134`). This is historical source
-behavior; target terminal-enabled training uses the same strict predicate at `0.15 m`. A reset places the
+behavior; target terminal-enabled training uses the same strict predicate at `0.10 m`. A reset places the
 object at the first trajectory frame, zeros object velocity, sets hand DOFs and
 targets to frame-zero mocap, and zeros cumulative offsets, progress, reset,
 episode reward, and statistics (`tasks/mano_hand.py:4423-4506`).

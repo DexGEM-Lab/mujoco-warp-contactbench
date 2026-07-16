@@ -609,7 +609,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=parse_cli_bool,
         default=True,
         metavar="{true,false}",
-        help="use the 0.15 m target training deviation threshold (default: true)",
+        help="use the 0.10 m target training deviation threshold (default: true)",
     )
     parser.add_argument(
         "--loop",
