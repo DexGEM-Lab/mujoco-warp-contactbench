@@ -33,6 +33,9 @@ def test_model_matches_source_pointnet_film_state_namespace(adapter: ManoGymnasi
 
     from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
 
+    assert adapter.single_action_space.shape == (ACTION_DIM,)
+    np.testing.assert_array_equal(adapter.single_action_space.low, np.full(ACTION_DIM, -1.0, dtype=np.float32))
+    np.testing.assert_array_equal(adapter.single_action_space.high, np.full(ACTION_DIM, 1.0, dtype=np.float32))
     model = _model(adapter)
     keys = set(model.state_dict())
     assert len(keys) == 41
@@ -112,6 +115,7 @@ def test_trajectory_completion_is_terminated_not_truncated(adapter: ManoGymnasiu
 def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnasiumVectorEnv, tmp_path) -> None:
     import torch
 
+    from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
     from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
     from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
     from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
@@ -120,6 +124,9 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     assert runtime.checkpoint_metadata()["reward_contract"] == REWARD_CONTRACT_ID
     assert runtime.checkpoint_metadata()["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert runtime.checkpoint_metadata()["ppo_reward_scale"] == PPO_REWARD_SCALE
+    assert runtime.checkpoint_metadata()["environment_contract"] == ENVIRONMENT_CONTRACT_ID
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.003, 0.003, 0.003)
+    assert runtime.checkpoint_metadata()["environment"]["max_deviation_distance"] == 1_000_000.0
     rollout = runtime.deterministic_rollout(steps=2)
     assert rollout["steps"] == 2
     assert torch.isfinite(rollout["observations"]).all()

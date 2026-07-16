@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
 from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_NAMES, KEYPOINT_NAMES, PHYSICS_SUBSTEPS_PER_TARGET
 from sim.manorl.environment import MujocoManoEnvironment, TransitionSnapshot
 from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, OBSERVATION_SLICES
@@ -189,6 +190,7 @@ class ManoRerunRecorder:
             "reward_contract": REWARD_CONTRACT_ID,
             "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
             "ppo_reward_scale": PPO_REWARD_SCALE,
+            "environment_contract": ENVIRONMENT_CONTRACT_ID,
             "env_id": self.env_id,
             "episode_id": self.episode_id,
             "trajectory_identity": trajectory.identity.identity,
@@ -209,6 +211,12 @@ class ManoRerunRecorder:
             "control_timestep_s": CONTROL_TIMESTEP,
             "physics_substeps": PHYSICS_SUBSTEPS_PER_TARGET,
             "residual_enabled": environment.config.residual_enabled,
+            "residual_action": {
+                "position_scale": list(environment.config.residual_action.position_scale),
+                "gamma_xy": environment.config.residual_action.gamma_xy,
+                "gamma_z": environment.config.residual_action.gamma_z,
+                "max_position_offset": environment.config.residual_action.max_position_offset,
+            },
             "compatibility": environment.config.compatibility.point_template_mode,
             "thresholds": {
                 "max_deviation_distance": environment.config.max_deviation_distance,

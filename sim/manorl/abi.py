@@ -8,6 +8,7 @@ and termination code, so future MuJoCo batching cannot silently change it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
@@ -23,17 +24,23 @@ _JOINT_LIMIT = np.asarray(
     dtype=np.float64,
 )
 
+# This binds the target's control mapping and terminal reset behavior separately
+# from the reward contracts. Historical source defaults remain documented as ABI
+# evidence but are not target training defaults.
+ENVIRONMENT_CONTRACT_ID: Final = "target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p15_v1"
+TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.15
+
 
 @dataclass(frozen=True)
 class ResidualActionConfig:
-    """The resolved actionScaling values from MANOHand.yaml."""
+    """Target training residual action mapping over the unchanged normalized Box."""
 
     gamma_xy: float = 0.9
     gamma_z: float = 0.9
     gamma_joints: float = 0.9
-    position_scale: tuple[float, float, float] = (0.005, 0.005, 0.005)
+    position_scale: tuple[float, float, float] = (0.003, 0.003, 0.003)
     rotation_scale: float = 0.01
-    max_position_offset: float = 0.05
+    max_position_offset: float = 0.03
     early_phase_steps: int = 100
 
 
@@ -189,7 +196,7 @@ def check_termination(
     progress: NDArray[object],
     trajectory_lengths: NDArray[object],
     early_mask: NDArray[object],
-    max_deviation_distance: float = 0.10,
+    max_deviation_distance: float = TARGET_MAX_DEVIATION_DISTANCE,
     deviation_penalty: float = 0.0,
 ) -> TerminationResult:
     """Evaluate exactly the task's trajectory-complete/deviation predicate."""

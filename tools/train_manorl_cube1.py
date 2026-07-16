@@ -19,6 +19,7 @@ from uuid import uuid4
 import numpy as np
 import torch
 
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.cli import parse_cli_bool
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
@@ -148,6 +149,16 @@ def _wandb_config(
             "ppo_contract": PPO_REWARD_CONTRACT_ID,
             "ppo_scale": PPO_REWARD_SCALE,
             "isaacgym_ppo_scale": 0.5,
+        },
+        "environment": {
+            "contract": ENVIRONMENT_CONTRACT_ID,
+            "residual_action": {
+                "position_scale": [0.003, 0.003, 0.003],
+                "gamma_xyz": 0.9,
+                "max_position_offset": 0.03,
+                "rotation_effective_scale": 0.00025,
+            },
+            "max_deviation_distance": TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
         },
         "trajectory_assignments": trajectory_assignments,
         "device": device,
@@ -634,7 +645,7 @@ def _build_evaluation_runtime(
             num_envs=num_envs,
             device="gpu",
             residual_enabled=budget.residual_enabled,
-            max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
+            max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
             contact_capacity=max(128, WARP_BROADPHASE_CONTACTS_PER_WORLD * num_envs + WARP_CONTACT_CAPACITY_MARGIN),
         ),
     )
@@ -770,7 +781,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             num_envs=budget.num_envs,
             device="gpu",
             residual_enabled=budget.residual_enabled,
-            max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
+            max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
             contact_capacity=contact_capacity,
         ),
     )
@@ -927,6 +938,12 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "ppo_scale": PPO_REWARD_SCALE,
                 "isaacgym_ppo_scale": 0.5,
             },
+            "environment": {
+                "residual_enabled": physical.config.residual_enabled,
+                "residual_action": asdict(physical.config.residual_action),
+                "max_deviation_distance": physical.config.max_deviation_distance,
+            },
+            "environment_contract": ENVIRONMENT_CONTRACT_ID,
             "learning_starts": runtime.agent.cfg.learning_starts,
             "budget": {
                 **asdict(budget),

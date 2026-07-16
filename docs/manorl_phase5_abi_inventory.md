@@ -110,7 +110,10 @@ The executable scale, mask, transition, and target assembly are
 the deterministic portion is implemented in this 5B slice. Source
 `actionsMovingAverage=1` makes its moving-average assignment an identity for
 the configured ABI. The target must not reuse the acceptance replay's
-`RESIDUAL_ENABLED=False` as its training default.
+`RESIDUAL_ENABLED=False` as its training default. The listed `(0.005, 0.005, 0.005)`
+and `[-0.05, 0.05]` values are historical source ABI evidence: target training now
+uses XYZ scale `(0.003, 0.003, 0.003)` with gamma `0.9` and `[-0.03, 0.03]` cap,
+while preserving the listed rotation and joint mappings.
 
 ## Episode and reset ABI
 
@@ -118,7 +121,8 @@ the configured ABI. The target must not reuse the acceptance replay's
 `progress >= trajectory_length - 1`, or the Euclidean object-target distance
 exceeds `0.10` after the early pure-mocap interval. The associated reward
 penalty is `-25.0` only for the deviation condition
-(`tasks/components/termination_manager.py:47-82, 85-134`). A reset places the
+(`tasks/components/termination_manager.py:47-82, 85-134`). This is historical source
+behavior; target terminal-enabled training uses the same strict predicate at `0.15 m`. A reset places the
 object at the first trajectory frame, zeros object velocity, sets hand DOFs and
 targets to frame-zero mocap, and zeros cumulative offsets, progress, reset,
 episode reward, and statistics (`tasks/mano_hand.py:4423-4506`).
