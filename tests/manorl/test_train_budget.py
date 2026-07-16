@@ -103,10 +103,9 @@ class FakeEnv:
         self.environment.last_reward = SimpleNamespace(**{
             name: np.array([value], dtype=np.float64) for name, value in values.items()
         })
-        self.environment.last_transition = SimpleNamespace(
-            termination=SimpleNamespace(reset=np.array([completed], dtype=bool)),
-            episode_return=np.array([float(self.step_calls)], dtype=np.float64),
-        )
+        self.environment.last_termination = SimpleNamespace(reset=np.array([completed], dtype=bool))
+        self.environment.episode_returns = np.array([float(self.step_calls)], dtype=np.float64)
+        self.environment.last_transition = None
         return (
             torch.zeros_like(actions),
             torch.ones((1, 1)),
@@ -117,7 +116,13 @@ class FakeEnv:
 
 
 def _runtime() -> SimpleNamespace:
-    environment = SimpleNamespace(config=SimpleNamespace(num_envs=1), last_reward=None, last_transition=None)
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=1),
+        last_reward=None,
+        last_termination=None,
+        episode_returns=np.zeros(1, dtype=np.float64),
+        last_transition=None,
+    )
     return SimpleNamespace(
         agent=FakeAgent(),
         env=FakeEnv(environment),

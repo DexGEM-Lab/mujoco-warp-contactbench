@@ -88,6 +88,8 @@ class EnvironmentConfig:
     contact_capacity: int = CONTACT_CAPACITY
     constraint_capacity: int = CONSTRAINT_CAPACITY
     point_seed: int = 42
+    device_resident_controls: bool = False
+    capture_transition_diagnostics: bool = True
 
     def __post_init__(self) -> None:
         if self.num_envs < 1:
@@ -108,6 +110,10 @@ class EnvironmentConfig:
             raise ValueError("MJX contact and constraint capacities must be positive")
         if self.compatibility.point_template_mode == "static_seed_42" and self.point_seed != 42:
             raise ValueError("static_seed_42 compatibility requires point_seed=42")
+        if not isinstance(self.device_resident_controls, bool):
+            raise TypeError("device_resident_controls must be bool")
+        if not isinstance(self.capture_transition_diagnostics, bool):
+            raise TypeError("capture_transition_diagnostics must be bool")
 
 
 @dataclass(frozen=True)
@@ -606,6 +612,11 @@ class MujocoManoEnvironment:
         )
         batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
         self.data = jax.vmap(lambda _: single_data)(batch_index)
+        self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
+        self._reset_ctrl_device = jax.device_put(self.reference_q[:, 0], self.device)
+        self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
+        self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
+        self._controller_targets_fn = jax.jit(self._device_controller_targets)
         self.expected_keypoint_ids = tuple(
             _expected_keypoint_ids(self.object_type, parts[1]) for parts in identity_parts
         )
@@ -638,7 +649,7 @@ class MujocoManoEnvironment:
         self.last_observation: ObservationResult | None = None
         self.last_reward: RewardDiagnostics | None = None
         self.last_termination: TerminationResult | None = None
-        self.last_controller_targets = np.zeros((config.num_envs, 26), dtype=np.float64)
+        self.last_controller_targets: NDArray[np.float64] | None = np.zeros((config.num_envs, 26), dtype=np.float64)
         self.control_call = 0
         self.last_transition: TransitionSnapshot | None = None
         self.reset()
@@ -766,17 +777,25 @@ class MujocoManoEnvironment:
     def _reset_indices(self, env_ids: NDArray[np.int64]) -> None:
         if len(env_ids) == 0:
             return
-        qpos = np.asarray(self.data.qpos, dtype=np.float64).copy()
-        qvel = np.asarray(self.data.qvel, dtype=np.float64).copy()
-        ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
-        qpos[env_ids] = self._reset_qpos[env_ids]
-        qvel[env_ids] = 0.0
-        ctrl[env_ids] = self.reference_q[env_ids, 0]
-        self.data = self.data.replace(
-            qpos=self.jax.device_put(self.jp.asarray(qpos), self.device),
-            qvel=self.jax.device_put(self.jp.asarray(qvel), self.device),
-            ctrl=self.jax.device_put(self.jp.asarray(ctrl), self.device),
-        )
+        if self.config.device_resident_controls:
+            device_ids = self.jax.device_put(env_ids, self.device)
+            self.data = self.data.replace(
+                qpos=self.data.qpos.at[device_ids].set(self._reset_qpos_device[device_ids]),
+                qvel=self.data.qvel.at[device_ids].set(self.jp.zeros_like(self.data.qvel[device_ids])),
+                ctrl=self.data.ctrl.at[device_ids].set(self._reset_ctrl_device[device_ids]),
+            )
+        else:
+            qpos = np.asarray(self.data.qpos, dtype=np.float64).copy()
+            qvel = np.asarray(self.data.qvel, dtype=np.float64).copy()
+            ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
+            qpos[env_ids] = self._reset_qpos[env_ids]
+            qvel[env_ids] = 0.0
+            ctrl[env_ids] = self.reference_q[env_ids, 0]
+            self.data = self.data.replace(
+                qpos=self.jax.device_put(self.jp.asarray(qpos), self.device),
+                qvel=self.jax.device_put(self.jp.asarray(qvel), self.device),
+                ctrl=self.jax.device_put(self.jp.asarray(ctrl), self.device),
+            )
         self.data = self._forward_fn(self.data)
         self.progress[env_ids] = 0
         self.trajectory_steps[env_ids] = 0
@@ -791,6 +810,13 @@ class MujocoManoEnvironment:
 
     def _reference_gather(self, table: NDArray[np.float64], indices: NDArray[np.int64]) -> NDArray[np.float64]:
         return table[np.arange(self.config.num_envs), indices]
+
+    def _device_controller_targets(self, targets: Any, current_qpos: Any) -> Any:
+        """Apply the source's nearest-Euler controller mapping without host state copies."""
+
+        wrist_delta = (targets[:, 3:6] - current_qpos[:, 3:6] + np.pi) % (2.0 * np.pi) - np.pi
+        resolved = targets.at[:, 3:6].set(current_qpos[:, 3:6] + wrist_delta)
+        return self.jp.clip(resolved, self._joint_lower_device, self._joint_upper_device)
 
     def _build_observation(self, physical: PhysicalSnapshot) -> ObservationResult:
         indices = self._target_indices()
@@ -882,19 +908,30 @@ class MujocoManoEnvironment:
             use_residual=np.full(self.config.num_envs, self.config.residual_enabled, dtype=np.float64),
             config=self.config.residual_action,
         )
-        current_qpos = np.asarray(self.data.qpos, dtype=np.float64)[:, :26]
-        controller_targets = np.stack(
-            [
-                command_target(action_result.targets[index], current_qpos[index], self.joint_lower, self.joint_upper)
-                for index in range(self.config.num_envs)
-            ]
-        )
+        if self.config.device_resident_controls:
+            controller_targets_device = self._controller_targets_fn(
+                self.jax.device_put(action_result.targets, self.device), self.data.qpos[:, :26]
+            )
+            controller_targets = (
+                np.asarray(controller_targets_device, dtype=np.float64)
+                if self.config.capture_transition_diagnostics
+                else None
+            )
+        else:
+            current_qpos = np.asarray(self.data.qpos, dtype=np.float64)[:, :26]
+            controller_targets = np.stack(
+                [
+                    command_target(action_result.targets[index], current_qpos[index], self.joint_lower, self.joint_upper)
+                    for index in range(self.config.num_envs)
+                ]
+            )
+            controller_targets_device = self.jax.device_put(self.jp.asarray(controller_targets), self.device)
         self.cumulative_offset = action_result.cumulative_offset
         self.cumulative_joint_offset = action_result.cumulative_joint_offset
-        self.last_controller_targets = controller_targets.copy()
+        self.last_controller_targets = None if controller_targets is None else controller_targets.copy()
         self.trajectory_steps += 1
         self.trajectory_steps[self.progress == 0] = 0
-        self.data = self.data.replace(ctrl=self.jax.device_put(self.jp.asarray(controller_targets), self.device))
+        self.data = self.data.replace(ctrl=controller_targets_device)
         for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
             self.data = self._step_fn(self.data)
         self.progress += 1
@@ -928,23 +965,28 @@ class MujocoManoEnvironment:
         self.last_observation = observation
         self.last_termination = termination
         self.last_reward = reward
-        self.last_transition = TransitionSnapshot(
-            control_call=self.control_call,
-            raw_actions=actions.copy(),
-            command_reference_indices=mocap_indices.copy(),
-            command_targets=mocap_targets.copy(),
-            processed_targets=action_result.targets.copy(),
-            controller_targets=controller_targets.copy(),
-            reset_applied=pending_reset.copy(),
-            progress=self.progress.copy(),
-            trajectory_steps=self.trajectory_steps.copy(),
-            target_indices=self._target_indices().copy(),
-            physical=physical,
-            observation=observation,
-            reward=reward,
-            episode_return=self.episode_returns.copy(),
-            termination=termination,
-        )
+        if self.config.capture_transition_diagnostics:
+            if controller_targets is None:
+                raise RuntimeError("transition diagnostics require host controller targets")
+            self.last_transition = TransitionSnapshot(
+                control_call=self.control_call,
+                raw_actions=actions.copy(),
+                command_reference_indices=mocap_indices.copy(),
+                command_targets=mocap_targets.copy(),
+                processed_targets=action_result.targets.copy(),
+                controller_targets=controller_targets.copy(),
+                reset_applied=pending_reset.copy(),
+                progress=self.progress.copy(),
+                trajectory_steps=self.trajectory_steps.copy(),
+                target_indices=self._target_indices().copy(),
+                physical=physical,
+                observation=observation,
+                reward=reward,
+                episode_return=self.episode_returns.copy(),
+                termination=termination,
+            )
+        else:
+            self.last_transition = None
         self.control_call += 1
         # ``episode_length`` is a rollout/statistics setting in this source
         # slice, not an independent physics horizon. A source trajectory end
