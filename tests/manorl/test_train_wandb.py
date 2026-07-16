@@ -52,6 +52,10 @@ class FakeRun:
 class FakeWandb:
     Artifact = FakeArtifact
 
+    @staticmethod
+    def Histogram(values: list[float]) -> tuple[str, list[float]]:
+        return ("histogram", values)
+
     def __init__(self) -> None:
         self.run = FakeRun()
         self.init_calls: list[dict[str, object]] = []
@@ -197,7 +201,8 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
 def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
     tool = _load_tool()
     run = FakeRun()
-    tool._log_wandb_update(run, {
+    wandb = FakeWandb()
+    tool._log_wandb_update(run, wandb, {
         "update": 1.0,
         "environment_transitions": 3072.0,
         "reward_mean": 1.0,
@@ -215,8 +220,10 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "survival": 0.001,
         "deviation_penalty": 0.0,
         "elapsed_seconds": 1.5,
+        "update_environment_transitions_per_second": 2048.0,
+        "cumulative_environment_transitions_per_second": 2048.0,
     })
-    tool._log_wandb_update(run, {
+    tool._log_wandb_update(run, wandb, {
         "update": 2.0,
         "environment_transitions": 6144.0,
         "reward_mean": 2.0,
@@ -224,6 +231,7 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "reset_count": 4.0,
         "completed_episode_count": 1.0,
         "episode_return_mean": 12.5,
+        "episode_return_values": [9.0, 16.0],
         "total": 2.0,
         "distance_x": 0.2,
         "distance_y": 0.3,
@@ -235,14 +243,17 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "survival": 0.001,
         "deviation_penalty": 0.0,
         "elapsed_seconds": 3.0,
+        "update_environment_transitions_per_second": 2048.0,
+        "cumulative_environment_transitions_per_second": 2048.0,
     })
 
     assert [step for _, step in run.logs] == [3072, 6144]
     assert [metrics["transitions"] for metrics, _ in run.logs] == [3072, 6144]
-    assert all({"reward_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "total", "distance_x", "distance_y", "distance_z", "rotation", "action_penalty", "contact", "object_stability", "survival", "deviation_penalty"} <= metrics.keys()
+    assert all({"reward_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "total", "distance_x", "distance_y", "distance_z", "rotation", "action_penalty", "contact", "object_stability", "survival", "deviation_penalty", "update_environment_transitions_per_second", "cumulative_environment_transitions_per_second"} <= metrics.keys()
                for metrics, _ in run.logs)
     assert "episode_return_mean" not in run.logs[0][0]
     assert run.logs[1][0]["episode_return_mean"] == 12.5
+    assert run.logs[1][0]["episode_return_distribution"] == ("histogram", [9.0, 16.0])
 
 
 def test_wandb_evaluation_summaries_include_all_modes() -> None:
@@ -283,6 +294,7 @@ def test_wandb_artifact_contains_existing_training_outputs(tmp_path: Path) -> No
         tmp_path / "training.pt.json",
         tmp_path / "training.json",
         tmp_path / "training.eval.npz",
+        tmp_path / "training.episodes.jsonl",
         tmp_path / "training.rrd",
     ]
     for path in artifact_paths:
