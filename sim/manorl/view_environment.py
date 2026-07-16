@@ -162,6 +162,87 @@ def _configure_tiled_visuals(model: object) -> None:
     model.vis.headlight.specular[:] = (0.28, 0.30, 0.34)
 
 
+class TrainingViewer:
+    """Tiled post-step renderer for PPO training; it never advances simulation."""
+
+    def __init__(self, environment: MujocoManoEnvironment, *, tile_envs: int, stride: int = 1) -> None:
+        if not 1 <= tile_envs <= environment.config.num_envs:
+            raise ValueError("tile_envs must be within the configured batch")
+        if stride < 1:
+            raise ValueError("stride must be positive")
+        _require_graphical_session()
+        import glfw
+        import mujoco
+
+        self._environment, self._tile_envs, self._stride = environment, tile_envs, stride
+        self._glfw, self._mujoco, self._frames, self.close_requested = glfw, mujoco, 0, False
+        self._width, self._height = 1600, 900
+        if not glfw.init():
+            raise RuntimeError("GLFW initialization failed for tiled MuJoCo rendering")
+        self._window = glfw.create_window(self._width, self._height, f"ManoRL training ({tile_envs} envs)", None, None)
+        if self._window is None:
+            glfw.terminate()
+            raise RuntimeError("could not create GLFW window for tiled MuJoCo rendering")
+        glfw.make_context_current(self._window)
+        glfw.swap_interval(1)
+        _configure_tiled_visuals(environment.model)
+        self._camera = mujoco.MjvCamera()
+        mujoco.mjv_defaultCamera(self._camera)
+        self._camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+        _reset_tiled_camera(self._camera)
+        self._option = mujoco.MjvOption()
+        mujoco.mjv_defaultOption(self._option)
+        self._scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
+        self._context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+        self._viewports = _tile_layout(tile_envs, width=self._width, height=self._height)
+        glfw.set_key_callback(self._window, self._key_callback)
+        print("Training viewer: press R to reset camera; close the window or press Esc to stop after the current PPO update.", flush=True)
+
+    def _key_callback(self, _: object, key: int, __: int, action: int, ___: int) -> None:
+        if action != self._glfw.PRESS:
+            return
+        if key == self._glfw.KEY_ESCAPE:
+            self._glfw.set_window_should_close(self._window, True)
+        elif key == self._glfw.KEY_R:
+            _reset_tiled_camera(self._camera)
+
+    def render(self) -> None:
+        """Mirror and render current states only; training owns all step calls."""
+        if self.close_requested:
+            return
+        self._frames += 1
+        if self._frames % self._stride:
+            return
+        glfw, mujoco = self._glfw, self._mujoco
+        if glfw.window_should_close(self._window):
+            self.close_requested = True
+            return
+        host_data = self._environment.host_data_batch()
+        width, height = glfw.get_framebuffer_size(self._window)
+        if (width, height) != (self._width, self._height):
+            self._width, self._height = width, height
+            self._viewports = _tile_layout(self._tile_envs, width=width, height=height)
+        mujoco.mjr_rectangle(mujoco.MjrRect(0, 0, width, height), 0.055, 0.085, 0.12, 1.0)
+        for env_id, (x, y, tile_width, tile_height) in enumerate(self._viewports):
+            mujoco.mjv_updateScene(self._environment.model, host_data[env_id], self._option, None, self._camera, mujoco.mjtCatBit.mjCAT_ALL, self._scene)
+            viewport = mujoco.MjrRect(x, y, tile_width, tile_height)
+            mujoco.mjr_render(viewport, self._scene, self._context)
+            mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT, viewport, f"env {env_id}", self._environment.trajectories[env_id].identity.identity, self._context)
+        glfw.swap_buffers(self._window)
+        glfw.poll_events()
+        self.close_requested = glfw.window_should_close(self._window)
+
+    def observe(self) -> None:
+        """Observer adapter used by the trainer after its completed environment step."""
+        self.render()
+
+    def close(self) -> None:
+        if getattr(self, "_window", None) is not None:
+            self._glfw.destroy_window(self._window)
+            self._window = None
+            self._glfw.terminate()
+
+
 def _view_tiled(
     environment: MujocoManoEnvironment,
     *,

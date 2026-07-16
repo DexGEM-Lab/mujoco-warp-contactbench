@@ -19,6 +19,15 @@ def _load_tool(name: str):
     return module
 
 
+def test_training_viewer_render_is_state_mirroring_only() -> None:
+    import inspect
+    from sim.manorl.view_environment import TrainingViewer
+
+    source = inspect.getsource(TrainingViewer.render)
+    assert ".step(" not in source
+    assert "host_data_batch" in source
+
+
 def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
     args = parse_args([])
     assert args.device == "cpu"

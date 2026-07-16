@@ -157,6 +157,57 @@ def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.
     assert clock.calls == 6
 
 
+def test_training_observer_never_owns_steps_and_close_finishes_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 3
+    clock = FakeClock([0.0, 1.0, 2.0, 3.0, 4.0])
+    monkeypatch.setattr(tool.time, "monotonic", clock)
+
+    class Observer:
+        def __init__(self) -> None:
+            self.close_requested = False
+            self.observations = 0
+
+        def observe(self) -> None:
+            self.observations += 1
+            self.close_requested = True
+
+        def close(self) -> None:
+            pass
+
+    observer = Observer()
+    updates, transitions, _ = tool._train(
+        runtime, tool.TrainingBudget(num_envs=1, updates=2), observer=observer
+    )
+
+    assert observer.observations == 3
+    assert runtime.env.step_calls == 3
+    assert runtime.agent.recorded_timesteps == [0, 1, 2]
+    assert len(updates) == 1
+    assert transitions == 3
+
+
+def test_console_formatters_keep_human_returns_compact_and_json_compatible(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tool = _load_tool()
+    record = {
+        "schema": "manorl.completed_episode_returns.v1",
+        "update": 1,
+        "update_step": 2,
+        "returns": [1.0, -3.0, 8.0],
+    }
+
+    summary = tool._format_completed_episode_record(record)
+    assert "[" not in summary
+    assert "count=3" in summary and "mean=2.0000" in summary
+    tool._emit_console("json", "completed_episodes", record)
+    assert json.loads(capsys.readouterr().out) == record
+    tool._emit_console("json", "training_update", {"metrics": {"update": 1.0}})
+    assert json.loads(capsys.readouterr().out) == {"event": "training_update", "metrics": {"update": 1.0}}
+
+
 def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     runtime = _runtime()
@@ -480,6 +531,35 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
         "--output", str(tmp_path / "server2"), "--num-envs", "4096", "--minibatch-size", "4096",
     ]) == 0
     assert captured[-1][1].minibatch_size == 4096
+
+
+def test_cli_configures_human_console_and_validates_training_viewer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tool = _load_tool()
+    captured = []
+    monkeypatch.setattr(tool, "run", lambda output, budget: captured.append((output, budget)) or {})
+
+    assert tool.main([
+        "--output", str(tmp_path / "visual"), "--num-envs", "8", "--evaluation-num-envs", "8",
+        "--minibatch-size", "384", "--headless", "false", "--viewer-envs", "8", "--viewer-stride", "2",
+    ]) == 0
+    budget = captured[-1][1]
+    assert budget.headless is False and budget.viewer_envs == 8 and budget.viewer_stride == 2
+    assert budget.console_format == "human"
+    assert "artifacts metrics=" in capsys.readouterr().out
+
+    assert tool.main(["--output", str(tmp_path / "default")]) == 0
+    default_budget = captured[-1][1]
+    assert default_budget.headless is True and default_budget.viewer_envs == 1
+    assert default_budget.viewer_stride == 1 and default_budget.console_format == "human"
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "bad"), "--num-envs", "8", "--minibatch-size", "384", "--viewer-envs", "9"
+        ])
+    assert "viewer-envs must be within num-envs" in capsys.readouterr().err
 
 
 def test_cli_rejects_minibatch_that_does_not_divide_rollout_batch(
