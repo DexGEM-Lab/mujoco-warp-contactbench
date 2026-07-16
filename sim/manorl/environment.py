@@ -9,7 +9,8 @@ array retains capacity-padding entries after the solved records.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import time
 from typing import Any, Sequence
 
 import numpy as np
@@ -90,6 +91,7 @@ class EnvironmentConfig:
     point_seed: int = 42
     device_resident_controls: bool = False
     capture_transition_diagnostics: bool = True
+    profile_phases: bool = False
 
     def __post_init__(self) -> None:
         if self.num_envs < 1:
@@ -114,6 +116,46 @@ class EnvironmentConfig:
             raise TypeError("device_resident_controls must be bool")
         if not isinstance(self.capture_transition_diagnostics, bool):
             raise TypeError("capture_transition_diagnostics must be bool")
+        if not isinstance(self.profile_phases, bool):
+            raise TypeError("profile_phases must be bool")
+
+
+@dataclass
+class PhaseTimings:
+    """Opt-in synchronized phase timings for one environment instance."""
+
+    enabled: bool = False
+    totals: dict[str, float] = field(default_factory=dict)
+    counts: dict[str, int] = field(default_factory=dict)
+
+    def start(self, name: str, synchronize: Any | None = None) -> float | None:
+        if not self.enabled:
+            return None
+        if synchronize is not None:
+            synchronize()
+        return time.perf_counter()
+
+    def stop(self, name: str, started: float | None, synchronize: Any | None = None) -> None:
+        if started is None:
+            return
+        if synchronize is not None:
+            synchronize()
+        self.totals[name] = self.totals.get(name, 0.0) + (time.perf_counter() - started)
+        self.counts[name] = self.counts.get(name, 0) + 1
+
+    def reset(self) -> None:
+        self.totals.clear()
+        self.counts.clear()
+
+    def summary(self) -> dict[str, dict[str, float | int]]:
+        return {
+            name: {
+                "total_seconds": total,
+                "calls": self.counts.get(name, 0),
+                "mean_seconds": total / self.counts[name] if self.counts.get(name, 0) else 0.0,
+            }
+            for name, total in self.totals.items()
+        }
 
 
 @dataclass(frozen=True)
@@ -581,6 +623,7 @@ class MujocoManoEnvironment:
         self.config = config
         self.jax = jax
         self.jp = jax.numpy
+        self.phase_timings = PhaseTimings(enabled=config.profile_phases)
         self.mjx = mjx
         self.device = devices[0]
         self.mujoco, self.model = compile_model(config.servo)
@@ -805,6 +848,21 @@ class MujocoManoEnvironment:
         self.episode_returns[env_ids] = 0.0
         self._set_dynamic_templates(env_ids)
 
+    def _profile_sync(self) -> None:
+        if self.phase_timings.enabled:
+            self.jax.block_until_ready(self.data.qpos)
+
+    def _phase_start(self, name: str) -> float | None:
+        return self.phase_timings.start(name, self._profile_sync if self.phase_timings.enabled else None)
+
+    def _phase_stop(self, name: str, started: float | None) -> None:
+        self.phase_timings.stop(name, started, self._profile_sync if self.phase_timings.enabled else None)
+
+    def phase_profile(self) -> dict[str, dict[str, float | int]]:
+        """Return accumulated phase timings without changing production behavior."""
+
+        return self.phase_timings.summary()
+
     def _target_indices(self) -> NDArray[np.int64]:
         return np.minimum(np.maximum(self.trajectory_steps, 0), self.trajectory_lengths - 1)
 
@@ -894,6 +952,7 @@ class MujocoManoEnvironment:
         actions = np.asarray(raw_actions, dtype=np.float64)
         if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
             raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
+        action_phase = self._phase_start("action_conversion_processing")
         mocap_indices = self._target_indices()
         mocap_targets = self._reference_gather(self.reference_q, mocap_indices)
         action_result = process_residual_actions(
@@ -908,6 +967,8 @@ class MujocoManoEnvironment:
             use_residual=np.full(self.config.num_envs, self.config.residual_enabled, dtype=np.float64),
             config=self.config.residual_action,
         )
+        self._phase_stop("action_conversion_processing", action_phase)
+        controller_phase = self._phase_start("controller_target_work")
         if self.config.device_resident_controls:
             controller_targets_device = self._controller_targets_fn(
                 self.jax.device_put(action_result.targets, self.device), self.data.qpos[:, :26]
@@ -931,19 +992,27 @@ class MujocoManoEnvironment:
         self.last_controller_targets = None if controller_targets is None else controller_targets.copy()
         self.trajectory_steps += 1
         self.trajectory_steps[self.progress == 0] = 0
+        self._phase_stop("controller_target_work", controller_phase)
         self.data = self.data.replace(ctrl=controller_targets_device)
+        physics_phase = self._phase_start("mjx_physics")
         for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
             self.data = self._step_fn(self.data)
+        self._phase_stop("mjx_physics", physics_phase)
         self.progress += 1
         pending_reset = self.reset_mask.copy()
+        reset_phase = self._phase_start("delayed_reset_application")
         if np.any(pending_reset):
             self._reset_indices(np.flatnonzero(pending_reset).astype(np.int64))
+        self._phase_stop("delayed_reset_application", reset_phase)
+        extraction_phase = self._phase_start("state_contact_extraction")
         physical = self.producer.extract(self.data)
+        self._phase_stop("state_contact_extraction", extraction_phase)
         early = early_phase_mask(
             self.trajectory_steps,
             starts=np.zeros(self.config.num_envs, dtype=np.int64),
             steps=self.config.compatibility.early_phase_steps,
         )
+        termination_phase = self._phase_start("termination")
         termination = check_termination(
             object_position=physical.object_position,
             target_position=self._reference_gather(self.reference_object_pos, self._target_indices()),
@@ -953,18 +1022,24 @@ class MujocoManoEnvironment:
             max_deviation_distance=self.config.max_deviation_distance,
             deviation_penalty=self.config.deviation_penalty,
         )
+        self._phase_stop("termination", termination_phase)
+        reward_phase = self._phase_start("reward")
         reward = compute_rewards(
             self._reward_state(physical),
             compatibility=self.config.compatibility,
             termination=termination,
         )
+        self._phase_stop("reward", reward_phase)
+        observation_phase = self._phase_start("observation")
         observation = self._build_observation(physical)
+        self._phase_stop("observation", observation_phase)
         self.reset_mask = termination.reset.copy()
         self.episode_returns += reward.total
         self.last_physical = physical
         self.last_observation = observation
         self.last_termination = termination
         self.last_reward = reward
+        recording_phase = self._phase_start("transition_recording")
         if self.config.capture_transition_diagnostics:
             if controller_targets is None:
                 raise RuntimeError("transition diagnostics require host controller targets")
@@ -987,6 +1062,7 @@ class MujocoManoEnvironment:
             )
         else:
             self.last_transition = None
+        self._phase_stop("transition_recording", recording_phase)
         self.control_call += 1
         # ``episode_length`` is a rollout/statistics setting in this source
         # slice, not an independent physics horizon. A source trajectory end

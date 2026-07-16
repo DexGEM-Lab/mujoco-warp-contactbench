@@ -88,6 +88,7 @@ class TrainingBudget:
     viewer_stride: int = 1
     console_format: Literal["human", "json"] = "human"
     device_resident_controls: bool = False
+    profile_phases: bool = False
 
     @property
     def transitions(self) -> int:
@@ -443,6 +444,21 @@ def _train(
     started = time.monotonic()
     updates: list[dict[str, Any]] = []
     global_timestep = 0
+    profile_totals: dict[str, float] = {}
+    profile_counts: dict[str, int] = {}
+
+    def phase_start(name: str) -> float | None:
+        if not budget.profile_phases:
+            return None
+        torch.cuda.synchronize()
+        return time.perf_counter()
+
+    def phase_stop(name: str, started: float | None) -> None:
+        if started is None:
+            return
+        torch.cuda.synchronize()
+        profile_totals[name] = profile_totals.get(name, 0.0) + (time.perf_counter() - started)
+        profile_counts[name] = profile_counts.get(name, 0) + 1
     for update in range(budget.updates):
         if (
             budget.wall_clock_seconds is not None
@@ -456,10 +472,12 @@ def _train(
         completed_episode_returns: list[float] = []
         reset_count = 0
         for update_step in range(config.rollouts):
+            policy_phase = phase_start("policy_action")
             with torch.no_grad():
                 actions, _ = runtime.agent.act(
                     observations, None, timestep=global_timestep, timesteps=budget.transitions
                 )
+            phase_stop("policy_action", policy_phase)
             next_observations, reward, terminated, truncated, infos = runtime.env.step(actions)
             if observer is not None:
                 observer.observe()
@@ -467,6 +485,7 @@ def _train(
                 recorder.record_transition()
             if not torch.isfinite(next_observations).all() or not torch.isfinite(reward).all():
                 raise RuntimeError(f"non-finite rollout value at global timestep {global_timestep}")
+            recording_phase = phase_start("transition_recording")
             runtime.agent.record_transition(
                 observations=observations,
                 states=None,
@@ -480,7 +499,10 @@ def _train(
                 timestep=global_timestep,
                 timesteps=budget.transitions,
             )
+            phase_stop("transition_recording", recording_phase)
+            ppo_phase = phase_start("ppo_update")
             runtime.agent.post_interaction(timestep=global_timestep + 1, timesteps=budget.transitions)
+            phase_stop("ppo_update", ppo_phase)
             observations = next_observations
             rewards.append(reward.detach())
             action_magnitudes.append(actions.detach().abs())
@@ -543,12 +565,29 @@ def _train(
             # One update retains at most one rollout batch: 48 * 4096 = 196,608
             # values for the target Server2 scale, then this list is discarded.
             update_metrics["episode_return_values"] = completed_episode_returns
+        if budget.profile_phases:
+            update_metrics["training_phase_profile"] = {
+                name: {
+                    "total_seconds": total,
+                    "calls": profile_counts[name],
+                    "mean_seconds": total / profile_counts[name],
+                }
+                for name, total in profile_totals.items()
+            }
         updates.append(_public_update_metrics(update_metrics))
         if on_update is not None:
             on_update(update_metrics)
         # A GLFW close is a request to stop after this complete PPO rollout.
         if observer is not None and observer.close_requested:
             break
+    runtime.training_phase_profile = {
+        name: {
+            "total_seconds": total,
+            "calls": profile_counts[name],
+            "mean_seconds": total / profile_counts[name],
+        }
+        for name, total in profile_totals.items()
+    }
     return updates, global_timestep * environment.config.num_envs, time.monotonic() - started
 
 
@@ -795,6 +834,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             contact_capacity=contact_capacity,
             device_resident_controls=budget.device_resident_controls,
             capture_transition_diagnostics=not budget.device_resident_controls,
+            profile_phases=budget.profile_phases,
         ),
     )
     ppo_config = ManoPPOConfig(minibatch_size=budget.minibatch_size)
@@ -966,6 +1006,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             },
             "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},
             "throughput": throughput,
+            "phase_profile": {
+                "environment": physical.phase_profile() if hasattr(physical, "phase_profile") else {},
+                "training": getattr(runtime, "training_phase_profile", {}),
+            },
             "device": device,
             "baseline": asdict(zero_baseline),
             "untrained": asdict(untrained),
@@ -1048,6 +1092,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="{true,false}",
         help="keep controller targets and delayed reset writes on the MJX device; disables transition snapshots",
     )
+    parser.add_argument(
+        "--profile-phases",
+        action="store_true",
+        help="synchronize CUDA/JAX at explicit rollout and PPO phase boundaries and emit timings",
+    )
     parser.add_argument("--wandb", type=parse_cli_bool, default=False, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
@@ -1106,6 +1155,7 @@ def main(argv: list[str] | None = None) -> int:
             args.viewer_stride,
             args.console_format,
             args.device_resident_controls,
+            args.profile_phases,
         ),
     )
     if args.console_format == "json":
