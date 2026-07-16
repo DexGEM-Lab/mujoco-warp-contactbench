@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
@@ -73,7 +74,8 @@ class FakeAgent:
 
 
 class FakeEnv:
-    def __init__(self) -> None:
+    def __init__(self, environment: SimpleNamespace) -> None:
+        self.environment = environment
         self.step_calls = 0
 
     def reset(self) -> tuple[torch.Tensor, dict[str, object]]:
@@ -83,6 +85,26 @@ class FakeEnv:
         self, actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, object]]:
         self.step_calls += 1
+        values = {
+            "total": 1.0,
+            "distance_x": 0.1,
+            "distance_y": 0.2,
+            "distance_z": 0.3,
+            "rotation": 0.4,
+            "action_penalty": 0.0,
+            "contact": 0.5,
+            "object_stability": 0.6,
+            "survival": 0.001,
+            "deviation_penalty": 0.0,
+        }
+        completed = self.step_calls % 48 == 0
+        self.environment.last_reward = SimpleNamespace(**{
+            name: np.array([value], dtype=np.float64) for name, value in values.items()
+        })
+        self.environment.last_transition = SimpleNamespace(
+            termination=SimpleNamespace(reset=np.array([completed], dtype=bool)),
+            episode_return=np.array([float(self.step_calls)], dtype=np.float64),
+        )
         return (
             torch.zeros_like(actions),
             torch.ones((1, 1)),
@@ -93,10 +115,10 @@ class FakeEnv:
 
 
 def _runtime() -> SimpleNamespace:
-    environment = SimpleNamespace(config=SimpleNamespace(num_envs=1))
+    environment = SimpleNamespace(config=SimpleNamespace(num_envs=1), last_reward=None, last_transition=None)
     return SimpleNamespace(
         agent=FakeAgent(),
-        env=FakeEnv(),
+        env=FakeEnv(environment),
         gymnasium_env=SimpleNamespace(environment=environment),
         config=SimpleNamespace(rollouts=48),
         model=SimpleNamespace(parameters=lambda: [torch.ones(1)]),
@@ -122,8 +144,25 @@ def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.
     assert runtime.agent.post_interaction_timesteps == list(range(1, 97))
     assert [update["environment_transitions"] for update in updates] == [48.0, 96.0]
     assert [update["elapsed_seconds"] for update in updates] == [10_000.0, 10_001.0]
+    assert [update["completed_episode_count"] for update in updates] == [1.0, 1.0]
+    assert [update["episode_return_mean"] for update in updates] == [48.0, 96.0]
+    assert all(update["reward_mean"] == update["total"] == 1.0 for update in updates)
+    assert all(np.isclose(update["distance_x"], 0.1) and update["action_penalty"] == 0.0 for update in updates)
     assert elapsed == 10_002.0
     assert clock.calls == 4
+
+
+def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 2
+    clock = FakeClock([0.0, 1.0, 2.0])
+    monkeypatch.setattr(tool.time, "monotonic", clock)
+
+    updates, _, _ = tool._train(runtime, tool.TrainingBudget(num_envs=1, updates=1))
+
+    assert updates[0]["completed_episode_count"] == 0.0
+    assert "episode_return_mean" not in updates[0]
 
 
 def test_train_saves_periodic_native_checkpoints_and_updates_last(

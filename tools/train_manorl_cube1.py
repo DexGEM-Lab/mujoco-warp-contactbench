@@ -30,6 +30,18 @@ from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
 WARP_CONTACT_CAPACITY_MARGIN = 64
 DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
+REWARD_UPDATE_COMPONENTS = (
+    "total",
+    "distance_x",
+    "distance_y",
+    "distance_z",
+    "rotation",
+    "action_penalty",
+    "contact",
+    "object_stability",
+    "survival",
+    "deviation_penalty",
+)
 
 
 @dataclass(frozen=True)
@@ -158,18 +170,20 @@ def _wandb_run(
 
 def _log_wandb_update(run: Any, update: dict[str, float]) -> None:
     transitions = int(update["environment_transitions"])
-    run.log(
-        {
-            "global_step": transitions,
-            "transitions": transitions,
-            "update": int(update["update"]),
-            "reward_mean": update["reward_mean"],
-            "action_abs_mean": update["action_abs_mean"],
-            "reset_count": update["reset_count"],
-            "elapsed_seconds": update["elapsed_seconds"],
-        },
-        step=transitions,
-    )
+    metrics = {
+        "global_step": transitions,
+        "transitions": transitions,
+        "update": int(update["update"]),
+        "reward_mean": update["reward_mean"],
+        "action_abs_mean": update["action_abs_mean"],
+        "reset_count": update["reset_count"],
+        "completed_episode_count": update["completed_episode_count"],
+        "elapsed_seconds": update["elapsed_seconds"],
+    }
+    metrics.update({name: update[name] for name in REWARD_UPDATE_COMPONENTS})
+    if "episode_return_mean" in update:
+        metrics["episode_return_mean"] = update["episode_return_mean"]
+    run.log(metrics, step=transitions)
 
 
 def _evaluation_metrics(result: EvaluationResult) -> dict[str, object]:
@@ -280,6 +294,8 @@ def _train(
             break
         rewards: list[torch.Tensor] = []
         action_magnitudes: list[torch.Tensor] = []
+        reward_components: dict[str, list[np.ndarray]] = {name: [] for name in REWARD_UPDATE_COMPONENTS}
+        completed_episode_returns: list[float] = []
         reset_count = 0
         for _ in range(config.rollouts):
             with torch.no_grad():
@@ -308,18 +324,34 @@ def _train(
             observations = next_observations
             rewards.append(reward.detach())
             action_magnitudes.append(actions.detach().abs())
+            diagnostics = environment.last_reward
+            snapshot = environment.last_transition
+            if diagnostics is None or snapshot is None:
+                raise RuntimeError("environment omitted reward diagnostics or transition snapshot during training")
+            for name in REWARD_UPDATE_COMPONENTS:
+                reward_components[name].append(np.asarray(getattr(diagnostics, name), dtype=np.float64))
+            completed = np.asarray(snapshot.termination.reset, dtype=bool)
+            completed_episode_returns.extend(np.asarray(snapshot.episode_return, dtype=np.float64)[completed].tolist())
             reset_count += int((terminated | truncated).sum().item())
             global_timestep += 1
         if not all(torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):
             raise RuntimeError(f"PPO update {update} produced non-finite model parameters")
+        component_means = {
+            name: float(np.concatenate(values).mean())
+            for name, values in reward_components.items()
+        }
         update_metrics = {
             "update": float(update + 1),
             "environment_transitions": float((update + 1) * config.rollouts * environment.config.num_envs),
             "reward_mean": float(torch.cat(rewards).mean().item()),
             "action_abs_mean": float(torch.cat(action_magnitudes).mean().item()),
             "reset_count": float(reset_count),
+            "completed_episode_count": float(len(completed_episode_returns)),
             "elapsed_seconds": time.monotonic() - started,
+            **component_means,
         }
+        if completed_episode_returns:
+            update_metrics["episode_return_mean"] = float(np.mean(completed_episode_returns))
         updates.append(update_metrics)
         if on_update is not None:
             on_update(update_metrics)

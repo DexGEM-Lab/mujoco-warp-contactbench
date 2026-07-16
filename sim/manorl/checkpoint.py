@@ -64,13 +64,7 @@ def save_skrl_checkpoint(agent: "PPO", path: str | Path, *, runtime_config: dict
     return checkpoint
 
 
-def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
-    """Load only a checkpoint produced by :func:`save_skrl_checkpoint`."""
-
-    checkpoint = Path(path)
-    if not checkpoint.is_file():
-        raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
-    _load_modules(checkpoint, device=agent.device)
+def _load_metadata(checkpoint: Path) -> dict[str, Any]:
     metadata_file = _metadata_path(checkpoint)
     if not metadata_file.is_file():
         raise CheckpointFormatError("native skrl checkpoint sidecar is required")
@@ -81,22 +75,40 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
     if metadata.get("format") != CHECKPOINT_FORMAT or metadata.get("checkpoint_file") != checkpoint.name:
         raise CheckpointFormatError(
             "checkpoint sidecar does not describe the native ManoRL skrl v2 raw-1.0x reward format; "
-            "legacy 0.5x-reward checkpoints cannot resume"
+            "legacy 0.5x-reward checkpoints cannot load"
         )
-    reward_contract = metadata.get("reward_contract")
-    if reward_contract is None:
-        raise CheckpointFormatError(
-            "checkpoint reward contract is missing; checkpoints predating target_hand_object_contact_v1 cannot resume"
-        )
+    for field in ("reward_contract", "ppo_reward_contract"):
+        if not isinstance(metadata.get(field), str) or not metadata[field]:
+            raise CheckpointFormatError(f"checkpoint {field.replace('_', ' ')} is missing")
+    return metadata
+
+
+def load_skrl_checkpoint_for_inference(agent: "PPO", path: str | Path) -> Path:
+    """Load a native checkpoint for visualization without accepting it for resume."""
+
+    checkpoint = Path(path)
+    if not checkpoint.is_file():
+        raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
+    _load_modules(checkpoint, device=agent.device)
+    _load_metadata(checkpoint)
+    agent.load(str(checkpoint))
+    return checkpoint
+
+
+def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
+    """Load a native checkpoint only when it matches the current training objective."""
+
+    checkpoint = Path(path)
+    if not checkpoint.is_file():
+        raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
+    _load_modules(checkpoint, device=agent.device)
+    metadata = _load_metadata(checkpoint)
+    reward_contract = metadata["reward_contract"]
     if reward_contract != REWARD_CONTRACT_ID:
         raise CheckpointFormatError(
             f"checkpoint reward contract {reward_contract!r} != required {REWARD_CONTRACT_ID!r}"
         )
-    ppo_reward_contract = metadata.get("ppo_reward_contract")
-    if ppo_reward_contract is None:
-        raise CheckpointFormatError(
-            "checkpoint PPO reward contract is missing; checkpoints predating raw 1.0x PPO rewards cannot resume"
-        )
+    ppo_reward_contract = metadata["ppo_reward_contract"]
     if ppo_reward_contract != PPO_REWARD_CONTRACT_ID:
         raise CheckpointFormatError(
             f"checkpoint PPO reward contract {ppo_reward_contract!r} != required {PPO_REWARD_CONTRACT_ID!r}"

@@ -23,7 +23,7 @@ from sim.manorl.observations import (
     OBSERVATION_SLICES,
     quat_rotate_xyzw,
 )
-from sim.manorl.rewards import REWARD_CONTRACT_ID, REWARD_HAND_OBJECT_THRESHOLD_N, compute_rewards
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID, REWARD_HAND_OBJECT_THRESHOLD_N, compute_rewards
 from sim.manorl.trajectory import load_reference_trajectory
 
 
@@ -624,6 +624,7 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     assert hand_object_path not in root.contents[1].contents[1].contents
 
     expected_hand_object_magnitudes = []
+    expected_episode_returns = []
     for _ in range(2):
         env.step(np.zeros((1, 26), dtype=np.float64))
         assert env.last_transition is not None
@@ -631,6 +632,7 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
         expected_hand_object_magnitudes.append(
             np.linalg.norm(env.last_physical.hand_object_force_on_object_world_N[0], axis=1)
         )
+        expected_episode_returns.append(float(env.last_transition.episode_return[0]))
         recorder._record(env.last_transition)
 
     geometry_paths = [f"contact/geometry_force/world/{component}" for component, _ in (
@@ -660,11 +662,17 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
         "series": recorder.hand_object_force_series_table,
     }
     assert metadata["reward_contract"] == REWARD_CONTRACT_ID
-    assert metadata["ppo_reward_contract"] == "target_hand_object_contact_v1_raw_ppo_reward_1x_v1"
+    assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert metadata["ppo_reward_scale"] == 1.0
     assert metadata["thresholds"]["observation_contact_threshold_N"] == 2.0
     assert metadata["thresholds"]["reward_hand_object_threshold_N"] == REWARD_HAND_OBJECT_THRESHOLD_N
     assert "contact_force_threshold" not in metadata["thresholds"]
+    episode_return_samples = [
+        args[0].scalars.as_arrow_array().to_numpy()[0]
+        for logged_path, args, kwargs, _ in recorder.recording.logs
+        if logged_path == "episode/return" and not kwargs.get("static")
+    ]
+    np.testing.assert_allclose(episode_return_samples, expected_episode_returns, rtol=0, atol=1e-12)
 
     samples = {
         path: [args[0] for logged_path, args, kwargs, _ in recorder.recording.logs if logged_path == path and not kwargs.get("static")]

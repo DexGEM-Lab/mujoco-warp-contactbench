@@ -297,6 +297,7 @@ class ManoRerunRecorder:
             "episode/progress": float(snapshot.progress[env_id]),
             "episode/trajectory_step": float(snapshot.trajectory_steps[env_id]),
             "episode/trajectory_length": float(self.environment.trajectory_lengths[env_id]),
+            "episode/return": float(snapshot.episode_return[env_id]),
             "episode/source_reference_index": float(self.environment.reference_source_indices[env_id, index]),
             "world/object_speed": float(np.linalg.norm(physical.object_linear_velocity[env_id])),
             "contact/count": float(physical.contact_count[env_id]),

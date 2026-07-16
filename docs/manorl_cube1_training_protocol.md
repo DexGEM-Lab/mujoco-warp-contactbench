@@ -137,8 +137,14 @@ assignments and devices. It creates the output parent before initialization and
 passes it as W&B's local directory, so SDK state is stored at
 `<output-parent>/wandb` under ignored training outputs rather than the repository
 root. It records the complete serializable training/PPO/raw reward configuration,
-logs each PPO update against monotonic environment transitions, writes the
-zero/untrained/trained evaluation summaries and final acceptance values, then
+logs each PPO update against monotonic environment transitions with scalar means
+for `total`, `distance_x`, `distance_y`, `distance_z`, `rotation`,
+`action_penalty`, `contact`, `object_stability`, `survival`, and
+`deviation_penalty`, alongside `reward_mean`. It also records
+`completed_episode_count` and, only when one or more episodes complete in that
+update, `episode_return_mean`. These target-native aggregates are semantically
+related to IsaacGym reward telemetry, but their logger key names are not an
+identity contract. It writes the zero/untrained/trained evaluation summaries and final acceptance values, then
 uploads the native checkpoint and sidecar, metrics JSON, evaluation trace, and a
 completed Rerun recording when one exists. An enabled run fails on W&B
 initialization or logging errors; cleanup failures do not mask a training error.
@@ -167,7 +173,8 @@ the latest completed recording from another terminal with:
 The embedded Rerun blueprint explicitly displays the object point cloud and
 tracks the object with an orbital camera. It records actual state, target, 26D
 action/controller target, hand keypoints, contact force vectors, named reward
-terms, reset causes, and the thresholds used by that recording.
+terms, per-step cumulative `episode/return`, reset causes, and the thresholds
+used by that recording.
 
 ## Visual Test With Background Rerun
 

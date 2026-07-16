@@ -82,7 +82,7 @@ class EnvironmentConfig:
     residual_enabled: bool = True
     residual_action: ResidualActionConfig = ResidualActionConfig()
     max_deviation_distance: float = 0.10
-    deviation_penalty: float = 25.0
+    deviation_penalty: float = 0.0
     episode_length: int = 600
     contact_capacity: int = CONTACT_CAPACITY
     constraint_capacity: int = CONSTRAINT_CAPACITY
@@ -145,6 +145,7 @@ class TransitionSnapshot:
     physical: PhysicalSnapshot
     observation: ObservationResult
     reward: RewardDiagnostics
+    episode_return: NDArray[np.float64]
     termination: TerminationResult
 
 
@@ -938,6 +939,7 @@ class MujocoManoEnvironment:
             physical=physical,
             observation=observation,
             reward=reward,
+            episode_return=self.episode_returns.copy(),
             termination=termination,
         )
         self.control_call += 1
