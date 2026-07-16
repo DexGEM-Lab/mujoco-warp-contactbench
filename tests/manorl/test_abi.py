@@ -40,7 +40,7 @@ def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
     np.testing.assert_array_equal(result.cumulative_joint_offset[:2], 0.0)
     np.testing.assert_allclose(
         result.cumulative_joint_offset[2, :8],
-        [0.1, 0.12, 0.044, 0.01, 0.024, 0.04, 0.06, 0.01],
+        [0.05, 0.06, 0.044, 0.01, 0.024, 0.04, 0.06, 0.01],
     )
     np.testing.assert_array_equal(result.cumulative_joint_offset[2, 8:], 0.0)
     # Rotation is immediate, unlike the position and joint cumulative residuals.
@@ -55,7 +55,7 @@ def test_residual_control_accumulates_only_active_joints_and_clamps() -> None:
     result = process_residual_actions(**values, trajectory_steps=np.array([101]))
     np.testing.assert_allclose(result.cumulative_offset, [[0.0291, 0.0291, 0.0291]])
     np.testing.assert_allclose(
-        result.cumulative_joint_offset[0, :8], [0.1, 0.12, 0.044, 0.01, 0.024, 0.04, 0.06, 0.01]
+        result.cumulative_joint_offset[0, :8], [0.05, 0.06, 0.044, 0.01, 0.024, 0.04, 0.06, 0.01]
     )
     np.testing.assert_array_equal(result.cumulative_joint_offset[0, 8:], 0.0)
     disabled = process_residual_actions(
@@ -83,6 +83,35 @@ def test_position_recurrence_reaches_the_target_cap_for_both_signs() -> None:
             **{**values, "cumulative_offset": np.full((1, 3), sign * 0.03)}, trajectory_steps=np.array([501])
         )
         np.testing.assert_allclose(capped.cumulative_offset, np.full((1, 3), sign * 0.03))
+
+
+def test_joint_recurrence_reaches_thumb_caps_without_changing_other_joints() -> None:
+    values = _control_inputs(batch=1)
+    values["cumulative_offset"][:] = 0.0
+    values["active_joint_mask"][:] = True
+    expected_scales = np.array([0.05, 0.06, 0.044, 0.01] + [0.024, 0.04, 0.06, 0.01] * 4)
+    expected_caps = np.array([0.5, 0.6, 0.44, 0.1] + [0.24, 0.4, 0.6, 0.1] * 4)
+    first_step = process_residual_actions(
+        **{**values, "raw_actions": np.ones((1, 26)), "cumulative_joint_offset": np.zeros((1, 20))},
+        trajectory_steps=np.array([101]),
+    )
+    np.testing.assert_allclose(first_step.cumulative_joint_offset, expected_scales[None, :])
+    np.testing.assert_allclose(first_step.cumulative_offset, [[0.003, 0.003, 0.003]])
+    np.testing.assert_allclose(first_step.targets[:, 3:6], 0.00025)
+    for sign in (-1.0, 1.0):
+        values["raw_actions"][:] = sign
+        offset = np.zeros((1, 20))
+        for step in range(101, 501):
+            result = process_residual_actions(
+                **{**values, "cumulative_joint_offset": offset}, trajectory_steps=np.array([step])
+            )
+            offset = result.cumulative_joint_offset
+        np.testing.assert_allclose(offset, sign * expected_caps[None, :], atol=1e-12)
+        capped = process_residual_actions(
+            **{**values, "cumulative_joint_offset": sign * expected_caps[None, :]},
+            trajectory_steps=np.array([501]),
+        )
+        np.testing.assert_allclose(capped.cumulative_joint_offset, sign * expected_caps[None, :])
 
 
 def test_early_phase_uses_per_environment_starts() -> None:

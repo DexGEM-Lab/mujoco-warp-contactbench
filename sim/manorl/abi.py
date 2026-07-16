@@ -14,20 +14,22 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+THUMB_JOINT_SCALE: Final = (0.05, 0.06, 0.044, 0.01)
+THUMB_JOINT_CAP: Final = (0.5, 0.6, 0.44, 0.1)
+
 _JOINT_SCALE = np.asarray(
-    [0.1, 0.12, 0.044, 0.01] + [0.024, 0.04, 0.06, 0.01] * 4,
+    list(THUMB_JOINT_SCALE) + [0.024, 0.04, 0.06, 0.01] * 4,
     dtype=np.float64,
 )
 _JOINT_LIMIT = np.asarray(
-    [1.0, 1.2, 0.44, 0.1]
-    + [0.24, 0.4, 0.6, 0.1] * 4,
+    list(THUMB_JOINT_CAP) + [0.24, 0.4, 0.6, 0.1] * 4,
     dtype=np.float64,
 )
 
 # This binds the target's control mapping and terminal reset behavior separately
 # from the reward contracts. Historical source defaults remain documented as ABI
 # evidence but are not target training defaults.
-ENVIRONMENT_CONTRACT_ID: Final = "target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v1"
+ENVIRONMENT_CONTRACT_ID: Final = "target_residual_reduced_thumb_authority_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v2"
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
 
