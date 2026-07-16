@@ -846,15 +846,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         episodes_path,
         partial_episodes_path,
     )
-    rerun_existing = [] if rerun_path is None else [
-        rerun_path,
-        rerun_path.with_name(f".{rerun_path.stem}.active{rerun_path.suffix or '.rrd'}"),
-    ]
-    if (
-        output.exists()
-        or any(path.exists() for path in artifacts)
-        or any(path.exists() for path in rerun_existing)
-    ):
+    if output.exists() or any(path.exists() for path in artifacts):
         raise FileExistsError("refusing to replace an existing training artifact prefix")
     torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)

@@ -726,6 +726,9 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
 ) -> None:
     tool = _load_tool()
     recorder_closed: list[bool] = []
+    rerun_output = tmp_path / "run.rrd"
+    rerun_output.write_bytes(b"previous recording")
+    rerun_output.with_name(".run.active.rrd").write_bytes(b"stale active stream")
 
     class Runtime:
         device = "cuda"
@@ -770,7 +773,7 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
     with pytest.raises(RuntimeError, match="viewer failed"):
         tool.run(
             tmp_path / "run",
-            tool.TrainingBudget(num_envs=1, updates=1, minibatch_size=1, rerun_output=str(tmp_path / "run.rrd")),
+            tool.TrainingBudget(num_envs=1, updates=1, minibatch_size=1, rerun_output=str(rerun_output)),
         )
     assert recorder_closed == [True]
 
