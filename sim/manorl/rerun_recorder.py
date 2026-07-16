@@ -12,7 +12,7 @@ import numpy as np
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
 from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_NAMES, KEYPOINT_NAMES, PHYSICS_SUBSTEPS_PER_TARGET
 from sim.manorl.environment import MujocoManoEnvironment, TransitionSnapshot
-from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, OBSERVATION_SLICES
+from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, OBSERVATION_SLICES, quat_rotate_xyzw
 from sim.manorl.rewards import (
     PPO_REWARD_CONTRACT_ID,
     PPO_REWARD_SCALE,
@@ -62,6 +62,7 @@ class ManoRerunRecorder:
         self.hand_object_force_series_names = tuple(
             row["series_name"] for row in self.hand_object_force_series_table
         )
+        self.hand_meshes = self._hand_meshes()
         self._start_episode()
 
     def _default_blueprint(self):
@@ -181,8 +182,63 @@ class ManoRerunRecorder:
             for keypoint_name, geom_id in zip(KEYPOINT_NAMES, producer.keypoint_geom_ids, strict=True)
         ]
 
+    def _hand_meshes(self) -> list[dict[str, object]]:
+        """Extract the URDF-resolved hand meshes in their owning body frames."""
+
+        environment = self.environment
+        model = environment.model
+        mujoco = environment.mujoco
+        mesh_type = int(mujoco.mjtGeom.mjGEOM_MESH)
+        meshes: list[dict[str, object]] = []
+        for keypoint_name, geom_id, body_id in zip(
+            KEYPOINT_NAMES,
+            environment.producer.keypoint_geom_ids,
+            environment.producer.keypoint_body_ids,
+            strict=True,
+        ):
+            if int(model.geom_type[geom_id]) != mesh_type:
+                raise RuntimeError(f"MANO geom {geom_id} is not a mesh")
+            if int(model.geom_bodyid[geom_id]) != body_id:
+                raise RuntimeError(f"MANO geom {geom_id} is not attached to body {body_id}")
+            mesh_id = int(model.geom_dataid[geom_id])
+            if mesh_id < 0:
+                raise RuntimeError(f"MANO geom {geom_id} has no mesh data")
+            vertex_start = int(model.mesh_vertadr[mesh_id])
+            vertex_count = int(model.mesh_vertnum[mesh_id])
+            face_start = int(model.mesh_faceadr[mesh_id])
+            face_count = int(model.mesh_facenum[mesh_id])
+            vertices = np.asarray(
+                model.mesh_vert[vertex_start : vertex_start + vertex_count], dtype=np.float64
+            ).copy()
+            faces = np.asarray(model.mesh_face[face_start : face_start + face_count], dtype=np.int32).copy()
+            geom_position = np.asarray(model.geom_pos[geom_id], dtype=np.float64)
+            geom_quaternion_wxyz = np.asarray(model.geom_quat[geom_id], dtype=np.float64)
+            geom_quaternion_xyzw = geom_quaternion_wxyz[[1, 2, 3, 0]]
+            vertices = quat_rotate_xyzw(
+                np.broadcast_to(geom_quaternion_xyzw, (len(vertices), 4)),
+                vertices,
+            ) + geom_position
+            if not np.all(np.isfinite(vertices)) or not np.all(np.isfinite(faces)):
+                raise RuntimeError(f"MANO mesh {keypoint_name} contains non-finite geometry")
+            meshes.append(
+                {
+                    "keypoint_name": keypoint_name,
+                    "geom_id": int(geom_id),
+                    "body_id": int(body_id),
+                    "mesh_id": mesh_id,
+                    "path": f"world/mano_hand/{keypoint_name}",
+                    "vertices": vertices,
+                    "faces": faces,
+                    "vertex_count": vertex_count,
+                    "triangle_count": face_count,
+                }
+            )
+        return meshes
+
     def _log_static_metadata(self) -> None:
         environment = self.environment
+        if not hasattr(self, "hand_meshes"):
+            self.hand_meshes = self._hand_meshes()
         trajectory = environment.trajectories[self.env_id]
         identity_parts = trajectory.identity.identity.split("_")
         metadata = {
@@ -201,6 +257,22 @@ class ManoRerunRecorder:
             "trajectory_length": int(environment.trajectory_lengths[self.env_id]),
             "joint_names": list(JOINT_NAMES),
             "keypoint_names": list(KEYPOINT_NAMES),
+            "hand_meshes": [
+                {
+                    key: mesh[key]
+                    for key in (
+                        "keypoint_name",
+                        "geom_id",
+                        "body_id",
+                        "mesh_id",
+                        "path",
+                        "vertex_count",
+                        "triangle_count",
+                    )
+                }
+                for mesh in self.hand_meshes
+            ],
+            "hand_mesh_source": "compiled MuJoCo meshes resolved from mano_hand.urdf",
             "collision_geometries": self.geometry_table,
             "hand_object_force_on_object_world_N": {
                 "direction": "net world-frame force exerted on the object by each hand collision geom",
@@ -243,6 +315,16 @@ class ManoRerunRecorder:
             self.rr.SeriesLines(names=self.hand_object_force_series_names),
             static=True,
         )
+        for mesh in self.hand_meshes:
+            self.recording.log(
+                mesh["path"],
+                self.rr.Mesh3D(
+                    vertex_positions=mesh["vertices"],
+                    triangle_indices=mesh["faces"],
+                    albedo_factor=(0.88, 0.58, 0.46, 1.0),
+                ),
+                static=True,
+            )
 
     def record_transition(self) -> None:
         if self._closed:
@@ -262,6 +344,8 @@ class ManoRerunRecorder:
     def _record(self, snapshot: TransitionSnapshot) -> None:
         env_id = self.env_id
         physical = snapshot.physical
+        if not hasattr(self, "hand_meshes"):
+            self.hand_meshes = self._hand_meshes()
         reward = snapshot.reward
         termination = snapshot.termination
         index = int(snapshot.target_indices[env_id])
@@ -294,6 +378,30 @@ class ManoRerunRecorder:
         )
         self.recording.log("world/object/center", self.rr.Points3D([[0.0, 0.0, 0.0]], colors=[(45, 190, 100)], radii=[0.012]))
         self.recording.log("world/hand", self.rr.Points3D([hand_position], colors=[(70, 140, 230)], radii=[0.010]))
+        hand_positions = physical.hand_keypoint_positions[env_id]
+        hand_orientations = physical.hand_keypoint_orientations_xyzw[env_id]
+        if hand_positions.shape != (len(self.hand_meshes), 3) or hand_orientations.shape != (
+            len(self.hand_meshes),
+            4,
+        ):
+            raise RuntimeError("physical hand transform shapes no longer match the MANO mesh contract")
+        orientation_norms = np.linalg.norm(hand_orientations, axis=1)
+        if (
+            not np.all(np.isfinite(hand_positions))
+            or not np.all(np.isfinite(hand_orientations))
+            or not np.allclose(orientation_norms, 1.0, rtol=0.0, atol=1e-6)
+        ):
+            raise RuntimeError("physical hand transforms must contain finite positions and unit quaternions")
+        for mesh, position, orientation in zip(
+            self.hand_meshes, hand_positions, hand_orientations, strict=True
+        ):
+            self.recording.log(
+                mesh["path"],
+                self.rr.Transform3D(
+                    translation=position,
+                    quaternion=self.rr.Quaternion(xyzw=orientation),
+                ),
+            )
         self.recording.log("world/hand_keypoints", self.rr.Points3D(physical.hand_keypoint_positions[env_id], colors=[(255, 180, 70)], radii=0.004))
         self.recording.log("world/fingertips", self.rr.Points3D(physical.fingertip_positions[env_id], colors=[(250, 100, 100)], radii=0.006))
         self.recording.log("world/object/point_cloud", self.rr.Points3D(object_cloud_local, colors=[(80, 245, 255)], radii=0.005))

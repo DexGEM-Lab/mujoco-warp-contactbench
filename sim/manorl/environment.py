@@ -117,6 +117,7 @@ class PhysicalSnapshot:
     mano_dof_pos: NDArray[np.float64]
     hand_position: NDArray[np.float64]
     hand_orientation_xyzw: NDArray[np.float64]
+    hand_keypoint_orientations_xyzw: NDArray[np.float64]
     object_position: NDArray[np.float64]
     object_orientation_xyzw: NDArray[np.float64]
     object_linear_velocity: NDArray[np.float64]
@@ -503,6 +504,7 @@ class MjxWarpPhysicalProducer:
             mano_dof_pos=qpos[:, :26].copy(),
             hand_position=xpos[:, self.keypoint_body_ids[0]].copy(),
             hand_orientation_xyzw=_normalized_xyzw(xquat[:, self.keypoint_body_ids[0]]),
+            hand_keypoint_orientations_xyzw=keypoint_quats,
             object_position=xpos[:, self.object_body_id].copy(),
             object_orientation_xyzw=_normalized_xyzw(xquat[:, self.object_body_id]),
             object_linear_velocity=qvel[:, self.object_qvel_address : self.object_qvel_address + 3].copy(),
