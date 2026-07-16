@@ -117,7 +117,7 @@ def compute_rewards(
     termination: TerminationResult,
     config: RewardConfig = RewardConfig(),
 ) -> RewardDiagnostics:
-    """Compute source reward terms, then apply the ABI termination penalty."""
+    """Compute reward terms plus the ABI termination contribution (default zero, configurable)."""
 
     if not isinstance(state, RewardState):
         raise TypeError("state must be a RewardState")
