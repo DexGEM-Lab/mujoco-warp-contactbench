@@ -165,6 +165,94 @@ def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.
     assert clock.calls == 6
 
 
+def test_profiled_train_attributes_all_post_calls_and_only_optimizer_boundaries() -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 3
+    runtime.agent.training = True
+    runtime.agent._rollout = 0
+    runtime.agent.cfg = SimpleNamespace(rollouts=3, learning_starts=4)
+    original_post_interaction = runtime.agent.post_interaction
+
+    def post_interaction(**kwargs: object) -> None:
+        original_post_interaction(**kwargs)
+        runtime.agent._rollout += 1
+
+    runtime.agent.post_interaction = post_interaction
+
+    updates, transitions, _ = tool._train(
+        runtime, tool.TrainingBudget(num_envs=1, updates=2, profile_phases=True)
+    )
+
+    assert transitions == 6
+    assert len(updates) == 2
+    profile = runtime.training_phase_profile
+    assert profile["runtime_env_step"]["calls"] == 6
+    assert profile["rollout_finite_checks"]["calls"] == 6
+    assert profile["host_telemetry"]["calls"] == 6
+    assert profile["reset_count_host_item"]["calls"] == 6
+    assert profile["post_interaction_all_calls"]["calls"] == 6
+    assert profile["ppo_optimizer_rollout_boundary"]["calls"] == 1
+    assert profile["trainer_parameter_finite_checks"]["calls"] == 2
+    assert profile["update_host_telemetry"]["calls"] == 2
+
+
+def test_profile_false_train_does_not_synchronize(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 1
+    runtime.device = "cuda"
+    monkeypatch.setattr(
+        tool.torch.cuda,
+        "synchronize",
+        lambda *_: (_ for _ in ()).throw(AssertionError("unexpected profiling sync")),
+    )
+
+    updates, transitions, _ = tool._train(
+        runtime, tool.TrainingBudget(num_envs=1, updates=1, profile_phases=False)
+    )
+
+    assert transitions == 1
+    assert len(updates) == 1
+    assert runtime.training_phase_profile == {}
+
+
+@pytest.mark.parametrize(
+    ("controls", "diagnostics"),
+    [(False, False), (False, True), (True, False), (True, True)],
+)
+def test_training_budget_supports_four_way_controls_diagnostics_cross(
+    controls: bool, diagnostics: bool
+) -> None:
+    tool = _load_tool()
+    budget = tool.TrainingBudget(
+        device_resident_controls=controls,
+        capture_transition_diagnostics=diagnostics,
+    )
+    assert budget.resolved_capture_transition_diagnostics is diagnostics
+    assert tool.TrainingBudget(
+        device_resident_controls=controls
+    ).resolved_capture_transition_diagnostics is (not controls)
+
+
+def test_training_cli_parses_independent_diagnostics_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured: list[object] = []
+    monkeypatch.setattr(tool, "run", lambda _output, budget: captured.append(budget) or {})
+
+    assert tool.main([
+        "--output", str(tmp_path / "training"),
+        "--device-resident-controls", "true",
+        "--capture-transition-diagnostics", "true",
+    ]) == 0
+    budget = captured[0]
+    assert budget.device_resident_controls is True
+    assert budget.capture_transition_diagnostics is True
+    assert budget.resolved_capture_transition_diagnostics is True
+
+
 def test_training_observer_never_owns_steps_and_close_finishes_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     runtime = _runtime()

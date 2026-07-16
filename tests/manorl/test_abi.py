@@ -23,9 +23,9 @@ def _control_inputs(batch: int = 3) -> dict[str, np.ndarray]:
 
 def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
     config = ResidualActionConfig()
-    assert config.position_scale == (0.003, 0.003, 0.003)
+    assert config.position_scale == (0.001, 0.001, 0.003)
     assert config.gamma_xy == config.gamma_z == 0.9
-    assert config.max_position_offset == 0.03
+    assert config.max_position_offset == (0.01, 0.01, 0.03)
     values = _control_inputs()
     result = process_residual_actions(
         **values,
@@ -36,7 +36,7 @@ def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
     np.testing.assert_array_equal(result.actions[2, 14:26], 0.0)
     np.testing.assert_allclose(result.actions[2, :14], 1.0)
     np.testing.assert_array_equal(result.cumulative_offset[:2], 0.0)
-    np.testing.assert_allclose(result.cumulative_offset[2], 0.003)
+    np.testing.assert_allclose(result.cumulative_offset[2], [0.001, 0.001, 0.003])
     np.testing.assert_array_equal(result.cumulative_joint_offset[:2], 0.0)
     np.testing.assert_allclose(
         result.cumulative_joint_offset[2, :8],
@@ -47,13 +47,28 @@ def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
     np.testing.assert_allclose(result.targets[2, 3:6], 0.00025)
 
 
+def test_position_action_unit_maps_signed_xy_and_z_steps() -> None:
+    values = _control_inputs(batch=2)
+    values["raw_actions"][:] = 0.0
+    values["raw_actions"][:, :3] = [[1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]]
+    values["cumulative_offset"][:] = 0.0
+    values["cumulative_joint_offset"][:] = 0.0
+    result = process_residual_actions(**values, trajectory_steps=np.array([101, 101]))
+    np.testing.assert_allclose(
+        result.cumulative_offset,
+        [[0.001, 0.001, 0.003], [-0.001, -0.001, -0.003]],
+        rtol=0,
+        atol=1e-12,
+    )
+
+
 def test_residual_control_accumulates_only_active_joints_and_clamps() -> None:
     values = _control_inputs(batch=1)
     values["raw_actions"][:] = 1.0
-    values["cumulative_offset"][:] = 0.029
+    values["cumulative_offset"][:] = [0.009, 0.009, 0.029]
     values["cumulative_joint_offset"][:] = 0.0
     result = process_residual_actions(**values, trajectory_steps=np.array([101]))
-    np.testing.assert_allclose(result.cumulative_offset, [[0.0291, 0.0291, 0.0291]])
+    np.testing.assert_allclose(result.cumulative_offset, [[0.0091, 0.0091, 0.0291]])
     np.testing.assert_allclose(
         result.cumulative_joint_offset[0, :8], [0.05, 0.06, 0.044, 0.01, 0.024, 0.04, 0.06, 0.01]
     )
@@ -78,11 +93,12 @@ def test_position_recurrence_reaches_the_target_cap_for_both_signs() -> None:
                 **{**values, "cumulative_offset": offset}, trajectory_steps=np.array([step])
             )
             offset = result.cumulative_offset
-        np.testing.assert_allclose(offset, np.full((1, 3), sign * 0.03), atol=1e-12)
+        expected_cap = sign * np.array([[0.01, 0.01, 0.03]])
+        np.testing.assert_allclose(offset, expected_cap, atol=1e-12)
         capped = process_residual_actions(
-            **{**values, "cumulative_offset": np.full((1, 3), sign * 0.03)}, trajectory_steps=np.array([501])
+            **{**values, "cumulative_offset": expected_cap}, trajectory_steps=np.array([501])
         )
-        np.testing.assert_allclose(capped.cumulative_offset, np.full((1, 3), sign * 0.03))
+        np.testing.assert_allclose(capped.cumulative_offset, expected_cap)
 
 
 def test_joint_recurrence_reaches_thumb_caps_without_changing_other_joints() -> None:
@@ -96,7 +112,7 @@ def test_joint_recurrence_reaches_thumb_caps_without_changing_other_joints() -> 
         trajectory_steps=np.array([101]),
     )
     np.testing.assert_allclose(first_step.cumulative_joint_offset, expected_scales[None, :])
-    np.testing.assert_allclose(first_step.cumulative_offset, [[0.003, 0.003, 0.003]])
+    np.testing.assert_allclose(first_step.cumulative_offset, [[0.001, 0.001, 0.003]])
     np.testing.assert_allclose(first_step.targets[:, 3:6], 0.00025)
     for sign in (-1.0, 1.0):
         values["raw_actions"][:] = sign

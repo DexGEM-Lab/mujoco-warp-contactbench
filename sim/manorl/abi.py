@@ -29,7 +29,7 @@ _JOINT_LIMIT = np.asarray(
 # This binds the target's control mapping and terminal reset behavior separately
 # from the reward contracts. Historical source defaults remain documented as ABI
 # evidence but are not target training defaults.
-ENVIRONMENT_CONTRACT_ID: Final = "target_residual_reduced_thumb_authority_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v2"
+ENVIRONMENT_CONTRACT_ID: Final = "target_residual_reduced_thumb_authority_xy_0p001_z_0p003_gamma_0p9_cap_xy_0p01_z_0p03_deviation_0p10_v3"
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
 
@@ -40,9 +40,9 @@ class ResidualActionConfig:
     gamma_xy: float = 0.9
     gamma_z: float = 0.9
     gamma_joints: float = 0.9
-    position_scale: tuple[float, float, float] = (0.003, 0.003, 0.003)
+    position_scale: tuple[float, float, float] = (0.001, 0.001, 0.003)
     rotation_scale: float = 0.01
-    max_position_offset: float = 0.03
+    max_position_offset: tuple[float, float, float] = (0.01, 0.01, 0.03)
     early_phase_steps: int = 100
 
 
@@ -176,9 +176,8 @@ def process_residual_actions(
     next_joint[accumulate] = (
         config.gamma_joints * next_joint[accumulate] + scaled_joints[accumulate]
     )
-    next_position = np.clip(
-        next_position, -config.max_position_offset, config.max_position_offset
-    )
+    position_limit = np.asarray(config.max_position_offset, dtype=np.float64)
+    next_position = np.clip(next_position, -position_limit, position_limit)
     next_joint = np.clip(next_joint, -_JOINT_LIMIT, _JOINT_LIMIT)
 
     residual_targets = np.zeros_like(targets)
