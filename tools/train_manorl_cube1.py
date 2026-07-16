@@ -222,6 +222,18 @@ def _episode_records_path(output: Path) -> Path:
     return output.with_suffix(".episodes.jsonl")
 
 
+def _partial_episode_records_path(output: Path) -> Path:
+    return output.with_suffix(".episodes.jsonl.partial")
+
+
+@contextmanager
+def _episode_records_file(episodes_path: Path) -> Iterator[Any]:
+    partial_path = episodes_path.with_suffix(f"{episodes_path.suffix}.partial")
+    with partial_path.open("x", encoding="utf-8") as episode_file:
+        yield episode_file
+    os.replace(partial_path, episodes_path)
+
+
 def _transitions_per_second(transitions: int, elapsed_seconds: float) -> float:
     return float(transitions / elapsed_seconds) if elapsed_seconds > 0.0 else 0.0
 
@@ -254,8 +266,9 @@ def _completed_episode_record(
 
 def _write_episode_record(episode_file: Any, record: dict[str, object]) -> None:
     serialized = json.dumps(record, sort_keys=True, separators=(",", ":"))
-    print(serialized)
     episode_file.write(serialized + "\n")
+    episode_file.flush()
+    print(serialized, flush=True)
 
 
 def _assert_cuda_runtime() -> None:
@@ -398,8 +411,9 @@ def _train(
             name: float(np.concatenate(values).mean())
             for name, values in reward_components.items()
         }
-        cumulative_elapsed = time.monotonic() - started
-        update_elapsed = time.monotonic() - update_started
+        update_finished = time.monotonic()
+        cumulative_elapsed = update_finished - started
+        update_elapsed = update_finished - update_started
         update_transitions = config.rollouts * environment.config.num_envs
         update_metrics: dict[str, Any] = {
             "update": float(update + 1),
@@ -420,6 +434,8 @@ def _train(
         }
         if completed_episode_returns:
             update_metrics["episode_return_mean"] = float(np.mean(completed_episode_returns))
+            # One update retains at most one rollout batch: 48 * 4096 = 196,608
+            # values for the target Server2 scale, then this list is discarded.
             update_metrics["episode_return_values"] = completed_episode_returns
         updates.append(_public_update_metrics(update_metrics))
         if on_update is not None:
@@ -545,6 +561,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     metrics_path = output.with_suffix(".json")
     trace_path = output.with_suffix(".eval.npz")
     episodes_path = _episode_records_path(output)
+    partial_episodes_path = _partial_episode_records_path(output)
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
     artifacts = (
         checkpoint,
@@ -552,6 +569,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         metrics_path,
         trace_path,
         episodes_path,
+        partial_episodes_path,
     )
     rerun_existing = [] if rerun_path is None else [
         rerun_path,
@@ -637,7 +655,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 _log_wandb_update(wandb_run, wandb, update)
 
         episodes_path.parent.mkdir(parents=True, exist_ok=True)
-        with episodes_path.open("x", encoding="utf-8") as episode_file:
+        with _episode_records_file(episodes_path) as episode_file:
             try:
                 updates, transitions, elapsed = _train(
                     runtime,

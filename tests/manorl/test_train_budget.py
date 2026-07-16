@@ -129,7 +129,7 @@ def _runtime() -> SimpleNamespace:
 def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     runtime = _runtime()
-    clock = FakeClock([0.0, 10.0, 14.0, 18.0, 20.0, 27.0, 29.0, 31.0])
+    clock = FakeClock([0.0, 10.0, 14.0, 18.0, 20.0, 27.0])
     monkeypatch.setattr(tool.time, "monotonic", clock)
 
     updates, transitions, elapsed = tool._train(
@@ -144,16 +144,16 @@ def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.
     assert runtime.agent.recorded_timesteps == list(range(96))
     assert runtime.agent.post_interaction_timesteps == list(range(1, 97))
     assert [update["environment_transitions"] for update in updates] == [48.0, 96.0]
-    assert [update["elapsed_seconds"] for update in updates] == [14.0, 27.0]
-    assert [update["update_elapsed_seconds"] for update in updates] == [8.0, 9.0]
-    assert [update["update_environment_transitions_per_second"] for update in updates] == [6.0, 48.0 / 9.0]
-    assert [update["cumulative_environment_transitions_per_second"] for update in updates] == [48.0 / 14.0, 96.0 / 27.0]
+    assert [update["elapsed_seconds"] for update in updates] == [14.0, 20.0]
+    assert [update["update_elapsed_seconds"] for update in updates] == [4.0, 2.0]
+    assert [update["update_environment_transitions_per_second"] for update in updates] == [12.0, 24.0]
+    assert [update["cumulative_environment_transitions_per_second"] for update in updates] == [48.0 / 14.0, 96.0 / 20.0]
     assert [update["completed_episode_count"] for update in updates] == [1.0, 1.0]
     assert [update["episode_return_mean"] for update in updates] == [48.0, 96.0]
     assert all(update["reward_mean"] == update["total"] == 1.0 for update in updates)
     assert all(np.isclose(update["distance_x"], 0.1) and update["action_penalty"] == 0.0 for update in updates)
-    assert elapsed == 31.0
-    assert clock.calls == 8
+    assert elapsed == 27.0
+    assert clock.calls == 6
 
 
 def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,13 +211,78 @@ def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.M
     assert tool._episode_records_path(Path("outputs/manorl/run")) == Path("outputs/manorl/run.episodes.jsonl")
 
 
+def test_episode_record_write_flushes_before_stdout_on_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _load_tool()
+    events: list[str] = []
+
+    class TrackingFile(io.StringIO):
+        def write(self, value: str) -> int:
+            events.append("write")
+            return super().write(value)
+
+        def flush(self) -> None:
+            events.append("flush")
+            super().flush()
+
+    def broken_print(*_: object, **kwargs: object) -> None:
+        assert kwargs["flush"] is True
+        events.append("print")
+        raise BrokenPipeError("closed stdout")
+
+    episode_file = TrackingFile()
+    monkeypatch.setattr("builtins.print", broken_print)
+    record = {"schema": "manorl.completed_episode_returns.v1", "env_ids": [2], "returns": [3.5]}
+    with pytest.raises(BrokenPipeError, match="closed stdout"):
+        tool._write_episode_record(episode_file, record)
+
+    assert events == ["write", "flush", "print"]
+    assert json.loads(episode_file.getvalue()) == record
+
+
+def test_episode_record_partial_publish_and_collision_protection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    episodes_path = tmp_path / "run.episodes.jsonl"
+    partial_path = tmp_path / "run.episodes.jsonl.partial"
+
+    with tool._episode_records_file(episodes_path) as episode_file:
+        episode_file.write('{"complete":true}\n')
+    assert episodes_path.read_text(encoding="utf-8") == '{"complete":true}\n'
+    assert not partial_path.exists()
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        with tool._episode_records_file(episodes_path.with_name("failed.episodes.jsonl")) as episode_file:
+            episode_file.write('{"partial":true}\n')
+            episode_file.flush()
+            raise RuntimeError("interrupted")
+    failed_partial = tmp_path / "failed.episodes.jsonl.partial"
+    assert failed_partial.read_text(encoding="utf-8") == '{"partial":true}\n'
+    assert not (tmp_path / "failed.episodes.jsonl").exists()
+
+    collision_output = tmp_path / "collision"
+    collision_partial = tool._partial_episode_records_path(collision_output)
+    collision_partial.write_text('{"preserved":true}\n', encoding="utf-8")
+    monkeypatch.setattr(tool, "_assert_cuda_runtime", lambda: None)
+    with pytest.raises(FileExistsError, match="refusing to replace"):
+        tool.run(collision_output, tool.TrainingBudget())
+    assert collision_partial.read_text(encoding="utf-8") == '{"preserved":true}\n'
+
+    final_collision_output = tmp_path / "collision-final"
+    final_collision = tool._episode_records_path(final_collision_output)
+    final_collision.write_text('{"published":true}\n', encoding="utf-8")
+    with pytest.raises(FileExistsError, match="refusing to replace"):
+        tool.run(final_collision_output, tool.TrainingBudget())
+    assert final_collision.read_text(encoding="utf-8") == '{"published":true}\n'
+
+
 def test_train_saves_periodic_native_checkpoints_and_updates_last(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tool = _load_tool()
     runtime = _runtime()
     runtime.checkpoint_metadata = lambda: {"runtime": "fake"}
-    clock = FakeClock(list(range(17)))
+    clock = FakeClock(list(range(12)))
     monkeypatch.setattr(tool.time, "monotonic", clock)
     output = tmp_path / "training"
     checkpoint_paths: list[Path] = []

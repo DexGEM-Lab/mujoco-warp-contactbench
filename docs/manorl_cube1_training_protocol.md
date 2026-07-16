@@ -156,9 +156,14 @@ update, `episode_return_mean`. It also records instantaneous and cumulative
 environment transitions per second for each PPO update, plus final throughput.
 Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
 record with parallel `env_ids` and exact `returns` arrays to stdout and
-`<output>.episodes.jsonl`; this JSONL is the complete per-episode evidence while
-W&B receives one update-level return histogram rather than a log call for every
-episode. W&B artifacts include that episode JSONL alongside the checkpoint and
+`<output>.episodes.jsonl`; active records first accumulate in
+`<output>.episodes.jsonl.partial`, which is preserved after an interruption and
+atomically published only after successful training. This JSONL is the complete
+per-episode evidence while W&B receives one update-level return histogram rather
+than a log call for every episode. Histogram samples are retained only for the
+current update, bounded by one rollout batch (196,608 values at 4096 worlds and
+48 rollout steps), then discarded. W&B artifacts include that episode JSONL
+alongside the checkpoint and
 sidecar, metrics JSON, evaluation trace, and a completed Rerun recording when
 one exists. These target-native aggregates are semantically related to IsaacGym
 reward telemetry, but their logger key names are not an identity contract. It
