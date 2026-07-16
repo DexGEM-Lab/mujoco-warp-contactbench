@@ -47,7 +47,8 @@ The benchmark harness is now v3 and fail-closed: every mode/repeat runs in an
 independent child process, each child publishes a schema-checked JSON artifact
 and logs, and the aggregate is written only after all children succeed. Source
 and mirror file hashes plus the dirty-worktree diff hash are required in the
-provenance artifact. The isolated mirror received a transfer before this
-expanded attribution diff, but its final hash check failed because the remote
-shell had no `python` alias; no remote result is attributable to the current
-expanded diff yet.
+provenance artifact. The isolated mirror has now been rebuilt from the remote primary with the
+seven feature-owned source/test/tool files overlaid. Its hashes match commit
+`49b2baf` using the explicit remote environment interpreter, and its 13-file
+`outputs/` manifest is unchanged. No benchmark result has been produced yet;
+GPU0/GPU3 blocked evidence remains the next experiment.

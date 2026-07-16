@@ -91,3 +91,26 @@
   occupancy check precedes every child, and any GPU0/GPU3 contention or any GPU1/
   GPU2 use aborts the run. No remote process was launched from this worker after
   the local gate; reviewer approval remains the execution boundary.
+- 2026-07-16T17:47:10+08:00: Rebuilt the isolated mirror only at
+  `/home/jay/dexrobot/FromSSH/manoRL_mujoco-benchmarks/feat-end-to-end-training-throughput-b7f1171`.
+  Seed source was the remote Unison-managed primary
+  `/home/jay/dexrobot/FromSSH/manoRL_mujoco`, copied with `outputs/` and `.git/`
+  excluded from deletion; no sync-back was performed. Overlay files were exactly:
+  `sim/manorl/environment.py`, `sim/manorl/skrl_runtime.py`,
+  `tools/benchmark_manorl_device_controls.py`, `tools/train_manorl_cube1.py`,
+  `tests/manorl/test_benchmark_device_controls.py`,
+  `tests/manorl/test_device_resident_controls.py`, and
+  `tests/manorl/test_train_budget.py`.
+- 2026-07-16T17:47:10+08:00: Uploaded provenance
+  `/tmp/bench_phase_ablation_49b2baf.source_provenance.json` with source commit
+  `49b2baf2f4de9865203584d32c36c0a5b0f6d9aa`, feature diff SHA256
+  `6d01bb34a32836358d2d7fe33986599be9389cab1bd6de85d730997eeb47dce1`, and
+  seven source/mirror file hashes. Remote verification used explicit
+  `/home/jay/miniconda3/envs/manorl_mujoco/bin/python`; all seven hashes matched.
+  The pre/post mirror `outputs/` manifests matched exactly: 13 files, 27,265 bytes.
+  No benchmark code ran during mirror rebuild or verification.
+- 2026-07-16T17:48:12+08:00: Two initial remote verification command attempts
+  failed in the reporting heredoc before completing output: one referenced an
+  undefined `source_commit` name and the next had a quote typo in a diagnostic
+  branch. Neither changed mirror files or outputs. The simplified rerun completed
+  the same manifest and seven-file hash checks successfully.
