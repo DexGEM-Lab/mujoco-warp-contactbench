@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -128,7 +129,7 @@ def _runtime() -> SimpleNamespace:
 def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     runtime = _runtime()
-    clock = FakeClock([0.0, 10_000.0, 10_001.0, 10_002.0])
+    clock = FakeClock([0.0, 10.0, 14.0, 18.0, 20.0, 27.0, 29.0, 31.0])
     monkeypatch.setattr(tool.time, "monotonic", clock)
 
     updates, transitions, elapsed = tool._train(
@@ -143,20 +144,23 @@ def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.
     assert runtime.agent.recorded_timesteps == list(range(96))
     assert runtime.agent.post_interaction_timesteps == list(range(1, 97))
     assert [update["environment_transitions"] for update in updates] == [48.0, 96.0]
-    assert [update["elapsed_seconds"] for update in updates] == [10_000.0, 10_001.0]
+    assert [update["elapsed_seconds"] for update in updates] == [14.0, 27.0]
+    assert [update["update_elapsed_seconds"] for update in updates] == [8.0, 9.0]
+    assert [update["update_environment_transitions_per_second"] for update in updates] == [6.0, 48.0 / 9.0]
+    assert [update["cumulative_environment_transitions_per_second"] for update in updates] == [48.0 / 14.0, 96.0 / 27.0]
     assert [update["completed_episode_count"] for update in updates] == [1.0, 1.0]
     assert [update["episode_return_mean"] for update in updates] == [48.0, 96.0]
     assert all(update["reward_mean"] == update["total"] == 1.0 for update in updates)
     assert all(np.isclose(update["distance_x"], 0.1) and update["action_penalty"] == 0.0 for update in updates)
-    assert elapsed == 10_002.0
-    assert clock.calls == 4
+    assert elapsed == 31.0
+    assert clock.calls == 8
 
 
 def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     runtime = _runtime()
     runtime.config.rollouts = 2
-    clock = FakeClock([0.0, 1.0, 2.0])
+    clock = FakeClock([0.0, 1.0, 2.0, 3.0, 4.0])
     monkeypatch.setattr(tool.time, "monotonic", clock)
 
     updates, _, _ = tool._train(runtime, tool.TrainingBudget(num_envs=1, updates=1))
@@ -165,13 +169,55 @@ def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: 
     assert "episode_return_mean" not in updates[0]
 
 
+def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 1
+    runtime.gymnasium_env.environment.config.num_envs = 4
+    runtime.env.reset = lambda: (torch.zeros((4, 1)), {})
+
+    def step(actions: torch.Tensor):
+        runtime.gymnasium_env.environment.last_reward = SimpleNamespace(**{
+            name: np.full(4, 1.0, dtype=np.float64) for name in tool.REWARD_UPDATE_COMPONENTS
+        })
+        runtime.gymnasium_env.environment.last_transition = SimpleNamespace(
+            termination=SimpleNamespace(reset=np.array([False, True, False, True])),
+            episode_return=np.array([1.0, 2.5, 3.0, -4.0]),
+        )
+        return (
+            torch.zeros_like(actions), torch.ones((4, 1)), torch.zeros((4, 1), dtype=torch.bool),
+            torch.zeros((4, 1), dtype=torch.bool), {},
+        )
+
+    runtime.env.step = step
+    clock = FakeClock([0.0, 1.0, 3.0, 5.0, 7.0])
+    monkeypatch.setattr(tool.time, "monotonic", clock)
+    records: list[dict[str, object]] = []
+    updates, transitions, _ = tool._train(
+        runtime, tool.TrainingBudget(num_envs=4, updates=1), on_completed_episodes=records.append
+    )
+
+    assert transitions == 4
+    assert updates[0]["completed_episode_count"] == 2.0
+    assert updates[0]["episode_return_mean"] == -0.75
+    assert "episode_return_values" not in updates[0]
+    assert records == [{
+        "schema": "manorl.completed_episode_returns.v1", "update": 1, "update_step": 1,
+        "vector_step": 1, "environment_transitions": 4, "env_ids": [1, 3], "returns": [2.5, -4.0],
+    }]
+    episode_file = io.StringIO()
+    tool._write_episode_record(episode_file, records[0])
+    assert json.loads(episode_file.getvalue()) == records[0]
+    assert tool._episode_records_path(Path("outputs/manorl/run")) == Path("outputs/manorl/run.episodes.jsonl")
+
+
 def test_train_saves_periodic_native_checkpoints_and_updates_last(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tool = _load_tool()
     runtime = _runtime()
     runtime.checkpoint_metadata = lambda: {"runtime": "fake"}
-    clock = FakeClock([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    clock = FakeClock(list(range(17)))
     monkeypatch.setattr(tool.time, "monotonic", clock)
     output = tmp_path / "training"
     checkpoint_paths: list[Path] = []
@@ -354,6 +400,7 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert tool.main(["--output", str(tmp_path / "default")]) == 0
     assert captured[-1][1].wall_clock_seconds is None
     assert captured[-1][1].checkpoint_interval_updates is None
+    assert captured[-1][1].minibatch_size == 1024
 
     assert tool.main([
         "--output", str(tmp_path / "capped"),
@@ -362,6 +409,22 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     ]) == 0
     assert captured[-1][1].wall_clock_seconds == 17.5
     assert captured[-1][1].checkpoint_interval_updates == 100
+
+    assert tool.main([
+        "--output", str(tmp_path / "server2"), "--num-envs", "4096", "--minibatch-size", "4096",
+    ]) == 0
+    assert captured[-1][1].minibatch_size == 4096
+
+
+def test_cli_rejects_minibatch_that_does_not_divide_rollout_batch(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tool = _load_tool()
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main(["--output", "output", "--num-envs", "1", "--minibatch-size", "4096"])
+
+    assert "must divide rollout batch" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("value", ["0", "-1"])

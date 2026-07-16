@@ -69,6 +69,7 @@ class TrainingBudget:
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
     checkpoint_interval_updates: int | None = None
+    minibatch_size: int = ManoPPOConfig().minibatch_size
 
     @property
     def transitions(self) -> int:
@@ -168,7 +169,7 @@ def _wandb_run(
             raise RuntimeError("W&B cleanup after successful training failed") from cleanup_error
 
 
-def _log_wandb_update(run: Any, update: dict[str, float]) -> None:
+def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
     transitions = int(update["environment_transitions"])
     metrics = {
         "global_step": transitions,
@@ -179,10 +180,15 @@ def _log_wandb_update(run: Any, update: dict[str, float]) -> None:
         "reset_count": update["reset_count"],
         "completed_episode_count": update["completed_episode_count"],
         "elapsed_seconds": update["elapsed_seconds"],
+        "update_environment_transitions_per_second": update["update_environment_transitions_per_second"],
+        "cumulative_environment_transitions_per_second": update[
+            "cumulative_environment_transitions_per_second"
+        ],
     }
     metrics.update({name: update[name] for name in REWARD_UPDATE_COMPONENTS})
     if "episode_return_mean" in update:
         metrics["episode_return_mean"] = update["episode_return_mean"]
+        metrics["episode_return_distribution"] = wandb.Histogram(update["episode_return_values"])
     run.log(metrics, step=transitions)
 
 
@@ -210,6 +216,46 @@ def _log_wandb_artifacts(run: Any, wandb: Any, *, output: Path, paths: list[Path
     for path in paths:
         artifact.add_file(str(path), name=path.name)
     run.log_artifact(artifact)
+
+
+def _episode_records_path(output: Path) -> Path:
+    return output.with_suffix(".episodes.jsonl")
+
+
+def _transitions_per_second(transitions: int, elapsed_seconds: float) -> float:
+    return float(transitions / elapsed_seconds) if elapsed_seconds > 0.0 else 0.0
+
+
+def _public_update_metrics(update: dict[str, Any]) -> dict[str, Any]:
+    """Exclude in-memory W&B histogram samples from persisted update metrics."""
+
+    return {name: value for name, value in update.items() if name != "episode_return_values"}
+
+
+def _completed_episode_record(
+    *,
+    update: int,
+    update_step: int,
+    vector_step: int,
+    num_envs: int,
+    completed: np.ndarray,
+    episode_returns: np.ndarray,
+) -> dict[str, object]:
+    return {
+        "schema": "manorl.completed_episode_returns.v1",
+        "update": update,
+        "update_step": update_step,
+        "vector_step": vector_step,
+        "environment_transitions": vector_step * num_envs,
+        "env_ids": np.flatnonzero(completed).tolist(),
+        "returns": np.asarray(episode_returns, dtype=np.float64)[completed].tolist(),
+    }
+
+
+def _write_episode_record(episode_file: Any, record: dict[str, object]) -> None:
+    serialized = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    print(serialized)
+    episode_file.write(serialized + "\n")
 
 
 def _assert_cuda_runtime() -> None:
@@ -277,14 +323,15 @@ def _train(
     runtime: ManoSkrlRuntime,
     budget: TrainingBudget,
     recorder: ManoRerunRecorder | None = None,
-    on_update: Callable[[dict[str, float]], None] | None = None,
-) -> tuple[list[dict[str, float]], int, float]:
+    on_update: Callable[[dict[str, Any]], None] | None = None,
+    on_completed_episodes: Callable[[dict[str, object]], None] | None = None,
+) -> tuple[list[dict[str, Any]], int, float]:
     environment = runtime.gymnasium_env.environment
     config = runtime.config
     runtime.agent.enable_training_mode(True)
     observations, _ = runtime.env.reset()
     started = time.monotonic()
-    updates: list[dict[str, float]] = []
+    updates: list[dict[str, Any]] = []
     global_timestep = 0
     for update in range(budget.updates):
         if (
@@ -292,12 +339,13 @@ def _train(
             and time.monotonic() - started >= budget.wall_clock_seconds
         ):
             break
+        update_started = time.monotonic()
         rewards: list[torch.Tensor] = []
         action_magnitudes: list[torch.Tensor] = []
         reward_components: dict[str, list[np.ndarray]] = {name: [] for name in REWARD_UPDATE_COMPONENTS}
         completed_episode_returns: list[float] = []
         reset_count = 0
-        for _ in range(config.rollouts):
+        for update_step in range(config.rollouts):
             with torch.no_grad():
                 actions, _ = runtime.agent.act(
                     observations, None, timestep=global_timestep, timesteps=budget.transitions
@@ -331,7 +379,17 @@ def _train(
             for name in REWARD_UPDATE_COMPONENTS:
                 reward_components[name].append(np.asarray(getattr(diagnostics, name), dtype=np.float64))
             completed = np.asarray(snapshot.termination.reset, dtype=bool)
-            completed_episode_returns.extend(np.asarray(snapshot.episode_return, dtype=np.float64)[completed].tolist())
+            episode_returns = np.asarray(snapshot.episode_return, dtype=np.float64)
+            completed_episode_returns.extend(episode_returns[completed].tolist())
+            if completed.any() and on_completed_episodes is not None:
+                on_completed_episodes(_completed_episode_record(
+                    update=update + 1,
+                    update_step=update_step + 1,
+                    vector_step=global_timestep + 1,
+                    num_envs=environment.config.num_envs,
+                    completed=completed,
+                    episode_returns=episode_returns,
+                ))
             reset_count += int((terminated | truncated).sum().item())
             global_timestep += 1
         if not all(torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):
@@ -340,19 +398,30 @@ def _train(
             name: float(np.concatenate(values).mean())
             for name, values in reward_components.items()
         }
-        update_metrics = {
+        cumulative_elapsed = time.monotonic() - started
+        update_elapsed = time.monotonic() - update_started
+        update_transitions = config.rollouts * environment.config.num_envs
+        update_metrics: dict[str, Any] = {
             "update": float(update + 1),
-            "environment_transitions": float((update + 1) * config.rollouts * environment.config.num_envs),
+            "environment_transitions": float((update + 1) * update_transitions),
             "reward_mean": float(torch.cat(rewards).mean().item()),
             "action_abs_mean": float(torch.cat(action_magnitudes).mean().item()),
             "reset_count": float(reset_count),
             "completed_episode_count": float(len(completed_episode_returns)),
-            "elapsed_seconds": time.monotonic() - started,
+            "elapsed_seconds": cumulative_elapsed,
+            "update_elapsed_seconds": update_elapsed,
+            "update_environment_transitions_per_second": _transitions_per_second(
+                update_transitions, update_elapsed
+            ),
+            "cumulative_environment_transitions_per_second": _transitions_per_second(
+                (update + 1) * update_transitions, cumulative_elapsed
+            ),
             **component_means,
         }
         if completed_episode_returns:
             update_metrics["episode_return_mean"] = float(np.mean(completed_episode_returns))
-        updates.append(update_metrics)
+            update_metrics["episode_return_values"] = completed_episode_returns
+        updates.append(_public_update_metrics(update_metrics))
         if on_update is not None:
             on_update(update_metrics)
     return updates, global_timestep * environment.config.num_envs, time.monotonic() - started
@@ -475,12 +544,14 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     last_checkpoint = _last_checkpoint_path(output)
     metrics_path = output.with_suffix(".json")
     trace_path = output.with_suffix(".eval.npz")
+    episodes_path = _episode_records_path(output)
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
     artifacts = (
         checkpoint,
         _checkpoint_sidecar_path(checkpoint),
         metrics_path,
         trace_path,
+        episodes_path,
     )
     rerun_existing = [] if rerun_path is None else [
         rerun_path,
@@ -512,7 +583,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             contact_capacity=contact_capacity,
         ),
     )
-    ppo_config = ManoPPOConfig()
+    ppo_config = ManoPPOConfig(minibatch_size=budget.minibatch_size)
+    ppo_config.skrl_config(num_envs=budget.num_envs, device="cuda")
     runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config)
     if runtime.device != "cuda":
         raise RuntimeError(f"skrl runtime must train on CUDA, got {runtime.device!r}")
@@ -554,24 +626,34 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         )
         periodic_checkpoints: list[Path] = []
 
-        def on_update(update: dict[str, float]) -> None:
+        def on_update(update: dict[str, Any]) -> None:
             periodic_checkpoint = _maybe_save_periodic_checkpoint(
                 runtime, output, budget.checkpoint_interval_updates, update
             )
             if periodic_checkpoint is not None:
                 periodic_checkpoints.append(periodic_checkpoint)
+            print(json.dumps({"event": "training_update", "metrics": _public_update_metrics(update)}, sort_keys=True))
             if wandb_run is not None:
-                _log_wandb_update(wandb_run, update)
+                _log_wandb_update(wandb_run, wandb, update)
 
-        try:
-            updates, transitions, elapsed = _train(
-                runtime,
-                budget,
-                recorder,
-                on_update=on_update,
-            )
-        finally:
-            published_rerun = None if recorder is None else recorder.close()
+        episodes_path.parent.mkdir(parents=True, exist_ok=True)
+        with episodes_path.open("x", encoding="utf-8") as episode_file:
+            try:
+                updates, transitions, elapsed = _train(
+                    runtime,
+                    budget,
+                    recorder,
+                    on_update=on_update,
+                    on_completed_episodes=lambda record: _write_episode_record(episode_file, record),
+                )
+            finally:
+                published_rerun = None if recorder is None else recorder.close()
+        throughput = {
+            "environment_transitions": transitions,
+            "elapsed_seconds": elapsed,
+            "final_environment_transitions_per_second": _transitions_per_second(transitions, elapsed),
+        }
+        print(json.dumps({"event": "training_complete", "throughput": throughput}, sort_keys=True))
         rerun_artifact = None if published_rerun is None else str(published_rerun)
         final_update = {
             "update": float(len(updates)),
@@ -632,6 +714,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "warp_contact_capacity": contact_capacity,
             },
             "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},
+            "throughput": throughput,
             "device": device,
             "baseline": asdict(zero_baseline),
             "untrained": asdict(untrained),
@@ -651,6 +734,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "last_checkpoint": str(last_checkpoint),
                 "periodic_checkpoints": [str(path) for path in periodic_checkpoints],
                 "evaluation_trace": str(trace_path),
+                "episode_returns": str(episodes_path),
                 "rerun": rerun_artifact,
             },
         }
@@ -661,6 +745,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             acceptance_metrics = {
                 "global_step": transitions,
                 "transitions": transitions,
+                **throughput,
                 **{f"acceptance/{key}": value for key, value in result["acceptance"].items()},
             }
             wandb_run.log(acceptance_metrics, step=transitions)
@@ -672,6 +757,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 _checkpoint_sidecar_path(last_checkpoint),
                 metrics_path,
                 trace_path,
+                episodes_path,
             ]
             for periodic_checkpoint in periodic_checkpoints:
                 artifact_paths.extend(
@@ -689,6 +775,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--updates", type=int, default=64)
     parser.add_argument("--checkpoint-interval-updates", type=int)
     parser.add_argument("--num-envs", type=int, default=64)
+    parser.add_argument("--minibatch-size", type=int, default=ManoPPOConfig().minibatch_size)
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
@@ -707,6 +794,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
+    try:
+        ManoPPOConfig(minibatch_size=args.minibatch_size).skrl_config(num_envs=args.num_envs, device="cuda")
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.checkpoint_interval_updates is not None and args.checkpoint_interval_updates < 1:
         parser.error("checkpoint-interval-updates must be positive when provided")
     if args.wall_clock_seconds is not None and (
@@ -738,6 +829,7 @@ def main(argv: list[str] | None = None) -> int:
                 tags=_parse_wandb_tags(args.wandb_tags),
             ),
             args.checkpoint_interval_updates,
+            args.minibatch_size,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))

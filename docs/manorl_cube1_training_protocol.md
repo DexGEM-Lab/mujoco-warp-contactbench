@@ -106,6 +106,11 @@ To apply an opt-in time cap, add `--wall-clock-seconds <positive-seconds>`.
 The cap may stop the run before the fixed 64-update, 196,608-transition budget
 is complete.
 
+PPO uses a 1024-sample minibatch by default. `--minibatch-size 4096` selects
+the IsaacGym-sized minibatch for the 4096-world Server2 run; the selected value
+must divide the 48-rollout vector batch and is recorded in both metrics and
+native checkpoint runtime configuration.
+
 For the 2,500-update Server2 run, add `--checkpoint-interval-updates 100`.
 After every 100 completed PPO updates, the output-prefix namespace receives
 `<output>/checkpoint-000100.pt` and `<output>/checkpoint-000100.pt.json`.
@@ -147,12 +152,19 @@ for `total`, `distance_x`, `distance_y`, `distance_z`, `rotation`,
 `action_penalty`, `contact`, `object_stability`, `survival`, and
 `deviation_penalty`, alongside `reward_mean`. It also records
 `completed_episode_count` and, only when one or more episodes complete in that
-update, `episode_return_mean`. These target-native aggregates are semantically
-related to IsaacGym reward telemetry, but their logger key names are not an
-identity contract. It writes the zero/untrained/trained evaluation summaries and final acceptance values, then
-uploads the native checkpoint and sidecar, metrics JSON, evaluation trace, and a
-completed Rerun recording when one exists. An enabled run fails on W&B
-initialization or logging errors; cleanup failures do not mask a training error.
+update, `episode_return_mean`. It also records instantaneous and cumulative
+environment transitions per second for each PPO update, plus final throughput.
+Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
+record with parallel `env_ids` and exact `returns` arrays to stdout and
+`<output>.episodes.jsonl`; this JSONL is the complete per-episode evidence while
+W&B receives one update-level return histogram rather than a log call for every
+episode. W&B artifacts include that episode JSONL alongside the checkpoint and
+sidecar, metrics JSON, evaluation trace, and a completed Rerun recording when
+one exists. These target-native aggregates are semantically related to IsaacGym
+reward telemetry, but their logger key names are not an identity contract. It
+writes the zero/untrained/trained evaluation summaries and final acceptance
+values, then uploads those artifacts. An enabled run fails on W&B initialization
+or logging errors; cleanup failures do not mask a training error.
 
 To record one actual training world without changing PPO actions, rollout
 memory, or updates, add a Rerun output path. `--rerun-stride 4` records env 0
