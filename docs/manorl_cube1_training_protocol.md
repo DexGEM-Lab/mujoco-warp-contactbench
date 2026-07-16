@@ -78,9 +78,22 @@ and does not reset before that zero-reference call count. Completing all 791 cal
 reported as a stretch result, not silently assumed. The reference baseline is a
 controller diagnostic, not a learned-policy comparator.
 
-The trained row is always evaluated from a fresh runtime after loading the
-native checkpoint. It is the executable artifact a user receives, and avoids
-reporting train-process-only normalizer or BatchNorm state. Native checkpoint sidecars must declare both
+Evaluation uses `min(--num-envs, 128)` worlds by default; pass
+`--evaluation-num-envs <count>` to override that bounded count only within
+`1..min(--num-envs, 128)`. This prevents a requested evaluation from recreating
+a second full-size training runtime. The zero, untrained, and trained rows all
+use the same evaluation trajectory prefix.
+Their evaluation-only PPO configuration selects the largest divisor shared by
+the training minibatch and evaluation rollout batch, while the training PPO
+configuration and update semantics remain unchanged. The initial training
+policy, value, optimizer, and normalizer state is written to an owned temporary
+native checkpoint, loaded for the untrained row, then loaded again immediately
+before training. That temporary checkpoint and sidecar are removed after the
+boundary completes, and the initial bounded runtime is released before
+training begins. The trained row is always evaluated from a fresh bounded
+runtime after loading the final native checkpoint. It is the executable artifact
+a user receives, and avoids reporting train-process-only normalizer or BatchNorm
+state. Native checkpoint sidecars must declare both
 `reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2` and
 `ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`.
 Missing or mismatched contracts fail before resume rather than silently changing
@@ -168,7 +181,9 @@ sidecar, metrics JSON, evaluation trace, and a completed Rerun recording when
 one exists. These target-native aggregates are semantically related to IsaacGym
 reward telemetry, but their logger key names are not an identity contract. It
 writes the zero/untrained/trained evaluation summaries and final acceptance
-values, then uploads those artifacts. An enabled run fails on W&B initialization
+values, preserving `evaluation/policy/*` as the untrained and trained policy
+comparison time series for existing dashboards, then uploads those artifacts.
+An enabled run fails on W&B initialization
 or logging errors; cleanup failures do not mask a training error.
 
 To record one actual training world without changing PPO actions, rollout

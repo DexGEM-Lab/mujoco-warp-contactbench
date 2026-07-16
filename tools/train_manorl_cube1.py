@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import gc
 import json
 import math
 import os
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
 from uuid import uuid4
@@ -70,10 +71,19 @@ class TrainingBudget:
     wandb: WandbOptions = WandbOptions()
     checkpoint_interval_updates: int | None = None
     minibatch_size: int = ManoPPOConfig().minibatch_size
+    evaluation_num_envs: int | None = None
 
     @property
     def transitions(self) -> int:
         return self.num_envs * ManoPPOConfig().rollouts * self.updates
+
+    @property
+    def resolved_evaluation_num_envs(self) -> int:
+        maximum = min(self.num_envs, 128)
+        num_envs = self.evaluation_num_envs if self.evaluation_num_envs is not None else maximum
+        if not 1 <= num_envs <= maximum:
+            raise ValueError(f"evaluation_num_envs must be within 1..{maximum}")
+        return num_envs
 
 
 @dataclass(frozen=True)
@@ -107,11 +117,18 @@ def _wandb_config(
     budget: TrainingBudget,
     ppo_config: ManoPPOConfig,
     trajectory_assignments: list[dict[str, object]],
+    evaluation_ppo_config: ManoPPOConfig,
+    evaluation_trajectory_assignments: list[dict[str, object]],
     device: dict[str, object],
 ) -> dict[str, object]:
     config = {
         "training_budget": {**asdict(budget), "planned_transitions": budget.transitions},
         "ppo_config": asdict(ppo_config),
+        "evaluation": {
+            "num_envs": budget.resolved_evaluation_num_envs,
+            "ppo_config": asdict(evaluation_ppo_config),
+            "trajectory_assignments": evaluation_trajectory_assignments,
+        },
         "reward": {
             "environment_contract": REWARD_CONTRACT_ID,
             "ppo_contract": PPO_REWARD_CONTRACT_ID,
@@ -203,7 +220,13 @@ def _evaluation_metrics(result: EvaluationResult) -> dict[str, object]:
 def _log_wandb_evaluations(run: Any, results: list[EvaluationResult], *, transitions: int) -> None:
     metrics: dict[str, object] = {"global_step": transitions, "transitions": transitions}
     for result in results:
-        metrics.update(_evaluation_metrics(result))
+        result_metrics = _evaluation_metrics(result)
+        metrics.update(result_metrics)
+        if result.mode in {"untrained", "trained"}:
+            metrics.update({
+                key.replace(f"evaluation/{result.mode}/", "evaluation/policy/"): value
+                for key, value in result_metrics.items()
+            })
     run.log(metrics, step=transitions)
     run.summary.update(metrics)
 
@@ -276,7 +299,7 @@ def _assert_cuda_runtime() -> None:
         raise RuntimeError("CUDA-capable target Torch is required for fast ManoRL training")
 
 
-def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "policy"]) -> EvaluationResult:
+def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trained"]) -> EvaluationResult:
     environment = runtime.gymnasium_env.environment
     # ``deterministic_actions`` only selects the Gaussian mean. PointNet/FiLM
     # still contains BatchNorm, so evaluation must also switch skrl modules to
@@ -469,6 +492,74 @@ def _temporary_checkpoint_path(checkpoint: Path) -> Path:
     return checkpoint.with_name(f".{checkpoint.name}.{uuid4().hex}.tmp")
 
 
+@contextmanager
+def _owned_initial_checkpoint(output: Path) -> Iterator[Path]:
+    """Reserve an output-owned native checkpoint for the initial-state boundary."""
+
+    output.mkdir(parents=True, exist_ok=True)
+    for _ in range(16):
+        checkpoint = output / f".initial-{uuid4().hex}.pt"
+        try:
+            checkpoint.touch(exist_ok=False)
+        except FileExistsError:
+            continue
+        sidecar = _checkpoint_sidecar_path(checkpoint)
+        if sidecar.exists():
+            checkpoint.unlink()
+            continue
+        try:
+            yield checkpoint
+        finally:
+            checkpoint.unlink(missing_ok=True)
+            sidecar.unlink(missing_ok=True)
+        return
+    raise RuntimeError("could not reserve a unique initial checkpoint path")
+
+
+def _evaluation_ppo_config(training_config: ManoPPOConfig, *, num_envs: int) -> ManoPPOConfig:
+    """Use the largest training-compatible minibatch that divides the evaluation batch."""
+
+    batch_size = training_config.rollouts * num_envs
+    minibatch_size = math.gcd(training_config.minibatch_size, batch_size)
+    if minibatch_size < 1:
+        raise ValueError("evaluation PPO minibatch has no valid divisor")
+    config = replace(training_config, minibatch_size=minibatch_size)
+    config.skrl_config(num_envs=num_envs, device="cuda")
+    return config
+
+
+def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
+    return [
+        {
+            "env_id": env_id,
+            "identity": item.identity.identity,
+            "row_index": item.identity.row_index,
+            "uuid": item.identity.uuid,
+            "source_slice": [item.identity.source_start, item.identity.source_stop],
+        }
+        for env_id, item in enumerate(trajectories.trajectories)
+    ]
+
+
+def _build_evaluation_runtime(
+    *, selection: TrajectorySelection, budget: TrainingBudget, training_config: ManoPPOConfig
+) -> tuple[ManoSkrlRuntime, ManoPPOConfig, list[dict[str, object]]]:
+    num_envs = budget.resolved_evaluation_num_envs
+    trajectories = load_assigned_trajectory_batch(selection, num_envs=num_envs)
+    physical = MujocoManoEnvironment(
+        trajectories,
+        EnvironmentConfig(
+            num_envs=num_envs,
+            device="gpu",
+            residual_enabled=budget.residual_enabled,
+            max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
+            contact_capacity=max(128, WARP_BROADPHASE_CONTACTS_PER_WORLD * num_envs + WARP_CONTACT_CAPACITY_MARGIN),
+        ),
+    )
+    ppo_config = _evaluation_ppo_config(training_config, num_envs=num_envs)
+    return ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config), ppo_config, _trajectory_assignments(trajectories)
+
+
 def _save_checkpoint_atomically(
     agent: Any, checkpoint: Path, *, runtime_config: dict[str, object]
 ) -> Path:
@@ -606,16 +697,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config)
     if runtime.device != "cuda":
         raise RuntimeError(f"skrl runtime must train on CUDA, got {runtime.device!r}")
-    trajectory_assignments = [
-        {
-            "env_id": env_id,
-            "identity": item.identity.identity,
-            "row_index": item.identity.row_index,
-            "uuid": item.identity.uuid,
-            "source_slice": [item.identity.source_start, item.identity.source_stop],
-        }
-        for env_id, item in enumerate(trajectories.trajectories)
-    ]
+    trajectory_assignments = _trajectory_assignments(trajectories)
+    evaluation_runtime, evaluation_ppo_config, evaluation_trajectory_assignments = _build_evaluation_runtime(
+        selection=selection, budget=budget, training_config=ppo_config
+    )
     device = {
         "torch": torch.__version__,
         "torch_cuda": torch.version.cuda,
@@ -626,6 +711,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         budget=budget,
         ppo_config=ppo_config,
         trajectory_assignments=trajectory_assignments,
+        evaluation_ppo_config=evaluation_ppo_config,
+        evaluation_trajectory_assignments=evaluation_trajectory_assignments,
         device=device,
     )
     with _wandb_run(output=output, budget=budget, config=wandb_config) as (wandb_run, wandb):
@@ -633,8 +720,25 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         # Updating PPO on their zero reward signal moves the shared actor/critic
         # representation before the policy has any controllable consequence.
         runtime.agent.cfg.learning_starts = physical.contact_start_frame
-        zero_baseline = _evaluate(runtime, "zero")
-        untrained = _evaluate(runtime, "policy")
+        with _owned_initial_checkpoint(output) as initial_checkpoint:
+            _save_checkpoint_atomically(
+                runtime.agent,
+                initial_checkpoint,
+                runtime_config=_checkpoint_runtime_config(
+                    runtime, {"update": 0.0, "environment_transitions": 0.0}
+                ),
+            )
+            load_skrl_checkpoint(evaluation_runtime.agent, initial_checkpoint)
+            zero_baseline = _evaluate(evaluation_runtime, "zero")
+            untrained = _evaluate(evaluation_runtime, "untrained")
+            # Make the checkpoint boundary executable: PPO starts from exactly
+            # the native policy, value, optimizer, and normalizer state reported
+            # by the untrained comparison, independent of RNG construction.
+            load_skrl_checkpoint(runtime.agent, initial_checkpoint)
+        # Free the initial bounded physical runtime before training. The final
+        # checkpoint evaluation constructs its own fresh bounded runtime later.
+        del evaluation_runtime
+        gc.collect()
         if wandb_run is not None:
             _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], transitions=0)
         recorder = (
@@ -684,19 +788,13 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         # Evaluate exactly what a user will later load. skrl preprocessor/module
         # state may differ in-process after PPO training, so a fresh native load is
         # the reproducibility boundary rather than an implementation detail.
-        evaluation_physical = MujocoManoEnvironment(
-            trajectories,
-            EnvironmentConfig(
-                num_envs=budget.num_envs,
-                device="gpu",
-                residual_enabled=budget.residual_enabled,
-                max_deviation_distance=0.1 if budget.terminal else 1_000_000.0,
-                contact_capacity=contact_capacity,
-            ),
+        evaluation_runtime, _, final_evaluation_trajectory_assignments = _build_evaluation_runtime(
+            selection=selection, budget=budget, training_config=ppo_config
         )
-        evaluation_runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(evaluation_physical), ppo_config)
+        if final_evaluation_trajectory_assignments != evaluation_trajectory_assignments:
+            raise RuntimeError("evaluation trajectory assignments changed during training")
         load_skrl_checkpoint(evaluation_runtime.agent, checkpoint)
-        trained = _evaluate(evaluation_runtime, "policy")
+        trained = _evaluate(evaluation_runtime, "trained")
         np.savez_compressed(
             trace_path,
             zero_reward=np.asarray(zero_baseline.rewards_by_call, dtype=np.float32),
@@ -712,6 +810,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "object": selection.object_type,
                 "gesture": selection.action_id,
                 "assignments": trajectory_assignments,
+                "evaluation_assignments": evaluation_trajectory_assignments,
             },
             "checkpoint_conversion": "out_of_scope",
             "initialization": {
@@ -730,6 +829,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 **asdict(budget),
                 "planned_transitions": budget.transitions,
                 "warp_contact_capacity": contact_capacity,
+                "evaluation_num_envs": budget.resolved_evaluation_num_envs,
+                "evaluation_ppo_config": asdict(evaluation_ppo_config),
             },
             "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},
             "throughput": throughput,
@@ -793,6 +894,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--updates", type=int, default=64)
     parser.add_argument("--checkpoint-interval-updates", type=int)
     parser.add_argument("--num-envs", type=int, default=64)
+    parser.add_argument("--evaluation-num-envs", type=int)
     parser.add_argument("--minibatch-size", type=int, default=ManoPPOConfig().minibatch_size)
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
@@ -812,6 +914,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
+    evaluation_num_envs_maximum = min(args.num_envs, 128)
+    if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
+        parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")
     try:
         ManoPPOConfig(minibatch_size=args.minibatch_size).skrl_config(num_envs=args.num_envs, device="cuda")
     except ValueError as exc:
@@ -848,6 +953,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             args.checkpoint_interval_updates,
             args.minibatch_size,
+            args.evaluation_num_envs,
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
