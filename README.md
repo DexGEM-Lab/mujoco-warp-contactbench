@@ -37,6 +37,18 @@ assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ ead79126589
 3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
 ```
 
+The `assets/mano_hand_s02` and `assets/all_assets` submodules track the
+upstream `main` branch for explicit remote updates. The commits shown above
+remain the root repository's gitlink pins; changing an upstream branch does
+not change this checkout until the updated gitlink is committed here. To
+intentionally advance a tracked asset, run for example:
+
+```bash
+git submodule update --remote assets/all_assets
+git add .gitmodules assets/all_assets
+git commit -m "Update all_assets submodule"
+```
+
 `assets/all_assets` is the complete, large source asset checkout. The curated
 files under `sim/manorl/runtime_assets/` remain the runtime inputs. When a local
 checkout of `all_assets` already has the pinned objects, it can be used as a
