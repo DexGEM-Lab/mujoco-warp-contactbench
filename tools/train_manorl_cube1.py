@@ -87,6 +87,7 @@ class TrainingBudget:
     viewer_envs: int = 1
     viewer_stride: int = 1
     console_format: Literal["human", "json"] = "human"
+    device_resident_controls: bool = False
 
     @property
     def transitions(self) -> int:
@@ -484,13 +485,20 @@ def _train(
             rewards.append(reward.detach())
             action_magnitudes.append(actions.detach().abs())
             diagnostics = environment.last_reward
-            snapshot = environment.last_transition
-            if diagnostics is None or snapshot is None:
-                raise RuntimeError("environment omitted reward diagnostics or transition snapshot during training")
+            termination = getattr(environment, "last_termination", None)
+            if diagnostics is None:
+                raise RuntimeError("environment omitted reward diagnostics during training")
+            if termination is None:
+                snapshot = environment.last_transition
+                if snapshot is None:
+                    raise RuntimeError("environment omitted termination state during training")
+                termination = snapshot.termination
+                episode_returns = np.asarray(snapshot.episode_return, dtype=np.float64)
+            else:
+                episode_returns = np.asarray(environment.episode_returns, dtype=np.float64)
             for name in REWARD_UPDATE_COMPONENTS:
                 reward_components[name].append(np.asarray(getattr(diagnostics, name), dtype=np.float64))
-            completed = np.asarray(snapshot.termination.reset, dtype=bool)
-            episode_returns = np.asarray(snapshot.episode_return, dtype=np.float64)
+            completed = np.asarray(termination.reset, dtype=bool)
             completed_episode_returns.extend(episode_returns[completed].tolist())
             if completed.any() and on_completed_episodes is not None:
                 on_completed_episodes(_completed_episode_record(
@@ -739,6 +747,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     _assert_cuda_runtime()
     if output.suffix:
         raise ValueError("--output must be a prefix without a suffix")
+    if budget.device_resident_controls and (budget.rerun_output is not None or not budget.headless):
+        raise ValueError("device-resident-controls requires headless training without Rerun transition recording")
     output = output.resolve()
     checkpoint = output.with_suffix(".pt")
     last_checkpoint = _last_checkpoint_path(output)
@@ -783,6 +793,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             residual_enabled=budget.residual_enabled,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
             contact_capacity=contact_capacity,
+            device_resident_controls=budget.device_resident_controls,
+            capture_transition_diagnostics=not budget.device_resident_controls,
         ),
     )
     ppo_config = ManoPPOConfig(minibatch_size=budget.minibatch_size)
@@ -1029,6 +1041,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--viewer-envs", type=int, default=1, help="number of training worlds to tile when headless=false")
     parser.add_argument("--viewer-stride", type=int, default=1, help="render every N completed vector steps when headless=false")
     parser.add_argument("--console-format", choices=("human", "json"), default="human")
+    parser.add_argument(
+        "--device-resident-controls",
+        type=parse_cli_bool,
+        default=False,
+        metavar="{true,false}",
+        help="keep controller targets and delayed reset writes on the MJX device; disables transition snapshots",
+    )
     parser.add_argument("--wandb", type=parse_cli_bool, default=False, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
@@ -1086,6 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
             args.viewer_envs,
             args.viewer_stride,
             args.console_format,
+            args.device_resident_controls,
         ),
     )
     if args.console_format == "json":
