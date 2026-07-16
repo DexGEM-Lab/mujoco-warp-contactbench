@@ -20,15 +20,19 @@ than being simulated using cube geometry.
   observation, and termination evidence. Its source reward fields are
   reference-only: the fixture lacks pair-filtered hand-object forces and cannot
   establish reward equality.
-- Training uses target reward contract `target_hand_object_contact_v1`: expected
+- Training uses target reward contract
+  `target_hand_object_contact_no_action_deviation_penalty_v2`: expected
   hand-object contacts receive weighted proportional credit only when their
   pair-filtered world-force norm is strictly greater than `1.0 N`. The unchanged
-  observation contact encoding uses its separate `2.0 N` threshold.
+  observation contact encoding uses its separate `2.0 N` threshold. Action and
+  one-shot deviation-failure penalties default to zero while deviation still
+  terminates at `0.1 m`.
 - PPO optimizes that environment reward at raw `1.0x` under
-  `target_hand_object_contact_v1_raw_ppo_reward_1x_v1`; no skrl reward shaper
-  is configured. This intentionally diverges from the sibling IsaacGym setup's
-  fixed `0.5x` shaper. Native checkpoints from that legacy objective are
-  rejected before load.
+  `target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`;
+  no skrl reward shaper is configured. This intentionally diverges from the
+  sibling IsaacGym setup's fixed `0.5x` shaper. Existing v1 checkpoints remain
+  valid for inference-only visualization, but strict training resume rejects
+  their retired objective contracts.
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
@@ -77,10 +81,11 @@ controller diagnostic, not a learned-policy comparator.
 The trained row is always evaluated from a fresh runtime after loading the
 native checkpoint. It is the executable artifact a user receives, and avoids
 reporting train-process-only normalizer or BatchNorm state. Native checkpoint sidecars must declare both
-`reward_contract: target_hand_object_contact_v1` and
-`ppo_reward_contract: target_hand_object_contact_v1_raw_ppo_reward_1x_v1`.
+`reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2` and
+`ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`.
 Missing or mismatched contracts fail before resume rather than silently changing
-the training objective.
+the training objective. Existing v1 sidecars are accepted only by the
+inference-only loader used for visualization, not by strict resume loading.
 
 ## Launch
 
