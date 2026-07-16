@@ -44,6 +44,14 @@ REWARD_UPDATE_COMPONENTS = (
     "survival",
     "deviation_penalty",
 )
+SKRL_TRACKING_METRICS = (
+    ("Loss / Policy loss", "losses/a_loss"),
+    ("Loss / Value loss", "losses/c_loss"),
+    ("Loss / Entropy loss", "losses/entropy"),
+    ("Learning / Learning rate", "info/last_lr"),
+    ("Policy / Standard deviation", "info/policy_std"),
+    ("Stats / Algorithm update time (ms)", "performance/algorithm_update_time_ms"),
+)
 
 
 @dataclass(frozen=True)
@@ -229,8 +237,40 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
         ],
     }
     metrics.update({name: update[name] for name in REWARD_UPDATE_COMPONENTS})
+    metrics.update({
+        name: update[name]
+        for name in (
+            "performance/total_fps",
+            "performance/step_fps",
+            "performance/update_time",
+            "performance/algorithm_update_time_ms",
+            "losses/a_loss",
+            "losses/c_loss",
+            "losses/entropy",
+            "info/last_lr",
+            "info/policy_std",
+            "rewards/frame",
+            "rewards/iter",
+        )
+        if name in update
+    })
     if "episode_return_mean" in update:
+        # ``total`` above is the rollout-batch reward mean.  Keep that
+        # historical key, and expose the completed-episode cumulative total
+        # under an explicit namespace so the two quantities cannot be
+        # confused in W&B.
+        episode_total_mean = update.get("episode_total_mean")
+        if episode_total_mean is None:
+            episode_total_mean = update["episode_return_mean"]
         metrics["episode_return_mean"] = update["episode_return_mean"]
+        metrics["episode_reward"] = episode_total_mean
+        metrics["episode_cumulative/total"] = episode_total_mean
+        metrics["episode_cumulative/episode_reward"] = episode_total_mean
+        metrics["episode_cumulative/total_mean"] = episode_total_mean
+        if "episode_total_min" in update:
+            metrics["episode_cumulative/total_min"] = update["episode_total_min"]
+        if "episode_total_max" in update:
+            metrics["episode_cumulative/total_max"] = update["episode_total_max"]
         metrics["episode_return_distribution"] = wandb.Histogram(update["episode_return_values"])
     run.log(metrics, step=transitions)
 
@@ -287,6 +327,20 @@ def _transitions_per_second(transitions: int, elapsed_seconds: float) -> float:
     return float(transitions / elapsed_seconds) if elapsed_seconds > 0.0 else 0.0
 
 
+def _latest_skrl_tracking_metrics(agent: Any) -> dict[str, float]:
+    """Read the latest native skrl scalars without inventing missing values."""
+
+    tracking_data = getattr(agent, "tracking_data", None)
+    if tracking_data is None:
+        return {}
+    metrics: dict[str, float] = {}
+    for source_name, metric_name in SKRL_TRACKING_METRICS:
+        values = tracking_data.get(source_name)
+        if values:
+            metrics[metric_name] = float(values[-1])
+    return metrics
+
+
 def _public_update_metrics(update: dict[str, Any]) -> dict[str, Any]:
     """Exclude in-memory W&B histogram samples from persisted update metrics."""
 
@@ -334,8 +388,19 @@ def _format_completed_episode_record(record: dict[str, object]) -> str:
 
 def _format_training_update(update: dict[str, Any]) -> str:
     episode = ""
-    if "episode_return_mean" in update:
-        episode = f" episodes={int(update['completed_episode_count'])} return_mean={update['episode_return_mean']:.4f}"
+    if "episode_return_mean" in update or "episode_total_mean" in update:
+        episode_total_mean = update.get("episode_total_mean")
+        if episode_total_mean is None:
+            episode_total_mean = update["episode_return_mean"]
+        episode = (
+            f" episodes={int(update['completed_episode_count'])}"
+            f" episode_total_mean={episode_total_mean:.4f}"
+        )
+        if "episode_total_min" in update and "episode_total_max" in update:
+            episode += (
+                f" episode_total_min={update['episode_total_min']:.4f}"
+                f" episode_total_max={update['episode_total_max']:.4f}"
+            )
     return (
         f"update={int(update['update'])} transitions={int(update['environment_transitions'])} "
         f"reward={update['reward_mean']:.4f} contact={update['contact']:.4f} "
@@ -521,10 +586,11 @@ def _train(
         cumulative_elapsed = update_finished - started
         update_elapsed = update_finished - update_started
         update_transitions = config.rollouts * environment.config.num_envs
+        reward_mean = float(torch.cat(rewards).mean().item())
         update_metrics: dict[str, Any] = {
             "update": float(update + 1),
             "environment_transitions": float((update + 1) * update_transitions),
-            "reward_mean": float(torch.cat(rewards).mean().item()),
+            "reward_mean": reward_mean,
             "action_abs_mean": float(torch.cat(action_magnitudes).mean().item()),
             "reset_count": float(reset_count),
             "completed_episode_count": float(len(completed_episode_returns)),
@@ -536,10 +602,25 @@ def _train(
             "cumulative_environment_transitions_per_second": _transitions_per_second(
                 (update + 1) * update_transitions, cumulative_elapsed
             ),
+            "performance/total_fps": _transitions_per_second(
+                (update + 1) * update_transitions, cumulative_elapsed
+            ),
+            "performance/step_fps": _transitions_per_second(update_transitions, update_elapsed),
+            "performance/update_time": update_elapsed,
+            # Gym's frame/iteration reward aliases both represent the mean
+            # reward over this completed rollout batch in the skrl runtime.
+            "rewards/frame": reward_mean,
+            "rewards/iter": reward_mean,
             **component_means,
         }
+        update_metrics.update(_latest_skrl_tracking_metrics(runtime.agent))
         if completed_episode_returns:
-            update_metrics["episode_return_mean"] = float(np.mean(completed_episode_returns))
+            episode_return_array = np.asarray(completed_episode_returns, dtype=np.float64)
+            episode_total_mean = float(np.mean(episode_return_array))
+            update_metrics["episode_return_mean"] = episode_total_mean
+            update_metrics["episode_total_mean"] = episode_total_mean
+            update_metrics["episode_total_min"] = float(np.min(episode_return_array))
+            update_metrics["episode_total_max"] = float(np.max(episode_return_array))
             # One update retains at most one rollout batch: 48 * 4096 = 196,608
             # values for the target Server2 scale, then this list is discarded.
             update_metrics["episode_return_values"] = completed_episode_returns

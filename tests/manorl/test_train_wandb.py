@@ -229,6 +229,11 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "elapsed_seconds": 1.5,
         "update_environment_transitions_per_second": 2048.0,
         "cumulative_environment_transitions_per_second": 2048.0,
+        "performance/total_fps": 2048.0,
+        "performance/step_fps": 2048.0,
+        "performance/update_time": 1.0,
+        "rewards/frame": 1.0,
+        "rewards/iter": 1.0,
     })
     tool._log_wandb_update(run, wandb, {
         "update": 2.0,
@@ -238,6 +243,9 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "reset_count": 4.0,
         "completed_episode_count": 1.0,
         "episode_return_mean": 12.5,
+        "episode_total_mean": 12.5,
+        "episode_total_min": 9.0,
+        "episode_total_max": 16.0,
         "episode_return_values": [9.0, 16.0],
         "total": 2.0,
         "distance_x": 0.2,
@@ -252,15 +260,55 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "elapsed_seconds": 3.0,
         "update_environment_transitions_per_second": 2048.0,
         "cumulative_environment_transitions_per_second": 2048.0,
+        "performance/total_fps": 2048.0,
+        "performance/step_fps": 2048.0,
+        "performance/update_time": 1.5,
+        "performance/algorithm_update_time_ms": 42.0,
+        "rewards/frame": 2.0,
+        "rewards/iter": 2.0,
+        "losses/a_loss": 0.25,
+        "losses/c_loss": 0.5,
+        "losses/entropy": -0.01,
+        "info/last_lr": 0.0003,
+        "info/policy_std": 0.8,
     })
 
     assert [step for _, step in run.logs] == [3072, 6144]
     assert [metrics["transitions"] for metrics, _ in run.logs] == [3072, 6144]
-    assert all({"reward_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "total", "distance_x", "distance_y", "distance_z", "rotation", "action_penalty", "contact", "object_stability", "survival", "deviation_penalty", "update_environment_transitions_per_second", "cumulative_environment_transitions_per_second"} <= metrics.keys()
+    assert all({"reward_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "total", "distance_x", "distance_y", "distance_z", "rotation", "action_penalty", "contact", "object_stability", "survival", "deviation_penalty", "update_environment_transitions_per_second", "cumulative_environment_transitions_per_second", "performance/total_fps", "performance/step_fps", "performance/update_time", "rewards/frame", "rewards/iter"} <= metrics.keys()
                for metrics, _ in run.logs)
     assert "episode_return_mean" not in run.logs[0][0]
+    assert not any(name.startswith("episode_cumulative/") for name in run.logs[0][0])
     assert run.logs[1][0]["episode_return_mean"] == 12.5
+    assert run.logs[1][0]["episode_reward"] == 12.5
+    assert run.logs[1][0]["episode_cumulative/total"] == 12.5
+    assert run.logs[1][0]["episode_cumulative/episode_reward"] == 12.5
+    assert run.logs[1][0]["episode_cumulative/total_mean"] == 12.5
+    assert run.logs[1][0]["episode_cumulative/total_min"] == 9.0
+    assert run.logs[1][0]["episode_cumulative/total_max"] == 16.0
     assert run.logs[1][0]["episode_return_distribution"] == ("histogram", [9.0, 16.0])
+    assert run.logs[1][0]["losses/a_loss"] == 0.25
+    assert run.logs[1][0]["losses/c_loss"] == 0.5
+    assert run.logs[1][0]["losses/entropy"] == -0.01
+    assert run.logs[1][0]["info/last_lr"] == 0.0003
+    assert run.logs[1][0]["info/policy_std"] == 0.8
+    assert run.logs[1][0]["performance/algorithm_update_time_ms"] == 42.0
+
+
+def test_latest_skrl_tracking_metrics_maps_only_available_latest_values() -> None:
+    tool = _load_tool()
+    agent = SimpleNamespace(tracking_data={
+        "Loss / Policy loss": [1.0, 0.25],
+        "Loss / Value loss": [0.5],
+        "Learning / Learning rate": [0.0003],
+        "Unknown / Value": [99.0],
+    })
+
+    assert tool._latest_skrl_tracking_metrics(agent) == {
+        "losses/a_loss": 0.25,
+        "losses/c_loss": 0.5,
+        "info/last_lr": 0.0003,
+    }
 
 
 def test_wandb_evaluation_summaries_preserve_policy_alias_for_both_comparisons() -> None:

@@ -156,6 +156,9 @@ def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.
     assert [update["cumulative_environment_transitions_per_second"] for update in updates] == [48.0 / 14.0, 96.0 / 20.0]
     assert [update["completed_episode_count"] for update in updates] == [1.0, 1.0]
     assert [update["episode_return_mean"] for update in updates] == [48.0, 96.0]
+    assert [update["episode_total_mean"] for update in updates] == [48.0, 96.0]
+    assert [update["episode_total_min"] for update in updates] == [48.0, 96.0]
+    assert [update["episode_total_max"] for update in updates] == [48.0, 96.0]
     assert all(update["reward_mean"] == update["total"] == 1.0 for update in updates)
     assert all(np.isclose(update["distance_x"], 0.1) and update["action_penalty"] == 0.0 for update in updates)
     assert elapsed == 27.0
@@ -219,6 +222,23 @@ def test_console_formatters_keep_human_returns_compact_and_json_compatible(
     tool._emit_console("json", "training_complete", {"throughput": throughput})
     assert json.loads(capsys.readouterr().out) == {"event": "training_complete", "throughput": throughput}
 
+    training_summary = tool._format_training_update({
+        "update": 1.0,
+        "environment_transitions": 48.0,
+        "reward_mean": 0.5,
+        "contact": 0.25,
+        "reset_count": 1.0,
+        "update_environment_transitions_per_second": 48.0,
+        "elapsed_seconds": 1.0,
+        "completed_episode_count": 2.0,
+        "episode_total_mean": 3.0,
+        "episode_total_min": -1.0,
+        "episode_total_max": 7.0,
+    })
+    assert "episode_total_mean=3.0000" in training_summary
+    assert "episode_total_min=-1.0000" in training_summary
+    assert "episode_total_max=7.0000" in training_summary
+
 
 def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
@@ -231,6 +251,9 @@ def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: 
 
     assert updates[0]["completed_episode_count"] == 0.0
     assert "episode_return_mean" not in updates[0]
+    assert "episode_total_mean" not in updates[0]
+    assert "episode_total_min" not in updates[0]
+    assert "episode_total_max" not in updates[0]
 
 
 def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,6 +287,9 @@ def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.M
     assert transitions == 4
     assert updates[0]["completed_episode_count"] == 2.0
     assert updates[0]["episode_return_mean"] == -0.75
+    assert updates[0]["episode_total_mean"] == -0.75
+    assert updates[0]["episode_total_min"] == -4.0
+    assert updates[0]["episode_total_max"] == 2.5
     assert "episode_return_values" not in updates[0]
     assert records == [{
         "schema": "manorl.completed_episode_returns.v1", "update": 1, "update_step": 1,
