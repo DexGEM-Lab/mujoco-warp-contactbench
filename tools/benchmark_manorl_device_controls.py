@@ -11,6 +11,7 @@ Example (use an idle GPU only):
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import random
 import sys
@@ -73,7 +74,7 @@ def _run_mode(
         resets += int(reset.sum())
     environment.jax.block_until_ready(environment.data.qpos)
     elapsed = time.perf_counter() - started
-    return {
+    result = {
         "mode": _mode_name(
             device_resident_controls=device_resident_controls,
             capture_transition_diagnostics=capture_transition_diagnostics,
@@ -92,6 +93,13 @@ def _run_mode(
         "transition_diagnostics": environment.last_transition is not None,
         "phase_profile": environment.phase_profile() if args.profile_phases else {},
     }
+    # Each mode creates a large batched Warp state. Release it before the next
+    # mode so repeated ablations do not accumulate JAX executables/buffers.
+    jax = environment.jax
+    del environment, trajectories, actions
+    gc.collect()
+    jax.clear_caches()
+    return result
 
 
 def main() -> int:
