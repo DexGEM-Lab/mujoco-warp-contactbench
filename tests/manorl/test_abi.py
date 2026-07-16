@@ -96,7 +96,7 @@ def test_early_phase_uses_per_environment_starts() -> None:
 
 def test_termination_uses_strict_target_threshold_and_early_suppression() -> None:
     outcome = check_termination(
-        object_position=np.array([[0.0, 0.0, 0.0], [0.150001, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        object_position=np.array([[0.0, 0.0, 0.0], [0.100001, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         target_position=np.zeros((3, 3)),
         progress=np.array([4, 0, 9]),
         trajectory_lengths=np.array([5, 20, 10]),
@@ -106,7 +106,7 @@ def test_termination_uses_strict_target_threshold_and_early_suppression() -> Non
     np.testing.assert_array_equal(outcome.deviation_reset, [False, False, False])
     np.testing.assert_array_equal(outcome.deviation_penalty, [0.0, 0.0, 0.0])
     strict_boundary = check_termination(
-        object_position=np.array([[0.15, 0.0, 0.0], [0.150001, 0.0, 0.0], [0.150001, 0.0, 0.0]]),
+        object_position=np.array([[0.10, 0.0, 0.0], [0.100001, 0.0, 0.0], [0.100001, 0.0, 0.0]]),
         target_position=np.zeros((3, 3)),
         progress=np.zeros(3, dtype=np.int64),
         trajectory_lengths=np.full(3, 10, dtype=np.int64),

@@ -26,7 +26,7 @@ than being simulated using cube geometry.
   pair-filtered world-force norm is strictly greater than `1.0 N`. The unchanged
   observation contact encoding uses its separate `2.0 N` threshold. Action and
   one-shot deviation-failure penalties default to zero while deviation still
-  terminates at the target training threshold `0.15 m`.
+  terminates at the target training threshold `0.10 m`.
 - PPO optimizes that environment reward at raw `1.0x` under
   `target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`;
   no skrl reward shaper is configured. This intentionally diverges from the
@@ -39,7 +39,7 @@ than being simulated using cube geometry.
 - Training defaults to `--use_residual true` and `--terminal true`. Pass
   `--use_residual false` only for source-reference diagnostics, or
   `--terminal false` for formal source-horizon termination. Target training uses
-  the current-source early phase of 100 steps and the target `0.15 m` deviation threshold.
+  the current-source early phase of 100 steps and the target `0.10 m` deviation threshold.
   Its normalized `[-1, 1]^26` action Box maps XYZ residual actions with scale
   `0.003 m`, gamma `0.9`, and cap `+/-0.03 m`; rotation and joint mappings retain
   their historical target values.
@@ -74,8 +74,8 @@ and after training. Report three rows:
 
 Every row reports return, mean reward, mean action absolute value, reset/timeout
 status, final object-target distance, maximum object-target distance, and
-contact-window reward. Under the target 0.15 m training deviation threshold,
-the zero-residual reference baseline may reset later than the historical 0.1 m case, so the short
+contact-window reward. Under the target 0.10 m training deviation threshold,
+the zero-residual reference baseline follows the historical 0.1 m reset boundary, so the short
 run is accepted when the trained policy is finite, exceeds the untrained return,
 and does not reset before that zero-reference call count. Completing all 791 calls is
 reported as a stretch result, not silently assumed. The reference baseline is a
@@ -99,7 +99,7 @@ a user receives, and avoids reporting train-process-only normalizer or BatchNorm
 state. Native checkpoint sidecars must declare both
 `reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2` and
 `ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`, and
-`environment_contract: target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p15_v1`.
+`environment_contract: target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v1`.
 Missing or mismatched environment contracts fail before `agent.load` for both
 resume and inference, so a visualization cannot silently run under different
 control or terminal dynamics.

@@ -27,8 +27,8 @@ _JOINT_LIMIT = np.asarray(
 # This binds the target's control mapping and terminal reset behavior separately
 # from the reward contracts. Historical source defaults remain documented as ABI
 # evidence but are not target training defaults.
-ENVIRONMENT_CONTRACT_ID: Final = "target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p15_v1"
-TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.15
+ENVIRONMENT_CONTRACT_ID: Final = "target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v1"
+TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
 
 @dataclass(frozen=True)
