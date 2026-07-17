@@ -28,7 +28,7 @@ def _model(adapter: ManoGymnasiumVectorEnv) -> ManoActorCritic:
     )
 
 
-def test_model_defaults_to_source_pointnet_mlp(adapter: ManoGymnasiumVectorEnv) -> None:
+def test_model_defaults_to_source_pointnet_film(adapter: ManoGymnasiumVectorEnv) -> None:
     import torch
 
     from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
@@ -38,10 +38,9 @@ def test_model_defaults_to_source_pointnet_mlp(adapter: ManoGymnasiumVectorEnv) 
     np.testing.assert_array_equal(adapter.single_action_space.high, np.full(ACTION_DIM, 1.0, dtype=np.float32))
     model = _model(adapter)
     keys = set(model.state_dict())
-    assert model.use_film is False
-    assert "actor_backbone.0.weight" in keys
-    assert model.actor_backbone[0].in_features == 348
-    assert not any("film_generator" in key for key in keys)
+    assert model.use_film is True
+    assert "actor_backbone.0.film.film_generator.weight" in keys
+    assert model.actor_backbone[0].linear.in_features == 286
 
     observations = torch.zeros((2, OBSERVATION_DIM), dtype=torch.float32)
     observations[:, 266] = 1.0
@@ -51,29 +50,6 @@ def test_model_defaults_to_source_pointnet_mlp(adapter: ManoGymnasiumVectorEnv) 
     assert policy_outputs["log_std"].shape == (2, ACTION_DIM)
     assert value.shape == (2, 1)
     assert value_outputs == {}
-
-
-def test_model_can_explicitly_enable_film(adapter: ManoGymnasiumVectorEnv) -> None:
-    import torch
-
-    from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
-    from sim.manorl.model import ManoActorCritic
-
-    model = ManoActorCritic(
-        adapter.single_observation_space,
-        None,
-        adapter.single_action_space,
-        device="cpu",
-        use_film=True,
-    )
-    keys = set(model.state_dict())
-    assert model.use_film is True
-    assert "actor_backbone.0.film.film_generator.weight" in keys
-    observations = torch.zeros((2, OBSERVATION_DIM), dtype=torch.float32)
-    policy, _ = model.compute({"observations": observations}, role="policy")
-    value, _ = model.compute({"observations": observations}, role="value")
-    assert policy.shape == (2, ACTION_DIM)
-    assert value.shape == (2, 1)
 
 
 def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
@@ -114,7 +90,7 @@ def test_adapter_and_skrl_wrapper_preserve_vector_tensor_boundary(adapter: ManoG
     assert adapter.metadata["autoreset_mode"].value == "NextStep"
 
     runtime = ManoSkrlRuntime(adapter, ManoPPOConfig.optimizer_smoke())
-    assert runtime.agent.cfg.rewards_shaper is None
+    assert runtime.agent.cfg.rewards_shaper is not None
     wrapped_observations, _ = runtime.env.reset()
     actions = runtime.deterministic_actions(wrapped_observations)
     assert actions.shape == (1, ACTION_DIM)
@@ -146,11 +122,11 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     assert runtime.checkpoint_metadata()["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert runtime.checkpoint_metadata()["ppo_reward_scale"] == PPO_REWARD_SCALE
     assert runtime.checkpoint_metadata()["environment_contract"] == ENVIRONMENT_CONTRACT_ID
-    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.001, 0.001, 0.003)
-    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.01, 0.01, 0.03)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.005, 0.005, 0.005)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.05, 0.05, 0.05)
     assert runtime.checkpoint_metadata()["environment"]["max_deviation_distance"] == 1_000_000.0
-    assert runtime.checkpoint_metadata()["ppo"]["use_film"] is False
-    assert runtime.checkpoint_metadata()["model"]["use_film"] is False
+    assert "use_film" not in runtime.checkpoint_metadata()["ppo"]
+    assert runtime.checkpoint_metadata()["model"]["use_film"] is True
     rollout = runtime.deterministic_rollout(steps=2)
     assert rollout["steps"] == 2
     assert torch.isfinite(rollout["observations"]).all()
@@ -184,6 +160,8 @@ def test_checkpoint_rejects_rl_games_and_one_sample_update(adapter: ManoGymnasiu
 
 
 def test_source_ppo_batch_divisibility_is_explicit() -> None:
+    import torch
+
     from sim.manorl.rewards import PPO_REWARD_SCALE
     from sim.manorl.skrl_runtime import ManoPPOConfig
 
@@ -192,7 +170,7 @@ def test_source_ppo_batch_divisibility_is_explicit() -> None:
     assert config["mini_batches"] == 3
     assert config["time_limit_bootstrap"] is True
     assert config["value_loss_scale"] == 4.0
-    assert "rewards_shaper" not in config
-    assert PPO_REWARD_SCALE == 1.0
+    assert config["rewards_shaper"](torch.ones(1), 0, 1).item() == 0.5
+    assert PPO_REWARD_SCALE == 0.5
     with pytest.raises(ValueError, match="must divide"):
         ManoPPOConfig().skrl_config(num_envs=1, device="cpu")

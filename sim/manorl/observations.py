@@ -90,6 +90,11 @@ CHECKPOINT_SIDECAR_COMPATIBILITY: Final = ObservationCompatibility(
     name="checkpoint_sidecar", early_phase_steps=50, movement_pre_padding=200,
     point_template_mode="dynamic_reset",
 )
+GYM_EVAL_ALIGNED_COMPATIBILITY: Final = ObservationCompatibility(
+    name="gym_eval_aligned", early_phase_steps=50, movement_pre_padding=250,
+    point_template_mode="dynamic_reset",
+)
+SOURCE_ALIGNED_COMPATIBILITY: Final = GYM_EVAL_ALIGNED_COMPATIBILITY
 
 
 @dataclass(frozen=True)
