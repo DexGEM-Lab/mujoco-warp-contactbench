@@ -195,6 +195,10 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert json.loads(json.dumps(config)) == config
     assert config["training_budget"]["planned_transitions"] == budget.transitions
     assert config["training_budget"]["wall_clock_seconds"] is None
+    assert config["wandb"] == {
+        "primary_axis": "completed_ppo_updates",
+        "secondary_metrics": ["transitions"],
+    }
     assert config["reward"]["ppo_scale"] == 1.0
     assert config["environment"]["contract"] == "target_residual_reduced_thumb_authority_xy_0p001_z_0p003_gamma_0p9_cap_xy_0p01_z_0p03_deviation_0p10_v3"
     assert config["environment"]["residual_action"]["position_scale"] == [0.001, 0.001, 0.003]
@@ -206,7 +210,7 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["device"]["skrl"] == "cuda"
 
 
-def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
+def test_wandb_update_metrics_use_completed_update_steps() -> None:
     tool = _load_tool()
     run = FakeRun()
     wandb = FakeWandb()
@@ -274,7 +278,9 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "info/policy_std": 0.8,
     })
 
-    assert [step for _, step in run.logs] == [3072, 6144]
+    assert [step for _, step in run.logs] == [1, 2]
+    assert [metrics["update"] for metrics, _ in run.logs] == [1, 2]
+    assert [metrics["global_step"] for metrics, _ in run.logs] == [1, 2]
     assert [metrics["transitions"] for metrics, _ in run.logs] == [3072, 6144]
     assert all({"reward_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "total", "distance_x", "distance_y", "distance_z", "rotation", "action_penalty", "contact", "object_stability", "survival", "deviation_penalty", "update_environment_transitions_per_second", "cumulative_environment_transitions_per_second", "performance/total_fps", "performance/step_fps", "performance/update_time", "rewards/frame", "rewards/iter"} <= metrics.keys()
                for metrics, _ in run.logs)
@@ -333,10 +339,15 @@ def test_wandb_evaluation_summaries_preserve_policy_alias_for_both_comparisons()
             object_target_distance_by_call=[0.3],
         )
 
-    tool._log_wandb_evaluations(run, [result("zero", 0.0), result("untrained", 1.0)], transitions=0)
-    tool._log_wandb_evaluations(run, [result("trained", 2.0)], transitions=6144)
+    tool._log_wandb_evaluations(
+        run, [result("zero", 0.0), result("untrained", 1.0)], update=0, transitions=0
+    )
+    tool._log_wandb_evaluations(run, [result("trained", 2.0)], update=2, transitions=6144)
 
-    assert [step for _, step in run.logs] == [0, 6144]
+    assert [step for _, step in run.logs] == [0, 2]
+    assert [metrics["update"] for metrics, _ in run.logs] == [0, 2]
+    assert [metrics["global_step"] for metrics, _ in run.logs] == [0, 2]
+    assert [metrics["transitions"] for metrics, _ in run.logs] == [0, 6144]
     assert run.logs[0][0]["evaluation/zero/return_mean"] == 0.0
     assert run.logs[0][0]["evaluation/untrained/return_mean"] == 1.0
     assert run.logs[0][0]["evaluation/policy/return_mean"] == 1.0

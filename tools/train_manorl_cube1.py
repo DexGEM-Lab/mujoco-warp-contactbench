@@ -160,6 +160,10 @@ def _wandb_config(
             "resolved_capture_transition_diagnostics": budget.resolved_capture_transition_diagnostics,
         },
         "ppo_config": asdict(ppo_config),
+        "wandb": {
+            "primary_axis": "completed_ppo_updates",
+            "secondary_metrics": ["transitions"],
+        },
         "evaluation": {
             "num_envs": budget.resolved_evaluation_num_envs,
             "ppo_config": asdict(evaluation_ppo_config),
@@ -233,11 +237,12 @@ def _wandb_run(
 
 
 def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
+    completed_updates = int(update["update"])
     transitions = int(update["environment_transitions"])
     metrics = {
-        "global_step": transitions,
+        "global_step": completed_updates,
         "transitions": transitions,
-        "update": int(update["update"]),
+        "update": completed_updates,
         "reward_mean": update["reward_mean"],
         "action_abs_mean": update["action_abs_mean"],
         "reset_count": update["reset_count"],
@@ -284,7 +289,7 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
         if "episode_total_max" in update:
             metrics["episode_cumulative/total_max"] = update["episode_total_max"]
         metrics["episode_return_distribution"] = wandb.Histogram(update["episode_return_values"])
-    run.log(metrics, step=transitions)
+    run.log(metrics, step=completed_updates)
 
 
 def _evaluation_metrics(result: EvaluationResult) -> dict[str, object]:
@@ -295,8 +300,14 @@ def _evaluation_metrics(result: EvaluationResult) -> dict[str, object]:
     }
 
 
-def _log_wandb_evaluations(run: Any, results: list[EvaluationResult], *, transitions: int) -> None:
-    metrics: dict[str, object] = {"global_step": transitions, "transitions": transitions}
+def _log_wandb_evaluations(
+    run: Any, results: list[EvaluationResult], *, update: int, transitions: int
+) -> None:
+    metrics: dict[str, object] = {
+        "global_step": update,
+        "update": update,
+        "transitions": transitions,
+    }
     for result in results:
         result_metrics = _evaluation_metrics(result)
         metrics.update(result_metrics)
@@ -305,7 +316,7 @@ def _log_wandb_evaluations(run: Any, results: list[EvaluationResult], *, transit
                 key.replace(f"evaluation/{result.mode}/", "evaluation/policy/"): value
                 for key, value in result_metrics.items()
             })
-    run.log(metrics, step=transitions)
+    run.log(metrics, step=update)
     run.summary.update(metrics)
 
 
@@ -1027,7 +1038,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         del evaluation_runtime
         gc.collect()
         if wandb_run is not None:
-            _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], transitions=0)
+            _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], update=0, transitions=0)
         recorder: ManoRerunRecorder | None = None
         observer: TrainingObserver | None = None
         published_rerun: Path | None = None
@@ -1182,14 +1193,17 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         metrics_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         if wandb_run is not None:
-            _log_wandb_evaluations(wandb_run, [trained], transitions=transitions)
+            _log_wandb_evaluations(
+                wandb_run, [trained], update=len(updates), transitions=transitions
+            )
             acceptance_metrics = {
-                "global_step": transitions,
+                "global_step": len(updates),
+                "update": len(updates),
                 "transitions": transitions,
                 **throughput,
                 **{f"acceptance/{key}": value for key, value in result["acceptance"].items()},
             }
-            wandb_run.log(acceptance_metrics, step=transitions)
+            wandb_run.log(acceptance_metrics, step=len(updates))
             wandb_run.summary.update(acceptance_metrics)
             artifact_paths = [
                 checkpoint,
