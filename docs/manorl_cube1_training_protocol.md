@@ -14,26 +14,30 @@ an object runtime for `cube1`; another selected object is reported with its
 actual assigned Lance identities and then rejected before simulation, rather
 than being simulated using cube geometry.
 
+This protocol starts from the completed Gym-to-MuJoCo aligned contract. Earlier
+MuJoCo runs used different policy, action, point-cloud, timing, reward, and PPO
+semantics; their poor returns and checkpoints are not comparable training
+baselines. New experiments use only the current source-aligned defaults and
+current native checkpoint contracts. The file-by-file implementation map is in
+`docs/manorl_phase5_abi_inventory.md` under "Implementation summary".
+
 ## Preconditions
 
 - The source semantic fixture and target verifier must pass for source action,
   observation, and termination evidence. Its source reward fields are
   reference-only: the fixture lacks pair-filtered hand-object forces and cannot
   establish reward equality.
-- Training uses target reward contract
-  `target_hand_object_contact_no_action_deviation_penalty_v3`: expected
-  hand-object contacts receive weighted proportional credit only when their
-  pair-filtered world-force norm is strictly greater than `1.0 N`. The direct
-  contact contribution is `3.0x` its unscaled contact quality, whose maximum
-  remains `0.4`; the distance gate and distance reward components continue to
-  use that unscaled quality. The unchanged observation contact encoding uses its
-  separate `2.0 N` threshold. Action and one-shot deviation-failure penalties
+- Training uses source-aligned reward contract
+  `source_aligned_hand_object_contact_1x_threshold_2n_v1`: expected hand-object
+  contacts receive weighted proportional credit only when their pair-filtered
+  world-force norm is strictly greater than `2.0 N`. The direct contact
+  contribution is `1.0x` its unscaled contact quality, whose maximum remains
+  `0.4`. Action and one-shot deviation-failure penalties
   default to zero while deviation still terminates at the target training
   threshold `0.10 m`.
-- PPO optimizes that environment reward at raw `1.0x` under
-  `target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3`;
-  no skrl reward shaper is configured. This intentionally diverges from the
-  sibling IsaacGym setup's fixed `0.5x` shaper. Native loads, including
+- PPO applies the source `0.5x` shaper under
+  `source_aligned_hand_object_contact_1x_threshold_2n_shaper_0p5_v1`.
+  Native loads, including
   inference-only visualization, reject sidecars that do not declare the current
   environment/control contract.
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
@@ -42,10 +46,12 @@ than being simulated using cube geometry.
 - Training defaults to `--use_residual true` and `--terminal true`. Pass
   `--use_residual false` only for source-reference diagnostics, or
   `--terminal false` for formal source-horizon termination. Target training uses
-  the current-source early phase of 100 steps and the target `0.10 m` deviation threshold.
-  Its normalized `[-1, 1]^26` action Box maps XYZ residual actions with scale
-  `0.003 m`, gamma `0.9`, and cap `+/-0.03 m`; rotation and joint mappings retain
-  their historical target values.
+  the validated early phase of 50 steps, movement pre-padding 250, and the
+  `0.10 m` deviation threshold. Its normalized `[-1, 1]^26` action Box maps XYZ
+  residual actions with per-step scale `0.005 m`, gamma `0.9`, and cap
+  `+/-0.05 m`. The first two thumb scales/caps are `0.10/0.12` and `1.0/1.2`.
+  FiLM and dynamic PointNet are enabled by default; GPU sampling uses the
+  global CUDA Torch RNG.
 
 ## Fixed Budget
 
@@ -99,13 +105,11 @@ boundary completes, and the initial bounded runtime is released before
 training begins. The trained row is always evaluated from a fresh bounded
 runtime after loading the final native checkpoint. It is the executable artifact
 a user receives, and avoids reporting train-process-only normalizer or BatchNorm
-state. Native checkpoint sidecars must declare both
-`reward_contract: target_hand_object_contact_no_action_deviation_penalty_v3` and
-`ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3`, and
-`environment_contract: target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v1`.
-Missing or mismatched environment contracts fail before `agent.load` for both
-resume and inference, so a visualization cannot silently run under different
-control or terminal dynamics.
+state. Native training resume requires the reward, PPO, and environment contract
+IDs emitted by the current runtime. Inference checks the checkpoint schema,
+finite tensor state, provenance, and strict model key/shape compatibility;
+sidecar PointNet, sampling, action, and timing values are versioned metadata, not
+permanent equality constraints on future runtime versions.
 
 ## Launch
 
@@ -286,7 +290,7 @@ completed update and environment-transition progress. Payloads are prepared as
 temporary files and published with replacements. `last.pt.json` is installed
 once before the first payload and remains fixed compatibility metadata, so later
 updates replace only complete `last.pt` payloads. Every checkpoint sidecar
-records the target environment/control contract and raw-1.0x PPO reward boundaries. The post-training
+records the source-aligned environment/control contract and 0.5x PPO reward boundary. The post-training
 viewer consumes the same actual `MujocoManoEnvironment` path and reports
-separate observation/reward contact thresholds plus the raw PPO reward scale in
+the contact threshold plus the PPO reward scale in
 Rerun metadata.

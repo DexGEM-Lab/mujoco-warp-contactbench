@@ -18,12 +18,12 @@ from sim.manorl.observations import (
 from sim.manorl.abi import TerminationResult
 
 
-REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v3"
-REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = 1.0
+REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_2n_v1"
+REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = 2.0
 # PPO consumes the environment reward directly, so its contract is distinct
 # because the PPO reward scale is tracked separately from the environment contract.
-PPO_REWARD_CONTRACT_ID: Final = "target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3"
-PPO_REWARD_SCALE: Final[float] = 1.0
+PPO_REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_2n_shaper_0p5_v1"
+PPO_REWARD_SCALE: Final[float] = 0.5
 
 
 @dataclass(frozen=True)
@@ -46,11 +46,16 @@ class RewardConfig:
     joint_penalty_scale: float = 10.0
     reference_joint_count: float = 8.0
     max_contact_reward: float = 0.4
-    direct_contact_reward_scale: float = 3.0
+    direct_contact_reward_scale: float = 1.0
     contact_force_threshold: float = REWARD_HAND_OBJECT_THRESHOLD_N
     max_object_stability_reward: float = 0.4
     object_stability_reference_speed: float = 0.1
     survival_reward: float = 0.001
+
+
+SOURCE_ALIGNED_REWARD_CONFIG: Final = RewardConfig()
+CHECKPOINT_SIDECAR_REWARD_CONFIG: Final = SOURCE_ALIGNED_REWARD_CONFIG
+CHECKPOINT_SIDECAR_PPO_REWARD_SCALE: Final[float] = PPO_REWARD_SCALE
 
 
 @dataclass(frozen=True)

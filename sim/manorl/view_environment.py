@@ -74,7 +74,11 @@ def _inference_ppo_config(num_envs: int) -> ManoPPOConfig:
 
     from sim.manorl.skrl_runtime import ManoPPOConfig
 
-    return ManoPPOConfig(rollouts=1, minibatch_size=num_envs, learning_epochs=1)
+    return ManoPPOConfig(
+        rollouts=1,
+        minibatch_size=num_envs,
+        learning_epochs=1,
+    )
 
 
 def _validate_checkpoint_path(checkpoint: Path) -> Path:
@@ -87,7 +91,9 @@ def _validate_checkpoint_path(checkpoint: Path) -> Path:
     return checkpoint
 
 
-def _build_checkpoint_stepper(environment: MujocoManoEnvironment, checkpoint: Path) -> ViewerStepper:
+def _build_checkpoint_stepper(
+    environment: MujocoManoEnvironment, checkpoint: Path
+) -> ViewerStepper:
     """Load the native policy and reset through its vector wrapper before rendering."""
 
     from sim.manorl.checkpoint import load_skrl_checkpoint_for_inference
@@ -95,7 +101,10 @@ def _build_checkpoint_stepper(environment: MujocoManoEnvironment, checkpoint: Pa
     from sim.manorl.skrl_runtime import ManoSkrlRuntime
 
     adapter = ManoGymnasiumVectorEnv(environment)
-    runtime = ManoSkrlRuntime(adapter, _inference_ppo_config(environment.config.num_envs))
+    runtime = ManoSkrlRuntime(
+        adapter,
+        _inference_ppo_config(environment.config.num_envs),
+    )
     load_skrl_checkpoint_for_inference(runtime.agent, checkpoint)
     runtime.agent.enable_training_mode(False)
     runtime.model.eval()
@@ -481,6 +490,15 @@ def view_environment(
     if checkpoint is not None and not use_residual:
         raise ValueError("--checkpoint requires --use_residual true so policy actions reach the controller")
     checkpoint = None if checkpoint is None else _validate_checkpoint_path(checkpoint)
+    if checkpoint is not None:
+        from sim.manorl.checkpoint import checkpoint_runtime_metadata
+
+        checkpoint_runtime_metadata(checkpoint)
+    if device == "gpu":
+        import torch
+
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
     _require_graphical_session()
 
     if (object_type is None) != (gesture is None):

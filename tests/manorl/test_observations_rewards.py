@@ -249,11 +249,11 @@ def test_reward_terms_and_windows_match_target_equations() -> None:
     np.testing.assert_allclose(diagnostics.joint_penalty, [0.0])
     np.testing.assert_allclose(diagnostics.action_penalty, [0.0])
     np.testing.assert_allclose(diagnostics.raw_contact, [0.4])
-    np.testing.assert_allclose(diagnostics.contact, [1.2])
+    np.testing.assert_allclose(diagnostics.contact, [0.4])
     np.testing.assert_allclose(diagnostics.distance_gate, [0.4])
     np.testing.assert_allclose(diagnostics.object_stability, [0.0])
     np.testing.assert_allclose(diagnostics.survival, [0.001])
-    np.testing.assert_allclose(diagnostics.total, [2.701])
+    np.testing.assert_allclose(diagnostics.total, [1.901])
 
     window_state = _reward_state(batch=3, steps=np.array([99, 105, 111], dtype=np.int64))
     window = compute_rewards(
@@ -261,18 +261,18 @@ def test_reward_terms_and_windows_match_target_equations() -> None:
         compatibility=CHECKPOINT_SIDECAR_COMPATIBILITY,
         termination=_termination_for(window_state, CHECKPOINT_SIDECAR_COMPATIBILITY),
     )
-    np.testing.assert_allclose(window.contact, [0.0, 1.2, 0.0])
+    np.testing.assert_allclose(window.contact, [0.0, 0.4, 0.0])
     np.testing.assert_allclose(window.distance_gate, [0.0, 0.4, 0.4])
     np.testing.assert_allclose(window.object_stability, [0.0, 0.0, 0.4])
-    np.testing.assert_allclose(window.total, [0.301, 2.701, 1.901])
+    np.testing.assert_allclose(window.total, [0.301, 1.901, 1.901])
 
 
 def test_direct_contact_scale_changes_only_contact_and_total() -> None:
     state = _reward_state(batch=3)
     forces = np.zeros((3, 16, 3), dtype=np.float64)
-    forces[1, 3] = [1.000001, 0.0, 0.0]
-    forces[2, 3] = [1.000001, 0.0, 0.0]
-    forces[2, 15] = [0.0, 1.000001, 0.0]
+    forces[1, 3] = [2.000001, 0.0, 0.0]
+    forces[2, 3] = [2.000001, 0.0, 0.0]
+    forces[2, 15] = [0.0, 2.000001, 0.0]
     state = replace(state, hand_object_force_on_object_world_N=forces)
     termination = _termination_for(state, CURRENT_SOURCE_COMPATIBILITY)
 
@@ -286,10 +286,11 @@ def test_direct_contact_scale_changes_only_contact_and_total() -> None:
         state,
         compatibility=CURRENT_SOURCE_COMPATIBILITY,
         termination=termination,
+        config=RewardConfig(direct_contact_reward_scale=3.0),
     )
 
     assert RewardConfig().max_contact_reward == 0.4
-    assert RewardConfig().direct_contact_reward_scale == 3.0
+    assert RewardConfig().direct_contact_reward_scale == 1.0
     np.testing.assert_allclose(three_x.contact, 3.0 * one_x.contact)
     np.testing.assert_array_equal(three_x.raw_contact, one_x.raw_contact)
     np.testing.assert_array_equal(three_x.distance_gate, one_x.distance_gate)
@@ -302,10 +303,10 @@ def test_direct_contact_scale_changes_only_contact_and_total() -> None:
 def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None:
     state = _reward_state(batch=3)
     forces = np.zeros((3, 16, 3), dtype=np.float64)
-    forces[1, 3] = [1.000001, 0.0, 0.0]
-    forces[1, 15] = [1.0, 0.0, 0.0]
-    forces[2, 3] = [1.000001, 0.0, 0.0]
-    forces[2, 15] = [0.0, 1.000001, 0.0]
+    forces[1, 3] = [2.000001, 0.0, 0.0]
+    forces[1, 15] = [2.0, 0.0, 0.0]
+    forces[2, 3] = [2.000001, 0.0, 0.0]
+    forces[2, 15] = [0.0, 2.000001, 0.0]
     state = replace(state, hand_object_force_on_object_world_N=forces)
     diagnostics = compute_rewards(
         state,
@@ -314,14 +315,14 @@ def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None
     )
 
     np.testing.assert_allclose(diagnostics.raw_contact, [0.0, 0.2, 0.4])
-    np.testing.assert_allclose(diagnostics.contact, [0.0, 0.6, 1.2])
+    np.testing.assert_allclose(diagnostics.contact, [0.0, 0.2, 0.4])
     np.testing.assert_allclose(diagnostics.distance_gate, [0.0, 0.2, 0.4])
     assert "object_contact_force" not in RewardState.__dataclass_fields__
     assert "object_gravity_force" not in RewardState.__dataclass_fields__
     assert "object_contact_gate" not in diagnostics.__dataclass_fields__
-    assert REWARD_CONTRACT_ID == "target_hand_object_contact_no_action_deviation_penalty_v3"
-    assert PPO_REWARD_CONTRACT_ID == "target_hand_object_contact_no_action_deviation_penalty_v3_raw_ppo_reward_1x_v3"
-    assert REWARD_HAND_OBJECT_THRESHOLD_N == 1.0
+    assert REWARD_CONTRACT_ID == "source_aligned_hand_object_contact_1x_threshold_2n_v1"
+    assert PPO_REWARD_CONTRACT_ID == "source_aligned_hand_object_contact_1x_threshold_2n_shaper_0p5_v1"
+    assert REWARD_HAND_OBJECT_THRESHOLD_N == 2.0
 
 
 def test_reward_contact_preserves_nonuniform_weights_and_zero_expected_contacts() -> None:
@@ -346,7 +347,7 @@ def test_reward_contact_preserves_nonuniform_weights_and_zero_expected_contacts(
     )
 
     np.testing.assert_allclose(diagnostics.raw_contact, [0.1, 0.0])
-    np.testing.assert_allclose(diagnostics.contact, [0.3, 0.0])
+    np.testing.assert_allclose(diagnostics.contact, [0.1, 0.0])
 
 
 def test_reward_compatibility_rotation_and_termination_interaction() -> None:

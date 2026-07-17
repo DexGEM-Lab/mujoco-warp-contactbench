@@ -19,7 +19,11 @@ from uuid import uuid4
 import numpy as np
 import torch
 
-from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, TARGET_MAX_DEVIATION_DISTANCE
+from sim.manorl.abi import (
+    ENVIRONMENT_CONTRACT_ID,
+    ResidualActionConfig,
+    TARGET_MAX_DEVIATION_DISTANCE,
+)
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.cli import parse_cli_bool
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
@@ -153,6 +157,7 @@ def _wandb_config(
     evaluation_trajectory_assignments: list[dict[str, object]],
     device: dict[str, object],
 ) -> dict[str, object]:
+    residual_action = ResidualActionConfig()
     config = {
         "training_budget": {
             **asdict(budget),
@@ -178,9 +183,14 @@ def _wandb_config(
         "environment": {
             "contract": ENVIRONMENT_CONTRACT_ID,
             "residual_action": {
-                "position_scale": [0.001, 0.001, 0.003],
-                "gamma_xyz": 0.9,
-                "max_position_offset": [0.01, 0.01, 0.03],
+                "position_scale": list(residual_action.position_scale),
+                "gamma_xy": residual_action.gamma_xy,
+                "gamma_z": residual_action.gamma_z,
+                "gamma_joints": residual_action.gamma_joints,
+                "max_position_offset": list(residual_action.max_position_offset),
+                "joint_scale": list(residual_action.joint_scale),
+                "max_joint_offset": list(residual_action.max_joint_offset),
+                "early_phase_steps": residual_action.early_phase_steps,
                 "rotation_effective_scale": 0.00025,
             },
             "max_deviation_distance": TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
@@ -1131,7 +1141,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "assignments": trajectory_assignments,
                 "evaluation_assignments": evaluation_trajectory_assignments,
             },
-            "checkpoint_conversion": "out_of_scope",
+            "checkpoint_conversion": "tools/convert_gym_checkpoint.py",
             "initialization": {
                 "actor_mean": "source_default",
                 "initial_log_std": -0.99,

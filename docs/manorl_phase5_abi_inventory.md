@@ -1,27 +1,68 @@
 # ManoRL Phase 5A ABI Inventory
 
-This inventory is the gate for Phase 5B. It records what the checked-out
-Isaac/rl-games implementation does, assigns a target owner, and names every
-semantic that cannot yet be claimed by the MuJoCo target. It is not evidence
-of training, policy, or checkpoint compatibility.
+This inventory began as the gate for Phase 5B and now records the completed
+Gym-to-MuJoCo policy migration contract. It identifies the source authority,
+the target implementation owner, the validated defaults, and the remaining
+cross-simulator limits. It does not claim bitwise physics equivalence.
+
+## Migration purpose and outcome
+
+The migration has two concrete purposes:
+
+1. Align IsaacGym and MuJoCo at the policy-semantic boundary: observation
+   layout and normalization, PointNet/FiLM structure, deterministic action
+   output, residual action authority, trajectory timing, reward parameters,
+   reset behavior, and checkpoint state.
+2. Establish one trustworthy MuJoCo training baseline. Before alignment,
+   MuJoCo used a different network, smaller XYZ and thumb authority, different
+   point sampling, timing, reward, and PPO reward scale. Poor training returns
+   and checkpoints from that configuration could not distinguish a PPO or
+   physics problem from a contract mismatch. Those results are not evidence
+   against the aligned MuJoCo implementation.
+
+The aligned contract is now the only production and training default. New
+scratch training and checkpoint resume must use the current environment,
+reward, PPO, model, and normalizer contracts; checkpoints from the previous
+MuJoCo contract are rejected. The validated Gym reference completes 790/790
+steps. The converted policy executes through the same source-aligned MuJoCo
+runtime used by new training. Exact Gym and MuJoCo returns remain non-comparable
+because their physics-derived contacts and rigid-body state are not numerically
+identical.
+
+## Implementation summary
+
+| Code path | Key classes/functions | Concrete migration change | Why it matters |
+| --- | --- | --- | --- |
+| `sim/manorl/abi.py` | `ResidualActionConfig`, `process_residual_actions`, `early_phase_mask`, `check_termination` | Makes the Gym action mapping the only default: XYZ action scale is `0.005 m`, accumulated XYZ cap is `0.05 m`, XYZ/joint gamma is `0.9`, and early phase is 50. The 20 joint scales/caps include full thumb authority (`0.10/0.12` scale and `1.0/1.2` cap for the first two thumb joints). Processing clips normalized actions, zeros inactive fingers and early-phase actions, accumulates residuals, applies limits, and adds the result to the mocap target. Deviation reset remains strictly above `0.10 m`. | A normalized policy action now produces the same command authority and temporal accumulation as Gym. |
+| `sim/manorl/observations.py` | `OBSERVATION_SLICES`, `SOURCE_ALIGNED_COMPATIBILITY`, `build_observation` | Preserves the exact 476D field order and slice boundaries, `[-5, 5]` policy clipping, hand-relative 64x3 point-cloud block, 50-step early phase, and movement pre-padding 250. | Matching the total dimension is insufficient; the checkpoint requires the same internal feature meanings and trajectory frame alignment. |
+| `sim/manorl/environment.py` | `EnvironmentConfig`, `_torch_global_surface_templates`, `_set_dynamic_templates`, `_reward_state`, `step` | Makes dynamic point templates the default. GPU sampling uses surface-area CDF face selection followed by square-root barycentric sampling with the global CUDA Torch RNG; construction/reset ordering preserves the source RNG sequence. CPU uses a deterministic fallback on the same MJX-Warp environment path. The environment passes the aligned residual and reward configs through the real physics step, observation, reward, and termination path. | PointNet receives the same sampling distribution as Gym, while viewer, evaluation, and training all execute one physical environment implementation. |
+| `sim/manorl/model.py` | `PointNetEncoder`, `FiLMLayer`, `FiLMBlock`, `ManoActorCritic` | Removes the alternate non-FiLM actor. PointNet maps 64x3 points through `3 -> 64 -> 128 -> 256`, max-pools, then emits 64 features. The 62D action/object condition is encoded to 32D. The actor path is `286 -> 512 (FiLM) -> 512 -> 256 -> 128 -> 26`; the critic consumes `286 + 32 = 318` features. CUDA construction order and source initialization behavior are preserved before converted weights load. | The converted checkpoint has one unambiguous architecture and can no longer be accidentally loaded into the old 348D non-FiLM actor. |
+| `sim/manorl/normalization.py` | `PointCloudAwareRunningStandardScaler`, `SourceRunningStandardScaler` | Uses source-compatible float64 observation moments, shared 3D XYZ statistics across all 64 points, epsilon `1e-5`, and the rl-games value-normalizer state layout. Converted inference restores these buffers instead of recomputing statistics in MuJoCo. | Identical raw observations can otherwise produce different actor inputs even when model weights match exactly. |
+| `sim/manorl/rewards.py`, `sim/manorl/skrl_runtime.py` | `RewardConfig`, `compute_rewards`, `source_aligned_reward_shaper`, `ManoPPOConfig` | Keeps the verified pair-filtered MuJoCo hand-object force calculation, sets the strict contact threshold to `2 N`, direct contact scale to 1x, maximum contact quality to `0.4`, and applies the source 0.5 PPO reward shaper. PPO defaults retain 48-step rollouts, `gamma=0.99`, GAE `0.95`, three epochs, clipping `0.2`, and the source-aligned FiLM model. | New training optimizes the intended reward contract instead of the previous contact-3x/1 N/raw-1x experiment. Environment telemetry remains raw while PPO receives the shaped reward. |
+| `sim/manorl/gym_checkpoint.py`, `tools/convert_gym_checkpoint.py` | `_map_model`, `_map_normalizer`, `convert_gym_checkpoint` | Converts the validated rl-games payload without modifying it: all 41 policy/value tensors, fixed `log_std`, observation normalizer, point-cloud normalizer, and value normalizer are mapped into native skrl modules. The output sidecar records source path/SHA256, model layout, point sampling, timing, action, reward, and deterministic inference contracts. Existing output files are never overwritten. | The MuJoCo runtime is now executing the Gym policy state rather than a separately trained native policy with a similar filename. |
+| `sim/manorl/checkpoint.py` | `checkpoint_runtime_metadata`, `_validate_conversion_metadata`, `load_skrl_checkpoint_for_inference`, `load_skrl_checkpoint` | Rejects raw rl-games files at the native loader, validates required modules, finite tensor state, sidecar schema, and converted provenance. Actual model key/shape compatibility is checked strictly against the runtime model during load. Native training resume additionally requires the current reward/PPO/environment contract IDs. Recorded Gym-v1 PointNet, action, timing, sampling, and evaluator values are not permanent global loader constants. | Current checkpoints fail closed on structural corruption while future versioned architectures and environment defaults can evolve without bypassing historical Gym-v1 equality checks. |
+| `sim/manorl/view_environment.py`, `tools/train_manorl_cube1.py` | `_build_checkpoint_stepper`, `view_environment`, `run`, `_wandb_config` | Removes compatibility-profile CLI selection. Viewer and training construct the current default `EnvironmentConfig` and FiLM runtime. Training metadata derives the complete residual config from code instead of hard-coded legacy values; checkpoint sidecars, W&B, and Rerun record the active contracts. | Evaluation and training share the current default, while future defaults remain versionable rather than frozen by the Gym-v1 converter. |
+| `tests/manorl/` | ABI, environment, model, normalizer, checkpoint, viewer, and training-contract tests | Verifies exact action steps/caps, dynamic sampler RNG behavior, 41-tensor conversion, independent source-key actor/critic parity, normalizer state, strict checkpoint rejection, reward scaling, old-contract rejection, metadata, and CPU/GPU execution. | Contract and fixed-input parity are tested without treating cross-physics return equality as a requirement. |
 
 ## Authority and scope
 
 Source authority is the local read-only sibling at
 `/home/jay/dexrobot/FromSSH/manohand_reconstruction/IsaacGymEnvs/isaacgymenvs`.
 The checkpoint sidecar confirms the same 476D layout but is a recorded training
-configuration, not the current executable task configuration. In particular it
-has `earlyPhaseMocapSteps: 50`, `movementFramePrePadding: 200`, and dynamic
-point templates, whereas the current task sets 100, 250, and non-dynamic
-templates (`checkpoint/18-09-37-36_MANOHand_all_all-new_setting-val099-new_obs/config.yaml:1-24,142-154`;
-`cfg/task/MANOHand.yaml:237-255`). Checkpoint inference compatibility must use
-the sidecar provenance; new target training follows the current source unless a
-later task explicitly selects the historical configuration.
+configuration, not the exact evaluation invocation or current executable task
+configuration. It records `earlyPhaseMocapSteps: 50`,
+`movementFramePrePadding: 200`, and dynamic point templates. The validated Gym
+evaluation kept early phase 50 and dynamic templates but inherited the current
+task's movement pre-padding 250; that actual 790-step contract is represented by
+`GYM_EVAL_ALIGNED_COMPATIBILITY`. This validated 50/dynamic/250 contract is now
+the only target production and training contract. Checkpoints from the prior
+MuJoCo contract are rejected.
 The accepted `cube1_01_009` replay is a residual-off, deviation-disabled
 diagnostic mode and must remain distinct from this training ABI.
 
-The target has no pre-existing training environment. Planned owner paths below
-are contracts for later slices, not claims that those modules already exist.
+The target environment and training runtime are implemented in the owner paths
+listed below. Remaining audit items describe cross-simulator evidence gaps, not
+missing production defaults.
 
 ## Vector-environment boundary
 
@@ -98,8 +139,8 @@ clipped before `ActionProcessor` (`vec_task.py:374-376`;
    after early phase, or in non-residual mode; the first post-early step then
    immediately accumulates its scaled action from zero history, while later
    steps apply gamma `0.9`;
-5. clips XYZ offsets to `[-0.05, 0.05]` and joint offsets to their per-joint
-   limits; and
+5. clips XYZ offsets to `[-0.05, 0.05]` from `baseMaxOffset`; the separate
+   `maxOffsetScale=2.0` applies only to the per-joint limits; and
 6. adds `[cum_xyz, immediate_rotation, cum_joints]` to the mocap target,
    then clamps to physical DOF limits.
 
@@ -110,10 +151,13 @@ The executable scale, mask, transition, and target assembly are
 the deterministic portion is implemented in this 5B slice. Source
 `actionsMovingAverage=1` makes its moving-average assignment an identity for
 the configured ABI. The target must not reuse the acceptance replay's
-`RESIDUAL_ENABLED=False` as its training default. The listed `(0.005, 0.005, 0.005)`
-and `[-0.05, 0.05]` values are historical source ABI evidence: target training now
-uses XYZ scale `(0.003, 0.003, 0.003)` with gamma `0.9` and `[-0.03, 0.03]` cap,
-while preserving the listed rotation and joint mappings.
+`RESIDUAL_ENABLED=False` as its training default. The listed
+`(0.005, 0.005, 0.005)` and `[-0.05, 0.05]` values are shared by checkpoint
+evaluation and new target training.
+
+The production mapping includes all 20 joint scales and accumulated-offset
+limits. In particular, the first two thumb scales/caps are `0.10/0.12` and
+`1.0/1.2`.
 
 ## Episode and reset ABI
 
@@ -153,9 +197,9 @@ in the early phase it is action penalty only
   but target contact eligibility is a distinct contract: it uses only strict
   pair-filtered hand-on-object forces, not the aggregate source contact tensor
   or the source object-force-versus-gravity gate.
-- Target contract `target_hand_object_contact_v1` awards `0.4` times the
+- Production contract `source_aligned_hand_object_contact_1x_threshold_2n_v1` awards `0.4` times the
   weighted fraction of expected keypoints whose filtered world-force norm is
-  strictly greater than `1.0 N`; no expected contacts produces zero. Contact
+  strictly greater than `2.0 N`; no expected contacts produces zero. Contact
   remains gated by the inclusive movement window, and distance remains gated
   by the resulting proportional contact reward.
 - Rotation uses XYZW angular error in degrees and the configured three-piece
@@ -238,10 +282,8 @@ float64 moments plus shared XYZ point moments under the source buffer names.
 The skrl runtime explicitly maps the current source PPO objective: 48 rollout
 steps, 1024-sample minibatches, three learning epochs, `gamma=0.99`,
 `lambda=0.95`, clipping `0.2`, entropy `0.001`, critic coefficient `4.0`,
-learning rate `3e-4`, KL threshold `0.016`, gradient norm `1.0`, raw environment
-reward scale `1.0`, and timeout bootstrapping. skrl receives no reward shaper;
-this intentionally diverges from the sibling IsaacGym configuration's fixed
-`0.5x` shaper. Its 1024-sample minibatch must divide the
+learning rate `3e-4`, KL threshold `0.016`, gradient norm `1.0`, the source
+`0.5x` reward shaper, and timeout bootstrapping. Its 1024-sample minibatch must divide the
 configured rollout batch; a two-sample `optimizer_smoke` is deliberately
 separate from training and disables only KL early-stop so it can demonstrate a
 finite optimizer step. The adapter exposes the source terminal observation,
@@ -250,22 +292,32 @@ evaluation choice as clipped normalized actor mean. That is a target contract,
 not an inferred rl-games player behavior.
 
 Target checkpoint I/O saves and reloads native skrl policy/value, optimizer,
-and normalizer state with a configuration sidecar. Every native sidecar records
-`reward_contract: target_hand_object_contact_v1` and
-`ppo_reward_contract: target_hand_object_contact_v1_raw_ppo_reward_1x_v1`; a
-missing or different value fails before load, so a checkpoint trained under an
-older objective cannot silently resume. It explicitly rejects an rl-games top-level `model`/`env_state`
-checkpoint; no parameter, normalizer, or optimizer conversion is implemented.
-Required evidence before any source compatibility claim remains frozen-normalizer
-preprocessing equivalence and deterministic mu/value equivalence on a captured
-476D batch. Training and evaluation are outside this slice.
+and normalizer state with a configuration sidecar. Native training resume
+requires the current reward, PPO, and environment contract IDs, so an older
+objective cannot silently continue training. Inference validates checkpoint
+structure, finite state, provenance schema, and the runtime model's strict
+key/shape boundary; it does not permanently equate future runtime settings with
+Gym-v1 constants. Raw rl-games top-level `model`/`env_state` checkpoints remain
+rejected at the native boundary, but the validated FiLM/PointNet source family
+has an explicit converter at `tools/convert_gym_checkpoint.py`. The converter
+maps all 41 model tensors and both normalizers, records the source and target
+dtypes, and stores the Gym-v1 point/action/timing/reward configuration as
+versioned provenance. Fixed-observation deterministic mu/value parity is the
+conversion acceptance gate.
+
+The aligned dynamic point-cloud sampler uses PyTorch's global CUDA RNG on GPU,
+as the source does. It samples triangle faces from the surface-area CDF and then
+uses the same square-root barycentric transform. The GPU runtime seeds the
+global CUDA generator with 42 and preserves the source construction/reset
+ordering. CPU execution remains on the same MJX-Warp environment path with its
+deterministic sampling fallback.
 
 ## Unresolved-owner audit
 
-The requested Phase 5A scope is closed only because each row below has a
-specific destination or a concrete evidence blocker. “Unresolved” means the
-target implementation does not exist; it does not mean that source behavior is
-unknown.
+The requested Phase 5A scope is closed because each row below has a production
+owner and a concrete evidence boundary. “Unresolved” now means simulator-level
+parity evidence is still missing; it does not mean the aligned production
+default is absent.
 
 | Required semantic | Source is sufficiently specified? | Target owner | Required evidence before it changes status |
 | --- | --- | --- | --- |
@@ -275,12 +327,12 @@ unknown.
 | 26D residual transform, active-joint masking, early phase | Yes | `sim/manorl/abi.py` | Deterministic tensor cases for clipping, masking, transition step, accumulation, and limits. |
 | Target application and MuJoCo batched stepping | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/environment.py` | Focused source-counter test and two-world CPU smoke cover action/target/two-substep ordering. |
 | Reset, progress, completion, deviation penalty | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/abi.py`, `environment.py` | Focused terminal-observation/delayed-reset fixture and 791-call CPU episode smoke. |
-| Rewards and contact-window timing | Target-specific `target_hand_object_contact_v1` | `sim/manorl/environment.py`, `rewards.py` | Source raw movement `[690,982]` maps to inclusive sliced window `[250,542]`; strict pair-filtered forces, weighted fractions, exact 1 N exclusion, and broad-contact isolation are tested. Source reward equality is non-comparable because the fixture lacks pair-filtered forces. |
+| Rewards and contact-window timing | Source-aligned 2 N/contact-1x production contract | `sim/manorl/environment.py`, `rewards.py` | Source raw movement `[690,982]` maps to inclusive sliced window `[250,542]`; strict pair-filtered forces, weighted fractions, exact 2 N exclusion, and broad-contact isolation are tested. Cross-simulator return equality remains non-comparable because physics-derived forces differ. |
 | Privileged/state inputs | Yes: absent in this configuration | `sim/manorl/environment.py` | Assert no `states` output until a source config declares `numStates > 0`. |
 | Network, PointNet/FiLM preprocessing, and normalization | Yes | `sim/manorl/model.py`, `normalization.py` | Source module namespace/shape and shared-XYZ statistics are tested; frozen-normalizer and deterministic-mu equivalence on a captured source batch remain required. |
 | Inference action selection and skrl adapter | No local Mano source defines the downstream rl-games player choice | `sim/manorl/gymnasium_env.py`, `skrl_runtime.py` | Target policy mode is explicitly clipped normalized mean; deterministic CPU/CUDA physics rollouts and a stochastic PPO update smoke pass. No rl-games evaluation equivalence is claimed. |
-| Checkpoint and optimizer migration | File layout known; target conversion deliberately absent | `sim/manorl/checkpoint.py` | Native skrl I/O round trip requires `target_hand_object_contact_v1`; missing or mismatched reward contracts and rl-games inputs are rejected. Conversion would still require a key/shape report and loaded mu/value equivalence. |
-| Current-source versus checkpoint-sidecar training settings | Yes: they differ in named fields above | `sim/manorl/observations.py` / future `config.py` | Pure compatibility variants explicitly select current (100/static/250) or historical checkpoint (50/dynamic/200); serialize the selection before an environment or checkpoint claim. |
+| Checkpoint and optimizer migration | Explicit Gym rl-games to native skrl conversion is implemented for the validated FiLM/PointNet checkpoint family | `sim/manorl/gym_checkpoint.py`, `sim/manorl/checkpoint.py` | `tools/convert_gym_checkpoint.py` maps model, observation normalizer, value normalizer, and a versioned provenance sidecar. Raw rl-games inputs remain rejected; model key/shape and fixed-observation parity provide compatibility evidence without freezing Gym-v1 environment values as global loader rules. |
+| Current-source versus checkpoint-sidecar training settings | Yes: historical sidecar metadata differs from the successful invocation | `sim/manorl/observations.py`, `sim/manorl/view_environment.py` | Historical sidecar 50/dynamic/200 remains recorded evidence; successful 50/dynamic/250 evaluation is the only production runtime contract. |
 
 ## Gate disposition
 

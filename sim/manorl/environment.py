@@ -36,7 +36,7 @@ from sim.manorl.contracts import (
 )
 from sim.manorl.mjx_sim import CONTACT_CAPACITY, CONSTRAINT_CAPACITY, command_target
 from sim.manorl.observations import (
-    CURRENT_SOURCE_COMPATIBILITY,
+    SOURCE_ALIGNED_COMPATIBILITY,
     POINT_COUNT,
     ObservationCompatibility,
     ObservationResult,
@@ -47,10 +47,13 @@ from sim.manorl.observations import (
     geometry_encoding,
     quat_rotate_xyzw,
 )
-from sim.manorl.rewards import RewardDiagnostics, RewardState, compute_rewards
+from sim.manorl.rewards import RewardConfig, RewardDiagnostics, RewardState, compute_rewards
 from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch, wxyz_to_xyzw, xyzw_to_wxyz
 
 _FINGERTIP_NAMES = ("thumb_ip", "index_dip", "middle_dip", "ring_dip", "pinky_dip")
+POINT_SAMPLING_NUMPY_PER_ENV = "numpy_per_env"
+POINT_SAMPLING_TORCH_CUDA_GLOBAL = "torch_cuda_global"
+POINT_SAMPLING_AUTO = "auto"
 _FINGERTIP_LOCAL_OFFSETS = np.asarray(
     (
         (-0.028633, -0.004191, 0.023667),
@@ -80,15 +83,17 @@ class EnvironmentConfig:
     num_envs: int = 1
     device: str = "cpu"
     servo: ServoConfig = ServoConfig()
-    compatibility: ObservationCompatibility = CURRENT_SOURCE_COMPATIBILITY
+    compatibility: ObservationCompatibility = SOURCE_ALIGNED_COMPATIBILITY
     residual_enabled: bool = True
     residual_action: ResidualActionConfig = ResidualActionConfig()
     max_deviation_distance: float = TARGET_MAX_DEVIATION_DISTANCE
     deviation_penalty: float = 0.0
+    reward_config: RewardConfig = RewardConfig()
     episode_length: int = 600
     contact_capacity: int = CONTACT_CAPACITY
     constraint_capacity: int = CONSTRAINT_CAPACITY
     point_seed: int = 42
+    point_sampling_backend: str = POINT_SAMPLING_AUTO
     device_resident_controls: bool = False
     capture_transition_diagnostics: bool = True
     profile_phases: bool = False
@@ -104,6 +109,8 @@ class EnvironmentConfig:
             raise TypeError("servo must be a ServoConfig")
         if not isinstance(self.residual_enabled, bool):
             raise TypeError("residual_enabled must be bool")
+        if not isinstance(self.reward_config, RewardConfig):
+            raise TypeError("reward_config must be a RewardConfig")
         if self.max_deviation_distance < 0 or self.deviation_penalty < 0:
             raise ValueError("termination thresholds must be non-negative")
         if self.episode_length < 1:
@@ -112,6 +119,22 @@ class EnvironmentConfig:
             raise ValueError("MJX contact and constraint capacities must be positive")
         if self.compatibility.point_template_mode == "static_seed_42" and self.point_seed != 42:
             raise ValueError("static_seed_42 compatibility requires point_seed=42")
+        if self.point_sampling_backend == POINT_SAMPLING_AUTO:
+            object.__setattr__(
+                self,
+                "point_sampling_backend",
+                POINT_SAMPLING_TORCH_CUDA_GLOBAL if self.device == "gpu" else POINT_SAMPLING_NUMPY_PER_ENV,
+            )
+        if self.point_sampling_backend not in {
+            POINT_SAMPLING_NUMPY_PER_ENV,
+            POINT_SAMPLING_TORCH_CUDA_GLOBAL,
+        }:
+            raise ValueError("point_sampling_backend must be auto, numpy_per_env, or torch_cuda_global")
+        if (
+            self.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL
+            and self.compatibility.point_template_mode != "dynamic_reset"
+        ):
+            raise ValueError("torch_cuda_global point sampling requires dynamic_reset compatibility")
         if not isinstance(self.device_resident_controls, bool):
             raise TypeError("device_resident_controls must be bool")
         if not isinstance(self.capture_transition_diagnostics, bool):
@@ -505,6 +528,44 @@ def _dynamic_surface_template(generator: np.random.Generator) -> NDArray[np.floa
 
     seed = int(generator.integers(0, np.iinfo(np.int64).max))
     return _source_surface_points(seed)
+
+
+def _torch_global_surface_templates(batch_size: int) -> NDArray[np.float64]:
+    """Run the source CUDA sampler against PyTorch's global CUDA RNG."""
+
+    if batch_size < 1:
+        raise ValueError("dynamic point sampling batch must be positive")
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("torch_cuda_global point sampling requires CUDA")
+    device = torch.device("cuda")
+    triangles = torch.as_tensor(
+        object_collision_vertices().reshape(-1, 3, 3).copy(),
+        dtype=torch.float32,
+        device=device,
+    )
+    edge_1 = triangles[:, 1] - triangles[:, 0]
+    edge_2 = triangles[:, 2] - triangles[:, 0]
+    areas = torch.linalg.norm(torch.cross(edge_1, edge_2, dim=1), dim=1) * 0.5
+    area_cdf = torch.cumsum(areas / areas.sum(), dim=0)
+    area_cdf[-1] = 1.0
+    flat_count = batch_size * POINT_COUNT
+    face_indices = torch.searchsorted(
+        area_cdf,
+        torch.rand(flat_count, device=device),
+        right=False,
+    )
+    selected = triangles[face_indices].reshape(batch_size, POINT_COUNT, 3, 3)
+    barycentric = torch.rand(batch_size, POINT_COUNT, 2, device=device)
+    sqrt_u = torch.sqrt(barycentric[..., 0:1])
+    v = barycentric[..., 1:2]
+    points = (
+        (1.0 - sqrt_u) * selected[:, :, 0]
+        + sqrt_u * (1.0 - v) * selected[:, :, 1]
+        + sqrt_u * v * selected[:, :, 2]
+    )
+    return points.detach().cpu().numpy().astype(np.float64, copy=False)
 
 
 def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64]:
@@ -916,6 +977,14 @@ class MujocoManoEnvironment:
         )
         self.object_gravity_force = float(np.linalg.norm(self.object_gravity_world_force))
         self._point_rngs = [np.random.default_rng(config.point_seed + index) for index in range(config.num_envs)]
+        if config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
+            import torch
+
+            if not torch.cuda.is_available():
+                raise RuntimeError("torch_cuda_global point sampling requires CUDA")
+            # Source task construction samples one random-force probability per
+            # environment before policy construction and the first point reset.
+            torch.rand(config.num_envs, device="cuda")
         self._static_template = _source_surface_template(42)
         self._dynamic_templates: NDArray[np.float64] | None = None
         self.progress = np.zeros(config.num_envs, dtype=np.int64)
@@ -931,7 +1000,9 @@ class MujocoManoEnvironment:
         self.last_controller_targets: NDArray[np.float64] | None = np.zeros((config.num_envs, 26), dtype=np.float64)
         self.control_call = 0
         self.last_transition: TransitionSnapshot | None = None
+        self._initializing_point_templates = True
         self.reset()
+        self._initializing_point_templates = False
         self.reset_phase_profile()
 
     def _build_reference_tables(self) -> None:
@@ -985,6 +1056,12 @@ class MujocoManoEnvironment:
             return
         if self._dynamic_templates is None:
             self._dynamic_templates = np.zeros((self.config.num_envs, POINT_COUNT, 3), dtype=np.float64)
+        if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
+            if self._initializing_point_templates:
+                self._dynamic_templates[env_ids] = _source_surface_points(42)
+                return
+            self._dynamic_templates[env_ids] = _torch_global_surface_templates(len(env_ids))
+            return
         for env_id in env_ids:
             self._dynamic_templates[env_id] = _dynamic_surface_template(self._point_rngs[int(env_id)])
 
@@ -993,6 +1070,11 @@ class MujocoManoEnvironment:
 
         if not isinstance(seed, (int, np.integer)):
             raise TypeError("point-template seed must be an integer")
+        if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
+            import torch
+
+            torch.cuda.manual_seed_all(int(seed))
+            return
         self._point_rngs = [
             np.random.default_rng(int(seed) + index) for index in range(self.config.num_envs)
         ]
@@ -1290,6 +1372,7 @@ class MujocoManoEnvironment:
             self._reward_state(physical),
             compatibility=self.config.compatibility,
             termination=termination,
+            config=self.config.reward_config,
         )
         self._phase_stop("reward", reward_phase)
         observation_phase = self._phase_start("observation")

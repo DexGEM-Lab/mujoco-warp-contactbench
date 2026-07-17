@@ -545,6 +545,11 @@ def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytes
         )
 
 
+def test_removed_policy_contract_cli_is_rejected() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--policy-contract", "auto"])
+
+
 def test_viewer_requires_a_graphical_session(monkeypatch: pytest.MonkeyPatch) -> None:
     from sim.manorl.view_environment import _require_graphical_session
 

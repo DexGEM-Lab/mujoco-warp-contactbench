@@ -295,7 +295,7 @@ def test_reward_state_filters_broad_contacts_before_reward() -> None:
         env._reward_state(physical), compatibility=CURRENT_SOURCE_COMPATIBILITY, termination=termination
     )
     filtered_forces = np.zeros((1, 16, 3), dtype=np.float64)
-    filtered_forces[:, 3] = [1.1, 0.0, 0.0]
+    filtered_forces[:, 3] = [2.1, 0.0, 0.0]
     filtered = compute_rewards(
         env._reward_state(replace(physical, hand_object_force_on_object_world_N=filtered_forces)),
         compatibility=CURRENT_SOURCE_COMPATIBILITY,
@@ -303,7 +303,7 @@ def test_reward_state_filters_broad_contacts_before_reward() -> None:
     )
 
     np.testing.assert_allclose(broad_only.contact, [0.0])
-    np.testing.assert_allclose(filtered.contact, [1.2])
+    np.testing.assert_allclose(filtered.contact, [0.4])
 
 
 def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> None:
@@ -482,7 +482,9 @@ def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajector
     assert env.last_physical is not None
     world_cloud = env.object_point_cloud_world()
     template = env._point_template()
-    local = np.asarray(template.local_points, dtype=np.float64) * np.asarray(template.scale, dtype=np.float64)
+    local = np.asarray(template.local_points, dtype=np.float64)
+    if template.normalized:
+        local = local * np.asarray(template.scale, dtype=np.float64)
     expected = quat_rotate_xyzw(
         np.broadcast_to(env.last_physical.object_orientation_xyzw[:, None, :], (1, 64, 4)),
         np.broadcast_to(local, (1, 64, 3)),
@@ -490,7 +492,11 @@ def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajector
     np.testing.assert_allclose(world_cloud, expected, rtol=0.0, atol=1e-12)
     assert env.last_observation is not None
     normalized_hand_relative = env.last_observation.raw[:, OBSERVATION_SLICES["object_point_cloud_raw"]].reshape(1, 64, 3)
-    assert not np.allclose(world_cloud, normalized_hand_relative + env.last_physical.hand_position[:, None, :])
+    recovered_world = normalized_hand_relative + env.last_physical.hand_position[:, None, :]
+    if template.normalized:
+        assert not np.allclose(world_cloud, recovered_world)
+    else:
+        np.testing.assert_allclose(world_cloud, recovered_world, rtol=0.0, atol=1e-12)
 
 
 def test_transition_snapshot_preserves_action_reference_and_partial_rerun_close(trajectory, tmp_path) -> None:
@@ -743,10 +749,10 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     }
     assert metadata["reward_contract"] == REWARD_CONTRACT_ID
     assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
-    assert metadata["ppo_reward_scale"] == 1.0
-    assert metadata["environment_contract"] == "target_residual_reduced_thumb_authority_xy_0p001_z_0p003_gamma_0p9_cap_xy_0p01_z_0p03_deviation_0p10_v3"
-    assert metadata["residual_action"]["position_scale"] == [0.001, 0.001, 0.003]
-    assert metadata["residual_action"]["max_position_offset"] == [0.01, 0.01, 0.03]
+    assert metadata["ppo_reward_scale"] == 0.5
+    assert metadata["environment_contract"] == "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_deviation_0p10_v1"
+    assert metadata["residual_action"]["position_scale"] == [0.005, 0.005, 0.005]
+    assert metadata["residual_action"]["max_position_offset"] == [0.05, 0.05, 0.05]
     assert metadata["thresholds"]["observation_contact_threshold_N"] == 2.0
     assert metadata["thresholds"]["reward_hand_object_threshold_N"] == REWARD_HAND_OBJECT_THRESHOLD_N
     assert "contact_force_threshold" not in metadata["thresholds"]
@@ -939,7 +945,10 @@ def test_two_world_cpu_vector_smoke_has_independent_equal_worlds(trajectory) -> 
         observation, reward, reset, extras = env.step(zero)
         assert observation["obs"].shape == (2, 476)
         assert reward.shape == reset.shape == extras["time_outs"].shape == (2,)
-        np.testing.assert_allclose(observation["obs"][0], observation["obs"][1], rtol=0, atol=1e-10)
+        point_slice = slice(74, 266)
+        np.testing.assert_allclose(observation["obs"][0, :74], observation["obs"][1, :74], rtol=0, atol=1e-10)
+        np.testing.assert_allclose(observation["obs"][0, 266:], observation["obs"][1, 266:], rtol=0, atol=1e-10)
+        assert not np.array_equal(observation["obs"][0, point_slice], observation["obs"][1, point_slice])
         np.testing.assert_allclose(reward[0], reward[1], rtol=0, atol=1e-10)
     assert env.last_physical is not None
     assert np.all(env.last_physical.contact_count > 0)

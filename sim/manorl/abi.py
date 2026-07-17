@@ -14,36 +14,35 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-THUMB_JOINT_SCALE: Final = (0.05, 0.06, 0.044, 0.01)
-THUMB_JOINT_CAP: Final = (0.5, 0.6, 0.44, 0.1)
-
-_JOINT_SCALE = np.asarray(
-    list(THUMB_JOINT_SCALE) + [0.024, 0.04, 0.06, 0.01] * 4,
-    dtype=np.float64,
+SOURCE_ALIGNED_JOINT_SCALE: Final = tuple(
+    [0.10, 0.12, 0.044, 0.01] + [0.024, 0.04, 0.06, 0.01] * 4
 )
-_JOINT_LIMIT = np.asarray(
-    list(THUMB_JOINT_CAP) + [0.24, 0.4, 0.6, 0.1] * 4,
-    dtype=np.float64,
+SOURCE_ALIGNED_JOINT_CAP: Final = tuple(
+    [1.0, 1.2, 0.44, 0.1] + [0.24, 0.4, 0.6, 0.1] * 4
 )
 
-# This binds the target's control mapping and terminal reset behavior separately
-# from the reward contracts. Historical source defaults remain documented as ABI
-# evidence but are not target training defaults.
-ENVIRONMENT_CONTRACT_ID: Final = "target_residual_reduced_thumb_authority_xy_0p001_z_0p003_gamma_0p9_cap_xy_0p01_z_0p03_deviation_0p10_v3"
+# This binds the source-aligned production control mapping and terminal reset
+# separately from reward contracts.
+ENVIRONMENT_CONTRACT_ID: Final = "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_deviation_0p10_v1"
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
-
 
 @dataclass(frozen=True)
 class ResidualActionConfig:
-    """Target training residual action mapping over the unchanged normalized Box."""
+    """Source-aligned production residual mapping over the normalized action Box."""
 
     gamma_xy: float = 0.9
     gamma_z: float = 0.9
     gamma_joints: float = 0.9
-    position_scale: tuple[float, float, float] = (0.001, 0.001, 0.003)
+    position_scale: tuple[float, float, float] = (0.005, 0.005, 0.005)
     rotation_scale: float = 0.01
-    max_position_offset: tuple[float, float, float] = (0.01, 0.01, 0.03)
-    early_phase_steps: int = 100
+    max_position_offset: tuple[float, float, float] = (0.05, 0.05, 0.05)
+    joint_scale: tuple[float, ...] = SOURCE_ALIGNED_JOINT_SCALE
+    max_joint_offset: tuple[float, ...] = SOURCE_ALIGNED_JOINT_CAP
+    early_phase_steps: int = 50
+
+
+SOURCE_ALIGNED_RESIDUAL_ACTION: Final = ResidualActionConfig()
+CHECKPOINT_SIDECAR_RESIDUAL_ACTION: Final = SOURCE_ALIGNED_RESIDUAL_ACTION
 
 
 @dataclass(frozen=True)
@@ -83,7 +82,7 @@ def early_phase_mask(
     trajectory_steps: NDArray[object],
     *,
     starts: NDArray[object] | None = None,
-    steps: int = 100,
+    steps: int = 50,
 ) -> NDArray[np.bool_]:
     """Return the source half-open early pure-mocap interval."""
 
@@ -159,8 +158,15 @@ def process_residual_actions(
     zero_offset = ~residual | early | exit_early
     accumulate = (steps != 0) & ~early & residual
 
-    scaled_position = processed[:, 0:3] * np.asarray(config.position_scale)
-    scaled_joints = processed[:, 6:26] * _JOINT_SCALE
+    position_scale = np.asarray(config.position_scale, dtype=np.float64)
+    joint_scale = np.asarray(config.joint_scale, dtype=np.float64)
+    joint_limit = np.asarray(config.max_joint_offset, dtype=np.float64)
+    if position_scale.shape != (3,) or joint_scale.shape != (20,) or joint_limit.shape != (20,):
+        raise ValueError("residual action scales and limits must have 3D position and 20D joint shapes")
+    if not np.all(np.isfinite(position_scale)) or not np.all(np.isfinite(joint_scale)) or not np.all(np.isfinite(joint_limit)):
+        raise ValueError("residual action scales and limits must be finite")
+    scaled_position = processed[:, 0:3] * position_scale
+    scaled_joints = processed[:, 6:26] * joint_scale
     next_position = position_offset.copy()
     next_joint = old_joint_offset.copy()
     next_position[zero_offset] = 0.0
@@ -178,7 +184,7 @@ def process_residual_actions(
     )
     position_limit = np.asarray(config.max_position_offset, dtype=np.float64)
     next_position = np.clip(next_position, -position_limit, position_limit)
-    next_joint = np.clip(next_joint, -_JOINT_LIMIT, _JOINT_LIMIT)
+    next_joint = np.clip(next_joint, -joint_limit, joint_limit)
 
     residual_targets = np.zeros_like(targets)
     residual_targets[:, 0:3] = next_position

@@ -12,7 +12,6 @@ from skrl.agents.torch.ppo import PPO
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.envs.wrappers.torch.gymnasium_envs import GymnasiumWrapper
 from skrl.memories.torch import RandomMemory
-from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 from skrl.utils.spaces.torch import (
     flatten_tensorized_space,
@@ -25,8 +24,17 @@ from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
 from sim.manorl.environment import PhaseTimings
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
-from sim.manorl.normalization import PointCloudAwareRunningStandardScaler
+from sim.manorl.normalization import PointCloudAwareRunningStandardScaler, SourceRunningStandardScaler
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
+
+
+def source_aligned_reward_shaper(
+    rewards: torch.Tensor, timestep: int, timesteps: int
+) -> torch.Tensor:
+    """Apply the rl-games 0.5 reward shaper without changing environment telemetry."""
+
+    del timestep, timesteps
+    return rewards * PPO_REWARD_SCALE
 
 
 @dataclass(frozen=True)
@@ -47,9 +55,6 @@ class ManoPPOConfig:
     grad_norm_clip: float = 1.0
     time_limit_bootstrap: bool = True
     profile_phases: bool = False
-    # Match the Gym baseline by default. FiLM is an explicit opt-in for
-    # experiments and is persisted in checkpoint metadata.
-    use_film: bool = False
 
     def __post_init__(self) -> None:
         if self.rollouts < 1 or self.minibatch_size < 1 or self.learning_epochs < 1:
@@ -78,16 +83,15 @@ class ManoPPOConfig:
             "learning_rate_scheduler_kwargs": {"kl_threshold": self.kl_threshold},
             "observation_preprocessor": PointCloudAwareRunningStandardScaler,
             "observation_preprocessor_kwargs": {"size": 476, "device": device},
-            "value_preprocessor": RunningStandardScaler,
-            "value_preprocessor_kwargs": {"size": 1, "device": device},
+            "value_preprocessor": SourceRunningStandardScaler,
+            "value_preprocessor_kwargs": {"size": 1, "epsilon": 1.0e-5, "device": device},
             "grad_norm_clip": self.grad_norm_clip,
             "ratio_clip": self.ratio_clip,
             "value_clip": self.value_clip,
             "entropy_loss_scale": self.entropy_loss_scale,
             "value_loss_scale": self.value_loss_scale,
             "time_limit_bootstrap": self.time_limit_bootstrap,
-            # skrl defaults rewards_shaper to None. Omitting the key is the
-            # raw-environment-reward contract, not an identity callback.
+            "rewards_shaper": source_aligned_reward_shaper,
             # Target AMP execution is a device policy, not a PPO semantic. It
             # remains off for deterministic CPU smoke coverage.
             "mixed_precision": False,
@@ -163,7 +167,6 @@ class ManoSkrlRuntime:
             self.env.state_space,
             self.env.action_space,
             device=self.device,
-            use_film=config.use_film,
         )
         self.memory = RandomMemory(memory_size=config.rollouts, num_envs=environment.num_envs, device=self.device)
         self.agent = PPO(
@@ -195,6 +198,9 @@ class ManoSkrlRuntime:
             "environment": {
                 "residual_enabled": self.gymnasium_env.environment.config.residual_enabled,
                 "residual_action": asdict(self.gymnasium_env.environment.config.residual_action),
+                "compatibility": asdict(self.gymnasium_env.environment.config.compatibility),
+                "point_sampling_backend": self.gymnasium_env.environment.config.point_sampling_backend,
+                "reward": asdict(self.gymnasium_env.environment.config.reward_config),
                 "max_deviation_distance": self.gymnasium_env.environment.config.max_deviation_distance,
             },
             "ppo": asdict(self.config),

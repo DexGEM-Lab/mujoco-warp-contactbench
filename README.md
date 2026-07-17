@@ -160,23 +160,27 @@ single 791-call replay. Both runtime controls default to `true`: use
 `--use_residual false` for source-reference diagnostics and `--terminal false`
 for formal source-horizon termination only.
 
-To render the deterministic mean policy from the copied Server2 checkpoint,
-keep its native `.pt.json` sidecar beside the checkpoint:
+To render a deterministic mean policy, keep its `.pt.json` sidecar beside the
+checkpoint. The sidecar records the checkpoint's versioned runtime and migration
+provenance; model key/shape compatibility is checked against the current runtime
+when the checkpoint loads. Native resume separately requires current training
+contract IDs.
 
 ```bash
 JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
   --device gpu \
-  --checkpoint outputs/manorl/server2_best_cube1_01_2500/server2_cube1_01_128env_2500u_20260716_010529.pt \
-  --object cube1 --gesture 01 --num-envs 128 --render-env 0 --no-loop
+  --checkpoint outputs/gym_checkpoint_alignment_20260717/MANOHand_film_dynamic_residual_true_v7.pt \
+  --object cube1 --gesture 01 --num-envs 1 --render-env 0 --no-loop
 ```
 
 ### ManoRL PPO Training
 
 The Cube1 fast-training contract is documented in
 [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
-PPO optimizes the raw environment reward at `1.0x`; it intentionally does not
-reuse IsaacGym's `0.5x` reward shaper. Run the fixed 64-world budget with W&B
-tracking disabled by default. This executes 64 updates of 48 rollout steps
+PPO uses the source-aligned `0.5x` reward shaper over the raw environment
+reward. The environment keeps contact reward at `1.0x` with a strict `2 N`
+pair-filtered threshold and maximum contact quality `0.4`. Run the fixed
+64-world budget with W&B tracking disabled by default. This executes 64 updates of 48 rollout steps
 (196,608 transitions); it has no wall-clock cutoff unless one is explicitly
 requested:
 

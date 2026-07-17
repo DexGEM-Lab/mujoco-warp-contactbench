@@ -199,10 +199,12 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
         "primary_axis": "completed_ppo_updates",
         "secondary_metrics": ["transitions"],
     }
-    assert config["reward"]["ppo_scale"] == 1.0
-    assert config["environment"]["contract"] == "target_residual_reduced_thumb_authority_xy_0p001_z_0p003_gamma_0p9_cap_xy_0p01_z_0p03_deviation_0p10_v3"
-    assert config["environment"]["residual_action"]["position_scale"] == [0.001, 0.001, 0.003]
-    assert config["environment"]["residual_action"]["max_position_offset"] == [0.01, 0.01, 0.03]
+    assert config["reward"]["ppo_scale"] == 0.5
+    assert config["environment"]["contract"] == "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_deviation_0p10_v1"
+    assert config["environment"]["residual_action"]["position_scale"] == [0.005, 0.005, 0.005]
+    assert config["environment"]["residual_action"]["max_position_offset"] == [0.05, 0.05, 0.05]
+    assert config["environment"]["residual_action"]["joint_scale"][:4] == [0.1, 0.12, 0.044, 0.01]
+    assert config["environment"]["residual_action"]["early_phase_steps"] == 50
     assert config["environment"]["max_deviation_distance"] == 0.10
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
     assert config["evaluation"]["num_envs"] == 64
