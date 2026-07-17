@@ -167,13 +167,13 @@ assignments and devices. It creates the output parent before initialization and
 passes it as W&B's local directory, so SDK state is stored at
 `<output-parent>/wandb` under ignored training outputs rather than the repository
 root. It records the complete serializable training/PPO/raw reward configuration,
-logs each PPO update against monotonic environment transitions with scalar means
+logs each PPO update against its completed PPO update count as the primary W&B axis, with monotonic environment transitions retained as the `transitions` secondary metric. It records scalar means
 for `total`, `distance_x`, `distance_y`, `distance_z`, `rotation`,
 `action_penalty`, `contact`, `object_stability`, `survival`, and
 `deviation_penalty`, alongside `reward_mean`. It also records
 `completed_episode_count` and, only when one or more episodes complete in that
 update, `episode_return_mean`. It also records instantaneous and cumulative
-environment transitions per second for each PPO update, plus final throughput.
+environment transitions per second for each PPO update, plus final throughput. Initial and final evaluations use the corresponding completed PPO update count as their W&B step.
 Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
 record with parallel `env_ids` and exact `returns` arrays to
 `<output>.episodes.jsonl`; active records first accumulate in
