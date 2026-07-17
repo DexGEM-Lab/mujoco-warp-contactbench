@@ -179,8 +179,9 @@ The Cube1 fast-training contract is documented in
 [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
 PPO uses the source-aligned `0.5x` reward shaper over the raw environment
 reward. The environment keeps contact reward at `1.0x` with a strict `2 N`
-pair-filtered threshold and maximum contact quality `0.4`. Run the fixed
-64-world budget with W&B tracking disabled by default. This executes 64 updates of 48 rollout steps
+pair-filtered threshold and maximum contact quality `0.4`. W&B tracking is
+enabled by default; pass `--wandb false` for a local-only diagnostic. Run the
+fixed 64-world budget as 64 updates of 48 rollout steps
 (196,608 transitions); it has no wall-clock cutoff unless one is explicitly
 requested:
 

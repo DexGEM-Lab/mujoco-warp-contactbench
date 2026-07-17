@@ -643,7 +643,8 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert tool.main(["--output", str(tmp_path / "default")]) == 0
     assert captured[-1][1].wall_clock_seconds is None
     assert captured[-1][1].checkpoint_interval_updates is None
-    assert captured[-1][1].minibatch_size == 1024
+    assert captured[-1][1].minibatch_size is None
+    assert captured[-1][1].resolved_minibatch_size == 1024
 
     assert tool.main([
         "--output", str(tmp_path / "capped"),
@@ -657,6 +658,12 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
         "--output", str(tmp_path / "server2"), "--num-envs", "4096", "--minibatch-size", "4096",
     ]) == 0
     assert captured[-1][1].minibatch_size == 4096
+
+    assert tool.main([
+        "--output", str(tmp_path / "server2-default"), "--num-envs", "2048",
+    ]) == 0
+    assert captured[-1][1].minibatch_size is None
+    assert captured[-1][1].resolved_minibatch_size == 4096
 
 
 def test_training_observer_quiets_viewer_for_json_console(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -861,7 +868,13 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
     with pytest.raises(RuntimeError, match="viewer failed"):
         tool.run(
             tmp_path / "run",
-            tool.TrainingBudget(num_envs=1, updates=1, minibatch_size=1, rerun_output=str(rerun_output)),
+            tool.TrainingBudget(
+                num_envs=1,
+                updates=1,
+                minibatch_size=1,
+                rerun_output=str(rerun_output),
+                wandb=tool.WandbOptions(enabled=False),
+            ),
         )
     assert recorder_closed == [True]
 
@@ -934,7 +947,15 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     monkeypatch.setattr(tool, "_evaluate", evaluate)
     monkeypatch.setattr(tool, "_train", lambda *args, **kwargs: ([], 0, 0.0))
 
-    result = tool.run(tmp_path / "run", tool.TrainingBudget(num_envs=4096, updates=1, minibatch_size=4096))
+    result = tool.run(
+        tmp_path / "run",
+        tool.TrainingBudget(
+            num_envs=4096,
+            updates=1,
+            minibatch_size=4096,
+            wandb=tool.WandbOptions(enabled=False),
+        ),
+    )
 
     assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048), ("evaluation-2", 128, 2048)]
     assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-2", "trained")]

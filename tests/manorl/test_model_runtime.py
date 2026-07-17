@@ -131,6 +131,9 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     assert rollout["steps"] == 2
     assert torch.isfinite(rollout["observations"]).all()
     assert runtime.one_update_smoke()
+    assert runtime.agent.tracking_data["Learning / Completed minibatches"][-1] == 1
+    assert "policy_mean" in runtime.memory.tensors
+    assert "policy_std" in runtime.memory.tensors
 
     checkpoint = save_skrl_checkpoint(
         runtime.agent, tmp_path / "manorl.pt", runtime_config=runtime.checkpoint_metadata()
@@ -165,12 +168,27 @@ def test_source_ppo_batch_divisibility_is_explicit() -> None:
     from sim.manorl.rewards import PPO_REWARD_SCALE
     from sim.manorl.skrl_runtime import ManoPPOConfig
 
-    config = ManoPPOConfig().skrl_config(num_envs=64, device="cpu")
+    config = ManoPPOConfig().skrl_config(num_envs=2048, device="cpu")
     assert config["rollouts"] == 48
-    assert config["mini_batches"] == 3
+    assert config["mini_batches"] == 24
     assert config["time_limit_bootstrap"] is True
     assert config["value_loss_scale"] == 4.0
     assert config["rewards_shaper"](torch.ones(1), 0, 1).item() == 0.5
     assert PPO_REWARD_SCALE == 0.5
     with pytest.raises(ValueError, match="must divide"):
         ManoPPOConfig().skrl_config(num_envs=1, device="cpu")
+
+
+def test_gym_aligned_ppo_completes_every_minibatch_without_kl_early_stop(
+    adapter: ManoGymnasiumVectorEnv,
+) -> None:
+    from sim.manorl.rl_games_ppo import RlGamesPPO
+    from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
+
+    config = ManoPPOConfig(rollouts=4, minibatch_size=2, learning_epochs=2)
+    runtime = ManoSkrlRuntime(adapter, config)
+
+    assert isinstance(runtime.agent, RlGamesPPO)
+    assert runtime.one_update_smoke()
+    assert runtime.agent.tracking_data["Learning / Completed minibatches"][-1] == 4
+    assert len(runtime.agent.tracking_data["Learning / Exact KL mean"]) == 1

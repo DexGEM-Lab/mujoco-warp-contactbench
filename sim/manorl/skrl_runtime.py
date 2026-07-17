@@ -8,11 +8,9 @@ from typing import Any
 import gymnasium
 import torch
 
-from skrl.agents.torch.ppo import PPO
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.envs.wrappers.torch.gymnasium_envs import GymnasiumWrapper
 from skrl.memories.torch import RandomMemory
-from skrl.resources.schedulers.torch import KLAdaptiveLR
 from skrl.utils.spaces.torch import (
     flatten_tensorized_space,
     tensorize_space,
@@ -26,6 +24,7 @@ from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
 from sim.manorl.normalization import PointCloudAwareRunningStandardScaler, SourceRunningStandardScaler
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
+from sim.manorl.rl_games_ppo import RlGamesAdaptiveLR, RlGamesPPO
 
 
 def source_aligned_reward_shaper(
@@ -42,7 +41,7 @@ class ManoPPOConfig:
     """PPO objective settings resolved from the current MANOHand source config."""
 
     rollouts: int = 48
-    minibatch_size: int = 1024
+    minibatch_size: int = 4096
     learning_epochs: int = 3
     discount_factor: float = 0.99
     gae_lambda: float = 0.95
@@ -64,7 +63,7 @@ class ManoPPOConfig:
     def optimizer_smoke(cls) -> "ManoPPOConfig":
         """Minimal non-training configuration that forces one finite update."""
 
-        return cls(rollouts=2, minibatch_size=2, learning_epochs=1, kl_threshold=0.0)
+        return cls(rollouts=2, minibatch_size=2, learning_epochs=1)
 
     def skrl_config(self, *, num_envs: int, device: str) -> dict[str, Any]:
         batch_size = self.rollouts * num_envs
@@ -79,7 +78,7 @@ class ManoPPOConfig:
             "discount_factor": self.discount_factor,
             "gae_lambda": self.gae_lambda,
             "learning_rate": self.learning_rate,
-            "learning_rate_scheduler": KLAdaptiveLR,
+            "learning_rate_scheduler": RlGamesAdaptiveLR,
             "learning_rate_scheduler_kwargs": {"kl_threshold": self.kl_threshold},
             "observation_preprocessor": PointCloudAwareRunningStandardScaler,
             "observation_preprocessor_kwargs": {"size": 476, "device": device},
@@ -169,7 +168,7 @@ class ManoSkrlRuntime:
             device=self.device,
         )
         self.memory = RandomMemory(memory_size=config.rollouts, num_envs=environment.num_envs, device=self.device)
-        self.agent = PPO(
+        self.agent = RlGamesPPO(
             models={"policy": self.model, "value": self.model},
             memory=self.memory,
             observation_space=self.env.observation_space,

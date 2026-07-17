@@ -72,6 +72,15 @@ PPO defers its first update until source contact onset step 250. Earlier
 rollouts are pure tracking phases; optimizing them changes shared actor/critic
 features before the contact reward can discriminate residual corrections.
 
+The policy update uses the resolved Gym run's legacy adaptive-KL contract.
+Each rollout stores the Gaussian policy mean and standard deviation. Every
+completed minibatch computes the source rl-games exact Gaussian KL against
+those stored parameters, updates the stored reference for that minibatch, and
+immediately adjusts learning rate by factor `1.5` within `[1e-6, 1e-2]` around
+the `0.016` threshold. The target does not use skrl's sampled-log-ratio KL to
+stop a learning epoch early. Exact and approximate KL are both telemetry, but
+only exact KL controls the scheduler.
+
 ## Evaluation
 
 Run deterministic mean-action evaluation for one fixed 791-call episode before
@@ -130,10 +139,13 @@ To apply an opt-in time cap, add `--wall-clock-seconds <positive-seconds>`.
 The cap may stop the run before the fixed 64-update, 196,608-transition budget
 is complete.
 
-PPO uses a 1024-sample minibatch by default. `--minibatch-size 4096` selects
-the IsaacGym-sized minibatch for the 4096-world Server2 run; the selected value
-must divide the 48-rollout vector batch and is recorded in both metrics and
-native checkpoint runtime configuration.
+The validated Gym checkpoint's resolved run config uses a 4096-sample
+minibatch. ManoRL therefore defaults to the largest divisor shared by `4096`
+and the configured 48-step rollout batch: this resolves to `4096` for the
+2,048- and 4,096-world Server2 runs and to `1024` for the 64-world fast
+protocol. `--minibatch-size` remains an explicit override; any selected value
+must divide the rollout batch and is recorded in metrics and native checkpoint
+runtime configuration.
 
 For the 2,500-update Server2 run, add `--checkpoint-interval-updates 100`.
 After every 100 completed PPO updates, the output-prefix namespace receives
@@ -143,10 +155,11 @@ final checkpoint. Its fixed sidecar records native compatibility only; exact
 progress remains in the numbered and final checkpoint sidecars. The legacy final
 `<output>.pt` checkpoint remains separate.
 
-### Optional W&B Tracking
+### W&B Tracking
 
-W&B tracking is disabled unless `--wandb true` is passed. Provision the exact
-training interpreter from the locked W&B release before enabling it:
+W&B tracking is enabled by default. Pass `--wandb false` for an explicit local
+or diagnostic run that must not initialize W&B. Provision the exact training
+interpreter from the locked W&B release before using the default:
 
 ```bash
 /home/jay/anaconda3/envs/manorl_mujoco/bin/uv pip install \
@@ -178,6 +191,10 @@ for `total`, `distance_x`, `distance_y`, `distance_z`, `rotation`,
 `completed_episode_count` and, only when one or more episodes complete in that
 update, `episode_return_mean`. It also records instantaneous and cumulative
 environment transitions per second for each PPO update, plus final throughput. Initial and final evaluations use the corresponding completed PPO update count as their W&B step.
+Every PPO update also records exact KL mean/min/max, approximate KL mean,
+learning-rate start/end/min/max, scheduler increase/decrease counts, and the
+number of completed minibatches. These metrics are emitted even when no episode
+completes, so early scheduler failures cannot be hidden by episode logging.
 Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
 record with parallel `env_ids` and exact `returns` arrays to
 `<output>.episodes.jsonl`; active records first accumulate in

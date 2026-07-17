@@ -53,6 +53,16 @@ SKRL_TRACKING_METRICS = (
     ("Loss / Value loss", "losses/c_loss"),
     ("Loss / Entropy loss", "losses/entropy"),
     ("Learning / Learning rate", "info/last_lr"),
+    ("Learning / Learning rate start", "info/lr_start"),
+    ("Learning / Learning rate min", "info/lr_min"),
+    ("Learning / Learning rate max", "info/lr_max"),
+    ("Learning / Exact KL mean", "info/exact_kl_mean"),
+    ("Learning / Exact KL min", "info/exact_kl_min"),
+    ("Learning / Exact KL max", "info/exact_kl_max"),
+    ("Learning / Approximate KL mean", "info/approximate_kl_mean"),
+    ("Learning / Scheduler increases", "info/lr_scheduler_increases"),
+    ("Learning / Scheduler decreases", "info/lr_scheduler_decreases"),
+    ("Learning / Completed minibatches", "info/completed_minibatches"),
     ("Policy / Standard deviation", "info/policy_std"),
     ("Stats / Algorithm update time (ms)", "performance/algorithm_update_time_ms"),
 )
@@ -60,7 +70,7 @@ SKRL_TRACKING_METRICS = (
 
 @dataclass(frozen=True)
 class WandbOptions:
-    enabled: bool = False
+    enabled: bool = True
     project: str = "one_policy"
     group: str = "s02"
     entity: str = ""
@@ -93,7 +103,7 @@ class TrainingBudget:
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
     checkpoint_interval_updates: int | None = None
-    minibatch_size: int = ManoPPOConfig().minibatch_size
+    minibatch_size: int | None = None
     evaluation_num_envs: int | None = None
     headless: bool = True
     viewer_envs: int = 1
@@ -106,6 +116,13 @@ class TrainingBudget:
     @property
     def transitions(self) -> int:
         return self.num_envs * ManoPPOConfig().rollouts * self.updates
+
+    @property
+    def resolved_minibatch_size(self) -> int:
+        if self.minibatch_size is not None:
+            return self.minibatch_size
+        rollout_batch = self.num_envs * ManoPPOConfig().rollouts
+        return math.gcd(ManoPPOConfig().minibatch_size, rollout_batch)
 
     @property
     def resolved_capture_transition_diagnostics(self) -> bool:
@@ -275,6 +292,16 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
             "losses/c_loss",
             "losses/entropy",
             "info/last_lr",
+            "info/lr_start",
+            "info/lr_min",
+            "info/lr_max",
+            "info/exact_kl_mean",
+            "info/exact_kl_min",
+            "info/exact_kl_max",
+            "info/approximate_kl_mean",
+            "info/lr_scheduler_increases",
+            "info/lr_scheduler_decreases",
+            "info/completed_minibatches",
             "info/policy_std",
             "rewards/frame",
             "rewards/iter",
@@ -998,7 +1025,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         ),
     )
     ppo_config = ManoPPOConfig(
-        minibatch_size=budget.minibatch_size,
+        minibatch_size=budget.resolved_minibatch_size,
         profile_phases=budget.profile_phases,
     )
     ppo_config.skrl_config(num_envs=budget.num_envs, device="cuda")
@@ -1241,7 +1268,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint-interval-updates", type=int)
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--evaluation-num-envs", type=int)
-    parser.add_argument("--minibatch-size", type=int, default=ManoPPOConfig().minibatch_size)
+    parser.add_argument(
+        "--minibatch-size",
+        type=int,
+        help="override resolved Gym minibatch size (default: largest 4096-compatible divisor)",
+    )
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
@@ -1274,7 +1305,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="synchronize CUDA/JAX at explicit rollout and PPO phase boundaries and emit timings",
     )
-    parser.add_argument("--wandb", type=parse_cli_bool, default=False, metavar="{true,false}")
+    parser.add_argument("--wandb", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
     parser.add_argument("--wandb-entity", default="")
@@ -1286,8 +1317,13 @@ def main(argv: list[str] | None = None) -> int:
     evaluation_num_envs_maximum = min(args.num_envs, 128)
     if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
         parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")
+    resolved_minibatch_size = TrainingBudget(
+        num_envs=args.num_envs, minibatch_size=args.minibatch_size
+    ).resolved_minibatch_size
     try:
-        ManoPPOConfig(minibatch_size=args.minibatch_size).skrl_config(num_envs=args.num_envs, device="cuda")
+        ManoPPOConfig(minibatch_size=resolved_minibatch_size).skrl_config(
+            num_envs=args.num_envs, device="cuda"
+        )
     except ValueError as exc:
         parser.error(str(exc))
     if args.checkpoint_interval_updates is not None and args.checkpoint_interval_updates < 1:
