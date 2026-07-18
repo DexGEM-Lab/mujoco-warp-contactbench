@@ -87,8 +87,10 @@ The first migration slice is isolated under `sim/manorl/`. It reads one settled
 trajectory without `lance_manager`, builds a MuJoCo model from curated source
 URDF/collision assets, and runs residual-off reference control. The current
 ManoRL path implements observations, target rewards, native SKRL PPO training,
-and native checkpoint round trips; conversion from Isaac rl-games checkpoints
-remains deliberately unsupported.
+and native checkpoint round trips. Raw Isaac rl-games checkpoints are still
+rejected by the native loader; for the validated source format, run the
+explicit `tools/convert_gym_checkpoint.py` converter to produce a native skrl
+checkpoint and provenance sidecar before loading it.
 
 Copying the PhysX drive values into an external MuJoCo torque law was falsified
 in free space: the explicit damping kick drove the maximum DOF velocity to about
