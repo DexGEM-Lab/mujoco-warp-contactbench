@@ -53,6 +53,16 @@ SKRL_TRACKING_METRICS = (
     ("Loss / Value loss", "losses/c_loss"),
     ("Loss / Entropy loss", "losses/entropy"),
     ("Learning / Learning rate", "info/last_lr"),
+    ("Learning / Learning rate start", "info/lr_start"),
+    ("Learning / Learning rate min", "info/lr_min"),
+    ("Learning / Learning rate max", "info/lr_max"),
+    ("Learning / Exact KL mean", "info/exact_kl_mean"),
+    ("Learning / Exact KL min", "info/exact_kl_min"),
+    ("Learning / Exact KL max", "info/exact_kl_max"),
+    ("Learning / Approximate KL mean", "info/approximate_kl_mean"),
+    ("Learning / Scheduler increases", "info/lr_scheduler_increases"),
+    ("Learning / Scheduler decreases", "info/lr_scheduler_decreases"),
+    ("Learning / Completed minibatches", "info/completed_minibatches"),
     ("Policy / Standard deviation", "info/policy_std"),
     ("Stats / Algorithm update time (ms)", "performance/algorithm_update_time_ms"),
 )
@@ -60,7 +70,7 @@ SKRL_TRACKING_METRICS = (
 
 @dataclass(frozen=True)
 class WandbOptions:
-    enabled: bool = False
+    enabled: bool = True
     project: str = "one_policy"
     group: str = "s02"
     entity: str = ""
@@ -80,21 +90,31 @@ class TrainingObserver(Protocol):
 
 @dataclass(frozen=True)
 class TrainingBudget:
-    num_envs: int = 64
-    updates: int = 64
+    # These are the validated single-task convergence defaults.  Smaller
+    # budgets remain available as explicit diagnostic overrides.
+    num_envs: int = 2048
+    updates: int = 8000
     wall_clock_seconds: float | None = None
     seed: int = 42
     rerun_output: str | None = None
+    rerun_grpc_url: str | None = None
+    rerun_high_return_dir: str | None = None
+    rerun_high_return_threshold: float | None = None
+    rerun_high_return_following: int = 5
     rerun_env_id: int = 0
     rerun_stride: int = 1
     object_type: str = "cube1"
     gesture: str = "01"
     residual_enabled: bool = True
+    use_film: bool = True
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
-    checkpoint_interval_updates: int | None = None
-    minibatch_size: int = ManoPPOConfig().minibatch_size
-    evaluation_num_envs: int | None = None
+    checkpoint_interval_updates: int | None = 200
+    minibatch_size: int | None = None
+    # Evaluation is intentionally one fixed trajectory by default.  A larger
+    # count is an explicit diagnostic mode and must not be mistaken for the
+    # Gym single-environment reference result.
+    evaluation_num_envs: int | None = 1
     headless: bool = True
     viewer_envs: int = 1
     viewer_stride: int = 1
@@ -106,6 +126,13 @@ class TrainingBudget:
     @property
     def transitions(self) -> int:
         return self.num_envs * ManoPPOConfig().rollouts * self.updates
+
+    @property
+    def resolved_minibatch_size(self) -> int:
+        if self.minibatch_size is not None:
+            return self.minibatch_size
+        rollout_batch = self.num_envs * ManoPPOConfig().rollouts
+        return math.gcd(ManoPPOConfig().minibatch_size, rollout_batch)
 
     @property
     def resolved_capture_transition_diagnostics(self) -> bool:
@@ -275,6 +302,16 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
             "losses/c_loss",
             "losses/entropy",
             "info/last_lr",
+            "info/lr_start",
+            "info/lr_min",
+            "info/lr_max",
+            "info/exact_kl_mean",
+            "info/exact_kl_min",
+            "info/exact_kl_max",
+            "info/approximate_kl_mean",
+            "info/lr_scheduler_increases",
+            "info/lr_scheduler_decreases",
+            "info/completed_minibatches",
             "info/policy_std",
             "rewards/frame",
             "rewards/iter",
@@ -954,8 +991,27 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     _assert_cuda_runtime()
     if output.suffix:
         raise ValueError("--output must be a prefix without a suffix")
-    if budget.device_resident_controls and (budget.rerun_output is not None or not budget.headless):
+    if budget.rerun_output is not None and budget.rerun_grpc_url is not None:
+        raise ValueError("rerun_output and rerun_grpc_url are mutually exclusive")
+    if budget.device_resident_controls and (
+        budget.rerun_output is not None
+        or budget.rerun_grpc_url is not None
+        or budget.rerun_high_return_dir is not None
+        or budget.rerun_high_return_threshold is not None
+        or not budget.headless
+    ):
         raise ValueError("device-resident-controls requires headless training without Rerun transition recording")
+    if budget.rerun_high_return_threshold is not None and budget.rerun_high_return_dir is None:
+        raise ValueError("rerun_high_return_threshold requires rerun_high_return_dir")
+    if budget.rerun_high_return_dir is not None and budget.rerun_output is None:
+        raise ValueError("rerun_high_return_dir requires rerun_output")
+    if budget.rerun_high_return_following < 0:
+        raise ValueError("rerun_high_return_following must be non-negative")
+    if (
+        budget.rerun_high_return_dir is not None
+        and budget.rerun_stride != 1
+    ):
+        raise ValueError("high-return Rerun replay requires rerun_stride=1 to preserve every action")
     output = output.resolve()
     checkpoint = output.with_suffix(".pt")
     last_checkpoint = _last_checkpoint_path(output)
@@ -964,6 +1020,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     episodes_path = _episode_records_path(output)
     partial_episodes_path = _partial_episode_records_path(output)
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
+    rerun_high_return_dir = (
+        Path(budget.rerun_high_return_dir).resolve() if budget.rerun_high_return_dir else None
+    )
     artifacts = (
         checkpoint,
         _checkpoint_sidecar_path(checkpoint),
@@ -998,7 +1057,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         ),
     )
     ppo_config = ManoPPOConfig(
-        minibatch_size=budget.minibatch_size,
+        minibatch_size=budget.resolved_minibatch_size,
+        use_film=budget.use_film,
         profile_phases=budget.profile_phases,
     )
     ppo_config.skrl_config(num_envs=budget.num_envs, device="cuda")
@@ -1024,10 +1084,6 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         device=device,
     )
     with _wandb_run(output=output, budget=budget, config=wandb_config) as (wandb_run, wandb):
-        # The first two 48-step rollouts are entirely source-defined pure mocap.
-        # Updating PPO on their zero reward signal moves the shared actor/critic
-        # representation before the policy has any controllable consequence.
-        runtime.agent.cfg.learning_starts = physical.contact_start_frame
         with _owned_initial_checkpoint(output) as initial_checkpoint:
             _save_checkpoint_atomically(
                 runtime.agent,
@@ -1075,8 +1131,16 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
 
         try:
             recorder = (
-                ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
-                if rerun_path is not None
+                ManoRerunRecorder(
+                    physical,
+                    rerun_path or "outputs/manorl/live_training.rrd",
+                    env_id=budget.rerun_env_id,
+                    grpc_url=budget.rerun_grpc_url,
+                    archive_dir=rerun_high_return_dir,
+                    archive_threshold=budget.rerun_high_return_threshold,
+                    archive_following=budget.rerun_high_return_following,
+                )
+                if rerun_path is not None or budget.rerun_grpc_url is not None
                 else None
             )
             observer = _build_training_observer(physical, budget)
@@ -1237,19 +1301,44 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--updates", type=int, default=64)
-    parser.add_argument("--checkpoint-interval-updates", type=int)
-    parser.add_argument("--num-envs", type=int, default=64)
-    parser.add_argument("--evaluation-num-envs", type=int)
-    parser.add_argument("--minibatch-size", type=int, default=ManoPPOConfig().minibatch_size)
+    parser.add_argument("--updates", type=int, default=8000)
+    parser.add_argument("--checkpoint-interval-updates", type=int, default=200)
+    parser.add_argument("--num-envs", type=int, default=2048)
+    parser.add_argument("--evaluation-num-envs", type=int, default=1)
+    parser.add_argument(
+        "--minibatch-size",
+        type=int,
+        help="override resolved Gym minibatch size (default: largest 4096-compatible divisor)",
+    )
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
+    parser.add_argument(
+        "--rerun-grpc-url",
+        help="optional Rerun gRPC URL (for example rerun+http://127.0.0.1:9876/proxy) for live web streaming",
+    )
+    parser.add_argument(
+        "--rerun-high-return-dir",
+        type=Path,
+        help="optional directory for preserving completed local .rrd episodes above the threshold",
+    )
+    parser.add_argument(
+        "--rerun-high-return-threshold",
+        type=float,
+        help="minimum completed episode return to preserve under --rerun-high-return-dir",
+    )
+    parser.add_argument(
+        "--rerun-high-return-following",
+        type=int,
+        default=5,
+        help="number of completed episodes after a threshold hit to preserve (default: 5)",
+    )
     parser.add_argument("--rerun-env-id", type=int, default=0)
     parser.add_argument("--rerun-stride", type=int, default=1)
     parser.add_argument("--object", dest="object_type", default="cube1")
     parser.add_argument("--gesture", default="01")
     parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
+    parser.add_argument("--film", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--headless", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--viewer-envs", type=int, default=1, help="number of training worlds to tile when headless=false")
@@ -1274,7 +1363,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="synchronize CUDA/JAX at explicit rollout and PPO phase boundaries and emit timings",
     )
-    parser.add_argument("--wandb", type=parse_cli_bool, default=False, metavar="{true,false}")
+    parser.add_argument("--wandb", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
     parser.add_argument("--wandb-entity", default="")
@@ -1286,8 +1375,13 @@ def main(argv: list[str] | None = None) -> int:
     evaluation_num_envs_maximum = min(args.num_envs, 128)
     if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
         parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")
+    resolved_minibatch_size = TrainingBudget(
+        num_envs=args.num_envs, minibatch_size=args.minibatch_size
+    ).resolved_minibatch_size
     try:
-        ManoPPOConfig(minibatch_size=args.minibatch_size).skrl_config(num_envs=args.num_envs, device="cuda")
+        ManoPPOConfig(minibatch_size=resolved_minibatch_size).skrl_config(
+            num_envs=args.num_envs, device="cuda"
+        )
     except ValueError as exc:
         parser.error(str(exc))
     if args.checkpoint_interval_updates is not None and args.checkpoint_interval_updates < 1:
@@ -1296,6 +1390,16 @@ def main(argv: list[str] | None = None) -> int:
         not math.isfinite(args.wall_clock_seconds) or args.wall_clock_seconds <= 0
     ):
         parser.error("wall-clock-seconds must be a finite positive value when provided")
+    if args.rerun_output is not None and args.rerun_grpc_url is not None:
+        parser.error("--rerun-output and --rerun-grpc-url are mutually exclusive")
+    if args.rerun_high_return_threshold is not None and not math.isfinite(args.rerun_high_return_threshold):
+        parser.error("rerun-high-return-threshold must be finite when provided")
+    if args.rerun_high_return_threshold is not None and args.rerun_high_return_dir is None:
+        parser.error("rerun-high-return-threshold requires --rerun-high-return-dir")
+    if args.rerun_high_return_dir is not None and args.rerun_output is None:
+        parser.error("rerun-high-return-dir requires --rerun-output")
+    if args.rerun_high_return_following < 0:
+        parser.error("rerun-high-return-following must be non-negative")
     if not 0 <= args.rerun_env_id < args.num_envs:
         parser.error("rerun-env-id must be within num-envs")
     if not 1 <= args.viewer_envs <= args.num_envs:
@@ -1310,11 +1414,18 @@ def main(argv: list[str] | None = None) -> int:
             wall_clock_seconds=args.wall_clock_seconds,
             seed=args.seed,
             rerun_output=str(args.rerun_output.resolve()) if args.rerun_output is not None else None,
+            rerun_grpc_url=args.rerun_grpc_url,
+            rerun_high_return_dir=(
+                str(args.rerun_high_return_dir.resolve()) if args.rerun_high_return_dir is not None else None
+            ),
+            rerun_high_return_threshold=args.rerun_high_return_threshold,
+            rerun_high_return_following=args.rerun_high_return_following,
             rerun_env_id=args.rerun_env_id,
             rerun_stride=args.rerun_stride,
             object_type=args.object_type,
             gesture=args.gesture,
             residual_enabled=args.use_residual,
+            use_film=args.film,
             terminal=args.terminal,
             wandb=WandbOptions(
                 enabled=args.wandb,

@@ -69,7 +69,7 @@ class _CheckpointPolicyStepper:
         return observations, rewards_array, resets, info
 
 
-def _inference_ppo_config(num_envs: int) -> ManoPPOConfig:
+def _inference_ppo_config(num_envs: int, *, use_film: bool = True) -> ManoPPOConfig:
     """Create a non-training PPO shell valid for any positive vector batch size."""
 
     from sim.manorl.skrl_runtime import ManoPPOConfig
@@ -78,7 +78,26 @@ def _inference_ppo_config(num_envs: int) -> ManoPPOConfig:
         rollouts=1,
         minibatch_size=num_envs,
         learning_epochs=1,
+        use_film=use_film,
     )
+
+
+def _checkpoint_use_film(checkpoint: Path) -> bool:
+    """Resolve the model variant recorded by a checkpoint, defaulting to FiLM."""
+
+    from sim.manorl.checkpoint import CheckpointFormatError, checkpoint_runtime_metadata
+
+    metadata = checkpoint_runtime_metadata(checkpoint)
+    runtime_config = metadata.get("runtime_config")
+    if not isinstance(runtime_config, dict):
+        return True
+    model = runtime_config.get("model")
+    if not isinstance(model, dict) or "use_film" not in model:
+        return True
+    use_film = model["use_film"]
+    if not isinstance(use_film, bool):
+        raise CheckpointFormatError("checkpoint model use_film must be a boolean")
+    return use_film
 
 
 def _validate_checkpoint_path(checkpoint: Path) -> Path:
@@ -103,7 +122,10 @@ def _build_checkpoint_stepper(
     adapter = ManoGymnasiumVectorEnv(environment)
     runtime = ManoSkrlRuntime(
         adapter,
-        _inference_ppo_config(environment.config.num_envs),
+        _inference_ppo_config(
+            environment.config.num_envs,
+            use_film=_checkpoint_use_film(checkpoint),
+        ),
     )
     load_skrl_checkpoint_for_inference(runtime.agent, checkpoint)
     runtime.agent.enable_training_mode(False)

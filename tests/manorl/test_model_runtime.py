@@ -52,6 +52,61 @@ def test_model_defaults_to_source_pointnet_film(adapter: ManoGymnasiumVectorEnv)
     assert value_outputs == {}
 
 
+def test_policy_keeps_raw_samples_and_environment_clips_at_boundary(
+    adapter: ManoGymnasiumVectorEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import torch
+
+    from sim.manorl.gymnasium_env import OBSERVATION_DIM
+    from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
+
+    runtime = ManoSkrlRuntime(adapter, ManoPPOConfig.optimizer_smoke())
+    runtime.agent.enable_training_mode(True)
+    with torch.no_grad():
+        runtime.model.log_std.fill_(2.0)
+    adapter.reset(seed=17)
+    observations, _ = runtime.env.reset()
+    torch.manual_seed(7)
+    with torch.no_grad():
+        raw_actions, _ = runtime.agent.act(
+            observations, None, timestep=0, timesteps=runtime.config.rollouts
+        )
+    assert raw_actions.shape == (adapter.num_envs, 26)
+    assert torch.any(torch.abs(raw_actions) > 1.0)
+
+    captured: list[np.ndarray] = []
+    original_step = adapter.environment.step
+
+    def capture_step(actions: np.ndarray):
+        captured.append(np.asarray(actions).copy())
+        return original_step(actions)
+
+    monkeypatch.setattr(adapter.environment, "step", capture_step)
+    next_observations, rewards, terminated, truncated, infos = runtime.env.step(raw_actions)
+    runtime.agent.record_transition(
+        observations=observations,
+        states=None,
+        actions=raw_actions,
+        rewards=rewards,
+        next_observations=next_observations,
+        next_states=None,
+        terminated=terminated,
+        truncated=truncated,
+        infos=infos,
+        timestep=0,
+        timesteps=runtime.config.rollouts,
+    )
+
+    stored_actions = runtime.memory.get_tensor_by_name("actions")[0]
+    torch.testing.assert_close(stored_actions, raw_actions)
+    assert len(captured) == 1
+    assert np.all(captured[0] <= 1.0) and np.all(captured[0] >= -1.0)
+    np.testing.assert_allclose(
+        captured[0], torch.clamp(raw_actions, -1.0, 1.0).cpu().numpy()
+    )
+    assert next_observations.shape == (adapter.num_envs, OBSERVATION_DIM)
+
+
 def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
     import torch
 
@@ -131,6 +186,9 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     assert rollout["steps"] == 2
     assert torch.isfinite(rollout["observations"]).all()
     assert runtime.one_update_smoke()
+    assert runtime.agent.tracking_data["Learning / Completed minibatches"][-1] == 1
+    assert "policy_mean" in runtime.memory.tensors
+    assert "policy_std" in runtime.memory.tensors
 
     checkpoint = save_skrl_checkpoint(
         runtime.agent, tmp_path / "manorl.pt", runtime_config=runtime.checkpoint_metadata()
@@ -165,12 +223,30 @@ def test_source_ppo_batch_divisibility_is_explicit() -> None:
     from sim.manorl.rewards import PPO_REWARD_SCALE
     from sim.manorl.skrl_runtime import ManoPPOConfig
 
-    config = ManoPPOConfig().skrl_config(num_envs=64, device="cpu")
+    config = ManoPPOConfig().skrl_config(num_envs=2048, device="cpu")
     assert config["rollouts"] == 48
-    assert config["mini_batches"] == 3
+    assert config["mini_batches"] == 24
     assert config["time_limit_bootstrap"] is True
-    assert config["value_loss_scale"] == 4.0
+    assert config["value_loss_scale"] == 2.0
+    assert config["learning_starts"] == 0
     assert config["rewards_shaper"](torch.ones(1), 0, 1).item() == 0.5
     assert PPO_REWARD_SCALE == 0.5
     with pytest.raises(ValueError, match="must divide"):
         ManoPPOConfig().skrl_config(num_envs=1, device="cpu")
+    with pytest.raises(ValueError, match="learning_starts must be non-negative"):
+        ManoPPOConfig(learning_starts=-1)
+
+
+def test_gym_aligned_ppo_completes_every_minibatch_without_kl_early_stop(
+    adapter: ManoGymnasiumVectorEnv,
+) -> None:
+    from sim.manorl.rl_games_ppo import RlGamesPPO
+    from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
+
+    config = ManoPPOConfig(rollouts=4, minibatch_size=2, learning_epochs=2)
+    runtime = ManoSkrlRuntime(adapter, config)
+
+    assert isinstance(runtime.agent, RlGamesPPO)
+    assert runtime.one_update_smoke()
+    assert runtime.agent.tracking_data["Learning / Completed minibatches"][-1] == 4
+    assert len(runtime.agent.tracking_data["Learning / Exact KL mean"]) == 1

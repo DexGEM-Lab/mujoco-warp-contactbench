@@ -642,8 +642,16 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
 
     assert tool.main(["--output", str(tmp_path / "default")]) == 0
     assert captured[-1][1].wall_clock_seconds is None
-    assert captured[-1][1].checkpoint_interval_updates is None
-    assert captured[-1][1].minibatch_size == 1024
+    assert captured[-1][1].num_envs == 2048
+    assert captured[-1][1].updates == 8000
+    assert captured[-1][1].checkpoint_interval_updates == 200
+    assert captured[-1][1].evaluation_num_envs == 1
+    assert captured[-1][1].minibatch_size is None
+    assert captured[-1][1].resolved_minibatch_size == 4096
+    assert captured[-1][1].use_film is True
+    assert captured[-1][1].residual_enabled is True
+    assert captured[-1][1].terminal is True
+    assert captured[-1][1].wandb.enabled is True
 
     assert tool.main([
         "--output", str(tmp_path / "capped"),
@@ -657,6 +665,28 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
         "--output", str(tmp_path / "server2"), "--num-envs", "4096", "--minibatch-size", "4096",
     ]) == 0
     assert captured[-1][1].minibatch_size == 4096
+
+    assert tool.main([
+        "--output", str(tmp_path / "server2-default"), "--num-envs", "2048",
+    ]) == 0
+    assert captured[-1][1].minibatch_size is None
+    assert captured[-1][1].resolved_minibatch_size == 4096
+
+
+def test_cli_rejects_local_rerun_and_grpc_stream_together(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid"),
+            "--rerun-output", str(tmp_path / "episode.rrd"),
+            "--rerun-grpc-url", "rerun+http://127.0.0.1:9876/proxy",
+            "--wandb", "false",
+        ])
+
+    assert "--rerun-output and --rerun-grpc-url are mutually exclusive" in capsys.readouterr().err
 
 
 def test_training_observer_quiets_viewer_for_json_console(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -768,16 +798,18 @@ def test_cli_rejects_invalid_explicit_wall_clock_cap(
     assert "wall-clock-seconds must be a finite positive value when provided" in capsys.readouterr().err
 
 
-def test_evaluation_budget_defaults_to_bounded_prefix_and_uses_valid_minibatch() -> None:
+def test_evaluation_budget_defaults_to_single_world_and_supports_bounded_override() -> None:
     tool = _load_tool()
 
     training = tool.TrainingBudget(num_envs=4096, minibatch_size=4096)
     small = tool.TrainingBudget(num_envs=64)
     override = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=96, minibatch_size=4096)
+    bounded = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=None, minibatch_size=4096)
 
-    assert training.resolved_evaluation_num_envs == 128
-    assert small.resolved_evaluation_num_envs == 64
+    assert training.resolved_evaluation_num_envs == 1
+    assert small.resolved_evaluation_num_envs == 1
     assert override.resolved_evaluation_num_envs == 96
+    assert bounded.resolved_evaluation_num_envs == 128
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=128).minibatch_size == 2048
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=96).minibatch_size == 512
     for invalid in (0, 129, 4096):
@@ -795,7 +827,7 @@ def test_cli_serializes_default_and_override_evaluation_counts(
     monkeypatch.setattr(tool, "run", lambda output, budget: captured.append(budget) or {})
 
     tool.main(["--output", str(tmp_path / "default"), "--num-envs", "4096", "--minibatch-size", "4096"])
-    assert captured[-1].resolved_evaluation_num_envs == 128
+    assert captured[-1].resolved_evaluation_num_envs == 1
     tool.main([
         "--output", str(tmp_path / "override"), "--num-envs", "4096", "--minibatch-size", "4096",
         "--evaluation-num-envs", "96",
@@ -861,7 +893,13 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
     with pytest.raises(RuntimeError, match="viewer failed"):
         tool.run(
             tmp_path / "run",
-            tool.TrainingBudget(num_envs=1, updates=1, minibatch_size=1, rerun_output=str(rerun_output)),
+            tool.TrainingBudget(
+                num_envs=1,
+                updates=1,
+                minibatch_size=1,
+                rerun_output=str(rerun_output),
+                wandb=tool.WandbOptions(enabled=False),
+            ),
         )
     assert recorder_closed == [True]
 
@@ -881,7 +919,10 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
             self.name = name
             self.device = "cuda"
             self.config = config
-            self.agent = SimpleNamespace(name=name, cfg=SimpleNamespace(learning_starts=None))
+            self.agent = SimpleNamespace(
+                name=name,
+                cfg=SimpleNamespace(learning_starts=config.learning_starts),
+            )
             self.gymnasium_env = SimpleNamespace(environment=None)
             self.model = SimpleNamespace(parameters=lambda: [])
 
@@ -934,7 +975,16 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     monkeypatch.setattr(tool, "_evaluate", evaluate)
     monkeypatch.setattr(tool, "_train", lambda *args, **kwargs: ([], 0, 0.0))
 
-    result = tool.run(tmp_path / "run", tool.TrainingBudget(num_envs=4096, updates=1, minibatch_size=4096))
+    result = tool.run(
+        tmp_path / "run",
+        tool.TrainingBudget(
+            num_envs=4096,
+            updates=1,
+            minibatch_size=4096,
+            evaluation_num_envs=128,
+            wandb=tool.WandbOptions(enabled=False),
+        ),
+    )
 
     assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048), ("evaluation-2", 128, 2048)]
     assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-2", "trained")]
@@ -943,6 +993,7 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     assert loads[2] == ("evaluation-2", "run.pt")
     assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
     assert result["budget"]["evaluation_num_envs"] == 128
+    assert result["learning_starts"] == 0
     assert not list((tmp_path / "run").glob(".initial-*"))
 
 

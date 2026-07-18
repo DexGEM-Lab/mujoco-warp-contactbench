@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 import json
 import os
 from pathlib import Path
+import shutil
+import warnings
 
 import numpy as np
 
@@ -34,7 +36,17 @@ _OBJECT_GRAVITY_MAGNITUDE_PATH = "contact/object/gravity/world/magnitude_N"
 class ManoRerunRecorder:
     """Publish reset-completed selected-world episodes to one stable Rerun path."""
 
-    def __init__(self, environment: MujocoManoEnvironment, output: str | Path, *, env_id: int = 0) -> None:
+    def __init__(
+        self,
+        environment: MujocoManoEnvironment,
+        output: str | Path,
+        *,
+        env_id: int = 0,
+        grpc_url: str | None = None,
+        archive_dir: str | Path | None = None,
+        archive_threshold: float | None = None,
+        archive_following: int = 5,
+    ) -> None:
         if not isinstance(environment, MujocoManoEnvironment):
             raise TypeError("environment must be a MujocoManoEnvironment")
         if not 0 <= env_id < environment.config.num_envs:
@@ -47,8 +59,49 @@ class ManoRerunRecorder:
         self.env_id = env_id
         self.rr = rr
         self.output = Path(output)
+        self.grpc_url = grpc_url
+        self.streaming = grpc_url is not None
+        if archive_dir is not None and self.streaming:
+            raise ValueError("high-return Rerun archives require a local .rrd recording")
+        if archive_threshold is not None and not np.isfinite(archive_threshold):
+            raise ValueError("archive_threshold must be finite")
+        if archive_threshold is not None and archive_dir is None:
+            raise ValueError("archive_threshold requires archive_dir")
+        if archive_following < 0:
+            raise ValueError("archive_following must be non-negative")
+        self.archive_dir = None if archive_dir is None else Path(archive_dir)
+        self.archive_threshold = archive_threshold
+        self.archive_following = archive_following
         self.output.parent.mkdir(parents=True, exist_ok=True)
+        if self.archive_dir is not None:
+            self.archive_dir.mkdir(parents=True, exist_ok=True)
         self.episode_id = 0
+        # This accumulator is deliberately local to the selected env. The
+        # delayed reset snapshot has already cleared environment.episode_returns,
+        # so the completed return must be captured before publishing the file.
+        self._episode_return = 0.0
+        self._archive_remaining = 0
+        self._pending_high_env_id: int | None = None
+        self._replay_enabled = self.archive_dir is not None and self.archive_threshold is not None
+        self._queued_replay_keys: set[tuple[int, int]] = set()
+        self._queued_replays: list[tuple[int, int, float, np.ndarray, np.ndarray]] = []
+        if self._replay_enabled:
+            batch_size = environment.config.num_envs
+            max_episode_steps = max(
+                int(np.max(environment.trajectory_lengths)),
+                int(environment.config.episode_length),
+            ) + 2
+            self._replay_action_history = np.zeros(
+                (batch_size, max_episode_steps, 26), dtype=np.float64
+            )
+            self._replay_episode_steps = np.zeros(batch_size, dtype=np.int64)
+            self._replay_episode_numbers = np.zeros(batch_size, dtype=np.int64)
+            self._replay_episode_templates = environment.object_point_cloud_local().copy()
+        else:
+            self._replay_action_history = None
+            self._replay_episode_steps = None
+            self._replay_episode_numbers = None
+            self._replay_episode_templates = None
         suffix = self.output.suffix or ".rrd"
         stem = self.output.stem if self.output.suffix else self.output.name
         self.active_path = self.output.with_name(f".{stem}.active{suffix}")
@@ -130,21 +183,158 @@ class ManoRerunRecorder:
         # A previous process may have left its private stream behind. The
         # stable output is replaced only after a complete episode is flushed,
         # so removing this stale temporary file cannot discard a published run.
-        self.active_path.unlink(missing_ok=True)
+        if not self.streaming:
+            self.active_path.unlink(missing_ok=True)
         self.recording = self.rr.RecordingStream("manorl_mujoco")
-        self.recording.save(self.active_path)
+        if self.streaming:
+            self.recording.connect_grpc(self.grpc_url)
+        else:
+            self.recording.save(self.active_path)
         self._recording_open = True
         self.recording.send_blueprint(self._default_blueprint(), make_active=True, make_default=True)
         self._log_static_metadata()
 
-    def _publish_episode(self) -> None:
+    def _publish_episode(self, *, archive_path: Path | None = None) -> None:
         if not self._recording_open:
             raise RuntimeError("cannot publish without an open recording stream")
         self.recording.flush()
         self.recording.disconnect()
         self._recording_open = False
-        os.replace(self.active_path, self.output)
-        self._published = True
+        if not self.streaming:
+            if archive_path is not None:
+                shutil.copy2(self.active_path, archive_path)
+            os.replace(self.active_path, self.output)
+            self._published = True
+
+    def _high_return_archive_path(self, completed_return: float) -> Path | None:
+        if self.archive_dir is None or self.archive_threshold is None:
+            return None
+        threshold_hit = completed_return >= self.archive_threshold
+        if threshold_hit:
+            self._archive_remaining = max(self._archive_remaining, self.archive_following)
+        if not threshold_hit and self._archive_remaining <= 0:
+            return None
+        if not threshold_hit:
+            self._archive_remaining -= 1
+        return self.archive_dir / (
+            f"env_{self.env_id:04d}_episode_{self.episode_id:06d}_return_{completed_return:.6f}.rrd"
+        )
+
+    def _discard_episode(self) -> None:
+        if not self._recording_open:
+            return
+        self.recording.flush()
+        self.recording.disconnect()
+        self._recording_open = False
+        if not self.streaming:
+            self.active_path.unlink(missing_ok=True)
+
+    def _switch_to_high_return_env(self, env_id: int, *, initial_return: float | None = None) -> None:
+        if env_id == self.env_id:
+            return
+        self._discard_episode()
+        self.env_id = env_id
+        self.episode_id += 1
+        self._episode_return = 0.0 if initial_return is None else initial_return
+        self._archive_remaining = max(self._archive_remaining, self.archive_following)
+        self._start_episode()
+
+    def _capture_replay_action(self, snapshot: TransitionSnapshot) -> None:
+        if not self._replay_enabled:
+            return
+        assert self._replay_action_history is not None
+        assert self._replay_episode_steps is not None
+        assert self._replay_episode_numbers is not None
+        assert self._replay_episode_templates is not None
+        reset_envs = np.flatnonzero(np.asarray(snapshot.reset_applied, dtype=bool))
+        starting_envs = np.flatnonzero(self._replay_episode_steps == 0)
+        if reset_envs.size:
+            self._replay_episode_steps[reset_envs] = 0
+            self._replay_episode_numbers[reset_envs] += 1
+        if starting_envs.size or reset_envs.size:
+            template_envs = np.unique(np.concatenate((starting_envs, reset_envs)))
+            templates = self.environment.object_point_cloud_local()
+            self._replay_episode_templates[template_envs] = templates[template_envs]
+        steps = self._replay_episode_steps
+        if np.any(steps >= self._replay_action_history.shape[1]):
+            raise RuntimeError("high-return replay action history exceeded the configured episode capacity")
+        env_indices = np.arange(self.environment.config.num_envs)
+        self._replay_action_history[env_indices, steps] = np.asarray(snapshot.raw_actions, dtype=np.float64)
+        self._replay_episode_steps += 1
+
+    def _queue_high_return_replays(
+        self, snapshot: TransitionSnapshot, high_envs: np.ndarray
+    ) -> None:
+        if not self._replay_enabled:
+            return
+        assert self._replay_action_history is not None
+        assert self._replay_episode_steps is not None
+        assert self._replay_episode_numbers is not None
+        assert self._replay_episode_templates is not None
+        for env_id in high_envs.tolist():
+            env_id = int(env_id)
+            episode_number = int(self._replay_episode_numbers[env_id])
+            key = (env_id, episode_number)
+            if key in self._queued_replay_keys:
+                continue
+            step_count = int(self._replay_episode_steps[env_id])
+            if step_count < 1:
+                continue
+            self._queued_replay_keys.add(key)
+            self._queued_replays.append(
+                (
+                    env_id,
+                    episode_number,
+                    float(snapshot.episode_return[env_id]),
+                    self._replay_action_history[env_id, :step_count].copy(),
+                    self._replay_episode_templates[env_id].copy(),
+                )
+            )
+
+    def _replay_high_return_episodes(self) -> None:
+        queued_replays = getattr(self, "_queued_replays", ())
+        archive_dir = getattr(self, "archive_dir", None)
+        if not queued_replays or archive_dir is None:
+            return
+        base_config = self.environment.config
+        for env_id, episode_number, episode_return, actions, template in queued_replays:
+            output = archive_dir / (
+                f"env_{env_id:04d}_episode_{episode_number:06d}_return_{episode_return:.6f}_full.rrd"
+            )
+            try:
+                replay_config = replace(
+                    base_config,
+                    num_envs=1,
+                    contact_capacity=max(128, 31),
+                    device_resident_controls=False,
+                    capture_transition_diagnostics=True,
+                )
+                replay_environment = MujocoManoEnvironment(
+                    self.environment.trajectories[env_id], replay_config
+                )
+                if replay_config.compatibility.point_template_mode == "dynamic_reset":
+                    if replay_environment._dynamic_templates is None:
+                        raise RuntimeError("replay environment did not initialize dynamic point templates")
+                    replay_environment._dynamic_templates[0] = template
+                replay_recorder = ManoRerunRecorder(replay_environment, output, env_id=0)
+                try:
+                    for action in actions:
+                        replay_environment.step(action.reshape(1, 26))
+                        replay_recorder.record_transition()
+                    # The source applies delayed resets on the following step;
+                    # this flushes the terminal episode into the stable .rrd.
+                    replay_environment.step(np.zeros((1, 26), dtype=np.float64))
+                    replay_recorder.record_transition()
+                finally:
+                    artifact = replay_recorder.close()
+                if artifact is None:
+                    raise RuntimeError("replayed high-return episode did not publish a complete Rerun artifact")
+            except Exception as exc:  # pragma: no cover - GPU/JAX replay failure is runtime-specific
+                warnings.warn(
+                    f"failed to materialize full high-return Rerun episode env={env_id} episode={episode_number}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
     def _geometry_table(self) -> list[dict[str, int | str | None]]:
         environment = self.environment
@@ -336,14 +526,50 @@ class ManoRerunRecorder:
         snapshot = self.environment.last_transition
         if snapshot is None:
             raise RuntimeError("record_transition requires one completed environment.step call")
+        self._capture_replay_action(snapshot)
+        if self.archive_dir is not None and self.archive_threshold is not None:
+            terminal_returns = np.asarray(snapshot.episode_return, dtype=np.float64)
+            terminal_mask = np.asarray(snapshot.termination.reset, dtype=bool)
+            high_envs = np.flatnonzero(terminal_mask & (terminal_returns >= self.archive_threshold))
+            self._queue_high_return_replays(snapshot, high_envs)
+            if high_envs.size and self._pending_high_env_id is None:
+                self._pending_high_env_id = int(high_envs[0])
+        switched_to_high_env = False
+        switched_high_return: float | None = None
+        if self._pending_high_env_id is not None and not bool(snapshot.reset_applied[self._pending_high_env_id]):
+            pending_env_id = self._pending_high_env_id
+            pending_return = float(snapshot.episode_return[pending_env_id])
+            if bool(snapshot.termination.reset[pending_env_id]) and pending_env_id != self.env_id:
+                self._pending_high_env_id = None
+                self._switch_to_high_return_env(pending_env_id, initial_return=pending_return)
+                switched_to_high_env = True
+                switched_high_return = pending_return
+        if (
+            self._pending_high_env_id is not None
+            and bool(snapshot.reset_applied[self._pending_high_env_id])
+        ):
+            pending_env_id = self._pending_high_env_id
+            self._pending_high_env_id = None
+            if pending_env_id != self.env_id:
+                self._switch_to_high_return_env(pending_env_id)
+                switched_to_high_env = True
         # The transition after terminal state has physically applied the delayed
         # reset. Atomically replace the user-visible recording before writing
         # the new reset state into a fresh private active file.
-        if bool(snapshot.reset_applied[self.env_id]):
-            self._publish_episode()
+        if bool(snapshot.reset_applied[self.env_id]) and not switched_to_high_env:
+            completed_return = float(self._episode_return)
+            archive_path = self._high_return_archive_path(completed_return)
+            self._publish_episode(archive_path=archive_path)
             self.episode_id += 1
             self._start_episode()
+            self._episode_return = 0.0
         self._record(snapshot)
+        if switched_high_return is None:
+            self._episode_return += float(snapshot.reward.total[self.env_id])
+        else:
+            # The terminal snapshot already contains the complete return; do
+            # not add its final reward a second time before archive naming.
+            self._episode_return = switched_high_return
 
     def _record(self, snapshot: TransitionSnapshot) -> None:
         env_id = self.env_id
@@ -484,5 +710,6 @@ class ManoRerunRecorder:
                 self._recording_open = False
             self.active_path.unlink(missing_ok=True)
             self._close_result = self.output if self._published else None
+            self._replay_high_return_episodes()
             self._closed = True
         return self._close_result

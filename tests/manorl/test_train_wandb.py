@@ -75,7 +75,9 @@ def test_wandb_disabled_never_imports_or_initializes(monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(sys.modules, "wandb", fake)
 
     with tool._wandb_run(
-        output=Path("outputs/manorl/cube1"), budget=tool.TrainingBudget(), config={}
+        output=Path("outputs/manorl/cube1"),
+        budget=tool.TrainingBudget(wandb=tool.WandbOptions(enabled=False)),
+        config={},
     ) as (run, wandb):
         assert run is None
         assert wandb is None
@@ -207,7 +209,7 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["environment"]["residual_action"]["early_phase_steps"] == 50
     assert config["environment"]["max_deviation_distance"] == 0.10
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
-    assert config["evaluation"]["num_envs"] == 64
+    assert config["evaluation"]["num_envs"] == 1
     assert config["evaluation"]["ppo_config"]["minibatch_size"] == 768
     assert config["device"]["skrl"] == "cuda"
 
@@ -395,7 +397,7 @@ def test_wandb_cli_parses_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch
 
     assert tool.main([
         "--output", str(tmp_path / "override"),
-        "--wandb", "true",
+        "--wandb", "false",
         "--wandb-project", "project",
         "--wandb-group", "group",
         "--wandb-entity", "entity",
@@ -405,7 +407,7 @@ def test_wandb_cli_parses_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch
     ]) == 0
     override = captured[-1][1].wandb
     assert override == tool.WandbOptions(
-        enabled=True,
+        enabled=False,
         project="project",
         group="group",
         entity="entity",
