@@ -209,7 +209,7 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["environment"]["residual_action"]["early_phase_steps"] == 50
     assert config["environment"]["max_deviation_distance"] == 0.10
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
-    assert config["evaluation"]["num_envs"] == 64
+    assert config["evaluation"]["num_envs"] == 1
     assert config["evaluation"]["ppo_config"]["minibatch_size"] == 768
     assert config["device"]["skrl"] == "cuda"
 

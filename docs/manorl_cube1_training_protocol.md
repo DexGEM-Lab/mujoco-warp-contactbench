@@ -55,22 +55,24 @@ current native checkpoint contracts. The file-by-file implementation map is in
 
 ## Fixed Budget
 
-Use 64 vector worlds, 48 rollout steps, and 64 PPO updates. This is 196,608
-environment transitions. By default training completes all 64 updates; it
-stops earlier only on non-finite values, CUDA failure, or a semantic/reset
-invariant failure. An explicit `--wall-clock-seconds` safety cap may stop the
-run before all requested updates complete.
-The 64-world Warp broadphase uses `naconmax=2048`: Warp requires at least 31
-contacts per world in this scene, and the remaining 64 slots are margin.
+The production defaults use 2,048 vector worlds, 48 rollout steps, and 8,000
+PPO updates. This is 786,432,000 environment transitions. A numbered native
+checkpoint is written every 200 completed updates by default. Training stops
+earlier only on non-finite values, CUDA failure, or a semantic/reset invariant
+failure. An explicit `--wall-clock-seconds` safety cap may stop the run before
+all requested updates complete. Smaller world/update counts remain available
+as explicit smoke or diagnostic overrides; they are not convergence claims.
+The Warp broadphase capacity is derived from the active world count (at least
+31 contacts per world plus the configured margin).
 
 The fast protocol uses the source model initialization: source-compatible
 orthogonal actor/critic MLP initialization, untouched PointNet/condition/FiLM
 initialization, and trainable `log_std=-0.99`. It does not inject a target-only
 action bias or alter the source initial exploration scale.
 
-PPO defers its first update until source contact onset step 250. Earlier
-rollouts are pure tracking phases; optimizing them changes shared actor/critic
-features before the contact reward can discriminate residual corrections.
+PPO updates begin after the first completed rollout (`learning_starts=0`), as
+in the source rl-games contract. The contact onset frame is an environment
+phase, not a training-start gate.
 
 The policy update uses the resolved Gym run's legacy adaptive-KL contract.
 Each rollout stores the Gaussian policy mean and standard deviation. Every
@@ -99,8 +101,9 @@ and does not reset before that zero-reference call count. Completing all 791 cal
 reported as a stretch result, not silently assumed. The reference baseline is a
 controller diagnostic, not a learned-policy comparator.
 
-Evaluation uses `min(--num-envs, 128)` worlds by default; pass
-`--evaluation-num-envs <count>` to override that bounded count only within
+Evaluation uses one world by default, matching the Gym reference and avoiding
+the worst-of-many early-reset statistic. Pass `--evaluation-num-envs <count>`
+explicitly for a bounded multi-world diagnostic; values are limited to
 `1..min(--num-envs, 128)`. This prevents a requested evaluation from recreating
 a second full-size training runtime. The zero, untrained, and trained rows all
 use the same evaluation trajectory prefix.
@@ -122,34 +125,44 @@ permanent equality constraints on future runtime versions.
 
 ## Launch
 
-Start a scratch run with the source-compatible model initialization and no
-checkpoint input:
+Start the production run with the source-compatible model initialization and
+no checkpoint input. The object, gesture, world count, update budget,
+checkpoint cadence, evaluation count, FiLM, residual, terminal, and W&B values
+below are also the CLI defaults:
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
-  --output outputs/manorl/cube1_03_scratch_run \
+  --output outputs/manorl/cube1_01_default \
   --object cube1 \
-  --gesture 03 \
-  --num-envs 64 \
-  --updates 64
+  --gesture 01 \
+  --num-envs 2048 \
+  --updates 8000 \
+  --checkpoint-interval-updates 200 \
+  --evaluation-num-envs 1 \
+  --film true \
+  --use_residual true \
+  --terminal true \
+  --wandb true
 ```
 
 To apply an opt-in time cap, add `--wall-clock-seconds <positive-seconds>`.
-The cap may stop the run before the fixed 64-update, 196,608-transition budget
-is complete.
+The cap may stop the run before the fixed 8,000-update, 786,432,000-transition
+budget is complete.
 
 The validated Gym checkpoint's resolved run config uses a 4096-sample
 minibatch. ManoRL therefore defaults to the largest divisor shared by `4096`
-and the configured 48-step rollout batch: this resolves to `4096` for the
-2,048- and 4,096-world Server2 runs and to `1024` for the 64-world fast
-protocol. `--minibatch-size` remains an explicit override; any selected value
+and the configured 48-step rollout batch. The production 2,048-world default
+therefore uses `4096` (24 minibatches per rollout, three epochs). For smaller
+explicit diagnostic world counts, omission resolves to the largest valid
+divisor; `--minibatch-size` remains an explicit override. Any selected value
 must divide the rollout batch and is recorded in metrics and native checkpoint
 runtime configuration.
 
-For the 2,500-update Server2 run, add `--checkpoint-interval-updates 100`.
-After every 100 completed PPO updates, the output-prefix namespace receives
-`<output>/checkpoint-000100.pt` and `<output>/checkpoint-000100.pt.json`.
+The default checkpoint cadence is 200 updates. After every 200 completed PPO
+updates, the output-prefix namespace receives
+`<output>/checkpoint-000200.pt` and `<output>/checkpoint-000200.pt.json`.
+Pass `--checkpoint-interval-updates <count>` to select another positive cadence.
 `<output>/last.pt` atomically follows the most recent completed periodic or
 final checkpoint. Its fixed sidecar records native compatibility only; exact
 progress remains in the numbered and final checkpoint sidecars. The legacy final

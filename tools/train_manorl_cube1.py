@@ -90,8 +90,10 @@ class TrainingObserver(Protocol):
 
 @dataclass(frozen=True)
 class TrainingBudget:
-    num_envs: int = 64
-    updates: int = 64
+    # These are the validated single-task convergence defaults.  Smaller
+    # budgets remain available as explicit diagnostic overrides.
+    num_envs: int = 2048
+    updates: int = 8000
     wall_clock_seconds: float | None = None
     seed: int = 42
     rerun_output: str | None = None
@@ -100,11 +102,15 @@ class TrainingBudget:
     object_type: str = "cube1"
     gesture: str = "01"
     residual_enabled: bool = True
+    use_film: bool = True
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
-    checkpoint_interval_updates: int | None = None
+    checkpoint_interval_updates: int | None = 200
     minibatch_size: int | None = None
-    evaluation_num_envs: int | None = None
+    # Evaluation is intentionally one fixed trajectory by default.  A larger
+    # count is an explicit diagnostic mode and must not be mistaken for the
+    # Gym single-environment reference result.
+    evaluation_num_envs: int | None = 1
     headless: bool = True
     viewer_envs: int = 1
     viewer_stride: int = 1
@@ -1026,6 +1032,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     )
     ppo_config = ManoPPOConfig(
         minibatch_size=budget.resolved_minibatch_size,
+        use_film=budget.use_film,
         profile_phases=budget.profile_phases,
     )
     ppo_config.skrl_config(num_envs=budget.num_envs, device="cuda")
@@ -1260,10 +1267,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--updates", type=int, default=64)
-    parser.add_argument("--checkpoint-interval-updates", type=int)
-    parser.add_argument("--num-envs", type=int, default=64)
-    parser.add_argument("--evaluation-num-envs", type=int)
+    parser.add_argument("--updates", type=int, default=8000)
+    parser.add_argument("--checkpoint-interval-updates", type=int, default=200)
+    parser.add_argument("--num-envs", type=int, default=2048)
+    parser.add_argument("--evaluation-num-envs", type=int, default=1)
     parser.add_argument(
         "--minibatch-size",
         type=int,
@@ -1277,6 +1284,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--object", dest="object_type", default="cube1")
     parser.add_argument("--gesture", default="01")
     parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
+    parser.add_argument("--film", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--headless", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--viewer-envs", type=int, default=1, help="number of training worlds to tile when headless=false")
@@ -1347,6 +1355,7 @@ def main(argv: list[str] | None = None) -> int:
             object_type=args.object_type,
             gesture=args.gesture,
             residual_enabled=args.use_residual,
+            use_film=args.film,
             terminal=args.terminal,
             wandb=WandbOptions(
                 enabled=args.wandb,

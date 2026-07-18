@@ -642,9 +642,16 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
 
     assert tool.main(["--output", str(tmp_path / "default")]) == 0
     assert captured[-1][1].wall_clock_seconds is None
-    assert captured[-1][1].checkpoint_interval_updates is None
+    assert captured[-1][1].num_envs == 2048
+    assert captured[-1][1].updates == 8000
+    assert captured[-1][1].checkpoint_interval_updates == 200
+    assert captured[-1][1].evaluation_num_envs == 1
     assert captured[-1][1].minibatch_size is None
-    assert captured[-1][1].resolved_minibatch_size == 1024
+    assert captured[-1][1].resolved_minibatch_size == 4096
+    assert captured[-1][1].use_film is True
+    assert captured[-1][1].residual_enabled is True
+    assert captured[-1][1].terminal is True
+    assert captured[-1][1].wandb.enabled is True
 
     assert tool.main([
         "--output", str(tmp_path / "capped"),
@@ -775,16 +782,18 @@ def test_cli_rejects_invalid_explicit_wall_clock_cap(
     assert "wall-clock-seconds must be a finite positive value when provided" in capsys.readouterr().err
 
 
-def test_evaluation_budget_defaults_to_bounded_prefix_and_uses_valid_minibatch() -> None:
+def test_evaluation_budget_defaults_to_single_world_and_supports_bounded_override() -> None:
     tool = _load_tool()
 
     training = tool.TrainingBudget(num_envs=4096, minibatch_size=4096)
     small = tool.TrainingBudget(num_envs=64)
     override = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=96, minibatch_size=4096)
+    bounded = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=None, minibatch_size=4096)
 
-    assert training.resolved_evaluation_num_envs == 128
-    assert small.resolved_evaluation_num_envs == 64
+    assert training.resolved_evaluation_num_envs == 1
+    assert small.resolved_evaluation_num_envs == 1
     assert override.resolved_evaluation_num_envs == 96
+    assert bounded.resolved_evaluation_num_envs == 128
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=128).minibatch_size == 2048
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=96).minibatch_size == 512
     for invalid in (0, 129, 4096):
@@ -802,7 +811,7 @@ def test_cli_serializes_default_and_override_evaluation_counts(
     monkeypatch.setattr(tool, "run", lambda output, budget: captured.append(budget) or {})
 
     tool.main(["--output", str(tmp_path / "default"), "--num-envs", "4096", "--minibatch-size", "4096"])
-    assert captured[-1].resolved_evaluation_num_envs == 128
+    assert captured[-1].resolved_evaluation_num_envs == 1
     tool.main([
         "--output", str(tmp_path / "override"), "--num-envs", "4096", "--minibatch-size", "4096",
         "--evaluation-num-envs", "96",
@@ -956,6 +965,7 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
             num_envs=4096,
             updates=1,
             minibatch_size=4096,
+            evaluation_num_envs=128,
             wandb=tool.WandbOptions(enabled=False),
         ),
     )

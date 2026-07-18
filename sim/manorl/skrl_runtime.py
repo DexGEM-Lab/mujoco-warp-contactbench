@@ -54,6 +54,7 @@ class ManoPPOConfig:
     kl_threshold: float = 0.016
     bounds_loss_coef: float = 1.0e-4
     learning_starts: int = 0
+    use_film: bool = True
     grad_norm_clip: float = 1.0
     time_limit_bootstrap: bool = True
     profile_phases: bool = False
@@ -172,6 +173,7 @@ class ManoSkrlRuntime:
             self.env.state_space,
             self.env.action_space,
             device=self.device,
+            use_film=config.use_film,
         )
         self.memory = RandomMemory(memory_size=config.rollouts, num_envs=environment.num_envs, device=self.device)
         self.agent = RlGamesPPO(
@@ -198,6 +200,8 @@ class ManoSkrlRuntime:
             reset_profile()
 
     def checkpoint_metadata(self) -> dict[str, object]:
+        ppo_metadata = asdict(self.config)
+        ppo_metadata.pop("use_film", None)
         return {
             "reward_contract": REWARD_CONTRACT_ID,
             "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
@@ -211,7 +215,7 @@ class ManoSkrlRuntime:
                 "reward": asdict(self.gymnasium_env.environment.config.reward_config),
                 "max_deviation_distance": self.gymnasium_env.environment.config.max_deviation_distance,
             },
-            "ppo": asdict(self.config),
+            "ppo": ppo_metadata,
             "model": {"use_film": self.model.use_film},
             "model_state_dict": self.model.state_dict_manifest(),
             "normalizer": "source_pointcloud_shared_xyz",

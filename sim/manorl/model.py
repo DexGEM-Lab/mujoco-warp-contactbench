@@ -91,6 +91,7 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         state_space,
         action_space,
         device: str | torch.device = "cpu",
+        use_film: bool = True,
     ) -> None:
         Model.__init__(self, observation_space=observation_space, state_space=state_space, action_space=action_space, device=device)
         if self.num_observations != OBSERVATION_DIM or self.num_actions != ACTION_DIM:
@@ -100,22 +101,41 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
             min_log_std=LOG_STD_LIMITS[0], max_log_std=LOG_STD_LIMITS[1], reduction="sum", role="policy",
         )
         DeterministicMixin.__init__(self, clip_actions=False, role="value")
-        self.use_film = True
+        self.use_film = bool(use_film)
         self.pointnet = PointNetEncoder(device)
         self.condition_encoder = nn.Sequential(
             nn.Linear(CONDITION_DIM, CONDITION_EMBED_DIM), nn.ReLU()
         ).to(device)
-        self.actor_backbone = nn.ModuleList(
-            [
-                FiLMBlock(BASE_FEATURE_DIM, HIDDEN_UNITS[0], device),
-                nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]).to(device),
-                nn.ELU(),
-                nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]).to(device),
-                nn.ELU(),
-                nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]).to(device),
-                nn.ELU(),
-            ]
-        )
+        if self.use_film:
+            self.actor_backbone = nn.ModuleList(
+                [
+                    FiLMBlock(BASE_FEATURE_DIM, HIDDEN_UNITS[0], device),
+                    nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]).to(device),
+                    nn.ELU(),
+                ]
+            )
+            actor_input_dim = BASE_FEATURE_DIM
+        else:
+            # Single-task mode keeps the source condition features as ordinary
+            # inputs while removing FiLM modulation. This preserves action and
+            # geometry information for an eventual multi-task run.
+            actor_input_dim = BASE_FEATURE_DIM + CONDITION_EMBED_DIM
+            self.actor_backbone = nn.ModuleList(
+                [
+                    nn.Linear(actor_input_dim, HIDDEN_UNITS[0]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]).to(device),
+                    nn.ELU(),
+                ]
+            )
         critic_input_dim = BASE_FEATURE_DIM + CONDITION_EMBED_DIM
         self.actor_head = nn.Linear(HIDDEN_UNITS[-1], ACTION_DIM).to(device)
         self.log_std = nn.Parameter(
@@ -178,9 +198,14 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         observations = inputs["observations"]
         base, condition = self._features(observations)
         if role == "policy":
-            features = self.actor_backbone[0](base, condition)
-            for layer in self.actor_backbone[1:]:
-                features = layer(features)
+            if self.use_film:
+                features = self.actor_backbone[0](base, condition)
+                for layer in self.actor_backbone[1:]:
+                    features = layer(features)
+            else:
+                features = torch.cat([base, condition], dim=-1)
+                for layer in self.actor_backbone:
+                    features = layer(features)
             mean = self.actor_head(features)
             return mean, {"log_std": self.log_std.expand_as(mean)}
         if role == "value":

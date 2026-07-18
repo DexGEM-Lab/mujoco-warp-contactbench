@@ -175,36 +175,38 @@ JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
 
 ### ManoRL PPO Training
 
-The Cube1 fast-training contract is documented in
+The Cube1 production training contract is documented in
 [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
 PPO uses the source-aligned `0.5x` reward shaper over the raw environment
 reward. The environment keeps contact reward at `1.0x` with a strict `2 N`
 pair-filtered threshold and maximum contact quality `0.4`. W&B tracking is
-enabled by default; pass `--wandb false` for a local-only diagnostic. Run the
-fixed 64-world budget as 64 updates of 48 rollout steps
-(196,608 transitions); it has no wall-clock cutoff unless one is explicitly
+enabled by default; pass `--wandb false` for a local-only diagnostic. The
+default run uses 2,048 worlds, 8,000 updates, 48 rollout steps, a 4,096-sample
+minibatch, FiLM, dynamic point-cloud sampling, residual actions, terminal
+deviation handling, and one-world deterministic evaluation. This is
+786,432,000 transitions; it has no wall-clock cutoff unless one is explicitly
 requested:
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
-  --output outputs/manorl/cube1_03_scratch_run \
-  --object cube1 --gesture 03 --num-envs 64 --updates 64
+  --output outputs/manorl/cube1_01_default \
+  --object cube1 --gesture 01 --num-envs 2048 --updates 8000 \
+  --checkpoint-interval-updates 200 --evaluation-num-envs 1
 ```
 
-For an opt-in safety cap that may stop before all 64 updates complete, add
-`--wall-clock-seconds <positive-seconds>`. Evaluation defaults to
-`min(--num-envs, 128)` worlds, so a 4096-world training run performs all three
-comparison rows on the same 128-world trajectory prefix. Override the bounded
-count explicitly with `--evaluation-num-envs <count>` when needed; accepted values are
-within `1..min(--num-envs, 128)`, so evaluation cannot recreate a second full-size runtime.
+For an opt-in safety cap that may stop before all 8,000 updates complete, add
+`--wall-clock-seconds <positive-seconds>`. Evaluation defaults to one world to
+match the Gym reference; pass `--evaluation-num-envs <count>` explicitly for a
+bounded diagnostic count within `1..min(--num-envs, 128)`, so evaluation cannot
+recreate a second full-size runtime.
 
-For a 2,500-update Server2 run, add `--checkpoint-interval-updates 100`. Each
-completed interval writes `<output>/checkpoint-000100.pt` plus its `.pt.json`
-sidecar. `<output>/last.pt` atomically follows the latest completed checkpoint;
-its fixed sidecar records compatibility only. Exact progress remains in the
-immutable numbered and final checkpoint sidecars. Sibling output prefixes have
-independent checkpoint namespaces.
+Every 200 completed updates, the default cadence writes
+`<output>/checkpoint-000200.pt` plus its `.pt.json` sidecar. Override the cadence
+with `--checkpoint-interval-updates <count>`. `<output>/last.pt` atomically
+follows the latest completed checkpoint; its fixed sidecar records compatibility
+only. Exact progress remains in the immutable numbered and final checkpoint
+sidecars. Sibling output prefixes have independent checkpoint namespaces.
 
 Training stdout defaults to compact human summaries. Exact completed episode
 returns are first flushed to `<output>.episodes.jsonl.partial`, then summarized
