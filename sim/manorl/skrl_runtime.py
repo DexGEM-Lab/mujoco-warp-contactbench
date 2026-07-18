@@ -48,9 +48,12 @@ class ManoPPOConfig:
     ratio_clip: float = 0.2
     value_clip: float = 0.2
     entropy_loss_scale: float = 0.001
-    value_loss_scale: float = 4.0
+    # rl-games applies 0.5 * critic_coef (4.0) to the critic MSE.
+    value_loss_scale: float = 2.0
     learning_rate: float = 3.0e-4
     kl_threshold: float = 0.016
+    bounds_loss_coef: float = 1.0e-4
+    learning_starts: int = 0
     grad_norm_clip: float = 1.0
     time_limit_bootstrap: bool = True
     profile_phases: bool = False
@@ -58,6 +61,8 @@ class ManoPPOConfig:
     def __post_init__(self) -> None:
         if self.rollouts < 1 or self.minibatch_size < 1 or self.learning_epochs < 1:
             raise ValueError("PPO rollout, minibatch, and epoch counts must be positive")
+        if self.learning_starts < 0:
+            raise ValueError("PPO learning_starts must be non-negative")
 
     @classmethod
     def optimizer_smoke(cls) -> "ManoPPOConfig":
@@ -89,6 +94,7 @@ class ManoPPOConfig:
             "value_clip": self.value_clip,
             "entropy_loss_scale": self.entropy_loss_scale,
             "value_loss_scale": self.value_loss_scale,
+            "learning_starts": self.learning_starts,
             "time_limit_bootstrap": self.time_limit_bootstrap,
             "rewards_shaper": source_aligned_reward_shaper,
             # Target AMP execution is a device policy, not a PPO semantic. It
@@ -177,6 +183,9 @@ class ManoSkrlRuntime:
             device=self.device,
             cfg=config.skrl_config(num_envs=environment.num_envs, device=self.device),
         )
+        # skrl's PPO_CFG rejects source-only fields. The custom PPO update
+        # reads this source contract through the agent config after init.
+        self.agent.cfg.bounds_loss_coef = config.bounds_loss_coef
         self.agent.init()
 
     def conversion_phase_profile(self) -> dict[str, dict[str, float | int]]:

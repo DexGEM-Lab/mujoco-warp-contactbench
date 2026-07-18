@@ -172,11 +172,14 @@ def test_source_ppo_batch_divisibility_is_explicit() -> None:
     assert config["rollouts"] == 48
     assert config["mini_batches"] == 24
     assert config["time_limit_bootstrap"] is True
-    assert config["value_loss_scale"] == 4.0
+    assert config["value_loss_scale"] == 2.0
+    assert config["learning_starts"] == 0
     assert config["rewards_shaper"](torch.ones(1), 0, 1).item() == 0.5
     assert PPO_REWARD_SCALE == 0.5
     with pytest.raises(ValueError, match="must divide"):
         ManoPPOConfig().skrl_config(num_envs=1, device="cpu")
+    with pytest.raises(ValueError, match="learning_starts must be non-negative"):
+        ManoPPOConfig(learning_starts=-1)
 
 
 def test_gym_aligned_ppo_completes_every_minibatch_without_kl_early_stop(

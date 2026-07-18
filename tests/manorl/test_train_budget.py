@@ -894,7 +894,10 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
             self.name = name
             self.device = "cuda"
             self.config = config
-            self.agent = SimpleNamespace(name=name, cfg=SimpleNamespace(learning_starts=None))
+            self.agent = SimpleNamespace(
+                name=name,
+                cfg=SimpleNamespace(learning_starts=config.learning_starts),
+            )
             self.gymnasium_env = SimpleNamespace(environment=None)
             self.model = SimpleNamespace(parameters=lambda: [])
 
@@ -964,6 +967,7 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     assert loads[2] == ("evaluation-2", "run.pt")
     assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
     assert result["budget"]["evaluation_num_envs"] == 128
+    assert result["learning_starts"] == 0
     assert not list((tmp_path / "run").glob(".initial-*"))
 
 

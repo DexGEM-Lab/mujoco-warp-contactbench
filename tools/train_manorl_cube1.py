@@ -1051,10 +1051,6 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         device=device,
     )
     with _wandb_run(output=output, budget=budget, config=wandb_config) as (wandb_run, wandb):
-        # The first two 48-step rollouts are entirely source-defined pure mocap.
-        # Updating PPO on their zero reward signal moves the shared actor/critic
-        # representation before the policy has any controllable consequence.
-        runtime.agent.cfg.learning_starts = physical.contact_start_frame
         with _owned_initial_checkpoint(output) as initial_checkpoint:
             _save_checkpoint_atomically(
                 runtime.agent,

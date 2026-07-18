@@ -38,3 +38,8 @@
   The bounded acceptance predicate passed, but the policy did not complete the
   trajectory and this is not a convergence claim. The process and W&B upload
   exited naturally; GPU 2 returned to 18 MiB.
+- 2026-07-18: Aligned the remaining confirmed source loss/start differences:
+  effective critic MSE weight `2.0`, source clipped critic max formula, bounds
+  soft bound `1.1`, and `learning_starts=0` without a contact-frame override.
+  Focused PPO/runtime/trainer validation passed 48/48; `py_compile` and
+  `git diff --check` passed. No remote training was launched by this change.

@@ -11,6 +11,12 @@
 - The source rl-games continuous PPO stores old mean/std, computes exact Gaussian
   KL after each optimizer step, and with default legacy scheduling adjusts LR
   after every minibatch without KL early stopping.
+- The source critic objective uses the elementwise maximum of unclipped and
+  clipped squared value errors, then applies the effective coefficient
+  `0.5 * critic_coef = 2.0` for the resolved `critic_coef=4` configuration.
+- The source continuous-policy bounds loss starts outside the soft bound `1.1`.
+- Source PPO updates from the first completed rollout; delaying skrl updates to
+  the environment contact-start frame is not part of the source contract.
 - The validated Gym run's resolved minibatch size is 4096, not the generic YAML
   default 1024 and not the stopped MuJoCo run's 2048.
 
@@ -24,7 +30,7 @@
   from the zero baseline return `67.1179` to `76.9706`, but both reset at call
   283 and the trained contact mean was only `0.00955`.
 - The first optimizer update still has very large exact KL (mean `4.88195`, max
-  `15.46646`). The effective critic loss/clipping formula, source bounds loss,
-  raw sampled-action boundary, and contiguous Gym versus shuffled skrl
-  minibatch order remain plausible convergence-significant PPO differences and
-  were intentionally not changed in this task.
+  `15.46646`). The critic clipping/weight, source bounds loss, and first-rollout
+  start differences have now been aligned. The raw sampled-action boundary and
+  contiguous Gym versus shuffled skrl minibatch order remain plausible
+  convergence-significant differences.

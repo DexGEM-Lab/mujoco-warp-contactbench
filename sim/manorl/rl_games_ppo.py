@@ -15,6 +15,9 @@ from skrl.agents.torch.ppo import PPO
 from skrl.agents.torch.ppo.ppo import compute_gae
 
 
+RL_GAMES_BOUNDS_SOFT_BOUND = 1.1
+
+
 def rl_games_policy_kl(
     current_mean: torch.Tensor,
     current_std: torch.Tensor,
@@ -37,6 +40,39 @@ def rl_games_policy_kl(
         current_std.square() + (reference_mean - current_mean).square()
     ) / (2.0 * (reference_std.square() + 1.0e-5))
     return (c1 + c2 - 0.5).sum(dim=-1).mean()
+
+
+def rl_games_bounds_loss(policy_mean: torch.Tensor) -> torch.Tensor:
+    """Return the source rl-games soft-bound penalty averaged over a minibatch."""
+
+    mu_loss_high = torch.square(
+        torch.clamp(policy_mean - RL_GAMES_BOUNDS_SOFT_BOUND, min=0.0)
+    )
+    mu_loss_low = torch.square(
+        torch.clamp(policy_mean + RL_GAMES_BOUNDS_SOFT_BOUND, max=0.0)
+    )
+    return (mu_loss_low + mu_loss_high).sum(dim=-1).mean()
+
+
+def rl_games_critic_loss(
+    current_values: torch.Tensor,
+    reference_values: torch.Tensor,
+    returns: torch.Tensor,
+    *,
+    value_clip: float,
+) -> torch.Tensor:
+    """Return the source rl-games clipped critic MSE before critic weighting."""
+
+    value_losses = F.mse_loss(current_values, returns, reduction="none")
+    if value_clip > 0.0:
+        clipped_values = reference_values + torch.clamp(
+            current_values - reference_values,
+            min=-value_clip,
+            max=value_clip,
+        )
+        clipped_losses = F.mse_loss(clipped_values, returns, reduction="none")
+        value_losses = torch.maximum(value_losses, clipped_losses)
+    return value_losses.mean()
 
 
 class RlGamesAdaptiveLR:
@@ -198,6 +234,8 @@ class RlGamesPPO(PPO):
         policy_loss_total = 0.0
         entropy_loss_total = 0.0
         value_loss_total = 0.0
+        bounds_loss_total = 0.0
+        bounds_loss_coef = float(getattr(self.cfg, "bounds_loss_coef", 0.0))
         exact_kls: list[float] = []
         approximate_kls: list[float] = []
         learning_rates = [float(self.optimizer.param_groups[0]["lr"])]
@@ -271,19 +309,22 @@ class RlGamesPPO(PPO):
                     )
                     policy_loss = -torch.min(surrogate, surrogate_clipped).mean()
 
+                    if bounds_loss_coef:
+                        bounds_loss = rl_games_bounds_loss(current_mean)
+                    else:
+                        bounds_loss = torch.zeros((), device=policy_loss.device)
+
                     predicted_values, _ = self.value.act(inputs, role="value")
-                    if self.cfg.value_clip > 0:
-                        predicted_values = sampled_values + torch.clip(
-                            predicted_values - sampled_values,
-                            min=-self.cfg.value_clip,
-                            max=self.cfg.value_clip,
-                        )
-                    value_loss = self.cfg.value_loss_scale * F.mse_loss(
-                        sampled_returns, predicted_values
+                    value_loss = self.cfg.value_loss_scale * rl_games_critic_loss(
+                        predicted_values,
+                        sampled_values,
+                        sampled_returns,
+                        value_clip=self.cfg.value_clip,
                     )
 
                 self.optimizer.zero_grad()
-                self.scaler.scale(policy_loss + entropy_loss + value_loss).backward()
+                total_loss = policy_loss + entropy_loss + value_loss + bounds_loss_coef * bounds_loss
+                self.scaler.scale(total_loss).backward()
                 if config.torch.is_distributed:
                     self.policy.reduce_parameters()
                     if self.policy is not self.value:
@@ -330,6 +371,7 @@ class RlGamesPPO(PPO):
 
                 policy_loss_total += policy_loss.item()
                 value_loss_total += value_loss.item()
+                bounds_loss_total += bounds_loss.item()
                 if self.cfg.entropy_loss_scale:
                     entropy_loss_total += entropy_loss.item()
                 exact_kls.append(exact_kl.item())
@@ -341,6 +383,7 @@ class RlGamesPPO(PPO):
         denominator = float(completed_minibatches)
         self.track_data("Loss / Policy loss", policy_loss_total / denominator)
         self.track_data("Loss / Value loss", value_loss_total / denominator)
+        self.track_data("Loss / Bounds loss", bounds_loss_total / denominator)
         if self.cfg.entropy_loss_scale:
             self.track_data("Loss / Entropy loss", entropy_loss_total / denominator)
         self.track_data(
