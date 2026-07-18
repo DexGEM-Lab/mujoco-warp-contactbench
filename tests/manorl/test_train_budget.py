@@ -673,6 +673,22 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert captured[-1][1].resolved_minibatch_size == 4096
 
 
+def test_cli_rejects_local_rerun_and_grpc_stream_together(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid"),
+            "--rerun-output", str(tmp_path / "episode.rrd"),
+            "--rerun-grpc-url", "rerun+http://127.0.0.1:9876/proxy",
+            "--wandb", "false",
+        ])
+
+    assert "--rerun-output and --rerun-grpc-url are mutually exclusive" in capsys.readouterr().err
+
+
 def test_training_observer_quiets_viewer_for_json_console(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     import sim.manorl.view_environment as viewer

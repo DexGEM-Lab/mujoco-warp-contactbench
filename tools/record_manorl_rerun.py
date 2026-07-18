@@ -15,7 +15,12 @@ from sim.manorl.cli import parse_cli_bool
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
-from sim.manorl.view_environment import _build_checkpoint_stepper, _inference_ppo_config, _validate_checkpoint_path
+from sim.manorl.view_environment import (
+    _build_checkpoint_stepper,
+    _checkpoint_use_film,
+    _inference_ppo_config,
+    _validate_checkpoint_path,
+)
 
 
 class _StochasticCheckpointStepper:
@@ -29,7 +34,13 @@ class _StochasticCheckpointStepper:
 
         self._torch = torch
         adapter = ManoGymnasiumVectorEnv(environment)
-        self._runtime = ManoSkrlRuntime(adapter, _inference_ppo_config(environment.config.num_envs))
+        self._runtime = ManoSkrlRuntime(
+            adapter,
+            _inference_ppo_config(
+                environment.config.num_envs,
+                use_film=_checkpoint_use_film(checkpoint),
+            ),
+        )
         load_skrl_checkpoint_for_inference(self._runtime.agent, checkpoint)
         self._runtime.agent.enable_training_mode(True)
         self._observations, _ = self._runtime.env.reset()

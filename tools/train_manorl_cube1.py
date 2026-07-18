@@ -991,6 +991,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     _assert_cuda_runtime()
     if output.suffix:
         raise ValueError("--output must be a prefix without a suffix")
+    if budget.rerun_output is not None and budget.rerun_grpc_url is not None:
+        raise ValueError("rerun_output and rerun_grpc_url are mutually exclusive")
     if budget.device_resident_controls and (
         budget.rerun_output is not None
         or budget.rerun_grpc_url is not None
@@ -1388,6 +1390,8 @@ def main(argv: list[str] | None = None) -> int:
         not math.isfinite(args.wall_clock_seconds) or args.wall_clock_seconds <= 0
     ):
         parser.error("wall-clock-seconds must be a finite positive value when provided")
+    if args.rerun_output is not None and args.rerun_grpc_url is not None:
+        parser.error("--rerun-output and --rerun-grpc-url are mutually exclusive")
     if args.rerun_high_return_threshold is not None and not math.isfinite(args.rerun_high_return_threshold):
         parser.error("rerun-high-return-threshold must be finite when provided")
     if args.rerun_high_return_threshold is not None and args.rerun_high_return_dir is None:
