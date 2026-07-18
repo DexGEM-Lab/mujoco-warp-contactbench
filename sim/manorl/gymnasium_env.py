@@ -81,9 +81,10 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
         actions_array = np.asarray(actions, dtype=np.float64)
         if actions_array.shape != (self.num_envs, ACTION_DIM) or not np.all(np.isfinite(actions_array)):
             raise ValueError(f"actions must be finite ({self.num_envs}, {ACTION_DIM})")
-        # The physical action processor clips at the source action bound. Reject
-        # only non-finite/shape errors here so the source clipping remains owner.
-        output, rewards, reset, extras = self.environment.step(actions_array)
+        # Match IsaacGym VecTask: PPO keeps raw samples, while the environment
+        # clips the normalized action at its boundary before physical processing.
+        clipped_actions = np.clip(actions_array, -1.0, 1.0)
+        output, rewards, reset, extras = self.environment.step(clipped_actions)
         observation = np.asarray(output["obs"], dtype=np.float32)
         reward = np.asarray(rewards, dtype=np.float32)
         done = np.asarray(reset, dtype=bool)

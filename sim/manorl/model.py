@@ -96,7 +96,7 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         if self.num_observations != OBSERVATION_DIM or self.num_actions != ACTION_DIM:
             raise ValueError("ManoActorCritic requires the fixed 476D / 26D ABI")
         GaussianMixin.__init__(
-            self, clip_actions=True, clip_mean_actions=False, clip_log_std=True,
+            self, clip_actions=False, clip_mean_actions=False, clip_log_std=True,
             min_log_std=LOG_STD_LIMITS[0], max_log_std=LOG_STD_LIMITS[1], reduction="sum", role="policy",
         )
         DeterministicMixin.__init__(self, clip_actions=False, role="value")

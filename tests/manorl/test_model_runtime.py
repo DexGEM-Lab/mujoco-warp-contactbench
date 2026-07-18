@@ -52,6 +52,61 @@ def test_model_defaults_to_source_pointnet_film(adapter: ManoGymnasiumVectorEnv)
     assert value_outputs == {}
 
 
+def test_policy_keeps_raw_samples_and_environment_clips_at_boundary(
+    adapter: ManoGymnasiumVectorEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import torch
+
+    from sim.manorl.gymnasium_env import OBSERVATION_DIM
+    from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
+
+    runtime = ManoSkrlRuntime(adapter, ManoPPOConfig.optimizer_smoke())
+    runtime.agent.enable_training_mode(True)
+    with torch.no_grad():
+        runtime.model.log_std.fill_(2.0)
+    adapter.reset(seed=17)
+    observations, _ = runtime.env.reset()
+    torch.manual_seed(7)
+    with torch.no_grad():
+        raw_actions, _ = runtime.agent.act(
+            observations, None, timestep=0, timesteps=runtime.config.rollouts
+        )
+    assert raw_actions.shape == (adapter.num_envs, 26)
+    assert torch.any(torch.abs(raw_actions) > 1.0)
+
+    captured: list[np.ndarray] = []
+    original_step = adapter.environment.step
+
+    def capture_step(actions: np.ndarray):
+        captured.append(np.asarray(actions).copy())
+        return original_step(actions)
+
+    monkeypatch.setattr(adapter.environment, "step", capture_step)
+    next_observations, rewards, terminated, truncated, infos = runtime.env.step(raw_actions)
+    runtime.agent.record_transition(
+        observations=observations,
+        states=None,
+        actions=raw_actions,
+        rewards=rewards,
+        next_observations=next_observations,
+        next_states=None,
+        terminated=terminated,
+        truncated=truncated,
+        infos=infos,
+        timestep=0,
+        timesteps=runtime.config.rollouts,
+    )
+
+    stored_actions = runtime.memory.get_tensor_by_name("actions")[0]
+    torch.testing.assert_close(stored_actions, raw_actions)
+    assert len(captured) == 1
+    assert np.all(captured[0] <= 1.0) and np.all(captured[0] >= -1.0)
+    np.testing.assert_allclose(
+        captured[0], torch.clamp(raw_actions, -1.0, 1.0).cpu().numpy()
+    )
+    assert next_observations.shape == (adapter.num_envs, OBSERVATION_DIM)
+
+
 def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
     import torch
 
