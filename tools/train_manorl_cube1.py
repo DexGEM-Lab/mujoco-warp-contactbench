@@ -97,6 +97,10 @@ class TrainingBudget:
     wall_clock_seconds: float | None = None
     seed: int = 42
     rerun_output: str | None = None
+    rerun_grpc_url: str | None = None
+    rerun_high_return_dir: str | None = None
+    rerun_high_return_threshold: float | None = None
+    rerun_high_return_following: int = 5
     rerun_env_id: int = 0
     rerun_stride: int = 1
     object_type: str = "cube1"
@@ -987,8 +991,25 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     _assert_cuda_runtime()
     if output.suffix:
         raise ValueError("--output must be a prefix without a suffix")
-    if budget.device_resident_controls and (budget.rerun_output is not None or not budget.headless):
+    if budget.device_resident_controls and (
+        budget.rerun_output is not None
+        or budget.rerun_grpc_url is not None
+        or budget.rerun_high_return_dir is not None
+        or budget.rerun_high_return_threshold is not None
+        or not budget.headless
+    ):
         raise ValueError("device-resident-controls requires headless training without Rerun transition recording")
+    if budget.rerun_high_return_threshold is not None and budget.rerun_high_return_dir is None:
+        raise ValueError("rerun_high_return_threshold requires rerun_high_return_dir")
+    if budget.rerun_high_return_dir is not None and budget.rerun_output is None:
+        raise ValueError("rerun_high_return_dir requires rerun_output")
+    if budget.rerun_high_return_following < 0:
+        raise ValueError("rerun_high_return_following must be non-negative")
+    if (
+        budget.rerun_high_return_dir is not None
+        and budget.rerun_stride != 1
+    ):
+        raise ValueError("high-return Rerun replay requires rerun_stride=1 to preserve every action")
     output = output.resolve()
     checkpoint = output.with_suffix(".pt")
     last_checkpoint = _last_checkpoint_path(output)
@@ -997,6 +1018,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     episodes_path = _episode_records_path(output)
     partial_episodes_path = _partial_episode_records_path(output)
     rerun_path = Path(budget.rerun_output).resolve() if budget.rerun_output else None
+    rerun_high_return_dir = (
+        Path(budget.rerun_high_return_dir).resolve() if budget.rerun_high_return_dir else None
+    )
     artifacts = (
         checkpoint,
         _checkpoint_sidecar_path(checkpoint),
@@ -1105,8 +1129,16 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
 
         try:
             recorder = (
-                ManoRerunRecorder(physical, rerun_path, env_id=budget.rerun_env_id)
-                if rerun_path is not None
+                ManoRerunRecorder(
+                    physical,
+                    rerun_path or "outputs/manorl/live_training.rrd",
+                    env_id=budget.rerun_env_id,
+                    grpc_url=budget.rerun_grpc_url,
+                    archive_dir=rerun_high_return_dir,
+                    archive_threshold=budget.rerun_high_return_threshold,
+                    archive_following=budget.rerun_high_return_following,
+                )
+                if rerun_path is not None or budget.rerun_grpc_url is not None
                 else None
             )
             observer = _build_training_observer(physical, budget)
@@ -1279,6 +1311,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
+    parser.add_argument(
+        "--rerun-grpc-url",
+        help="optional Rerun gRPC URL (for example rerun+http://127.0.0.1:9876/proxy) for live web streaming",
+    )
+    parser.add_argument(
+        "--rerun-high-return-dir",
+        type=Path,
+        help="optional directory for preserving completed local .rrd episodes above the threshold",
+    )
+    parser.add_argument(
+        "--rerun-high-return-threshold",
+        type=float,
+        help="minimum completed episode return to preserve under --rerun-high-return-dir",
+    )
+    parser.add_argument(
+        "--rerun-high-return-following",
+        type=int,
+        default=5,
+        help="number of completed episodes after a threshold hit to preserve (default: 5)",
+    )
     parser.add_argument("--rerun-env-id", type=int, default=0)
     parser.add_argument("--rerun-stride", type=int, default=1)
     parser.add_argument("--object", dest="object_type", default="cube1")
@@ -1336,6 +1388,14 @@ def main(argv: list[str] | None = None) -> int:
         not math.isfinite(args.wall_clock_seconds) or args.wall_clock_seconds <= 0
     ):
         parser.error("wall-clock-seconds must be a finite positive value when provided")
+    if args.rerun_high_return_threshold is not None and not math.isfinite(args.rerun_high_return_threshold):
+        parser.error("rerun-high-return-threshold must be finite when provided")
+    if args.rerun_high_return_threshold is not None and args.rerun_high_return_dir is None:
+        parser.error("rerun-high-return-threshold requires --rerun-high-return-dir")
+    if args.rerun_high_return_dir is not None and args.rerun_output is None:
+        parser.error("rerun-high-return-dir requires --rerun-output")
+    if args.rerun_high_return_following < 0:
+        parser.error("rerun-high-return-following must be non-negative")
     if not 0 <= args.rerun_env_id < args.num_envs:
         parser.error("rerun-env-id must be within num-envs")
     if not 1 <= args.viewer_envs <= args.num_envs:
@@ -1350,6 +1410,12 @@ def main(argv: list[str] | None = None) -> int:
             wall_clock_seconds=args.wall_clock_seconds,
             seed=args.seed,
             rerun_output=str(args.rerun_output.resolve()) if args.rerun_output is not None else None,
+            rerun_grpc_url=args.rerun_grpc_url,
+            rerun_high_return_dir=(
+                str(args.rerun_high_return_dir.resolve()) if args.rerun_high_return_dir is not None else None
+            ),
+            rerun_high_return_threshold=args.rerun_high_return_threshold,
+            rerun_high_return_following=args.rerun_high_return_following,
             rerun_env_id=args.rerun_env_id,
             rerun_stride=args.rerun_stride,
             object_type=args.object_type,
