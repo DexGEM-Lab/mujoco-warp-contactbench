@@ -225,11 +225,12 @@ def _validate_row(row: dict[str, Any]) -> None:
 def _initial_support_shift(
     initial_position: NDArray[np.float64],
     initial_quaternion_xyzw: NDArray[np.float64],
+    object_type: str = OBJECT_TYPE,
 ) -> float:
     from sim.manorl.assets import object_collision_vertices
 
     rotated = Rotation.from_quat(initial_quaternion_xyzw).apply(
-        object_collision_vertices().copy()
+        object_collision_vertices(object_type).copy()
     )
     return -float(np.min(rotated[:, 2] + initial_position[2]))
 
@@ -639,7 +640,9 @@ def _selected_trajectory_from_row(
     q_ref[:, 3:6] = np.unwrap(q_ref[:, 3:6], axis=0, period=2.0 * np.pi)
     object_pos_raw = object_pos_all[start:stop].copy()
     object_quat_xyzw = rotvec_to_xyzw(object_rotvec_all[start:stop])
-    z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0]) if object_type == OBJECT_TYPE else 0.0
+    z_shift = _initial_support_shift(
+        object_pos_raw[0], object_quat_xyzw[0], object_type
+    )
     object_pos = object_pos_raw.copy()
     object_pos[:, 2] += z_shift
     return ReferenceTrajectory(
