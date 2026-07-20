@@ -15,7 +15,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from sim.sim_to_lance import main as sim_to_lance_main  # noqa: E402
 
-DEFAULT_OUTPUT = REPO_ROOT / "outputs" / "mjx_warp_smoke.lance"
+from sim.dexhandrl.constants import DEFAULT_OUTPUT_ROOT  # noqa: E402
+
+DEFAULT_OUTPUT = DEFAULT_OUTPUT_ROOT / "mjx_warp_smoke.lance"
 
 
 def check_mujoco() -> tuple[bool, str]:

@@ -1,0 +1,6 @@
+Source repository: all_assets.git (internal source repository)
+Source commit: ead79126589d1abf2362ea30b9d674d9e675a2f9
+
+This checkout contains the minimum DexHandRL runtime bundle currently used by
+the repository: the DexHand021Pro hand assets, cube1 object mesh/URDF, contact
+map, and reconstruction task configuration.

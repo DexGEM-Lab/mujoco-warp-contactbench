@@ -84,7 +84,7 @@ ENV UV_CACHE_DIR=/root/.cache/uv \
 # Build the project Python environment with uv. The second install adds GPU sim
 # packages that are intentionally kept out of the local visualization pyproject.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    "${CONDA_DIR}/bin/uv" sync --frozen --python "${CONDA_DIR}/bin/python" --no-install-project && \
+    "${CONDA_DIR}/bin/uv" sync --frozen --extra dexhandrl --python "${CONDA_DIR}/bin/python" --no-install-project && \
     "${CONDA_DIR}/bin/uv" pip install --python .venv/bin/python \
       "imageio" \
       "imageio-ffmpeg" \

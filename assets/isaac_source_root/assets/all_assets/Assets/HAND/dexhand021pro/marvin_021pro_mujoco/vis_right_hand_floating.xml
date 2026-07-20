@@ -1,0 +1,32 @@
+<mujoco model="marvin_021pro_right_hand_floating_vis">
+  <include file="marvin_021pro_right_hand_floating_simplified.xml"/>
+
+  <statistic center="0 0 0.08" extent="0.6"/>
+
+  <visual>
+    <headlight diffuse="0.7 0.7 0.7" ambient="0.35 0.35 0.35" specular="0.15 0.15 0.15"/>
+    <global azimuth="140" elevation="-22"/>
+    <rgba haze="0.15 0.2 0.28 1"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.18 0.24 0.32" rgb2="0.12 0.16 0.22" width="512" height="512"/>
+    <material name="grid_mat" texture="grid" texrepeat="8 8" reflectance="0.15" rgba="1 1 1 1"/>
+  </asset>
+
+  <worldbody>
+    <light name="key_light" pos="1.2 -1.2 1.6" dir="-0.5 0.5 -1" directional="true" diffuse="0.9 0.9 0.9" specular="0.2 0.2 0.2"/>
+    <light name="fill_light" pos="-1.0 1.0 1.1" dir="0.4 -0.4 -1" directional="true" diffuse="0.35 0.35 0.4" specular="0.05 0.05 0.05"/>
+    <geom name="floor" type="plane" size="2 2 0.1" pos="0 0 -0.22" material="grid_mat" condim="3"/>
+
+    <camera name="overview" pos="0.42 -0.42 0.26" xyaxes="0.707 0.707 0 -0.331 0.331 0.883"/>
+    <camera name="side" pos="0.04 -0.62 0.12" xyaxes="1 0 0 0 0.3 0.954"/>
+    <camera name="top" pos="0 0 0.72" xyaxes="1 0 0 0 1 0"/>
+  </worldbody>
+
+  <keyframe>
+    <key
+      name="home"
+      qpos="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"/>
+  </keyframe>
+</mujoco>

@@ -2,11 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-mkdir -p outputs
+: "${OUTPUT_ROOT:=${PWD}/outputs}"
 : "${DEVICE:=gpu}"
 : "${CUDA_VISIBLE_DEVICES:=0}"
 
-OUTPUT="${OUTPUT:-outputs/mjx_warp_contactbench_generated.lance}"
+OUTPUT="${OUTPUT:-${OUTPUT_ROOT}/mjx_warp_contactbench_generated.lance}"
 
 # Pass additional sim_to_lance.py arguments after the script name, for example:
 #   DEVICE=cpu OUTPUT=outputs/test.lance scripts/run_sim_lance.sh --duration-seconds 1 --ball-count 16

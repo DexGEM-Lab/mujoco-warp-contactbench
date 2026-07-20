@@ -1,0 +1,530 @@
+<mujoco model="marvin_021pro_urdf">
+  <compiler inertiafromgeom="auto" angle="radian" meshdir="../marvin_021pro_urdf/meshes/" autolimits="true" balanceinertia="true" />
+	<option timestep="0.001" iterations="50" solver="Newton" integrator="implicit" gravity="0 0 -9.81" />
+
+  <asset>
+    <mesh name="base_link" file="base_link.STL"/>
+    <mesh name="L0" file="L0.STL"/>
+    <mesh name="L1" file="L1.STL"/>
+    <mesh name="L2" file="L2.STL"/>
+    <mesh name="L3" file="L3.STL"/>
+    <mesh name="L4" file="L4.STL"/>
+    <mesh name="LFH0" file="LFH0.STL"/>
+    <mesh name="LFH1" file="LFH1.STL"/>
+    <mesh name="LH0_0" file="LH0_0.STL"/>
+    <mesh name="LH0_1" file="LH0_1.STL"/>
+    <mesh name="LH0_2" file="LH0_2.STL"/>
+    <mesh name="LH0_3" file="LH0_3.STL"/>
+    <mesh name="LH1_0" file="LH1_0.STL"/>
+    <mesh name="LH1_1" file="LH1_1.STL"/>
+    <mesh name="LH1_2" file="LH1_2.STL"/>
+    <mesh name="LH1_3" file="LH1_3.STL"/>
+    <mesh name="LH2_0" file="LH2_0.STL"/>
+    <mesh name="LH2_1" file="LH2_1.STL"/>
+    <mesh name="LH2_2" file="LH2_2.STL"/>
+    <mesh name="LH2_3" file="LH2_3.STL"/>
+    <mesh name="LH3_0" file="LH3_0.STL"/>
+    <mesh name="LH3_1" file="LH3_1.STL"/>
+    <mesh name="LH3_2" file="LH3_2.STL"/>
+    <mesh name="LH3_3" file="LH3_3.STL"/>
+    <mesh name="LH4_0" file="LH4_0.STL"/>
+    <mesh name="LH4_1" file="LH4_1.STL"/>
+    <mesh name="LH4_2" file="LH4_2.STL"/>
+    <mesh name="LH4_3" file="LH4_3.STL"/>
+    <mesh name="R0" file="R0.STL"/>
+    <mesh name="R1" file="R1.STL"/>
+    <mesh name="R2" file="R2.STL"/>
+    <mesh name="R3" file="R3.STL"/>
+    <mesh name="R4" file="R4.STL"/>
+    <mesh name="RFH0" file="RFH0.STL"/>
+    <mesh name="RFH1" file="RFH1.STL"/>
+    <mesh name="RH0_0" file="RH0_0.STL"/>
+    <mesh name="RH0_1" file="RH0_1.STL"/>
+    <mesh name="RH0_2" file="RH0_2.STL"/>
+    <mesh name="RH0_3" file="RH0_3.STL"/>
+    <mesh name="RH1_0" file="RH1_0.STL"/>
+    <mesh name="RH1_1" file="RH1_1.STL"/>
+    <mesh name="RH1_2" file="RH1_2.STL"/>
+    <mesh name="RH1_3" file="RH1_3.STL"/>
+    <mesh name="RH2_0" file="RH2_0.STL"/>
+    <mesh name="RH2_1" file="RH2_1.STL"/>
+    <mesh name="RH2_2" file="RH2_2.STL"/>
+    <mesh name="RH2_3" file="RH2_3.STL"/>
+    <mesh name="RH3_0" file="RH3_0.STL"/>
+    <mesh name="RH3_1" file="RH3_1.STL"/>
+    <mesh name="RH3_2" file="RH3_2.STL"/>
+    <mesh name="RH3_3" file="RH3_3.STL"/>
+    <mesh name="RH4_0" file="RH4_0.STL"/>
+    <mesh name="RH4_1" file="RH4_1.STL"/>
+    <mesh name="RH4_2" file="RH4_2.STL"/>
+    <mesh name="RH4_3" file="RH4_3.STL"/>
+    <mesh name="YUNTAI0" file="YUNTAI0.STL"/>
+    <mesh name="YUNTAI1" file="YUNTAI1.STL"/>
+    <mesh name="YUNTAI2" file="YUNTAI2.STL"/>
+  </asset>
+
+  <default>
+		<default class="arm_dam_fri">
+			<joint damping="0.6" frictionloss="0.6" />
+		</default>
+		<default class="fig_dam_fri">
+			<joint damping="0.3" frictionloss="0.3" />
+		</default>
+    <default class="black">
+      	<geom rgba="0.3 0.3 0.3 1" />
+		</default>
+    <default class="grey">
+      	<geom rgba="0.9 0.9 0.9 1" />
+		</default>
+    <default class="white">
+      	<geom rgba="0.9 0.9 0.9 1" />
+		</default>
+    <default class="blue">
+      	<geom rgba="0.184314 0.466667 1 1" />
+		</default>
+      
+    <joint damping="0.1" />
+    
+    <geom friction="3.0 2 2" solref=".01 0.9" solimp="0.9 0.999 0.005" />
+	</default>
+	
+
+  <visual>
+    <headlight diffuse="0.5 0.5 0.5" ambient="0.3 0.3 0.3" specular="0.1 0.1 0.1"/>
+  </visual>
+
+  <worldbody>
+    <!-- 光源 -->
+    <light name="light_top"   pos="0 0 4"  dir="0 0 -1"    diffuse="0.8 0.8 0.8" specular="0.2 0.2 0.2" directional="true"/>
+    <light name="light_front" pos="2 1 2"  dir="-1 -0.5 -1" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+    <light name="light_back"  pos="-2 -1 2" dir="1 0.5 -1"  diffuse="0.3 0.3 0.3" specular="0.0 0.0 0.0"/>
+
+    <!-- 地板 -->
+    <geom name="floor" type="plane" size="5 5 0.1" pos="0 0 -0.06" rgba="0.2 0.3 0.6 1" condim="3"/>
+
+    <body name="base_link">
+    <geom type="mesh" contype="0" conaffinity="0" density="0" rgba="0.61569 0.64314 0.67451 1" mesh="base_link"/>
+    <geom type="mesh" contype="0" conaffinity="0" density="0" rgba="0.61569 0.64314 0.67451 1" mesh="base_link"/>
+    
+    <body name="L0" pos="0.00095486 0.111 0.956" quat="0.497844 0.497845 -0.502147 -0.502145">
+      <inertial pos="-0.0853876 0.00169466 -1.60763e-06" quat="0.507053 0.5071 0.492808 0.492836" mass="0.810572" diaginertia="0.00198853 0.00167182 0.000874101"/>
+      <joint name="l_a_jiont_1" pos="0 0 0" axis="-1 0 0" range="-3.1067 3.1067"  class="arm_dam_fri"/>
+      <geom type="mesh"  density="0" rgba="0.129412 0.54902 0.129412 1" mesh="L0"/>
+      <geom type="mesh" rgba="0.129412 0.54902 0.129412 1" mesh="L0"/>
+      <body name="L1" pos="-0.1085 -0.032 0" quat="0.7071 0.00304141 0.00304141 0.7071">
+        <inertial pos="0.0304874 0.0477186 -0.000412431" quat="0.511492 0.488269 -0.507251 0.492611" mass="1.14647" diaginertia="0.0054128 0.00453546 0.00234885"/>
+        <joint name="l_a_jiont_2" pos="0 0 0" axis="1 0 0" range="-2.0944 2.0944"  class="arm_dam_fri"/>
+        <geom type="mesh"  density="0" rgba="0.188235 0.498039 0.286275 1" mesh="L1"/>
+        <geom type="mesh" rgba="0.188235 0.498039 0.286275 1" mesh="L1"/>
+        <body name="L2" pos="0.032 0.147995 -0.00127315" quat="-0.00304141 -0.7071 -0.7071 0.00304141">
+          <inertial pos="0.0821685 -0.000902705 0.00584948" quat="0.540157 0.466017 0.449649 0.537471" mass="1.04272" diaginertia="0.0037384 0.0035188 0.00101926"/>
+          <joint name="l_a_jiont_3" pos="0 0 0" axis="1 0 0" range="-3.1067 3.1067"  class="arm_dam_fri"/>
+          <geom type="mesh"  density="0" rgba="0.929412 0.509804 0.929412 1" mesh="L2"/>
+          <geom type="mesh" rgba="0.929412 0.509804 0.929412 1" mesh="L2"/>
+          <body name="L3" pos="0.139 0.0285001 0.018" quat="0.00304141 -0.7071 -0.7071 0.00304141">
+            <inertial pos="-0.0259011 0.0316813 0.00714228" quat="0.41878 0.569645 -0.535755 0.461622" mass="0.747366" diaginertia="0.00241963 0.001883 0.00135212"/>
+            <joint name="l_a_jiont_4" pos="0 0 0" axis="1 0 0" range="-2.5307 1.0472"  class="arm_dam_fri"/>
+            <geom type="mesh"  density="0" rgba="1 0.698039 0.768627 1" mesh="L3"/>
+            <geom type="mesh" rgba="1 0.698039 0.768627 1" mesh="L3"/>
+            <body name="L4" pos="-0.0275837 0.12115 0.0169584" quat="0.7071 -0.00304141 -0.00304141 -0.7071">
+              <inertial pos="-0.126971 1.41591e-07 0.00153675" quat="0.00261866 0.710116 0.00265047 0.704075" mass="0.611334" diaginertia="0.000962859 0.000850828 0.000308088"/>
+              <joint name="l_a_jiont_5" pos="0 0 0" axis="-1 0 0" range="-3.1067 3.1067"  class="arm_dam_fri"/>
+              <geom type="mesh"  density="0" rgba="0.866667 0.717647 0.517647 1" mesh="L4"/>
+              <geom type="mesh" rgba="0.866667 0.717647 0.517647 1" mesh="L4"/>
+              <body name="LFH0" pos="-0.2145 0.0285 0" quat="0.7071 0.00304141 0.00304141 0.7071">
+                <inertial pos="-0.0285 -2.57151e-05 -0.00298921" quat="0.502146 0.497845 0.502146 0.497845" mass="0.0321207" diaginertia="9.54022e-06 6.58656e-06 4.70268e-06"/>
+                <joint name="l_a_jiont_6" pos="0 0 0" axis="1 0 0" range="-1 0.5" class="arm_dam_fri"/>
+                <geom type="mesh"  density="0" rgba="1 0.0666667 0.568627 1" mesh="LFH0"/>
+                <geom type="mesh" rgba="1 0.0666667 0.568627 1" mesh="LFH0"/>
+                <body name="LFH1" pos="-0.0285 -0.000240865 -0.027999" quat="0.502146 0.497845 0.497845 -0.502146">
+                  <inertial pos="-0.0283127 0.00068848 -0.0639051" quat="0.997892 0.0016401 0.064775 -0.00370287" mass="0.543643" diaginertia="0.000988791 0.000799204 0.000448395"/>
+                  <joint name="l_a_jiont_7" pos="0 0 0" axis="1 0 0" range="-0.6 0.6" class="arm_dam_fri"/>
+                  <geom type="mesh"  density="0" rgba="0.498039 0 1 1" mesh="LFH1"/>
+                  <geom type="mesh" rgba="0.498039 0 1 1" mesh="LFH1"/>
+                  <body name="LH0_0" pos="0.001 0.0173446 -0.0609471" quat="0.669581 -0.227292 -0.669581 0.227292">
+                    <inertial pos="0.0166 0.00521328 -0.000919242" quat="0.541675 0.454519 -0.454519 0.541675" mass="0.0105243" diaginertia="1.30842e-06 1.2533e-06 5.88299e-07"/>
+                    <joint name="l_f_jiont_1_1" pos="0 0 0" axis="-1 0 0" range="0 2" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.929412 0.866667 0.509804 1" mesh="LH0_0"/>
+                    <geom type="mesh" rgba="0.929412 0.866667 0.509804 1" mesh="LH0_0"/>
+                    <body name="LH0_1" pos="0.0166 0.0160248 -0.0127768" quat="0.686215 0.170612 0.646164 -0.28718">
+                      <inertial pos="-0.00980016 0.0148825 -0.0104531" quat="0.894642 0.446781 -0.000620607 0.00126081" mass="0.0246804" diaginertia="7.69889e-06 7.69006e-06 1.75846e-06"/>
+                      <joint name="l_f_jiont_1_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.458824 0.529412 0.6 1" mesh="LH0_1"/>
+                      <geom type="mesh" rgba="0.458824 0.529412 0.6 1" mesh="LH0_1"/>
+                      <body name="LH0_2" pos="-0.0038 0.0339193 -0.0264287">
+                        <inertial pos="-0.00599999 0.011904 -0.00882206" quat="0.634548 0.31211 -0.31207 0.634467" mass="0.0122868" diaginertia="1.81253e-06 1.78096e-06 6.66259e-07"/>
+                        <joint name="l_f_jiont_1_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.407843 0.407843 0.54902 1" mesh="LH0_2"/>
+                        <geom type="mesh" rgba="0.407843 0.407843 0.54902 1" mesh="LH0_2"/>
+                        <body name="LH0_3" pos="0 0.021456 -0.0167177" quat="0 0 1 0">
+                          <inertial pos="0.00598305 0.0109867 0.0076505" quat="0.463072 0.886283 0.00764615 -0.00293779" mass="0.0110115" diaginertia="1.47866e-06 1.44967e-06 5.32426e-07"/>
+                          <joint name="l_f_jiont_1_4" pos="0 0 0" axis="1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.94902 0.819608 0.54902 1" mesh="LH0_3"/>
+                          <geom type="mesh" rgba="0.94902 0.819608 0.54902 1" mesh="LH0_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="LH1_0" pos="-0.0105 0.03045 -0.12078">
+                    <inertial pos="-0.00753484 -6.56576e-05 -0.00156068" quat="0.999764 -0.019262 0.00624851 0.00783021" mass="0.00384132" diaginertia="1.98177e-07 1.94791e-07 1.29158e-07"/>
+                    <joint name="l_f_jiont_2_1" pos="0 0 0" axis="-1 0 0" range="-0.5 0.5" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="LH1_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="LH1_0"/>
+                    <body name="LH1_1" pos="-0.00745 0.00965 -0.0116" quat="0.502146 -0.497845 -0.497845 0.502146">
+                      <inertial pos="-0.00987049 0.0216901 0.000469002" quat="0.474369 0.484682 -0.51158 0.527583" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="l_f_jiont_2_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="LH1_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="LH1_1"/>
+                      <body name="LH1_2" pos="-0.00325 0.0429984 -0.000369901">
+                        <inertial pos="-0.00544889 0.0127721 0.00114067" quat="0.52262 0.5167 -0.467049 0.491685" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="l_f_jiont_2_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="LH1_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="LH1_2"/>
+                        <body name="LH1_3" pos="0 0.0249991 -0.000215058">
+                          <inertial pos="-0.00675576 0.0126957 0.000262258" quat="0.471437 0.551531 -0.552349 0.410454" mass="0.00790881" diaginertia="6.43887e-07 6.00668e-07 2.47989e-07"/>
+                          <joint name="l_f_jiont_2_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.568627 0.427451 0.847059 1" mesh="LH1_3"/>
+                          <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="LH1_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="LH2_0" pos="-0.0133 0.01015 -0.12578">
+                    <inertial pos="-0.00473484 -6.56576e-05 -0.00156068" quat="0.999764 -0.019262 0.00624851 0.00783021" mass="0.00384132" diaginertia="1.98177e-07 1.94791e-07 1.29158e-07"/>
+                    <joint name="l_f_jiont_3_1" pos="0 0 0" axis="-1 0 0" range="-0.5 0.5" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="LH2_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="LH2_0"/>
+                    <body name="LH2_1" pos="-0.00465 0.00965 -0.0116" quat="0.502146 -0.497845 -0.497845 0.502146">
+                      <inertial pos="-0.00987049 0.0216901 0.000469002" quat="0.474369 0.484682 -0.51158 0.527583" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="l_f_jiont_3_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="LH2_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="LH2_1"/>
+                      <body name="LH2_2" pos="-0.00325 0.0429984 -0.000369901">
+                        <inertial pos="-0.00544889 0.0127721 0.00114067" quat="0.52262 0.5167 -0.467049 0.491685" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="l_f_jiont_3_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="LH2_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="LH2_2"/>
+                        <body name="LH2_3" pos="0 0.0249991 -0.000215058">
+                          <inertial pos="-0.00675576 0.0126957 0.000262258" quat="0.471437 0.551531 -0.552349 0.410454" mass="0.00790881" diaginertia="6.43887e-07 6.00668e-07 2.47989e-07"/>
+                          <joint name="l_f_jiont_3_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.568627 0.427451 0.847059 1" mesh="LH2_3"/>
+                          <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="LH2_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="LH3_0" pos="-0.0105 -0.01015 -0.12078">
+                    <inertial pos="-0.00753484 -6.56576e-05 -0.00156068" quat="0.999764 -0.019262 0.00624851 0.00783021" mass="0.00384132" diaginertia="1.98177e-07 1.94791e-07 1.29158e-07"/>
+                    <joint name="l_f_jiont_4_1" pos="0 0 0" axis="-1 0 0" range="-0.5 0.5" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="LH3_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="LH3_0"/>
+                    <body name="LH3_1" pos="-0.00745 0.00965 -0.0116" quat="0.502146 -0.497845 -0.497845 0.502146">
+                      <inertial pos="-0.00987049 0.0216901 0.000469002" quat="0.474369 0.484682 -0.51158 0.527583" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="l_f_jiont_4_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="LH3_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="LH3_1"/>
+                      <body name="LH3_2" pos="-0.00325 0.0429984 -0.000369901">
+                        <inertial pos="-0.00544889 0.0127721 0.00114067" quat="0.52262 0.5167 -0.467049 0.491685" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="l_f_jiont_4_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="LH3_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="LH3_2"/>
+                        <body name="LH3_3" pos="0 0.0249991 -0.000215058">
+                          <inertial pos="-0.00675576 0.0126957 0.000262258" quat="0.471437 0.551531 -0.552349 0.410454" mass="0.00790881" diaginertia="6.43887e-07 6.00668e-07 2.47989e-07"/>
+                          <joint name="l_f_jiont_4_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.568627 0.427451 0.847059 1" mesh="LH3_3"/>
+                          <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="LH3_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="LH4_0" pos="-0.0108 -0.03045 -0.11578">
+                    <inertial pos="-0.00723484 -6.56576e-05 -0.00156068" quat="0.999764 -0.019262 0.00624851 0.00783021" mass="0.00384132" diaginertia="1.98177e-07 1.94791e-07 1.29158e-07"/>
+                    <joint name="l_f_jiont_5_1" pos="0 0 0" axis="-1 0 0" range="-0.5 0.5" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="LH4_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="LH4_0"/>
+                    <body name="LH4_1" pos="-0.00715 -0.0078 -0.0116" quat="0.497845 -0.502146 0.502146 -0.497845">
+                      <inertial pos="-0.00757951 0.0216901 -0.000469002" quat="0.484682 0.474369 -0.527583 0.51158" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="l_f_jiont_5_2" pos="0 0 0" axis="1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="LH4_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="LH4_1"/>
+                      <body name="LH4_2" pos="0.0015 0.0429984 0.000369901" quat="0 0 -1 0">
+                        <inertial pos="0.0102511 0.0127721 0.00114067" quat="0.52262 0.5167 -0.467049 0.491685" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="l_f_jiont_5_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="LH4_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="LH4_2"/>
+                        <body name="LH4_3" pos="0 0.0249991 -0.000215058">
+                          <inertial pos="0.00894424 0.0126957 0.000262258" quat="0.471437 0.551531 -0.552349 0.410454" mass="0.00790881" diaginertia="6.43887e-07 6.00668e-07 2.47989e-07"/>
+                          <joint name="l_f_jiont_5_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.568627 0.427451 0.847059 1" mesh="LH4_3"/>
+                          <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="LH4_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="R0" pos="-0.0010607 -0.1233 0.956" quat="0.502144 0.502145 0.497847 0.497845">
+      <inertial pos="-0.0730876 -0.00169467 1.57044e-06" quat="0.492808 0.492836 0.507053 0.5071" mass="0.810573" diaginertia="0.00198853 0.00167182 0.000874101"/>
+      <joint name="r_a_jiont_1" pos="0 0 0" axis="-1 0 0" range="-3.1067 3.1067"  class="arm_dam_fri"/>
+      <geom type="mesh"  density="0" rgba="0.129412 0.54902 0.129412 1" mesh="R0"/>
+      <geom type="mesh" rgba="0.129412 0.54902 0.129412 1" mesh="R0"/>
+      <body name="R1" pos="-0.0962 -0.031 0" quat="0.7071 -0.00304141 0.00304141 -0.7071">
+        <inertial pos="-0.0325126 -0.0477186 -0.00040857" quat="0.488229 0.51147 -0.492651 0.507273" mass="1.14647" diaginertia="0.0054128 0.00453546 0.00234885"/>
+        <joint name="r_a_jiont_2" pos="0 0 0" axis="1 0 0" range="-2.0944 2.0944"  class="arm_dam_fri"/>
+        <geom type="mesh"  density="0" rgba="0.188235 0.498039 0.286275 1" mesh="R1"/>
+        <geom type="mesh" rgba="0.188235 0.498039 0.286275 1" mesh="R1"/>
+        <body name="R2" pos="-0.031 -0.147995 -0.00127315" quat="0.7071 0.00304141 -0.00304141 0.7071">
+          <inertial pos="-0.0821685 0.000902704 0.00584949" quat="0.466017 0.540157 0.537471 0.449649" mass="1.04272" diaginertia="0.0037384 0.0035188 0.00101926"/>
+          <joint name="r_a_jiont_3" pos="0 0 0" axis="-1 0 0" range="-3.1067 3.1067"  class="arm_dam_fri"/>
+          <geom type="mesh"  density="0" rgba="0.929412 0.509804 0.929412 1" mesh="R2"/>
+          <geom type="mesh" rgba="0.929412 0.509804 0.929412 1" mesh="R2"/>
+          <body name="R3" pos="-0.139 -0.0285001 0.018" quat="0.00304141 -0.7071 -0.7071 0.00304141">
+            <inertial pos="0.0259011 -0.0315541 0.00768626" quat="0.539707 0.456996 -0.413864 0.573226" mass="0.747371" diaginertia="0.00241963 0.001883 0.00135212"/>
+            <joint name="r_a_jiont_4" pos="0 0 0" axis="-1 0 0" range="-2.5307 1.0472"  class="arm_dam_fri"/>
+            <geom type="mesh"  density="0" rgba="1 0.698039 0.768627 1" mesh="R3"/>
+            <geom type="mesh" rgba="1 0.698039 0.768627 1" mesh="R3"/>
+            <body name="R4" pos="0.0275837 -0.120841 0.0190402" quat="-0.00304141 -0.7071 -0.7071 0.00304141">
+              <inertial pos="-0.126971 -1.42431e-07 -0.00153675" quat="0.00265045 0.704075 0.00261863 0.710116" mass="0.611334" diaginertia="0.000962859 0.000850829 0.000308088"/>
+              <joint name="r_a_jiont_5" pos="0 0 0" axis="-1 0 0" range="-3.1067 3.1067"  class="arm_dam_fri"/>
+              <geom type="mesh"  density="0" rgba="0.866667 0.717647 0.517647 1" mesh="R4"/>
+              <geom type="mesh" rgba="0.866667 0.717647 0.517647 1" mesh="R4"/>
+              <body name="RFH0" pos="-0.2145 0.0285 0" quat="0.00304141 -0.7071 -0.7071 0.00304141">
+                <inertial pos="-0.0285 -2.57151e-05 -0.00298921" quat="0.502146 0.497845 0.502146 0.497845" mass="0.0321207" diaginertia="9.54022e-06 6.58656e-06 4.70268e-06"/>
+                <joint name="r_a_jiont_6" pos="0 0 0" axis="-1 0 0" range="-1 0.5" class="arm_dam_fri"/>
+                <geom type="mesh"  density="0" rgba="1 0.0666667 0.568627 1" mesh="RFH0"/>
+                <geom type="mesh" rgba="1 0.0666667 0.568627 1" mesh="RFH0"/>
+                <body name="RFH1" pos="-0.0285 -0.000240865 -0.027999" quat="0.502146 0.497845 0.497845 -0.502146">
+                  <inertial pos="-0.0281358 0.00116684 0.0629761" quat="0.997889 0.000664538 -0.0648663 -0.00322019" mass="0.552446" diaginertia="0.000987241 0.000800455 0.000447942"/>
+                  <joint name="r_a_jiont_7" pos="0 0 0" axis="-1 0 0" range="-0.6 0.6" class="arm_dam_fri"/>
+                  <geom type="mesh"  density="0" rgba="0.858824 0.858824 0.858824 1" mesh="RFH1"/>
+                  <geom type="mesh" rgba="0.858824 0.858824 0.858824 1" mesh="RFH1"/>
+                  <body name="RH0_0" pos="0.001 0.0173446 0.0609471" quat="0.669581 0.227292 0.669581 0.227292">
+                    <inertial pos="0.0166 0.00521328 0.000919242" quat="0.454519 0.541675 -0.541675 0.454519" mass="0.0505243" diaginertia="1.30842e-06 1.2533e-06 5.88299e-07"/>
+                    <joint name="r_f_jiont_1_1" pos="0 0 0" axis="1 0 0" range="0 2" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.929412 0.866667 0.509804 1" mesh="RH0_0"/>
+                    <geom type="mesh" rgba="0.929412 0.866667 0.509804 1" mesh="RH0_0"/>
+                    <body name="RH0_1" pos="0.0166 0.0160248 0.0127768" quat="0.646164 0.28718 0.686215 -0.170612">
+                      <inertial pos="0.00979983 0.0148825 -0.0104531" quat="0.894642 0.446781 -0.000693364 0.00140788" mass="0.0246804" diaginertia="7.69892e-06 7.69009e-06 1.75846e-06"/>
+                      <joint name="r_f_jiont_1_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.458824 0.529412 0.6 1" mesh="RH0_1"/>
+                      <geom type="mesh" rgba="0.458824 0.529412 0.6 1" mesh="RH0_1"/>
+                      <body name="RH0_2" pos="0.0038 0.0339193 -0.0264287">
+                        <inertial pos="0.00600001 0.011904 -0.00882206" quat="0.634542 0.312107 -0.312073 0.634473" mass="0.0122868" diaginertia="1.81253e-06 1.78096e-06 6.66259e-07"/>
+                        <joint name="r_f_jiont_1_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.407843 0.407843 0.54902 1" mesh="RH0_2"/>
+                        <geom type="mesh" rgba="0.407843 0.407843 0.54902 1" mesh="RH0_2"/>
+                        <body name="RH0_3" pos="0 0.021456 -0.0167177" quat="0 0 -1 0">
+                          <inertial pos="-0.00601695 0.0109867 0.00765051" quat="0.463072 0.886283 0.00763868 -0.00293413" mass="0.0110115" diaginertia="1.47866e-06 1.44967e-06 5.32426e-07"/>
+                          <joint name="r_f_jiont_1_4" pos="0 0 0" axis="1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.94902 0.819608 0.54902 1" mesh="RH0_3"/>
+                          <geom type="mesh" rgba="0.94902 0.819608 0.54902 1" mesh="RH0_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="RH1_0" pos="-0.0108 0.03045 0.12078">
+                    <inertial pos="-0.00723484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07"/>
+                    <joint name="r_f_jiont_2_1" pos="0 0 0" axis="-1 0 0" range="-0.1570796327 0.4537856055" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="RH1_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH1_0"/>
+                    <body name="RH1_1" pos="-0.00715 0.0078 0.0116" quat="0.502146 -0.497845 -0.497845 0.502146">
+                      <inertial pos="-0.00757951 -0.0216788 0.000842089" quat="0.516099 0.523162 -0.470182 0.488746" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="r_f_jiont_2_2" pos="0 0 0" axis="1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH1_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH1_1"/>
+                      <body name="RH1_2" pos="0.0015 -0.0429984 0.000369901" quat="0 0 1 0">
+                        <inertial pos="0.0102511 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="r_f_jiont_2_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="RH1_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH1_2"/>
+                        <body name="RH1_3" pos="0 -0.0249991 -0.000215058">
+                          <inertial pos="0.00894424 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07"/>
+                          <joint name="r_f_jiont_2_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.568627 0.427451 0.847059 1" mesh="RH1_3"/>
+                          <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="RH1_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="RH2_0" pos="-0.0105 0.01015 0.12578">
+                    <inertial pos="-0.00753484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07"/>
+                    <joint name="r_f_jiont_3_1" pos="0 0 0" axis="-1 0 0" range="-0.4537856055 0.4537856055" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="RH2_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH2_0"/>
+                    <body name="RH2_1" pos="-0.00745 0.0081 0.0116" quat="0.502146 -0.497845 -0.497845 0.502146">
+                      <inertial pos="-0.00787951 -0.0216788 0.000842089" quat="0.516099 0.523162 -0.470182 0.488746" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="r_f_jiont_3_2" pos="0 0 0" axis="1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH2_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH2_1"/>
+                      <body name="RH2_2" pos="0.0012 -0.0429984 0.000369901" quat="0 0 1 0">
+                        <inertial pos="0.0102511 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="r_f_jiont_3_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="RH2_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH2_2"/>
+                        <body name="RH2_3" pos="0 -0.0249991 -0.000215058">
+                          <inertial pos="0.00894424 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07"/>
+                          <joint name="r_f_jiont_3_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0 0.498039 1 1" mesh="RH2_3"/>
+                          <geom type="mesh" rgba="0 0.498039 1 1" mesh="RH2_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="RH3_0" pos="-0.0108 -0.01015 0.12078">
+                    <inertial pos="-0.00723484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07"/>
+                    <joint name="r_f_jiont_4_1" pos="0 0 0" axis="-1 0 0" range="-0.4537856055 0.1570796327" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="RH3_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH3_0"/>
+                    <body name="RH3_1" pos="-0.00715 -0.00965 0.0116" quat="0.497845 -0.502146 0.502146 -0.497845">
+                      <inertial pos="-0.00987049 -0.0216788 -0.000842089" quat="0.523162 0.516099 -0.488746 0.470182" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="r_f_jiont_4_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH3_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH3_1"/>
+                      <body name="RH3_2" pos="-0.00325 -0.0429984 -0.000369901">
+                        <inertial pos="-0.00544889 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="r_f_jiont_4_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="RH3_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH3_2"/>
+                        <body name="RH3_3" pos="0 -0.0249991 -0.000215058">
+                          <inertial pos="-0.00675576 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07"/>
+                          <joint name="r_f_jiont_4_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0.568627 0.427451 0.847059 1" mesh="RH3_3"/>
+                          <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="RH3_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                  <body name="RH4_0" pos="-0.0105 -0.03045 0.11578">
+                    <inertial pos="-0.00753484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07"/>
+                    <joint name="r_f_jiont_5_1" pos="0 0 0" axis="-1 0 0" range="-0.4537856055 0.0872664626" class="fig_dam_fri"/>
+                    <geom type="mesh"  density="0" rgba="0.439216 0.619608 1 1" mesh="RH4_0"/>
+                    <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH4_0"/>
+                    <body name="RH4_1" pos="-0.00745 -0.00965 0.0116" quat="0.497845 -0.502146 0.502146 -0.497845">
+                      <inertial pos="-0.00987049 -0.0216788 -0.000842089" quat="0.523162 0.516099 -0.488746 0.470182" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07"/>
+                      <joint name="r_f_jiont_5_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                      <geom type="mesh"  density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH4_1"/>
+                      <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH4_1"/>
+                      <body name="RH4_2" pos="-0.00325 -0.0429984 -0.000369901">
+                        <inertial pos="-0.00544889 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07"/>
+                        <joint name="r_f_jiont_5_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                        <geom type="mesh"  density="0" rgba="0.486275 1 0 1" mesh="RH4_2"/>
+                        <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH4_2"/>
+                        <body name="RH4_3" pos="0 -0.0249991 -0.000215058">
+                          <inertial pos="-0.00675576 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07"/>
+                          <joint name="r_f_jiont_5_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" class="fig_dam_fri"/>
+                          <geom type="mesh"  density="0" rgba="0 0.498039 1 1" mesh="RH4_3"/>
+                          <geom type="mesh" rgba="0 0.498039 1 1" mesh="RH4_3"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <body name="YUNTAI0" pos="0 0 1.294" quat="0.707107 0 -0.707107 0">
+      <inertial pos="0 0 0" quat="0.546337 0.448123 0.555501 0.438316" mass="1" diaginertia="4.72565e-05 4.27018e-05 9.04451e-06"/>
+      <joint name="j_y1" pos="0 0 0" axis="-1 0 0" range="-1 1" class="arm_dam_fri"/>
+      <geom type="mesh"  density="0" rgba="1 1 1 1" mesh="YUNTAI0"/>
+      <geom type="mesh" rgba="1 1 1 1" mesh="YUNTAI0"/>
+      <body name="YUNTAI1" pos="0.0245 -0.0382475 -0.0111714" quat="0.7071 -0.00304141 -0.00304141 -0.7071">
+        <inertial pos="-0.0485418 -0.0223768 -0.0221237" quat="-0.138576 0.700734 0.0953788 0.693305" mass="0.0831059" diaginertia="0.000112458 9.78483e-05 3.21251e-05"/>
+        <joint name="j_y2" pos="0 0 0" axis="-1 0 0" range="-1 1" class="arm_dam_fri"/>
+        <geom type="mesh"  density="0" rgba="0.611765 0.898039 0.901961 1" mesh="YUNTAI1"/>
+        <geom type="mesh" rgba="0.611765 0.898039 0.901961 1" mesh="YUNTAI1"/>
+        <geom pos="-0.03815 -0.0095 -0.06015" quat="0 1 0 0" type="mesh"  density="0" rgba="0.6 0.6 0.6 1" mesh="YUNTAI2"/>
+        <geom pos="-0.03815 -0.0095 -0.06015" quat="0 1 0 0" type="mesh" rgba="0.6 0.6 0.6 1" mesh="YUNTAI2"/>
+      </body>
+    </body>
+    </body>
+  </worldbody>
+
+   <include file="./contact.xml" />
+
+  <!-- 位置控制执行器 (59 DOF) -->
+  <actuator>
+    <!-- 颈部 (2 DOF) -->
+    <position name="act_j_y1" joint="j_y1" kp="100" ctrllimited="true" ctrlrange="-1 1"/>
+    <position name="act_j_y2" joint="j_y2" kp="100" ctrllimited="true" ctrlrange="-1 1"/>
+
+    <!-- 左臂 (7 DOF) -->
+    <position name="act_l_a_1" joint="l_a_jiont_1" kp="500" ctrllimited="true" ctrlrange="-3.1067 3.1067"/>
+    <position name="act_l_a_2" joint="l_a_jiont_2" kp="300" ctrllimited="true" ctrlrange="-2.0944 2.0944"/>
+    <position name="act_l_a_3" joint="l_a_jiont_3" kp="300" ctrllimited="true" ctrlrange="-3.1067 3.1067"/>
+    <position name="act_l_a_4" joint="l_a_jiont_4" kp="200" ctrllimited="true" ctrlrange="-2.5307 1.0472"/>
+    <position name="act_l_a_5" joint="l_a_jiont_5" kp="100" ctrllimited="true" ctrlrange="-3.1067 3.1067"/>
+    <position name="act_l_a_6" joint="l_a_jiont_6" kp="80"  ctrllimited="true" ctrlrange="-1 0.5"/>
+    <position name="act_l_a_7" joint="l_a_jiont_7" kp="80"  ctrllimited="true" ctrlrange="-0.6 0.6"/>
+
+    <!-- 左手拇指 (4 DOF) -->
+    <position name="act_l_f_1_1" joint="l_f_jiont_1_1" kp="30" ctrllimited="true" ctrlrange="0 2"/>
+    <position name="act_l_f_1_2" joint="l_f_jiont_1_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_1_3" joint="l_f_jiont_1_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_1_4" joint="l_f_jiont_1_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 左手食指 (4 DOF) -->
+    <position name="act_l_f_2_1" joint="l_f_jiont_2_1" kp="30" ctrllimited="true" ctrlrange="-0.5 0.5"/>
+    <position name="act_l_f_2_2" joint="l_f_jiont_2_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_2_3" joint="l_f_jiont_2_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_2_4" joint="l_f_jiont_2_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 左手中指 (4 DOF) -->
+    <position name="act_l_f_3_1" joint="l_f_jiont_3_1" kp="30" ctrllimited="true" ctrlrange="-0.5 0.5"/>
+    <position name="act_l_f_3_2" joint="l_f_jiont_3_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_3_3" joint="l_f_jiont_3_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_3_4" joint="l_f_jiont_3_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 左手无名指 (4 DOF) -->
+    <position name="act_l_f_4_1" joint="l_f_jiont_4_1" kp="30" ctrllimited="true" ctrlrange="-0.5 0.5"/>
+    <position name="act_l_f_4_2" joint="l_f_jiont_4_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_4_3" joint="l_f_jiont_4_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_4_4" joint="l_f_jiont_4_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 左手小指 (4 DOF) -->
+    <position name="act_l_f_5_1" joint="l_f_jiont_5_1" kp="30" ctrllimited="true" ctrlrange="-0.5 0.5"/>
+    <position name="act_l_f_5_2" joint="l_f_jiont_5_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_5_3" joint="l_f_jiont_5_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_l_f_5_4" joint="l_f_jiont_5_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+
+    <!-- 右臂 (7 DOF) -->
+    <position name="act_r_a_1" joint="r_a_jiont_1" kp="300" ctrllimited="true" ctrlrange="-3.1067 3.1067"/>
+    <position name="act_r_a_2" joint="r_a_jiont_2" kp="300" ctrllimited="true" ctrlrange="-2.0944 2.0944"/>
+    <position name="act_r_a_3" joint="r_a_jiont_3" kp="300" ctrllimited="true" ctrlrange="-3.1067 3.1067"/>
+    <position name="act_r_a_4" joint="r_a_jiont_4" kp="200" ctrllimited="true" ctrlrange="-2.5307 1.0472"/>
+    <position name="act_r_a_5" joint="r_a_jiont_5" kp="100" ctrllimited="true" ctrlrange="-3.1067 3.1067"/>
+    <position name="act_r_a_6" joint="r_a_jiont_6" kp="80"  ctrllimited="true" ctrlrange="-1 0.5"/>
+    <position name="act_r_a_7" joint="r_a_jiont_7" kp="80"  ctrllimited="true" ctrlrange="-0.6 0.6"/>
+
+    <!-- 右手拇指 (4 DOF) -->
+    <position name="act_r_f_1_1" joint="r_f_jiont_1_1" kp="30" ctrllimited="true" ctrlrange="0 2"/>
+    <position name="act_r_f_1_2" joint="r_f_jiont_1_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_1_3" joint="r_f_jiont_1_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_1_4" joint="r_f_jiont_1_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 右手食指 (4 DOF) -->
+    <position name="act_r_f_2_1" joint="r_f_jiont_2_1" kp="30" ctrllimited="true" ctrlrange="-0.1570796327 0.4537856055"/>
+    <position name="act_r_f_2_2" joint="r_f_jiont_2_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_2_3" joint="r_f_jiont_2_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_2_4" joint="r_f_jiont_2_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 右手中指 (4 DOF) -->
+    <position name="act_r_f_3_1" joint="r_f_jiont_3_1" kp="30" ctrllimited="true" ctrlrange="-0.4537856055 0.4537856055"/>
+    <position name="act_r_f_3_2" joint="r_f_jiont_3_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_3_3" joint="r_f_jiont_3_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_3_4" joint="r_f_jiont_3_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 右手无名指 (4 DOF) -->
+    <position name="act_r_f_4_1" joint="r_f_jiont_4_1" kp="30" ctrllimited="true" ctrlrange="-0.4537856055 0.1570796327"/>
+    <position name="act_r_f_4_2" joint="r_f_jiont_4_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_4_3" joint="r_f_jiont_4_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_4_4" joint="r_f_jiont_4_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <!-- 右手小指 (4 DOF) -->
+    <position name="act_r_f_5_1" joint="r_f_jiont_5_1" kp="30" ctrllimited="true" ctrlrange="-0.4537856055 0.0872664626"/>
+    <position name="act_r_f_5_2" joint="r_f_jiont_5_2" kp="30" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_5_3" joint="r_f_jiont_5_3" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+    <position name="act_r_f_5_4" joint="r_f_jiont_5_4" kp="20" ctrllimited="true" ctrlrange="0 1.57"/>
+  </actuator>
+
+</mujoco>

@@ -27,6 +27,14 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+# These packages are pinned in the base runtime so the DexHandRL and MANO
+# workflows execute in the same environment; retain the named extra for the
+# DexHandRL setup entry point.
+dexhandrl = [
+  "gymnasium==1.3.0",
+  "skrl==2.1.0",
+  "torch==2.13.0+cu129",
+]
 
 [tool.uv]
 package = false

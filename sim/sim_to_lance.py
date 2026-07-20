@@ -13,12 +13,13 @@ for path in (REPO_ROOT, REPO_ROOT / "sim"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from sim.dexhandrl.constants import DEFAULT_OUTPUT_ROOT  # noqa: E402
 from sim.warp_contact_export import _export_warp_contacts  # noqa: E402
 from tools.export_contactbench_lance import write_payloads_to_lance  # noqa: E402
 
-DEFAULT_OUTPUT = REPO_ROOT / "outputs/mjx_warp_contactbench_generated.lance"
-DEFAULT_ERROR_OUTPUT = REPO_ROOT / "outputs/mjx_warp_contact_to_hand_mesh_error_raw.json"
-DEFAULT_SCENE_COPY = REPO_ROOT / "outputs/mjx_warp_contact_error_scene.xml"
+DEFAULT_OUTPUT = DEFAULT_OUTPUT_ROOT / "mjx_warp_contactbench_generated.lance"
+DEFAULT_ERROR_OUTPUT = DEFAULT_OUTPUT_ROOT / "mjx_warp_contact_to_hand_mesh_error_raw.json"
+DEFAULT_SCENE_COPY = DEFAULT_OUTPUT_ROOT / "mjx_warp_contact_error_scene.xml"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -50,6 +51,10 @@ def main() -> int:
 
     if args.replace and args.output.exists():
         shutil.rmtree(args.output)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.error_output.parent.mkdir(parents=True, exist_ok=True)
+    args.scene_copy.parent.mkdir(parents=True, exist_ok=True)
 
     native_payload, error_payload, contactbench_payload = _export_warp_contacts(args)
     if args.keep_debug_json:

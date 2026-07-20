@@ -26,6 +26,7 @@ from sim.common.contact_schema import (  # noqa: E402
     transform_force_to_local,
     validate_contact_sequence,
 )
+from sim.dexhandrl.constants import DEFAULT_OUTPUT_ROOT  # noqa: E402
 from sim.scene import (  # noqa: E402
     HAND_LINK_NAMES,
     build_ball_pit_scene_xml,
@@ -33,7 +34,7 @@ from sim.scene import (  # noqa: E402
     set_hand_pose_mjx,
 )
 
-DEFAULT_SCENE_COPY = REPO_ROOT / "outputs/mjx_warp_contact_error_scene.xml"
+DEFAULT_SCENE_COPY = DEFAULT_OUTPUT_ROOT / "mjx_warp_contact_error_scene.xml"
 
 
 def _device_get(jax: Any, value: Any) -> np.ndarray:
