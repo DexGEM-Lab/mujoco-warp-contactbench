@@ -25,7 +25,6 @@ from sim.manorl.abi import (
     process_residual_actions,
 )
 from sim.manorl.assets import (
-    ASSET_ROOT,
     compile_model,
     object_collision_vertices,
     object_runtime,
@@ -33,8 +32,6 @@ from sim.manorl.assets import (
 from sim.manorl.contracts import (
     FLOOR_TOP_Z,
     KEYPOINT_NAMES,
-    OBJECT_BODY_NAME,
-    OBJECT_FREE_JOINT_NAME,
     OBJECT_TYPE,
     PHYSICS_SUBSTEPS_PER_TARGET,
     ServoConfig,
