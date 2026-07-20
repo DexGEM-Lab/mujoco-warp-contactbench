@@ -3,8 +3,9 @@
 Standalone MJX-Warp sim-to-Lance export repo.
 
 This repository contains the current MANO reference workflow and a local
-[DexHandRL](http://192.168.10.116/dexrobot-oss/dexrobot_isaac/-/tree/dev/change_source?ref_type=heads)
-Isaac Gym-to-MuJoCo migration surface.
+DexHandRL Isaac Gym-to-MuJoCo migration surface. Its source implementation is
+hosted in internal GitLab repository `dexrobot-oss/dexrobot_isaac`, branch
+[`dev/change_source`](http://192.168.10.116/dexrobot-oss/dexrobot_isaac/-/tree/dev/change_source?ref_type=heads).
 
 This repo is intentionally decoupled from the larger `contactbench` workspace. The
 MANO hand asset, complete source asset collection, and `lance_manager` are git
