@@ -812,6 +812,7 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert captured[-1][1].residual_enabled is True
     assert captured[-1][1].terminal is True
     assert captured[-1][1].wandb.enabled is True
+    assert captured[-1][1].dataset_path == tool.DATASET_PATH
 
     assert tool.main([
         "--output", str(tmp_path / "capped"),
@@ -840,8 +841,14 @@ def test_cli_parses_all_and_exact_pair_selection(
     captured = []
     monkeypatch.setattr(tool, "run", lambda output, budget: captured.append((output, budget)) or {})
 
-    assert tool.main(["--output", str(tmp_path / "all"), "--all-pairs"]) == 0
+    dataset_path = tmp_path / "restored-s02.lance"
+    assert tool.main([
+        "--output", str(tmp_path / "all"),
+        "--all-pairs",
+        "--dataset-path", str(dataset_path),
+    ]) == 0
     assert captured[-1][1].trajectory_selector == "all"
+    assert captured[-1][1].dataset_path == str(dataset_path.resolve())
 
     assert tool.main([
         "--output", str(tmp_path / "pairs"),
