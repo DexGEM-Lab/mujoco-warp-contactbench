@@ -113,12 +113,15 @@ and does not reset before that zero-reference call count. Completing all 791 cal
 reported as a stretch result, not silently assumed. The reference baseline is a
 controller diagnostic, not a learned-policy comparator.
 
-Evaluation uses one world by default, matching the Gym reference and avoiding
-the worst-of-many early-reset statistic. Pass `--evaluation-num-envs <count>`
-explicitly for a bounded multi-world diagnostic; values are limited to
-`1..min(--num-envs, 128)`. This prevents a requested evaluation from recreating
-a second full-size training runtime. The zero, untrained, and trained rows all
-use the same evaluation trajectory prefix.
+Evaluation uses one world for a single selected pair, matching the Gym
+reference and avoiding a worst-of-many early-reset statistic. For multi-pair
+training, the trainer raises the requested `--evaluation-num-envs` count until
+every resolved pair has at least one deterministic evaluation world. The final
+count remains limited to `1..min(--num-envs, 128)`, preventing evaluation from
+silently reporting only the first sorted pair or recreating a second full-size
+training runtime. The zero, untrained, and trained rows all use the same fixed
+evaluation assignments. Aggregate rows include every assignment; W&B also
+receives object and object/action rows for direct comparison.
 Their evaluation-only PPO configuration selects the largest divisor shared by
 the training minibatch and evaluation rollout batch, while the training PPO
 configuration and update semantics remain unchanged. The initial training
@@ -221,8 +224,9 @@ output prefix plus the selected object and gesture; its default tags are
   --wandb-tags manorl,mujoco,skrl
 ```
 
-The training process initializes one W&B run after resolving trajectory
-assignments and devices. It creates the output parent before initialization and
+The training process initializes one W&B run for the one shared policy after
+resolving trajectory assignments and devices. It does not create one run per
+object or action. It creates the output parent before initialization and
 passes it as W&B's local directory, so SDK state is stored at
 `<output-parent>/wandb` under ignored training outputs rather than the repository
 root. It records the complete serializable training/PPO/raw reward configuration,
@@ -235,13 +239,24 @@ or more episodes complete in that update, `episode_return_mean`. It also records
 instantaneous and cumulative environment transitions per second for each PPO
 update, plus final throughput. Initial and final evaluations use the
 corresponding completed PPO update count as their W&B step.
+
+Global keys retain the existing names. In the same update log call, Gym-aligned
+grouped keys add an `object_<object>` suffix for object aggregates and an
+`<object>_<action>` suffix for exact pairs, for example
+`contact_reward_instant/object_cube1` and
+`contact_reward_instant/cube1_01`. The hierarchy covers rollout reward means,
+instant reward components, attempts/successes/failures/success rate, completed
+episode reward and components, and zero/untrained/trained evaluation results.
+Episode-only grouped values are emitted only when that group completes an
+episode; attempt counters and success rates remain present at zero otherwise.
 Every PPO update also records exact KL mean/min/max, approximate KL mean,
 learning-rate start/end/min/max, scheduler increase/decrease counts, and the
 number of completed minibatches. These metrics are emitted even when no episode
 completes, so early scheduler failures cannot be hidden by episode logging.
-Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
-record with parallel `env_ids`, exact `returns`, termination reason codes, and
-success/failure env-id arrays to
+Each completed vector step emits one `manorl.completed_episode_returns.v2` JSON
+record with parallel `env_ids`, object types, zero-padded action IDs, trajectory
+identities, exact returns, reward-component totals, termination reason codes,
+and success/failure env-id arrays to
 `<output>.episodes.jsonl`; active records first accumulate in
 `<output>.episodes.jsonl.partial`, which is preserved after an interruption and
 atomically published only after successful training. This JSONL is the complete
@@ -254,8 +269,8 @@ current update, bounded by one rollout batch (196,608 values at 4096 worlds and
 48 rollout steps), then discarded. W&B artifacts include that episode JSONL
 alongside the checkpoint and
 sidecar, metrics JSON, evaluation trace, and a completed Rerun recording when
-one exists. These target-native aggregates are semantically related to IsaacGym
-reward telemetry, but their logger key names are not an identity contract. It
+one exists. Grouped logger names intentionally follow the Isaac Gym hierarchy;
+the underlying MuJoCo reward contract remains independently versioned. It
 writes the zero/untrained/trained evaluation summaries and final acceptance
 values, preserving `evaluation/policy/*` as the untrained and trained policy
 comparison time series for existing dashboards, then uploads those artifacts.

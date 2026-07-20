@@ -389,6 +389,166 @@ def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.M
     assert tool._episode_records_path(Path("outputs/manorl/run")) == Path("outputs/manorl/run.episodes.jsonl")
 
 
+def test_train_emits_gym_style_object_and_pair_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 1
+    environment = runtime.gymnasium_env.environment
+    environment.config.num_envs = 4
+    environment.object_types = ("cube1", "cube1", "cube2", "cube2")
+    environment.action_ids = np.asarray([1, 2, 1, 2], dtype=np.int64)
+    environment.trajectories = tuple(
+        SimpleNamespace(identity=SimpleNamespace(identity=identity))
+        for identity in ("cube1_01_001", "cube1_02_001", "cube2_01_001", "cube2_02_001")
+    )
+    runtime.env.reset = lambda: (torch.zeros((4, 1)), {})
+    completed = np.asarray([False, True, False, True])
+    success = np.asarray([False, True, False, False])
+    failure = np.asarray([False, False, False, True])
+    component_values = np.arange(1.0, 5.0, dtype=np.float64)
+
+    def step(actions: torch.Tensor):
+        environment.last_reward = SimpleNamespace(**{
+            source: component_values.copy()
+            for source in set(tool.REWARD_UPDATE_COMPONENTS) | set(tool.GROUPED_REWARD_COMPONENTS)
+        })
+        environment.last_termination = SimpleNamespace(
+            reset=completed,
+            success=success,
+            failure=failure,
+            reason_code=np.asarray([0, 1, 0, 2], dtype=np.int32),
+        )
+        environment.episode_returns = np.asarray([1.0, 2.5, 3.0, -4.0])
+        return (
+            torch.zeros_like(actions),
+            torch.ones((4, 1)),
+            torch.as_tensor(completed).reshape(-1, 1),
+            torch.zeros((4, 1), dtype=torch.bool),
+            {},
+        )
+
+    runtime.env.step = step
+    clock = FakeClock([0.0, 1.0, 3.0, 5.0, 7.0])
+    monkeypatch.setattr(tool.time, "monotonic", clock)
+    raw_updates: list[dict[str, object]] = []
+    episode_records: list[dict[str, object]] = []
+    updates, _, _ = tool._train(
+        runtime,
+        tool.TrainingBudget(num_envs=4, updates=1),
+        on_update=raw_updates.append,
+        on_completed_episodes=episode_records.append,
+    )
+
+    grouped = raw_updates[0]["grouped_metrics"]
+    assert grouped["reward_mean/object_cube1"] == 1.5
+    assert grouped["reward_mean/object_cube2"] == 3.5
+    assert grouped["reward_mean/cube1_01"] == 1.0
+    assert grouped["contact_reward_instant/cube2_02"] == 4.0
+    assert grouped["attempts/object_cube1"] == 1.0
+    assert grouped["success_rate/object_cube1"] == 100.0
+    assert grouped["success_rate/object_cube2"] == 0.0
+    assert grouped["episode_reward/cube1_02"] == 2.5
+    assert grouped["episode_reward/cube2_02"] == -4.0
+    assert grouped["distance_reward_x/cube1_02"] == 2.0
+    assert grouped["distance_reward/cube2_02"] == 12.0
+    assert "grouped_metrics" not in updates[0]
+    assert episode_records[0]["schema"] == "manorl.completed_episode_returns.v2"
+    assert episode_records[0]["object_types"] == ["cube1", "cube2"]
+    assert episode_records[0]["action_ids"] == ["02", "02"]
+    assert episode_records[0]["identities"] == ["cube1_02_001", "cube2_02_001"]
+    assert episode_records[0]["reward_components"]["contact_reward"] == [2.0, 4.0]
+
+
+def test_evaluate_waits_for_each_pair_first_termination() -> None:
+    tool = _load_tool()
+
+    class Agent:
+        def enable_models_training_mode(self, _: bool) -> None:
+            pass
+
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=2),
+        object_types=("cube1", "cube2"),
+        action_ids=np.asarray([1, 2], dtype=np.int64),
+        trajectories=tuple(
+            SimpleNamespace(identity=SimpleNamespace(identity=value))
+            for value in ("cube1_01_001", "cube2_02_001")
+        ),
+        trajectory_lengths=np.asarray([3, 5], dtype=np.int64),
+        trajectory_steps=np.zeros(2, dtype=np.int64),
+        reference_object_pos=np.zeros((2, 5, 3), dtype=np.float64),
+        last_physical=None,
+        last_reward=None,
+        last_termination=None,
+    )
+
+    class Env:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def reset(self):
+            self.calls = 0
+            return torch.zeros((2, 1)), {}
+
+        def step(self, actions: torch.Tensor):
+            self.calls += 1
+            environment.trajectory_steps = np.minimum(
+                np.asarray([self.calls, self.calls]), environment.trajectory_lengths - 1
+            )
+            positions = np.asarray(
+                [[0.1 * self.calls, 0.0, 0.0], [0.2 * self.calls, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+            environment.last_physical = SimpleNamespace(object_position=positions)
+            environment.last_reward = SimpleNamespace(contact=np.asarray([0.1, 0.2]))
+            done = np.asarray([self.calls == 2, self.calls == 4])
+            environment.last_termination = SimpleNamespace(
+                reason_code=np.asarray([1 if done[0] else 0, 2 if done[1] else 0]),
+                success=np.asarray([done[0], False]),
+                failure=np.asarray([False, done[1]]),
+            )
+            return (
+                torch.zeros((2, 1)),
+                torch.as_tensor([[1.0], [2.0]]),
+                torch.as_tensor(done).reshape(-1, 1),
+                torch.zeros((2, 1), dtype=torch.bool),
+                {},
+            )
+
+    runtime = SimpleNamespace(
+        agent=Agent(),
+        env=Env(),
+        gymnasium_env=SimpleNamespace(environment=environment),
+        device="cpu",
+    )
+    result = tool._evaluate(runtime, "zero")
+
+    assert result.calls == 4
+    assert result.return_mean == 5.0
+    assert result.reward_mean == 1.5
+    assert result.success_seen is True and result.failure_seen is True
+    assert result.completed_horizon is False
+    by_label = {group.label: group for group in result.groups}
+    assert by_label["cube1_01"].return_mean == 2.0
+    assert by_label["cube1_01"].success_count == 1
+    assert by_label["cube2_02"].return_mean == 8.0
+    assert by_label["cube2_02"].failure_count == 1
+
+
+def test_full_pair_evaluation_uses_at_least_one_environment_per_pair() -> None:
+    tool = _load_tool()
+    trajectories = SimpleNamespace(resolved_pairs=tuple(range(77)))
+    assert tool._full_coverage_evaluation_num_envs(
+        tool.TrainingBudget(num_envs=2048, evaluation_num_envs=1), trajectories
+    ) == 77
+    with pytest.raises(ValueError, match="needs 77 environments"):
+        tool._full_coverage_evaluation_num_envs(
+            tool.TrainingBudget(num_envs=64, evaluation_num_envs=1), trajectories
+        )
+
+
 def test_episode_record_write_flushes_before_stdout_on_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     events: list[str] = []
