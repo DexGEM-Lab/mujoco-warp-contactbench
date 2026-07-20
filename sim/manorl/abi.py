@@ -26,6 +26,14 @@ SOURCE_ALIGNED_JOINT_CAP: Final = tuple(
 ENVIRONMENT_CONTRACT_ID: Final = "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_deviation_0p10_v1"
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
+# Termination reason values are part of the host-side ABI.  Keep ``0`` for an
+# in-progress transition so callers can safely persist the code for every
+# sample, including non-terminal samples.
+TERMINATION_REASON_NONE: Final[int] = 0
+TERMINATION_REASON_SUCCESS: Final[int] = 1
+TERMINATION_REASON_DEVIATION: Final[int] = 2
+TERMINATION_REASON_FAILURE: Final[int] = TERMINATION_REASON_DEVIATION
+
 @dataclass(frozen=True)
 class ResidualActionConfig:
     """Source-aligned production residual mapping over the normalized action Box."""
@@ -57,11 +65,67 @@ class ResidualActionResult:
 
 @dataclass(frozen=True)
 class TerminationResult:
-    """Source task reset conditions and their separately applied penalty."""
+    """Source task reset conditions, reason masks, and penalty.
+
+    Reason data is exposed through derived properties so the original
+    three-field dataclass and its ``dataclasses.replace`` behavior stay intact.
+    """
 
     reset: NDArray[np.bool_]
     deviation_reset: NDArray[np.bool_]
     deviation_penalty: NDArray[np.float64]
+
+    @property
+    def success(self) -> NDArray[np.bool_]:
+        """Trajectory completion without a simultaneous deviation failure."""
+
+        return np.asarray(self.reset, dtype=bool) & ~np.asarray(self.deviation_reset, dtype=bool)
+
+    @property
+    def failure(self) -> NDArray[np.bool_]:
+        """Position-deviation failure mask."""
+
+        return np.asarray(self.reset, dtype=bool) & np.asarray(self.deviation_reset, dtype=bool)
+
+    @property
+    def reason_code(self) -> NDArray[np.int32]:
+        """Return 0=ongoing, 1=success, 2=deviation failure."""
+
+        return np.where(
+            self.failure,
+            TERMINATION_REASON_FAILURE,
+            np.where(self.success, TERMINATION_REASON_SUCCESS, TERMINATION_REASON_NONE),
+        ).astype(np.int32)
+
+    @property
+    def success_mask(self) -> NDArray[np.bool_]:
+        """Alias used by telemetry and vectorized consumers."""
+
+        return self.success
+
+    @property
+    def failure_mask(self) -> NDArray[np.bool_]:
+        """Alias used by telemetry and vectorized consumers."""
+
+        return self.failure
+
+    @property
+    def termination_reason_code(self) -> NDArray[np.int32]:
+        """Stable name matching the source trace artifact field."""
+
+        return self.reason_code
+
+    @property
+    def trajectory_complete_reset_mask(self) -> NDArray[np.bool_]:
+        """Source-compatible success mask name."""
+
+        return self.success
+
+    @property
+    def deviation_reset_mask(self) -> NDArray[np.bool_]:
+        """Source-compatible deviation mask name."""
+
+        return np.asarray(self.deviation_reset, dtype=bool)
 
 
 def _as_batch(name: str, values: NDArray[object], width: int) -> NDArray[np.float64]:

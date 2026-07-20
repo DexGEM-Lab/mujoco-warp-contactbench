@@ -11,7 +11,12 @@ import warnings
 
 import numpy as np
 
-from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
+from sim.manorl.abi import (
+    ENVIRONMENT_CONTRACT_ID,
+    TERMINATION_REASON_DEVIATION,
+    TERMINATION_REASON_NONE,
+    TERMINATION_REASON_SUCCESS,
+)
 from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_NAMES, KEYPOINT_NAMES, PHYSICS_SUBSTEPS_PER_TARGET
 from sim.manorl.environment import MujocoManoEnvironment, TransitionSnapshot
 from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, OBSERVATION_SLICES, quat_rotate_xyzw
@@ -34,7 +39,7 @@ _OBJECT_GRAVITY_MAGNITUDE_PATH = "contact/object/gravity/world/magnitude_N"
 
 
 class ManoRerunRecorder:
-    """Publish reset-completed selected-world episodes to one stable Rerun path."""
+    """Publish terminal-complete selected-world episodes to one stable Rerun path."""
 
     def __init__(
         self,
@@ -76,9 +81,8 @@ class ManoRerunRecorder:
         if self.archive_dir is not None:
             self.archive_dir.mkdir(parents=True, exist_ok=True)
         self.episode_id = 0
-        # This accumulator is deliberately local to the selected env. The
-        # delayed reset snapshot has already cleared environment.episode_returns,
-        # so the completed return must be captured before publishing the file.
+        # This accumulator is deliberately local to the selected env. Terminal
+        # snapshots provide the authoritative cumulative value at publication.
         self._episode_return = 0.0
         self._archive_remaining = 0
         self._pending_high_env_id: int | None = None
@@ -97,11 +101,13 @@ class ManoRerunRecorder:
             self._replay_episode_steps = np.zeros(batch_size, dtype=np.int64)
             self._replay_episode_numbers = np.zeros(batch_size, dtype=np.int64)
             self._replay_episode_templates = environment.object_point_cloud_local().copy()
+            self._replay_pending_resets = np.zeros(batch_size, dtype=bool)
         else:
             self._replay_action_history = None
             self._replay_episode_steps = None
             self._replay_episode_numbers = None
             self._replay_episode_templates = None
+            self._replay_pending_resets = None
         suffix = self.output.suffix or ".rrd"
         stem = self.output.stem if self.output.suffix else self.output.name
         self.active_path = self.output.with_name(f".{stem}.active{suffix}")
@@ -246,11 +252,15 @@ class ManoRerunRecorder:
         assert self._replay_episode_steps is not None
         assert self._replay_episode_numbers is not None
         assert self._replay_episode_templates is not None
-        reset_envs = np.flatnonzero(np.asarray(snapshot.reset_applied, dtype=bool))
+        assert self._replay_pending_resets is not None
+        reset_envs = np.flatnonzero(
+            self._replay_pending_resets | np.asarray(snapshot.reset_applied, dtype=bool)
+        )
         starting_envs = np.flatnonzero(self._replay_episode_steps == 0)
         if reset_envs.size:
             self._replay_episode_steps[reset_envs] = 0
             self._replay_episode_numbers[reset_envs] += 1
+            self._replay_pending_resets[reset_envs] = False
         if starting_envs.size or reset_envs.size:
             template_envs = np.unique(np.concatenate((starting_envs, reset_envs)))
             templates = self.environment.object_point_cloud_local()
@@ -261,6 +271,7 @@ class ManoRerunRecorder:
         env_indices = np.arange(self.environment.config.num_envs)
         self._replay_action_history[env_indices, steps] = np.asarray(snapshot.raw_actions, dtype=np.float64)
         self._replay_episode_steps += 1
+        self._replay_pending_resets |= np.asarray(snapshot.termination.reset, dtype=bool)
 
     def _queue_high_return_replays(
         self, snapshot: TransitionSnapshot, high_envs: np.ndarray
@@ -321,10 +332,6 @@ class ManoRerunRecorder:
                     for action in actions:
                         replay_environment.step(action.reshape(1, 26))
                         replay_recorder.record_transition()
-                    # The source applies delayed resets on the following step;
-                    # this flushes the terminal episode into the stable .rrd.
-                    replay_environment.step(np.zeros((1, 26), dtype=np.float64))
-                    replay_recorder.record_transition()
                 finally:
                     artifact = replay_recorder.close()
                 if artifact is None:
@@ -441,6 +448,11 @@ class ManoRerunRecorder:
             "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
             "ppo_reward_scale": PPO_REWARD_SCALE,
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
+            "termination_reason_codes": {
+                "none": TERMINATION_REASON_NONE,
+                "success": TERMINATION_REASON_SUCCESS,
+                "deviation_failure": TERMINATION_REASON_DEVIATION,
+            },
             "env_id": self.env_id,
             "episode_id": self.episode_id,
             "trajectory_identity": trajectory.identity.identity,
@@ -534,42 +546,33 @@ class ManoRerunRecorder:
             self._queue_high_return_replays(snapshot, high_envs)
             if high_envs.size and self._pending_high_env_id is None:
                 self._pending_high_env_id = int(high_envs[0])
-        switched_to_high_env = False
-        switched_high_return: float | None = None
-        if self._pending_high_env_id is not None and not bool(snapshot.reset_applied[self._pending_high_env_id]):
+        if self._pending_high_env_id is not None:
             pending_env_id = self._pending_high_env_id
-            pending_return = float(snapshot.episode_return[pending_env_id])
-            if bool(snapshot.termination.reset[pending_env_id]) and pending_env_id != self.env_id:
+            if pending_env_id == self.env_id:
                 self._pending_high_env_id = None
-                self._switch_to_high_return_env(pending_env_id, initial_return=pending_return)
-                switched_to_high_env = True
-                switched_high_return = pending_return
-        if (
-            self._pending_high_env_id is not None
-            and bool(snapshot.reset_applied[self._pending_high_env_id])
-        ):
-            pending_env_id = self._pending_high_env_id
-            self._pending_high_env_id = None
-            if pending_env_id != self.env_id:
-                self._switch_to_high_return_env(pending_env_id)
-                switched_to_high_env = True
-        # The transition after terminal state has physically applied the delayed
-        # reset. Atomically replace the user-visible recording before writing
-        # the new reset state into a fresh private active file.
-        if bool(snapshot.reset_applied[self.env_id]) and not switched_to_high_env:
-            completed_return = float(self._episode_return)
+            elif bool(snapshot.termination.reset[pending_env_id]):
+                self._pending_high_env_id = None
+                self._switch_to_high_return_env(
+                    pending_env_id,
+                    initial_return=float(snapshot.episode_return[pending_env_id]),
+                )
+        self._record(snapshot)
+        if bool(snapshot.termination.reset[self.env_id]):
+            # The terminal snapshot itself is the final episode sample. Publish
+            # it before any indexed reset can replace physical/return state.
+            completed_return = float(snapshot.episode_return[self.env_id])
+            self._episode_return = completed_return
+            # Archive-following is a stream policy: after a high-return terminal episode,
+            # the configured following episodes are archived regardless of their
+            # own success/failure reason. The terminal-threshold replay/archive
+            # trigger remains source-compatible as well.
             archive_path = self._high_return_archive_path(completed_return)
             self._publish_episode(archive_path=archive_path)
             self.episode_id += 1
             self._start_episode()
             self._episode_return = 0.0
-        self._record(snapshot)
-        if switched_high_return is None:
-            self._episode_return += float(snapshot.reward.total[self.env_id])
         else:
-            # The terminal snapshot already contains the complete return; do
-            # not add its final reward a second time before archive naming.
-            self._episode_return = switched_high_return
+            self._episode_return += float(snapshot.reward.total[self.env_id])
 
     def _record(self, snapshot: TransitionSnapshot) -> None:
         env_id = self.env_id
@@ -594,7 +597,7 @@ class ManoRerunRecorder:
         target_next = min(index + 5, int(self.environment.trajectory_lengths[env_id]) - 1)
         target_position = self.environment.reference_object_pos[env_id, index]
         target_orientation = self.environment.reference_object_quat_xyzw[env_id, index]
-        trajectory_complete = bool(termination.reset[env_id] and not termination.deviation_reset[env_id])
+        trajectory_complete = bool(termination.success[env_id])
         target_distance = float(np.linalg.norm(object_position - target_position))
         self.recording.set_time("step", sequence=snapshot.control_call)
         self.recording.set_time("simulation", duration=snapshot.control_call * CONTROL_TIMESTEP)
@@ -650,6 +653,9 @@ class ManoRerunRecorder:
             "contact/object_force_magnitude": float(np.linalg.norm(physical.object_contact_force[env_id])),
             "contact/keypoint_force_total": float(force_magnitudes.sum()),
             "termination/requested": float(termination.reset[env_id]),
+            "termination/reason_code": float(termination.reason_code[env_id]),
+            "termination/success": float(termination.success[env_id]),
+            "termination/failure": float(termination.failure[env_id]),
             "termination/trajectory_complete": float(trajectory_complete),
             "termination/deviation": float(termination.deviation_reset[env_id]),
             "termination/object_target_distance": target_distance,

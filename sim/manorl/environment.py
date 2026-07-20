@@ -230,7 +230,7 @@ class PhysicalSnapshot:
 
 @dataclass(frozen=True)
 class TransitionSnapshot:
-    """Immutable evidence for one complete control transition, including delayed reset state."""
+    """Immutable evidence for one transition, including compatibility-reset state."""
 
     control_call: int
     raw_actions: NDArray[np.float64]
@@ -1285,7 +1285,12 @@ class MujocoManoEnvironment:
 
     def step(
         self, raw_actions: NDArray[object]
-    ) -> tuple[dict[str, NDArray[np.float64]], NDArray[np.float64], NDArray[np.bool_], dict[str, NDArray[np.bool_]]]:
+    ) -> tuple[
+        dict[str, NDArray[np.float64]],
+        NDArray[np.float64],
+        NDArray[np.bool_],
+        dict[str, NDArray[Any]],
+    ]:
         materialization_phase = self._phase_start("action_numpy_materialization")
         actions = np.asarray(raw_actions, dtype=np.float64)
         self._phase_stop("action_numpy_materialization", materialization_phase)
@@ -1417,5 +1422,12 @@ class MujocoManoEnvironment:
             {"obs": observation.policy_input.copy()},
             reward.total.copy(),
             termination.reset.copy(),
-            {"time_outs": timeouts.copy()},
+            {
+                "time_outs": timeouts.copy(),
+                "termination_reason_code": termination.reason_code.copy(),
+                "termination_success": termination.success.copy(),
+                "termination_failure": termination.failure.copy(),
+                "trajectory_complete_reset_mask": termination.success.copy(),
+                "deviation_reset_mask": termination.deviation_reset.copy(),
+            },
         )

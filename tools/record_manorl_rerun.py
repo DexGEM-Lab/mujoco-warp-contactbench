@@ -19,6 +19,7 @@ from sim.manorl.view_environment import (
     _build_checkpoint_stepper,
     _checkpoint_use_film,
     _inference_ppo_config,
+    _reset_runtime_done,
     _validate_checkpoint_path,
 )
 
@@ -44,8 +45,16 @@ class _StochasticCheckpointStepper:
         load_skrl_checkpoint_for_inference(self._runtime.agent, checkpoint)
         self._runtime.agent.enable_training_mode(True)
         self._observations, _ = self._runtime.env.reset()
+        self._pending_done = None
 
     def step(self):
+        if self._pending_done is not None and bool(self._pending_done.any()):
+            self._observations = _reset_runtime_done(
+                self._runtime,
+                self._observations,
+                self._pending_done,
+            )
+            self._pending_done = None
         with self._torch.no_grad():
             actions, _ = self._runtime.agent.act(
                 self._observations,
@@ -55,7 +64,13 @@ class _StochasticCheckpointStepper:
             )
         self._observations, rewards, terminated, truncated, info = self._runtime.env.step(actions)
         resets = terminated | truncated
-        return self._observations, rewards.detach().cpu().numpy().reshape(-1), resets.detach().cpu().numpy().reshape(-1), info
+        self._pending_done = resets
+        return (
+            self._observations,
+            rewards.detach().cpu().numpy().reshape(-1),
+            resets.detach().cpu().numpy().reshape(-1),
+            info,
+        )
 
 
 def _assignment_payload(trajectory_batch) -> list[dict[str, object]]:
@@ -73,7 +88,12 @@ def _assignment_payload(trajectory_batch) -> list[dict[str, object]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="stable latest-env0 .rrd output, atomically replaced at episode boundaries")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="stable latest-env0 .rrd output, atomically replaced at terminal boundaries",
+    )
     parser.add_argument("--object", dest="object_type", default="cube1")
     parser.add_argument("--gesture", default="01")
     parser.add_argument("--steps", type=int, default=160)
@@ -106,7 +126,15 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint = None if args.checkpoint is None else _validate_checkpoint_path(args.checkpoint)
     selection = TrajectorySelection(object_type=args.object_type, gesture=args.gesture)
     trajectories = load_assigned_trajectory_batch(selection, num_envs=args.num_envs)
-    print(json.dumps({"selection": {"object": selection.object_type, "gesture": selection.action_id}, "assignments": _assignment_payload(trajectories)}, indent=2))
+    print(
+        json.dumps(
+            {
+                "selection": {"object": selection.object_type, "gesture": selection.action_id},
+                "assignments": _assignment_payload(trajectories),
+            },
+            indent=2,
+        )
+    )
     environment = MujocoManoEnvironment(
         trajectories,
         EnvironmentConfig(
@@ -126,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     recorder = ManoRerunRecorder(environment, args.output, **recorder_kwargs)
     actions = np.zeros((args.num_envs, 26), dtype=np.float64)
+    pending_done = np.zeros(args.num_envs, dtype=bool)
     if checkpoint is None:
         stepper = None
     elif args.stochastic_policy:
@@ -135,7 +164,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         for _ in range(args.steps):
             if stepper is None:
-                environment.step(actions)
+                if np.any(pending_done):
+                    environment.reset(
+                        env_ids=np.flatnonzero(pending_done).astype(np.int64)
+                    )
+                    pending_done[:] = False
+                transition = environment.step(actions)
+                if isinstance(transition, tuple) and len(transition) >= 3:
+                    done = transition[2]
+                else:
+                    termination = getattr(environment, "last_termination", None)
+                    done = (
+                        np.zeros(args.num_envs, dtype=bool)
+                        if termination is None
+                        else termination.reset
+                    )
+                pending_done = np.asarray(done, dtype=bool).copy()
             else:
                 stepper.step()
             recorder.record_transition()
@@ -144,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({"rerun_artifact": None if artifact is None else str(artifact)}, indent=2))
     if args.open_rerun:
         if artifact is None:
-            print("No reset-complete Rerun episode was published; Rerun viewer was not opened.")
+            print("No terminal-complete Rerun episode was published; Rerun viewer was not opened.")
             return 0
         viewer = Path(sys.executable).with_name("rerun")
         if not viewer.exists():

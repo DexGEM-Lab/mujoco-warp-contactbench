@@ -23,6 +23,9 @@ from sim.manorl.abi import (
     ENVIRONMENT_CONTRACT_ID,
     ResidualActionConfig,
     TARGET_MAX_DEVIATION_DISTANCE,
+    TERMINATION_REASON_FAILURE,
+    TERMINATION_REASON_NONE,
+    TERMINATION_REASON_SUCCESS,
 )
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.cli import parse_cli_bool
@@ -164,6 +167,9 @@ class EvaluationResult:
     completed_horizon: bool
     rewards_by_call: list[float]
     object_target_distance_by_call: list[float]
+    success_seen: bool = False
+    failure_seen: bool = False
+    termination_reason_code: int = 0
 
 
 def _wandb_run_name(output: Path, budget: TrainingBudget) -> str:
@@ -283,6 +289,8 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
         "reward_mean": update["reward_mean"],
         "action_abs_mean": update["action_abs_mean"],
         "reset_count": update["reset_count"],
+        "success_count": update.get("success_count", 0.0),
+        "failure_count": update.get("failure_count", 0.0),
         "completed_episode_count": update["completed_episode_count"],
         "elapsed_seconds": update["elapsed_seconds"],
         "update_environment_transitions_per_second": update["update_environment_transitions_per_second"],
@@ -425,8 +433,9 @@ def _completed_episode_record(
     num_envs: int,
     completed: np.ndarray,
     episode_returns: np.ndarray,
+    termination_reason_codes: np.ndarray | None = None,
 ) -> dict[str, object]:
-    return {
+    record: dict[str, object] = {
         "schema": "manorl.completed_episode_returns.v1",
         "update": update,
         "update_step": update_step,
@@ -435,6 +444,18 @@ def _completed_episode_record(
         "env_ids": np.flatnonzero(completed).tolist(),
         "returns": np.asarray(episode_returns, dtype=np.float64)[completed].tolist(),
     }
+    if termination_reason_codes is not None:
+        reason_codes = np.asarray(termination_reason_codes, dtype=np.int32)
+        if reason_codes.shape != completed.shape:
+            raise ValueError("termination reason codes must match completed mask")
+        record["termination_reason_codes"] = reason_codes[completed].tolist()
+        record["success_env_ids"] = np.flatnonzero(
+            completed & (reason_codes == TERMINATION_REASON_SUCCESS)
+        ).tolist()
+        record["failure_env_ids"] = np.flatnonzero(
+            completed & (reason_codes == TERMINATION_REASON_FAILURE)
+        ).tolist()
+    return record
 
 
 def _write_episode_record(
@@ -474,7 +495,8 @@ def _format_training_update(update: dict[str, Any]) -> str:
     return (
         f"update={int(update['update'])} transitions={int(update['environment_transitions'])} "
         f"reward={update['reward_mean']:.4f} contact={update['contact']:.4f} "
-        f"resets={int(update['reset_count'])} speed={update['update_environment_transitions_per_second']:.1f}/s "
+        f"resets={int(update['reset_count'])} success={int(update.get('success_count', 0))} "
+        f"failure={int(update.get('failure_count', 0))} speed={update['update_environment_transitions_per_second']:.1f}/s "
         f"elapsed={update['elapsed_seconds']:.1f}s{episode}"
     )
 
@@ -521,6 +543,9 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trai
     distance_means: list[float] = []
     reset_seen = False
     timeout_seen = False
+    success_seen = False
+    failure_seen = False
+    termination_reason_code = 0
     for call in range(791):
         if mode == "zero":
             actions = torch.zeros((environment.config.num_envs, 26), device=runtime.device)
@@ -544,6 +569,14 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trai
         done = terminated | truncated
         reset_seen |= bool(done.any().item())
         timeout_seen |= bool(truncated.any().item())
+        termination = environment.last_termination
+        if termination is not None:
+            success_seen |= bool(np.asarray(termination.success, dtype=bool).any())
+            failure_seen |= bool(np.asarray(termination.failure, dtype=bool).any())
+            if bool(done.any().item()):
+                done_ids = np.flatnonzero(done.detach().cpu().numpy().reshape(-1))
+                reason_codes = np.asarray(termination.reason_code, dtype=np.int32).reshape(-1)
+                termination_reason_code = int(reason_codes[int(done_ids[0])])
         if bool(done.any().item()):
             return EvaluationResult(
                 mode=mode,
@@ -559,6 +592,9 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trai
                 completed_horizon=call == 790 and reset_seen,
                 rewards_by_call=reward_means,
                 object_target_distance_by_call=distance_means,
+                success_seen=success_seen,
+                failure_seen=failure_seen,
+                termination_reason_code=termination_reason_code,
             )
     raise RuntimeError(f"{mode} evaluation did not terminate at the source horizon")
 
@@ -572,6 +608,37 @@ def _post_interaction_runs_optimizer(
     rollout = int(getattr(agent, "_rollout", fallback_rollout_index))
     training = bool(getattr(agent, "training", True))
     return training and not (rollout + 1) % rollouts and timestep >= learning_starts
+
+
+def _reset_done_observations(
+    runtime: ManoSkrlRuntime, observations: torch.Tensor, done: torch.Tensor
+) -> torch.Tensor:
+    """Resolve terminal rows to reset ``s0`` before the next policy action."""
+
+    mask = torch.as_tensor(done, device=observations.device, dtype=torch.bool).reshape(-1)
+    if mask.numel() != observations.shape[0]:
+        raise ValueError("done mask and observation batch size must match")
+    if not bool(mask.any()):
+        return observations
+    runtime_reset_done = getattr(runtime, "reset_done", None)
+    if callable(runtime_reset_done):
+        return runtime_reset_done(observations, mask)
+    env_ids = torch.nonzero(mask, as_tuple=False).reshape(-1).cpu().numpy().astype(np.int64)
+    try:
+        reset_observations, _ = runtime.env.reset(options={"env_ids": env_ids})
+    except TypeError:
+        # Minimal fake runtimes used by pure training-loop tests may only expose
+        # a full reset. Production always takes the indexed branch above.
+        reset_observations, _ = runtime.env.reset()
+    reset_observations = torch.as_tensor(
+        reset_observations, device=observations.device, dtype=observations.dtype
+    )
+    if reset_observations.shape != observations.shape:
+        raise RuntimeError("reset observation batch does not match policy observations")
+    updated = observations.clone()
+    row_ids = torch.nonzero(mask, as_tuple=False).reshape(-1)
+    updated[row_ids] = reset_observations[row_ids]
+    return updated
 
 
 def _train(
@@ -596,6 +663,9 @@ def _train(
     started = time.monotonic()
     updates: list[dict[str, Any]] = []
     global_timestep = 0
+    pending_done = torch.zeros(
+        (environment.config.num_envs, 1), device=observations.device, dtype=torch.bool
+    )
     profile_totals: dict[str, float] = {}
     profile_counts: dict[str, int] = {}
     profile_cuda = str(getattr(runtime, "device", getattr(runtime.agent, "device", "cpu"))).startswith("cuda")
@@ -648,7 +718,14 @@ def _train(
         reward_components: dict[str, list[np.ndarray]] = {name: [] for name in REWARD_UPDATE_COMPONENTS}
         completed_episode_returns: list[float] = []
         reset_count = 0
+        success_count = 0
+        failure_count = 0
         for update_step in range(config.rollouts):
+            boundary_reset_phase = phase_start("episode_boundary_reset")
+            if bool(pending_done.any()):
+                observations = _reset_done_observations(runtime, observations, pending_done)
+                pending_done.zero_()
+            phase_stop("episode_boundary_reset", boundary_reset_phase)
             policy_phase = phase_start("policy_action")
             with torch.no_grad():
                 actions, _ = runtime.agent.act(
@@ -657,11 +734,14 @@ def _train(
             phase_stop("policy_action", policy_phase)
             environment_step_phase = phase_start("runtime_env_step")
             next_observations, reward, terminated, truncated, infos = runtime.env.step(actions)
+            done = terminated | truncated
             phase_stop("runtime_env_step", environment_step_phase)
             observer_phase = phase_start("observer_and_rerun")
             if observer is not None:
                 observer.observe()
-            if recorder is not None and global_timestep % budget.rerun_stride == 0:
+            if recorder is not None and (
+                global_timestep % budget.rerun_stride == 0 or bool(done.any().item())
+            ):
                 recorder.record_transition()
             phase_stop("observer_and_rerun", observer_phase)
             finite_phase = phase_start("rollout_finite_checks")
@@ -697,6 +777,7 @@ def _train(
             if runs_optimizer and post_elapsed is not None:
                 record_phase("ppo_optimizer_rollout_boundary", post_elapsed)
             observations = next_observations
+            pending_done = done
             rewards.append(reward.detach())
             action_magnitudes.append(actions.detach().abs())
             telemetry_phase = phase_start("host_telemetry")
@@ -715,6 +796,33 @@ def _train(
             for name in REWARD_UPDATE_COMPONENTS:
                 reward_components[name].append(np.asarray(getattr(diagnostics, name), dtype=np.float64))
             completed = np.asarray(termination.reset, dtype=bool)
+            failure_value = getattr(termination, "failure", None)
+            if failure_value is None:
+                failure_value = getattr(termination, "deviation_reset", np.zeros_like(completed))
+            failure = np.asarray(failure_value, dtype=bool)
+            success_value = getattr(termination, "success", None)
+            success = np.asarray(
+                completed & ~failure if success_value is None else success_value,
+                dtype=bool,
+            )
+            reason_value = getattr(termination, "reason_code", None)
+            if reason_value is None:
+                reason_value = np.where(
+                    failure,
+                    TERMINATION_REASON_FAILURE,
+                    np.where(success, TERMINATION_REASON_SUCCESS, TERMINATION_REASON_NONE),
+                )
+            reason_codes = np.asarray(reason_value, dtype=np.int32)
+            if (
+                success.shape != completed.shape
+                or failure.shape != completed.shape
+                or reason_codes.shape != completed.shape
+            ):
+                raise RuntimeError("environment termination telemetry has an invalid shape")
+            if np.any((success | failure) != completed) or np.any(success & failure):
+                raise RuntimeError("environment termination masks are inconsistent")
+            success_count += int(success.sum())
+            failure_count += int(failure.sum())
             completed_episode_returns.extend(episode_returns[completed].tolist())
             if completed.any() and on_completed_episodes is not None:
                 on_completed_episodes(_completed_episode_record(
@@ -724,10 +832,13 @@ def _train(
                     num_envs=environment.config.num_envs,
                     completed=completed,
                     episode_returns=episode_returns,
+                    termination_reason_codes=reason_codes
+                    if hasattr(termination, "reason_code")
+                    else None,
                 ))
             phase_stop("host_telemetry", telemetry_phase)
             reset_item_phase = phase_start("reset_count_host_item")
-            reset_increment = int((terminated | truncated).sum().item())
+            reset_increment = int(done.sum().item())
             phase_stop("reset_count_host_item", reset_item_phase)
             reset_count += reset_increment
             global_timestep += 1
@@ -752,6 +863,8 @@ def _train(
             "reward_mean": reward_mean,
             "action_abs_mean": float(torch.cat(action_magnitudes).mean().item()),
             "reset_count": float(reset_count),
+            "success_count": float(success_count),
+            "failure_count": float(failure_count),
             "completed_episode_count": float(len(completed_episode_returns)),
             "elapsed_seconds": cumulative_elapsed,
             "update_elapsed_seconds": update_elapsed,

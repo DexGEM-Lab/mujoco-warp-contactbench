@@ -52,6 +52,12 @@ current native checkpoint contracts. The file-by-file implementation map is in
   `+/-0.05 m`. The first two thumb scales/caps are `0.10/0.12` and `1.0/1.2`.
   FiLM and dynamic PointNet are enabled by default; GPU sampling uses the
   global CUDA Torch RNG.
+- PPO records the terminal transition and its terminal observation. Before the
+  next policy action, only completed vector worlds are reset and their reset
+  `s0` rows replace the terminal rows; reset work is not stored as a PPO
+  transition. Trajectory completion and position-deviation failure both set
+  `terminated=True`, while `truncated` remains false and reason code/masks keep
+  success (`1`) separate from deviation failure (`2`).
 
 ## Fixed Budget
 
@@ -201,15 +207,18 @@ logs each PPO update against its completed PPO update count as the primary W&B a
 for `total`, `distance_x`, `distance_y`, `distance_z`, `rotation`,
 `action_penalty`, `contact`, `object_stability`, `survival`, and
 `deviation_penalty`, alongside `reward_mean`. It also records
-`completed_episode_count` and, only when one or more episodes complete in that
-update, `episode_return_mean`. It also records instantaneous and cumulative
-environment transitions per second for each PPO update, plus final throughput. Initial and final evaluations use the corresponding completed PPO update count as their W&B step.
+`completed_episode_count`, `success_count`, `failure_count` and, only when one
+or more episodes complete in that update, `episode_return_mean`. It also records
+instantaneous and cumulative environment transitions per second for each PPO
+update, plus final throughput. Initial and final evaluations use the
+corresponding completed PPO update count as their W&B step.
 Every PPO update also records exact KL mean/min/max, approximate KL mean,
 learning-rate start/end/min/max, scheduler increase/decrease counts, and the
 number of completed minibatches. These metrics are emitted even when no episode
 completes, so early scheduler failures cannot be hidden by episode logging.
 Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
-record with parallel `env_ids` and exact `returns` arrays to
+record with parallel `env_ids`, exact `returns`, termination reason codes, and
+success/failure env-id arrays to
 `<output>.episodes.jsonl`; active records first accumulate in
 `<output>.episodes.jsonl.partial`, which is preserved after an interruption and
 atomically published only after successful training. This JSONL is the complete
@@ -242,7 +251,7 @@ once every four vector control calls:
 
 The default recording is env 0 only. It keeps one stable artifact:
 `cube1_03_scratch_run.rrd`. The recorder writes the active episode privately,
-then atomically replaces that path when the next delayed reset is applied; it
+then atomically replaces that path after writing the terminal snapshot; it
 does not retain an episode archive. Recording never opens a second GUI; open
 the latest completed recording from another terminal with:
 

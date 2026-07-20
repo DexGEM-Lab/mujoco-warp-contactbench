@@ -153,8 +153,8 @@ forces` pane combines the 16 source-order hand-contact magnitude curves with an
 `Object gravity` magnitude reference; each hand curve is the net world-frame
 force exerted on the object by one mapped hand collision geom, with floor and
 non-hand-object rows excluded. The all-geometry tab records cube gravity as
-`body_subtreemass * gravity` in N. The stable `.rrd` changes only
-after the delayed reset is applied; interrupting the run discards its active
+`body_subtreemass * gravity` in N. The stable `.rrd` changes immediately after
+the terminal snapshot is recorded; interrupting the run discards its active
 partial episode.
 
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
@@ -296,7 +296,7 @@ JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
 ```
 
 The batch contains ten distinct fully padded action-`01` trajectories. They
-retain independent reference progress and delayed resets while sharing one
+retain independent reference progress and indexed episode resets while sharing one
 compiled cube1 model and batched MJX-Warp physics. `--tile-envs 1` preserves
 the native actuator-pane viewer; larger values render the first N batch worlds
 as tiles in one GLFW/MuJoCo window. In tiled mode, drag with the left mouse button to rotate, right mouse button to pan horizontally, middle mouse button to pan vertically, use the scroll wheel to zoom, press `R` to reset the view, and press `Esc` to close the window.
