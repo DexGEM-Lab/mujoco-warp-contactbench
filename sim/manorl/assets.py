@@ -32,6 +32,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 ALL_ASSETS_ROOT = REPOSITORY_ROOT / "assets" / "all_assets"
 ALL_ASSETS_SIM_ROOT = ALL_ASSETS_ROOT / "Assets" / "sim"
 ALL_OBJECT_GRASPS = ALL_ASSETS_ROOT / "Assets" / "object_grasps_simple.yaml"
+ALL_OBJECT_GRASPS_SHA256 = "97293b96a3015173bf2fa875d165b04c925953147ebc0f4c0935ed1215558a9d"
 HAND_URDF = ASSET_ROOT / "hand" / "mano_hand.urdf"
 OBJECT_URDF = ASSET_ROOT / "cube1" / "cube1.urdf"
 ASSET_MANIFEST = ASSET_ROOT / "manifest.json"
@@ -88,10 +89,7 @@ def _all_assets_runtime(
         expected_sha256=(
             (urdf_path, urdf_sha256),
             (collision_path, collision_sha256),
-            (
-                ALL_OBJECT_GRASPS,
-                "97293b96a3015173bf2fa875d165b04c925953147ebc0f4c0935ed1215558a9d",
-            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
     )
 
@@ -109,10 +107,11 @@ _OBJECT_RUNTIMES = {
         source_mesh_filename="cube1.obj",
         urdf_path=ASSET_ROOT / "cube1" / "cube1.urdf",
         collision_mesh_path=OBJECT_MESH,
-        grasp_mapping_path=ASSET_ROOT / "cube1" / "grasp_mapping.yaml",
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
         collision_mesh_scale=(0.001, 0.001, 0.001),
         rgba="0.8 0.18 0.16 1",
+        expected_sha256=((ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),),
     ),
     "cube2": _all_assets_runtime(
         "cube2",
