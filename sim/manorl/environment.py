@@ -251,18 +251,6 @@ class TransitionSnapshot:
     termination: TerminationResult
 
 
-@dataclass(frozen=True)
-class _PreparedStep:
-    """Host inputs retained while route-local physics executes asynchronously."""
-
-    actions: NDArray[np.float64]
-    mocap_indices: NDArray[np.int64]
-    mocap_targets: NDArray[np.float64]
-    processed_targets: NDArray[np.float64]
-    controller_targets: NDArray[np.float64] | None
-    pending_reset: NDArray[np.bool_]
-
-
 def _array_metadata(value: Any) -> dict[str, object]:
     shape = tuple(int(item) for item in value.shape)
     dtype = np.dtype(value.dtype)
@@ -1259,13 +1247,9 @@ class MujocoManoEnvironment:
         actions = np.asarray(raw_actions, dtype=np.float64)
         if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
             raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
-        routed_steps = []
-        for env_ids, route in self._object_routes.values():
-            prepared = route._prepare_step(actions[env_ids])
-            routed_steps.append((env_ids, route, prepared))
         routed_outputs = []
-        for env_ids, route, prepared in routed_steps:
-            observation, rewards, resets, extras = route._complete_step(prepared)
+        for env_ids, route in self._object_routes.values():
+            observation, rewards, resets, extras = route.step(actions[env_ids])
             routed_outputs.append((env_ids, observation, rewards, resets, extras))
         self._sync_heterogeneous_state()
         observations = _scatter_routed_value(
@@ -1646,11 +1630,6 @@ class MujocoManoEnvironment:
     ]:
         if self.is_heterogeneous:
             return self._heterogeneous_step(raw_actions)
-        return self._complete_step(self._prepare_step(raw_actions))
-
-    def _prepare_step(self, raw_actions: NDArray[object]) -> _PreparedStep:
-        """Process controls and submit physics without materializing device state."""
-
         materialization_phase = self._phase_start("action_numpy_materialization")
         actions = np.asarray(raw_actions, dtype=np.float64)
         self._phase_stop("action_numpy_materialization", materialization_phase)
@@ -1708,25 +1687,6 @@ class MujocoManoEnvironment:
         if np.any(pending_reset):
             self._reset_indices(np.flatnonzero(pending_reset).astype(np.int64))
         self._phase_stop("delayed_reset_application", reset_phase)
-        return _PreparedStep(
-            actions=actions,
-            mocap_indices=mocap_indices,
-            mocap_targets=mocap_targets,
-            processed_targets=action_result.targets,
-            controller_targets=controller_targets,
-            pending_reset=pending_reset,
-        )
-
-    def _complete_step(
-        self, prepared: _PreparedStep
-    ) -> tuple[
-        dict[str, NDArray[np.float64]],
-        NDArray[np.float64],
-        NDArray[np.bool_],
-        dict[str, NDArray[Any]],
-    ]:
-        """Materialize submitted physics and finish route-local transition work."""
-
         extraction_phase = self._phase_start("state_contact_extraction")
         physical = self.producer.extract(
             self.data,
@@ -1770,16 +1730,16 @@ class MujocoManoEnvironment:
         self.last_reward = reward
         recording_phase = self._phase_start("transition_recording")
         if self.config.capture_transition_diagnostics:
-            if prepared.controller_targets is None:
+            if controller_targets is None:
                 raise RuntimeError("transition diagnostics require host controller targets")
             self.last_transition = TransitionSnapshot(
                 control_call=self.control_call,
-                raw_actions=prepared.actions.copy(),
-                command_reference_indices=prepared.mocap_indices.copy(),
-                command_targets=prepared.mocap_targets.copy(),
-                processed_targets=prepared.processed_targets.copy(),
-                controller_targets=prepared.controller_targets.copy(),
-                reset_applied=prepared.pending_reset.copy(),
+                raw_actions=actions.copy(),
+                command_reference_indices=mocap_indices.copy(),
+                command_targets=mocap_targets.copy(),
+                processed_targets=action_result.targets.copy(),
+                controller_targets=controller_targets.copy(),
+                reset_applied=pending_reset.copy(),
                 progress=self.progress.copy(),
                 trajectory_steps=self.trajectory_steps.copy(),
                 target_indices=self._target_indices().copy(),
