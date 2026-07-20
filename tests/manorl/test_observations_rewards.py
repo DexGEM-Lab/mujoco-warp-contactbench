@@ -9,6 +9,7 @@ import pytest
 from sim.manorl.abi import check_termination, early_phase_mask
 from sim.manorl.observations import (
     CHECKPOINT_SIDECAR_COMPATIBILITY,
+    CONTACT_FORCE_THRESHOLD,
     CURRENT_SOURCE_COMPATIBILITY,
     OBSERVATION_KEYS,
     OBSERVATION_SLICES,
@@ -149,7 +150,15 @@ def test_observation_has_all_named_source_slices_in_exact_order() -> None:
         "hand_keypoints": (state.hand_keypoint_positions - state.object_position[:, None, :]).reshape(1, -1),
         "contact_forces": np.tanh(np.array([[0.0, 0.0, 0.0, 5.0] + [0.0] * 11 + [1.0]]) * 0.025),
         "cumulative_joint_offset": state.cumulative_joint_offset,
-        "contact_force_directions": np.concatenate((np.zeros((3, 3)), np.array([[0.6, 0.8, 0.0]]), np.zeros((12, 3))), axis=0).reshape(1, -1),
+        "contact_force_directions": np.concatenate(
+            (
+                np.zeros((3, 3)),
+                np.array([[0.6, 0.8, 0.0]]),
+                np.zeros((11, 3)),
+                np.array([[0.0, 1.0, 0.0]]),
+            ),
+            axis=0,
+        ).reshape(1, -1),
         "expected_contact_mask": state.expected_contact_mask,
     }
     for key, values in expected.items():
@@ -191,9 +200,10 @@ def test_point_cloud_compatibility_variants_are_explicit_and_transform_source_fr
 
 def test_contact_order_mask_and_geometry_encoding_match_source_rules() -> None:
     forces = np.zeros((1, 16, 3))
-    forces[0, 3] = [0.0, 0.0, 2.0]
-    forces[0, 15] = [0.0, -3.0, 0.0]
+    forces[0, 3] = [0.0, 0.0, 0.2]
+    forces[0, 15] = [0.0, -0.200001, 0.0]
     contact = extract_contact_features(forces)
+    assert CONTACT_FORCE_THRESHOLD == 0.2
     np.testing.assert_array_equal(contact.direction[0, 3], [0.0, 0.0, 0.0])
     np.testing.assert_allclose(contact.direction[0, 15], [0.0, -1.0, 0.0])
     mask = expected_contact_mask_from_keypoint_ids(np.array([[3, 15]], dtype=np.int64), 1)
@@ -270,9 +280,9 @@ def test_reward_terms_and_windows_match_target_equations() -> None:
 def test_direct_contact_scale_changes_only_contact_and_total() -> None:
     state = _reward_state(batch=3)
     forces = np.zeros((3, 16, 3), dtype=np.float64)
-    forces[1, 3] = [2.000001, 0.0, 0.0]
-    forces[2, 3] = [2.000001, 0.0, 0.0]
-    forces[2, 15] = [0.0, 2.000001, 0.0]
+    forces[1, 3] = [0.200001, 0.0, 0.0]
+    forces[2, 3] = [0.200001, 0.0, 0.0]
+    forces[2, 15] = [0.0, 0.200001, 0.0]
     state = replace(state, hand_object_force_on_object_world_N=forces)
     termination = _termination_for(state, CURRENT_SOURCE_COMPATIBILITY)
 
@@ -303,10 +313,10 @@ def test_direct_contact_scale_changes_only_contact_and_total() -> None:
 def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None:
     state = _reward_state(batch=3)
     forces = np.zeros((3, 16, 3), dtype=np.float64)
-    forces[1, 3] = [2.000001, 0.0, 0.0]
-    forces[1, 15] = [2.0, 0.0, 0.0]
-    forces[2, 3] = [2.000001, 0.0, 0.0]
-    forces[2, 15] = [0.0, 2.000001, 0.0]
+    forces[1, 3] = [0.200001, 0.0, 0.0]
+    forces[1, 15] = [0.2, 0.0, 0.0]
+    forces[2, 3] = [0.200001, 0.0, 0.0]
+    forces[2, 15] = [0.0, 0.200001, 0.0]
     state = replace(state, hand_object_force_on_object_world_N=forces)
     diagnostics = compute_rewards(
         state,
@@ -320,9 +330,12 @@ def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None
     assert "object_contact_force" not in RewardState.__dataclass_fields__
     assert "object_gravity_force" not in RewardState.__dataclass_fields__
     assert "object_contact_gate" not in diagnostics.__dataclass_fields__
-    assert REWARD_CONTRACT_ID == "source_aligned_hand_object_contact_1x_threshold_2n_v1"
-    assert PPO_REWARD_CONTRACT_ID == "source_aligned_hand_object_contact_1x_threshold_2n_shaper_0p5_v1"
-    assert REWARD_HAND_OBJECT_THRESHOLD_N == 2.0
+    assert REWARD_CONTRACT_ID == "source_aligned_hand_object_contact_1x_threshold_0p2n_v1"
+    assert (
+        PPO_REWARD_CONTRACT_ID
+        == "source_aligned_hand_object_contact_1x_threshold_0p2n_shaper_0p5_v1"
+    )
+    assert REWARD_HAND_OBJECT_THRESHOLD_N == CONTACT_FORCE_THRESHOLD == 0.2
 
 
 def test_reward_contact_preserves_nonuniform_weights_and_zero_expected_contacts() -> None:

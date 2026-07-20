@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pytest
 
-from sim.manorl.abi import check_termination
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, check_termination
 from sim.manorl.assets import OBJECT_MESH
 from sim.manorl.contracts import KEYPOINT_NAMES
 from sim.manorl.environment import (
@@ -754,11 +754,16 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     assert metadata["reward_contract"] == REWARD_CONTRACT_ID
     assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert metadata["ppo_reward_scale"] == 0.5
-    assert metadata["environment_contract"] == "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_deviation_0p10_v1"
+    assert metadata["environment_contract"] == ENVIRONMENT_CONTRACT_ID
     assert metadata["residual_action"]["position_scale"] == [0.005, 0.005, 0.005]
     assert metadata["residual_action"]["max_position_offset"] == [0.05, 0.05, 0.05]
-    assert metadata["thresholds"]["observation_contact_threshold_N"] == 2.0
-    assert metadata["thresholds"]["reward_hand_object_threshold_N"] == REWARD_HAND_OBJECT_THRESHOLD_N
+    assert (
+        metadata["thresholds"]["observation_contact_threshold_N"]
+        == metadata["thresholds"]["reward_hand_object_threshold_N"]
+        == env.config.reward_config.contact_force_threshold
+        == REWARD_HAND_OBJECT_THRESHOLD_N
+        == 0.2
+    )
     assert "contact_force_threshold" not in metadata["thresholds"]
     episode_return_samples = [
         args[0].scalars.as_arrow_array().to_numpy()[0]

@@ -202,7 +202,9 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
         "secondary_metrics": ["transitions"],
     }
     assert config["reward"]["ppo_scale"] == 0.5
-    assert config["environment"]["contract"] == "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_deviation_0p10_v1"
+    assert config["reward"]["contact_force_threshold_N"] == 0.2
+    assert config["environment"]["contract"] == tool.ENVIRONMENT_CONTRACT_ID
+    assert config["environment"]["observation_contact_threshold_N"] == 0.2
     assert config["environment"]["residual_action"]["position_scale"] == [0.005, 0.005, 0.005]
     assert config["environment"]["residual_action"]["max_position_offset"] == [0.05, 0.05, 0.05]
     assert config["environment"]["residual_action"]["joint_scale"][:4] == [0.1, 0.12, 0.044, 0.01]

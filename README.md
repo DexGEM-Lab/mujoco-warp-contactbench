@@ -180,8 +180,9 @@ JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
 The Cube1 production training contract is documented in
 [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
 PPO uses the source-aligned `0.5x` reward shaper over the raw environment
-reward. The environment keeps contact reward at `1.0x` with a strict `2 N`
-pair-filtered threshold and maximum contact quality `0.4`. W&B tracking is
+reward. Observation contact direction and the `1.0x` pair-filtered contact
+reward use the same strict `0.2 N` threshold; maximum contact quality remains
+`0.4`. W&B tracking is
 enabled by default; pass `--wandb false` for a local-only diagnostic. The
 default run uses 2,048 worlds, 8,000 updates, 48 rollout steps, a 4,096-sample
 minibatch, FiLM, dynamic point-cloud sampling, residual actions, terminal

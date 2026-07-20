@@ -21,9 +21,12 @@ SOURCE_ALIGNED_JOINT_CAP: Final = tuple(
     [1.0, 1.2, 0.44, 0.1] + [0.24, 0.4, 0.6, 0.1] * 4
 )
 
-# This binds the source-aligned production control mapping and terminal reset
-# separately from reward contracts.
-ENVIRONMENT_CONTRACT_ID: Final = "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_deviation_0p10_v1"
+# This binds the source-aligned production observation/control mapping and
+# terminal reset separately from reward contracts.
+ENVIRONMENT_CONTRACT_ID: Final = (
+    "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_"
+    "observation_contact_0p2n_deviation_0p10_v2"
+)
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
 # Termination reason values are part of the host-side ABI.  Keep ``0`` for an

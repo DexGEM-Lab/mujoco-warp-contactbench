@@ -18,11 +18,11 @@ from sim.manorl.observations import (
 from sim.manorl.abi import TerminationResult
 
 
-REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_2n_v1"
-REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = 2.0
+REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_0p2n_v1"
+REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = CONTACT_FORCE_THRESHOLD
 # PPO consumes the environment reward directly, so its contract is distinct
 # because the PPO reward scale is tracked separately from the environment contract.
-PPO_REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_2n_shaper_0p5_v1"
+PPO_REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_0p2n_shaper_0p5_v1"
 PPO_REWARD_SCALE: Final[float] = 0.5
 
 
@@ -54,7 +54,9 @@ class RewardConfig:
 
 
 SOURCE_ALIGNED_REWARD_CONFIG: Final = RewardConfig()
-CHECKPOINT_SIDECAR_REWARD_CONFIG: Final = SOURCE_ALIGNED_REWARD_CONFIG
+# Converted IsaacGym checkpoints keep their external source-side 2 N declaration.
+# Production ManoRL environments use ``SOURCE_ALIGNED_REWARD_CONFIG`` above.
+CHECKPOINT_SIDECAR_REWARD_CONFIG: Final = RewardConfig(contact_force_threshold=2.0)
 CHECKPOINT_SIDECAR_PPO_REWARD_SCALE: Final[float] = PPO_REWARD_SCALE
 
 

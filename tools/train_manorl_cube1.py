@@ -31,8 +31,14 @@ from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.cli import parse_cli_bool
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
+from sim.manorl.observations import CONTACT_FORCE_THRESHOLD
 from sim.manorl.rerun_recorder import ManoRerunRecorder
-from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
+from sim.manorl.rewards import (
+    PPO_REWARD_CONTRACT_ID,
+    PPO_REWARD_SCALE,
+    REWARD_CONTRACT_ID,
+    REWARD_HAND_OBJECT_THRESHOLD_N,
+)
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 from sim.manorl.trajectory import (
     TRAJECTORY_IDENTITY_SCHEMA,
@@ -221,12 +227,14 @@ def _wandb_config(
         },
         "reward": {
             "environment_contract": REWARD_CONTRACT_ID,
+            "contact_force_threshold_N": REWARD_HAND_OBJECT_THRESHOLD_N,
             "ppo_contract": PPO_REWARD_CONTRACT_ID,
             "ppo_scale": PPO_REWARD_SCALE,
             "isaacgym_ppo_scale": 0.5,
         },
         "environment": {
             "contract": ENVIRONMENT_CONTRACT_ID,
+            "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
             "residual_action": {
                 "position_scale": list(residual_action.position_scale),
                 "gamma_xy": residual_action.gamma_xy,
@@ -1428,12 +1436,14 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             },
             "reward": {
                 "environment_contract": REWARD_CONTRACT_ID,
+                "contact_force_threshold_N": REWARD_HAND_OBJECT_THRESHOLD_N,
                 "ppo_contract": PPO_REWARD_CONTRACT_ID,
                 "ppo_scale": PPO_REWARD_SCALE,
                 "isaacgym_ppo_scale": 0.5,
             },
             "environment": {
                 "residual_enabled": physical.config.residual_enabled,
+                "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
                 "residual_action": asdict(physical.config.residual_action),
                 "max_deviation_distance": physical.config.max_deviation_distance,
                 "device_resident_controls": physical.config.device_resident_controls,
