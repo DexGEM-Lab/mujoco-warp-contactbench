@@ -673,6 +673,42 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert captured[-1][1].resolved_minibatch_size == 4096
 
 
+def test_cli_parses_all_and_exact_pair_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured = []
+    monkeypatch.setattr(tool, "run", lambda output, budget: captured.append((output, budget)) or {})
+
+    assert tool.main(["--output", str(tmp_path / "all"), "--all-pairs"]) == 0
+    assert captured[-1][1].trajectory_selector == "all"
+
+    assert tool.main([
+        "--output", str(tmp_path / "pairs"),
+        "--pairs", "cube2:1,cube1:02",
+    ]) == 0
+    assert captured[-1][1].trajectory_selector == "cube1:02,cube2:01"
+
+
+def test_cli_rejects_pair_selector_conflicts(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid"),
+            "--all-pairs", "--pairs", "cube1:01",
+        ])
+    assert "not allowed with argument" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid-legacy"),
+            "--pairs", "cube1:01", "--object", "cube1", "--gesture", "01",
+        ])
+    assert "cannot be combined" in capsys.readouterr().err
+
+
 def test_cli_rejects_local_rerun_and_grpc_stream_together(
     capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:

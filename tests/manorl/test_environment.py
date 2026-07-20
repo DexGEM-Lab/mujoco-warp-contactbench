@@ -24,7 +24,11 @@ from sim.manorl.observations import (
     quat_rotate_xyzw,
 )
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID, REWARD_HAND_OBJECT_THRESHOLD_N, compute_rewards
-from sim.manorl.trajectory import load_reference_trajectory
+from sim.manorl.trajectory import (
+    TrajectoryBatch,
+    _initial_support_shift,
+    load_reference_trajectory,
+)
 
 
 @pytest.fixture(scope="module")
@@ -948,6 +952,50 @@ def test_two_world_cpu_vector_smoke_has_independent_equal_worlds(trajectory) -> 
     np.testing.assert_allclose(
         env.last_physical.hand_keypoint_contact_forces[0], env.last_physical.hand_keypoint_contact_forces[1], rtol=0, atol=1e-10
     )
+
+
+def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(trajectory) -> None:
+    cube2_shift = _initial_support_shift(
+        trajectory.object_pos_raw[0], trajectory.object_quat_xyzw[0], "cube2"
+    )
+    cube2_position = trajectory.object_pos_raw.copy()
+    cube2_position[:, 2] += cube2_shift
+    cube2 = replace(
+        trajectory,
+        identity=replace(trajectory.identity, identity="cube2_01_003"),
+        object_pos=cube2_position,
+        object_z_shift=cube2_shift,
+    )
+    env = MujocoManoEnvironment(
+        TrajectoryBatch((trajectory, cube2, trajectory)),
+        EnvironmentConfig(
+            num_envs=3,
+            residual_enabled=False,
+            max_deviation_distance=1_000_000.0,
+        ),
+    )
+
+    assert env.is_heterogeneous
+    assert env.object_types == ("cube1", "cube2", "cube1")
+    assert tuple(env._object_routes) == ("cube1", "cube2")
+    np.testing.assert_array_equal(env._object_routes["cube1"][0], (0, 2))
+    np.testing.assert_array_equal(env._object_routes["cube2"][0], (1,))
+    assert env.object_geometry.shape == (3, 12)
+    assert not np.array_equal(env.object_geometry[0], env.object_geometry[1])
+
+    observation, reward, reset, extras = env.step(np.zeros((3, 26), dtype=np.float64))
+    assert observation["obs"].shape == (3, 476)
+    assert reward.shape == reset.shape == extras["time_outs"].shape == (3,)
+    np.testing.assert_array_equal(env.progress, (1, 1, 1))
+    np.testing.assert_allclose(observation["obs"][0, :74], observation["obs"][2, :74], rtol=0, atol=1e-10)
+    np.testing.assert_allclose(observation["obs"][0, 266:], observation["obs"][2, 266:], rtol=0, atol=1e-10)
+    assert not np.array_equal(observation["obs"][0, 74:266], observation["obs"][2, 74:266])
+
+    reset_observation = env.reset(np.asarray([1], dtype=np.int64))
+    assert reset_observation["obs"].shape == (3, 476)
+    np.testing.assert_array_equal(env.progress, (1, 0, 1))
+    assert env.last_physical is not None
+    assert env.last_physical.object_position.shape == (3, 3)
 
 
 def test_dynamic_template_variant_preserves_raw_surface_coordinates(trajectory) -> None:

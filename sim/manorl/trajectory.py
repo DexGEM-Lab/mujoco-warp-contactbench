@@ -1,9 +1,10 @@
-"""Narrow Lance reader for the one accepted ManoRL trajectory."""
+"""Versioned Lance readers and deterministic ManoRL training selection."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -25,6 +26,8 @@ from sim.manorl.contracts import (
 )
 
 LANCE_COLUMNS = ("index", "trajectory_metadata", "timestamp", "hands", "objects")
+LANCE_DISCOVERY_COLUMNS = ("index", "trajectory_metadata")
+TRAJECTORY_IDENTITY_SCHEMA = "object_action_sequence"
 GENERATED_CUBE1_DATASET_PATH = Path(
     "/mnt/nas-222-project/mocap/dataAugmentation/for_retargeting/new_all_with_keypoints/"
     "lance_new_all_generated_mano/new_all_generated_mano.lance"
@@ -126,12 +129,18 @@ class TrajectoryBatch:
     """Immutable per-world reference assignments, mirroring Isaac batch loading."""
 
     trajectories: tuple[ReferenceTrajectory, ...]
+    resolved_pairs: tuple[ObjectActionPair, ...] = ()
+    selection_mode: str | None = None
 
     def __post_init__(self) -> None:
         if not self.trajectories:
             raise ValueError("trajectory batch must be non-empty")
         if any(not isinstance(trajectory, ReferenceTrajectory) for trajectory in self.trajectories):
             raise TypeError("trajectory batch must contain ReferenceTrajectory values")
+        if any(not isinstance(pair, ObjectActionPair) for pair in self.resolved_pairs):
+            raise TypeError("resolved_pairs must contain ObjectActionPair values")
+        if self.selection_mode not in (None, "pairs", "all"):
+            raise ValueError("selection_mode must be 'pairs', 'all', or None")
 
     @property
     def num_envs(self) -> int:
@@ -142,28 +151,104 @@ class TrajectoryBatch:
         return _immutable(np.asarray([len(trajectory.q_ref) for trajectory in self.trajectories]), dtype=np.int64)
 
 
-@dataclass(frozen=True)
-class TrajectorySelection:
-    """Versioned Lance query matching the source object/action selection contract."""
+@dataclass(frozen=True, order=True)
+class ObjectActionPair:
+    """One exact Lance object/action pair with a canonical two-digit action ID."""
 
     object_type: str
-    gesture: str
+    action_id: str
+
+    def __post_init__(self) -> None:
+        object_type = str(self.object_type)
+        action_id = str(self.action_id)
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", object_type) is None:
+            raise ValueError(
+                "trajectory selector object must use letters, digits, '.', or '-' and cannot contain '_'"
+            )
+        if not action_id.isdigit() or not 1 <= int(action_id) <= 50:
+            raise ValueError("trajectory selector action must be a source action id in [1, 50]")
+        object.__setattr__(self, "object_type", object_type)
+        object.__setattr__(self, "action_id", f"{int(action_id):02d}")
+
+    @property
+    def canonical(self) -> str:
+        return f"{self.object_type}:{self.action_id}"
+
+
+def parse_trajectory_selector(selector: str) -> tuple[ObjectActionPair, ...] | None:
+    """Parse ``all`` or a comma-separated list of exact ``object:action`` pairs.
+
+    ``None`` means all eligible pairs. Explicit pairs are de-duplicated after
+    action normalization and returned in deterministic sorted order.
+    """
+
+    if not isinstance(selector, str) or not selector.strip():
+        raise ValueError("trajectory selector must be 'all' or a non-empty object:action list")
+    value = selector.strip()
+    if value == "all":
+        return None
+    if value.lower() == "all":
+        raise ValueError("trajectory selector all mode must be spelled exactly 'all'")
+    tokens = value.split(",")
+    if any(not token.strip() for token in tokens):
+        raise ValueError("trajectory selector contains an empty pair")
+    pairs: list[ObjectActionPair] = []
+    for token in tokens:
+        fields = token.strip().split(":")
+        if len(fields) != 2 or not all(field.strip() for field in fields):
+            raise ValueError(
+                f"malformed trajectory selector pair {token!r}; expected object:action"
+            )
+        pairs.append(ObjectActionPair(fields[0].strip(), fields[1].strip()))
+    duplicates = sorted(pair.canonical for pair in set(pairs) if pairs.count(pair) > 1)
+    if duplicates:
+        raise ValueError(f"duplicate trajectory selector pair(s): {', '.join(duplicates)}")
+    return tuple(sorted(pairs))
+
+
+@dataclass(frozen=True)
+class TrajectorySelection:
+    """Versioned Lance query over one pair, explicit pairs, or every pair."""
+
+    object_type: str = "cube1"
+    gesture: str = "01"
+    selector: str | None = None
     dataset_path: Path = Path(TRAJECTORY_IDENTITY.dataset_path)
     expected_dataset_version: int = EXPECTED_DATASET_VERSION
     pre_padding: int = GENERATED_PADDING
     post_padding: int = GENERATED_PADDING
 
     def __post_init__(self) -> None:
-        if not self.object_type or "_" in self.object_type:
-            raise ValueError("object_type must be a non-empty Lance scene name")
-        if not self.gesture.isdigit() or not 1 <= int(self.gesture) <= 50:
-            raise ValueError("gesture must be a source action id in [1, 50]")
+        ObjectActionPair(self.object_type, self.gesture)
+        if self.selector is not None:
+            parse_trajectory_selector(self.selector)
         if self.pre_padding < 0 or self.post_padding < 0:
             raise ValueError("trajectory padding must be non-negative")
 
     @property
     def action_id(self) -> str:
-        return self.gesture.zfill(2)
+        return ObjectActionPair(self.object_type, self.gesture).action_id
+
+    @property
+    def requested_pairs(self) -> tuple[ObjectActionPair, ...] | None:
+        if self.selector is None:
+            return (ObjectActionPair(self.object_type, self.gesture),)
+        return parse_trajectory_selector(self.selector)
+
+    @property
+    def mode(self) -> str:
+        return "all" if self.requested_pairs is None else "pairs"
+
+    @property
+    def canonical_selector(self) -> str:
+        pairs = self.requested_pairs
+        return "all" if pairs is None else ",".join(pair.canonical for pair in pairs)
+
+    @property
+    def require_full_padding(self) -> bool:
+        """Keep the historical single-pair slice exact; clip opt-in selectors."""
+
+        return self.selector is None
 
 
 @dataclass(frozen=True)
@@ -225,11 +310,12 @@ def _validate_row(row: dict[str, Any]) -> None:
 def _initial_support_shift(
     initial_position: NDArray[np.float64],
     initial_quaternion_xyzw: NDArray[np.float64],
+    object_type: str = OBJECT_TYPE,
 ) -> float:
     from sim.manorl.assets import object_collision_vertices
 
     rotated = Rotation.from_quat(initial_quaternion_xyzw).apply(
-        object_collision_vertices().copy()
+        object_collision_vertices(object_type).copy()
     )
     return -float(np.min(rotated[:, 2] + initial_position[2]))
 
@@ -578,12 +664,128 @@ def _selection_row_sort_key(row_index_and_row: tuple[int, dict[str, Any]]) -> tu
     return object_type, action_id, int(sequence), row_index
 
 
+@dataclass(frozen=True)
+class _TrajectoryCandidate:
+    row_index: int
+    pair: ObjectActionPair
+    identity: str
+    sequence: int
+
+
+def _candidate_from_metadata_row(
+    row: dict[str, Any], *, row_index: int, selection: TrajectorySelection
+) -> _TrajectoryCandidate | None:
+    """Return lightweight eligibility metadata without decoding frame arrays."""
+
+    index = row.get("index")
+    metadata = row.get("trajectory_metadata")
+    if not isinstance(index, dict) or not isinstance(metadata, dict):
+        return None
+    # The accepted s02 source index predates the optional ``is_generated``
+    # field.  Missing means a source row here; an explicit true value is the
+    # only generated-row marker accepted by the contract.
+    if index.get("is_generated", False) is not False:
+        return None
+    try:
+        identity = _derive_identity(row)
+    except (KeyError, ValueError):
+        return None
+    fields = identity.split("_")
+    if len(fields) != 3 or not fields[2].isdigit():
+        return None
+    object_type, action_raw, sequence_raw = fields
+    try:
+        pair = ObjectActionPair(object_type, action_raw)
+        index_pair = ObjectActionPair(str(index.get("scene", "")), str(index.get("gesture", "")))
+    except ValueError:
+        return None
+    if pair != index_pair or action_raw != pair.action_id:
+        return None
+    source_path = str(index.get("source_path", ""))
+    if Path(source_path).parent.name != identity:
+        return None
+    object_names = metadata.get("object_names")
+    if (
+        not isinstance(object_names, list)
+        or object_type not in object_names
+        or metadata.get("hand_names") != ["right"]
+    ):
+        return None
+    try:
+        source_count = int(metadata["total_frames"])
+        movement = metadata["trajectory_info"]["object_move"]
+        movement_entry = next(
+            item for item in movement if item.get("object_name") == object_type
+        )
+        start_raw = int(movement_entry["start_frame"])
+        end_raw = int(movement_entry["end_frame"])
+    except (KeyError, TypeError, ValueError, StopIteration):
+        return None
+    requested_start = start_raw - selection.pre_padding
+    requested_stop = end_raw + selection.post_padding
+    if selection.require_full_padding and (
+        requested_start < 0 or requested_stop > source_count
+    ):
+        return None
+    start = max(0, requested_start)
+    stop = min(source_count, requested_stop)
+    if stop - start < 2:
+        return None
+    return _TrajectoryCandidate(
+        row_index=row_index,
+        pair=pair,
+        identity=identity,
+        sequence=int(sequence_raw),
+    )
+
+
+def _discover_trajectory_candidates(
+    dataset: Any, selection: TrajectorySelection
+) -> tuple[tuple[ObjectActionPair, ...], dict[ObjectActionPair, tuple[_TrajectoryCandidate, ...]]]:
+    """Resolve pairs from lightweight Lance index/metadata columns only."""
+
+    discovery_rows = dataset.to_table(columns=list(LANCE_DISCOVERY_COLUMNS)).to_pylist()
+    candidates: dict[ObjectActionPair, list[_TrajectoryCandidate]] = {}
+    for row_index, row in enumerate(discovery_rows):
+        candidate = _candidate_from_metadata_row(row, row_index=row_index, selection=selection)
+        if candidate is not None:
+            candidates.setdefault(candidate.pair, []).append(candidate)
+
+    requested_pairs = selection.requested_pairs
+    if requested_pairs is None:
+        resolved_pairs = tuple(sorted(candidates))
+        if not resolved_pairs:
+            raise LookupError(
+                "no eligible non-generated Lance object/action pairs with exact "
+                f"{TRAJECTORY_IDENTITY_SCHEMA} identities"
+            )
+    else:
+        unmatched = tuple(pair for pair in requested_pairs if pair not in candidates)
+        if unmatched:
+            available = ", ".join(pair.canonical for pair in sorted(candidates)) or "none"
+            missing = ", ".join(pair.canonical for pair in unmatched)
+            raise LookupError(
+                f"trajectory selector pair(s) matched no eligible rows: {missing}; "
+                f"available pairs: {available}"
+            )
+        resolved_pairs = requested_pairs
+
+    resolved_candidates = {
+        pair: tuple(
+            sorted(candidates[pair], key=lambda item: (item.sequence, item.identity, item.row_index))
+        )
+        for pair in resolved_pairs
+    }
+    return resolved_pairs, resolved_candidates
+
+
 def _selected_trajectory_from_row(
     row: dict[str, Any],
     dataset_version: int,
     *,
     row_index: int,
     selection: TrajectorySelection,
+    expected_pair: ObjectActionPair,
 ) -> ReferenceTrajectory:
     """Decode one fully padded source row selected by object and gesture."""
 
@@ -591,8 +793,8 @@ def _selected_trajectory_from_row(
     metadata = row["trajectory_metadata"]
     identity = _derive_identity(row)
     object_type, action_id, _ = identity.split("_")
-    if object_type != selection.object_type or action_id != selection.action_id:
-        raise ValueError(f"row {row_index} is not {selection.object_type}/{selection.action_id}")
+    if ObjectActionPair(object_type, action_id) != expected_pair:
+        raise ValueError(f"row {row_index} is not {expected_pair.canonical}")
     if index.get("scene") != object_type or str(index.get("gesture", "")).zfill(2) != action_id:
         raise ValueError(f"row {row_index} Lance index identity does not match source_path")
     object_names = metadata.get("object_names")
@@ -609,11 +811,18 @@ def _selected_trajectory_from_row(
     if entry is None:
         raise ValueError(f"row {row_index} has no object_move entry for {object_type!r}")
     start_raw, end_raw = int(entry["start_frame"]), int(entry["end_frame"])
-    start, stop = start_raw - selection.pre_padding, end_raw + selection.post_padding
-    if start < 0 or stop > source_count or stop - start < 2:
+    requested_start = start_raw - selection.pre_padding
+    requested_stop = end_raw + selection.post_padding
+    if selection.require_full_padding and (
+        requested_start < 0 or requested_stop > source_count
+    ):
         raise ValueError(
             f"row {row_index} cannot provide [{start_raw}-{selection.pre_padding}, {end_raw}+{selection.post_padding})"
         )
+    start = max(0, requested_start)
+    stop = min(source_count, requested_stop)
+    if stop - start < 2:
+        raise ValueError(f"row {row_index} selected source window has fewer than two frames")
     timestamps_all = np.asarray(row["timestamp"], dtype=np.float64)
     q_all = np.asarray(row["hands"][0]["urdf_dof"], dtype=np.float64)
     object_pos_all = np.asarray(row["objects"][object_index]["pos"], dtype=np.float64)
@@ -639,7 +848,9 @@ def _selected_trajectory_from_row(
     q_ref[:, 3:6] = np.unwrap(q_ref[:, 3:6], axis=0, period=2.0 * np.pi)
     object_pos_raw = object_pos_all[start:stop].copy()
     object_quat_xyzw = rotvec_to_xyzw(object_rotvec_all[start:stop])
-    z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0]) if object_type == OBJECT_TYPE else 0.0
+    z_shift = _initial_support_shift(
+        object_pos_raw[0], object_quat_xyzw[0], object_type
+    )
     object_pos = object_pos_raw.copy()
     object_pos[:, 2] += z_shift
     return ReferenceTrajectory(
@@ -668,11 +879,11 @@ def _selected_trajectory_from_row(
 
 
 def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: int) -> TrajectoryBatch:
-    """Load all eligible Lance rows then assign them sequentially to vector worlds.
+    """Discover eligible pairs and deterministically assign them to vector worlds.
 
-    The assignment is fixed for the lifetime of the environment: world ``i``
-    owns eligible trajectory ``i % eligible_count`` just as IsaacGym's
-    ``TrajectoryManager(assignment_mode='sequential')`` does.
+    Pair slots round-robin over sorted resolved pairs; each pair independently
+    round-robins its sorted exact-identity trajectories. Only distinct assigned
+    rows are decoded from Lance.
     """
 
     if not isinstance(selection, TrajectorySelection):
@@ -689,28 +900,32 @@ def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: 
     version = int(getattr(dataset, "version", -1))
     if version != selection.expected_dataset_version:
         raise ValueError(f"dataset version {version} != requested {selection.expected_dataset_version}")
-    index_rows = dataset.to_table(columns=["index"]).to_pylist()
-    candidate_indices = [
-        row_index for row_index, row in enumerate(index_rows)
-        if row["index"].get("scene") == selection.object_type
-        and str(row["index"].get("gesture", "")).zfill(2) == selection.action_id
-        and row["index"].get("is_generated") is False
-    ]
-    if not candidate_indices:
-        raise LookupError(f"no Lance rows match object={selection.object_type!r}, gesture={selection.action_id!r}")
-    rows = dataset.take(candidate_indices, columns=list(LANCE_COLUMNS)).to_pylist()
-    valid: list[tuple[int, ReferenceTrajectory]] = []
-    rejected: list[str] = []
-    for row_index, row in zip(candidate_indices, rows, strict=True):
-        try:
-            valid.append((row_index, _selected_trajectory_from_row(row, version, row_index=row_index, selection=selection)))
-        except ValueError as exc:
-            rejected.append(f"row {row_index}: {exc}")
-    if not valid:
-        detail = "; ".join(rejected[:4])
-        raise LookupError(
-            f"no fully padded Lance rows match object={selection.object_type!r}, gesture={selection.action_id!r}; {detail}"
+    resolved_pairs, candidates_by_pair = _discover_trajectory_candidates(dataset, selection)
+    assignments: list[_TrajectoryCandidate] = []
+    pair_count = len(resolved_pairs)
+    for env_id in range(num_envs):
+        pair = resolved_pairs[env_id % pair_count]
+        candidates = candidates_by_pair[pair]
+        pair_slot = env_id // pair_count
+        assignments.append(candidates[pair_slot % len(candidates)])
+
+    assigned_by_row = {candidate.row_index: candidate for candidate in assignments}
+    assigned_row_indices = sorted(assigned_by_row)
+    rows = dataset.take(assigned_row_indices, columns=list(LANCE_COLUMNS)).to_pylist()
+    if len(rows) != len(assigned_row_indices):
+        raise ValueError("Lance did not return every assigned trajectory row")
+    decoded = {
+        row_index: _selected_trajectory_from_row(
+            row,
+            version,
+            row_index=row_index,
+            selection=selection,
+            expected_pair=assigned_by_row[row_index].pair,
         )
-    valid.sort(key=lambda item: _selection_row_sort_key((item[0], rows[candidate_indices.index(item[0])])))
-    eligible = tuple(item[1] for item in valid)
-    return TrajectoryBatch(tuple(eligible[env_id % len(eligible)] for env_id in range(num_envs)))
+        for row_index, row in zip(assigned_row_indices, rows, strict=True)
+    }
+    return TrajectoryBatch(
+        tuple(decoded[candidate.row_index] for candidate in assignments),
+        resolved_pairs=resolved_pairs,
+        selection_mode=selection.mode,
+    )

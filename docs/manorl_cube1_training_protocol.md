@@ -2,17 +2,22 @@
 
 ## Scope
 
-This experiment trains from scratch from a versioned Lance selector. The user
-chooses one object and one gesture/action ID; the target discovers every fully
-pre/post-padded matching row, sorts by source trajectory identity, and assigns
-world `i` to candidate `i % candidate_count`. Assignments are fixed across
-normal episode resets and reported in metrics/Rerun metadata. The formal
-reference fixture remains `cube1_01_009`; it is not the training-data default.
-Isaac rl-games checkpoints are not inputs. The catalog can inspect assignments
-for every object/action present in Lance. Physical MJX execution currently has
-an object runtime for `cube1`; another selected object is reported with its
-actual assigned Lance identities and then rejected before simulation, rather
-than being simulated using cube geometry.
+This experiment trains from scratch from a versioned Lance selector. It accepts
+the legacy single `--object`/`--gesture` pair, an exact comma-separated `--pairs`
+list, or `--all-pairs`. Exact pairs are canonicalized and sorted; they never form
+a Cartesian product. Pair slots round-robin over the resolved pairs, while each
+pair independently round-robins its sorted source trajectories. Assignments are
+fixed across normal episode resets and reported in metrics and checkpoint
+sidecars. The formal reference fixture remains `cube1_01_009`; it is not the
+training-data default. Isaac rl-games checkpoints are not inputs.
+
+The s02 catalog has runtime support for all 13 discovered objects. Each object
+uses its pinned URDF, decomposed collision mesh, mass/inertia, geometry encoding,
+support points, and grasp mapping. Mixed batches route environments through one
+static MJX-Warp model per object and scatter outputs back to global environment
+order. Mixed-object training is headless: the viewer and Rerun recorder require
+one native MuJoCo model and therefore reject a batch containing multiple object
+types.
 
 This protocol starts from the completed Gym-to-MuJoCo aligned contract. Earlier
 MuJoCo runs used different policy, action, point-cloud, timing, reward, and PPO
@@ -155,6 +160,23 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
 To apply an opt-in time cap, add `--wall-clock-seconds <positive-seconds>`.
 The cap may stop the run before the fixed 8,000-update, 786,432,000-transition
 budget is complete.
+
+Select exact object/action pairs without creating unintended combinations:
+
+```bash
+JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.train_manorl_cube1 \
+  --output outputs/manorl/cube1_cube2_actions \
+  --pairs cube1:01,cube1:02,cube2:01 \
+  --num-envs 2048 --updates 8000
+```
+
+Select every eligible source pair in the pinned s02 Lance version with
+`--all-pairs`. Opt-in pair selectors clip the requested 250-frame context at
+source boundaries so every eligible pair remains trainable. The legacy
+`--object`/`--gesture` path retains strict full pre/post padding for compatibility.
+Suffix identities with more than the exact `object_action_sequence` fields and
+rows explicitly marked as generated are excluded.
 
 The validated Gym checkpoint's resolved run config uses a 4096-sample
 minibatch. ManoRL therefore defaults to the largest divisor shared by `4096`

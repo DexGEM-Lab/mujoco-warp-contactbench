@@ -2,7 +2,7 @@
   "schema": "manorl.curated-assets.v1",
   "source_repository": "sibling:manohand_reconstruction/model/all_assets",
   "source_commit": "ead79126589d1abf2362ea30b9d674d9e675a2f9",
-  "policy": "Only authoritative source URDFs, collision meshes, metadata, and the cube1 action-01 grasp mapping are curated. The compact binary STL is geometrically equivalent to the URDF-referenced OBJ and preserves the source 0.001 mesh scale.",
+  "policy": "Only explicitly registered object runtimes are accepted. Curated collision meshes preserve the source 0.001 mesh scale; each runtime requires digest-checked URDF, collision, and grasp assets and compiles its own static MJX model.",
   "files": [
     {
       "source_path": "Assets/HAND/s02/mano/Z_upNew/mano_hand.urdf",
