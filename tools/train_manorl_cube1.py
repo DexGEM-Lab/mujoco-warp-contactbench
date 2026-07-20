@@ -1873,6 +1873,30 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             ),
         )
         _update_last_checkpoint(output, checkpoint)
+        environment_result = {
+            "residual_enabled": physical.config.residual_enabled,
+            "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
+            "residual_action": asdict(physical.config.residual_action),
+            "max_deviation_distance": physical.config.max_deviation_distance,
+            "device_resident_controls": physical.config.device_resident_controls,
+            "capture_transition_diagnostics": physical.config.capture_transition_diagnostics,
+        }
+        learning_starts = runtime.agent.cfg.learning_starts
+        phase_profile = {
+            "environment": physical.phase_profile() if hasattr(physical, "phase_profile") else {},
+            "contact": physical.contact_profile() if hasattr(physical, "contact_profile") else {},
+            "training": getattr(runtime, "training_phase_profile", {}),
+        }
+        # The fresh full-pair evaluator must not overlap the 2,048-world
+        # training runtime in GPU memory. Preserve plain result metadata first,
+        # then remove every training-only owner before constructing it.
+        observer = None
+        recorder = None
+        del runtime
+        del physical
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         # Evaluate exactly what a user will later load. skrl preprocessor/module
         # state may differ in-process after PPO training, so a fresh native load is
         # the reproducibility boundary rather than an implementation detail.
@@ -1911,16 +1935,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "ppo_scale": PPO_REWARD_SCALE,
                 "isaacgym_ppo_scale": 0.5,
             },
-            "environment": {
-                "residual_enabled": physical.config.residual_enabled,
-                "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
-                "residual_action": asdict(physical.config.residual_action),
-                "max_deviation_distance": physical.config.max_deviation_distance,
-                "device_resident_controls": physical.config.device_resident_controls,
-                "capture_transition_diagnostics": physical.config.capture_transition_diagnostics,
-            },
+            "environment": environment_result,
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
-            "learning_starts": runtime.agent.cfg.learning_starts,
+            "learning_starts": learning_starts,
             "budget": {
                 **asdict(budget),
                 "planned_transitions": budget.transitions,
@@ -1931,11 +1948,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             },
             "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},
             "throughput": throughput,
-            "phase_profile": {
-                "environment": physical.phase_profile() if hasattr(physical, "phase_profile") else {},
-                "contact": physical.contact_profile() if hasattr(physical, "contact_profile") else {},
-                "training": getattr(runtime, "training_phase_profile", {}),
-            },
+            "phase_profile": phase_profile,
             "device": device,
             "baseline": asdict(zero_baseline),
             "untrained": asdict(untrained),
