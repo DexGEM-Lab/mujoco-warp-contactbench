@@ -9,9 +9,11 @@ array retains capacity-padding entries after the solved records.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 import time
 from typing import Any, Sequence
+import weakref
 
 import numpy as np
 from numpy.typing import NDArray
@@ -1111,6 +1113,20 @@ class MujocoManoEnvironment:
                 route_config,
             )
             self._object_routes[object_type] = (env_ids, route)
+        self._route_executor: ThreadPoolExecutor | None = None
+        self._route_executor_finalizer: weakref.finalize | None = None
+        if config.device == "gpu" and len(self._object_routes) > 1:
+            executor = ThreadPoolExecutor(
+                max_workers=len(self._object_routes),
+                thread_name_prefix="manorl-object-route",
+            )
+            self._route_executor = executor
+            self._route_executor_finalizer = weakref.finalize(
+                self,
+                executor.shutdown,
+                wait=False,
+                cancel_futures=True,
+            )
 
         first_route = next(iter(self._object_routes.values()))[1]
         self.jax = first_route.jax
@@ -1247,10 +1263,21 @@ class MujocoManoEnvironment:
         actions = np.asarray(raw_actions, dtype=np.float64)
         if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
             raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
-        routed_outputs = []
-        for env_ids, route in self._object_routes.values():
-            observation, rewards, resets, extras = route.step(actions[env_ids])
-            routed_outputs.append((env_ids, observation, rewards, resets, extras))
+        routes = list(self._object_routes.values())
+        if self._route_executor is None:
+            routed_outputs = [
+                (env_ids, *route.step(actions[env_ids]))
+                for env_ids, route in routes
+            ]
+        else:
+            futures = [
+                (env_ids, self._route_executor.submit(route.step, actions[env_ids]))
+                for env_ids, route in routes
+            ]
+            routed_outputs = [
+                (env_ids, *future.result())
+                for env_ids, future in futures
+            ]
         self._sync_heterogeneous_state()
         observations = _scatter_routed_value(
             [(env_ids, output["obs"]) for env_ids, output, _, _, _ in routed_outputs],
