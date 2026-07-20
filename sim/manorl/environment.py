@@ -26,6 +26,7 @@ from sim.manorl.abi import (
 )
 from sim.manorl.assets import (
     compile_model,
+    compile_unified_model,
     object_collision_vertices,
     object_runtime,
 )
@@ -56,6 +57,7 @@ _FINGERTIP_NAMES = ("thumb_ip", "index_dip", "middle_dip", "ring_dip", "pinky_di
 POINT_SAMPLING_NUMPY_PER_ENV = "numpy_per_env"
 POINT_SAMPLING_TORCH_CUDA_GLOBAL = "torch_cuda_global"
 POINT_SAMPLING_AUTO = "auto"
+UNIFIED_WARP_CONTACTS_PER_WORLD = 64
 _FINGERTIP_LOCAL_OFFSETS = np.asarray(
     (
         (-0.028633, -0.004191, 0.023667),
@@ -99,6 +101,7 @@ class EnvironmentConfig:
     device_resident_controls: bool = False
     capture_transition_diagnostics: bool = True
     profile_phases: bool = False
+    unified_object_batch: bool = False
 
     def __post_init__(self) -> None:
         if self.num_envs < 1:
@@ -143,6 +146,8 @@ class EnvironmentConfig:
             raise TypeError("capture_transition_diagnostics must be bool")
         if not isinstance(self.profile_phases, bool):
             raise TypeError("profile_phases must be bool")
+        if not isinstance(self.unified_object_batch, bool):
+            raise TypeError("unified_object_batch must be bool")
 
 
 @dataclass
@@ -396,6 +401,7 @@ def _decode_contact_forces(
     ngeom: int,
     keypoint_geom_ids: Sequence[int],
     object_geom_ids: set[int],
+    active_object_geom_ids: NDArray[np.int64] | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
     """Vectorized contact decoding with the loop implementation retained for tests."""
 
@@ -411,6 +417,14 @@ def _decode_contact_forces(
         raise ValueError("contact decoder received an invalid keypoint or object geom")
     if keypoint_geom_id_set & object_geom_ids:
         raise ValueError("contact decoder requires disjoint hand and object collision geoms")
+    if active_object_geom_ids is not None:
+        active_object_geom_ids = np.asarray(active_object_geom_ids, dtype=np.int64)
+        if active_object_geom_ids.shape != (batch,):
+            raise ValueError("active object geom ids must have one entry per MJX world")
+        if np.any(active_object_geom_ids < 0) or np.any(active_object_geom_ids >= ngeom):
+            raise ValueError("active object geom ids contain an invalid MuJoCo geom")
+        if not np.all(np.isin(active_object_geom_ids, np.asarray(sorted(object_geom_ids), dtype=np.int64))):
+            raise ValueError("active object geom ids must belong to the unified object geom set")
 
     if np.asarray(geom).ndim != 2 or np.asarray(geom).shape[0] < count or np.asarray(geom).shape[1] != 2:
         raise RuntimeError("contact decoder received an invalid geom-pair buffer shape")
@@ -471,9 +485,16 @@ def _decode_contact_forces(
         keypoint_lookup[np.asarray(keypoint_geom_ids, dtype=np.int64)] = np.arange(len(KEYPOINT_NAMES))
         first_keypoint = keypoint_lookup[active_geom[:, 0]]
         second_keypoint = keypoint_lookup[active_geom[:, 1]]
-        object_geom_array = np.asarray(sorted(object_geom_ids), dtype=np.int64)
-        first_hand = (first_keypoint >= 0) & (second_keypoint < 0) & np.isin(active_geom[:, 1], object_geom_array)
-        second_hand = (second_keypoint >= 0) & (first_keypoint < 0) & np.isin(active_geom[:, 0], object_geom_array)
+        if active_object_geom_ids is None:
+            object_geom_array = np.asarray(sorted(object_geom_ids), dtype=np.int64)
+            first_object = np.isin(active_geom[:, 1], object_geom_array)
+            second_object = np.isin(active_geom[:, 0], object_geom_array)
+        else:
+            world_object_geom = active_object_geom_ids[active_world]
+            first_object = active_geom[:, 1] == world_object_geom
+            second_object = active_geom[:, 0] == world_object_geom
+        first_hand = (first_keypoint >= 0) & (second_keypoint < 0) & first_object
+        second_hand = (second_keypoint >= 0) & (first_keypoint < 0) & second_object
         np.add.at(
             hand_object_forces,
             (active_world[first_hand], first_keypoint[first_hand]),
@@ -680,6 +701,11 @@ class MjxWarpPhysicalProducer:
             )
         if self.object_geom_ids & set(self.keypoint_geom_ids):
             raise ValueError("source hand and object collision geoms must be disjoint")
+        # Unified superset scenes replace these scalar fields with one active
+        # entry per world.  The default homogeneous path remains unchanged.
+        self.active_object_body_ids: NDArray[np.int64] | None = None
+        self.active_object_qvel_addresses: NDArray[np.int64] | None = None
+        self.active_object_geom_ids: NDArray[np.int64] | None = None
         self.reset_profile()
 
     def reset_profile(self) -> None:
@@ -847,6 +873,7 @@ class MjxWarpPhysicalProducer:
             ngeom=self.model.ngeom,
             keypoint_geom_ids=self.keypoint_geom_ids,
             object_geom_ids=self.object_geom_ids,
+            active_object_geom_ids=self.active_object_geom_ids,
         )
 
     def extract(
@@ -872,7 +899,24 @@ class MjxWarpPhysicalProducer:
         decode_started = timings.start("python_contact_decode", synchronize) if timings is not None else None
         geometry_forces, hand_object_forces, per_world_count = self.decode_contact_buffers(buffers)
         forces = geometry_forces[:, self.keypoint_geom_ids].copy()
-        object_force = geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
+        if self.active_object_geom_ids is None:
+            object_force = geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
+            object_position = state.xpos[:, self.object_body_id]
+            object_orientation = state.xquat[:, self.object_body_id]
+            object_linear_velocity = state.qvel[:, self.object_qvel_address : self.object_qvel_address + 3]
+        else:
+            world_ids = np.arange(len(state.qpos), dtype=np.int64)
+            object_force = geometry_forces[world_ids, self.active_object_geom_ids]
+            if self.active_object_body_ids is None or self.active_object_qvel_addresses is None:
+                raise RuntimeError("unified producer active object state is incomplete")
+            object_position = state.xpos[world_ids, self.active_object_body_ids]
+            object_orientation = state.xquat[world_ids, self.active_object_body_ids]
+            object_linear_velocity = np.stack(
+                [
+                    state.qvel[index, address : address + 3]
+                    for index, address in enumerate(self.active_object_qvel_addresses)
+                ]
+            )
         if timings is not None:
             timings.stop("python_contact_decode", decode_started, synchronize)
         return PhysicalSnapshot(
@@ -880,9 +924,9 @@ class MjxWarpPhysicalProducer:
             hand_position=state.xpos[:, self.keypoint_body_ids[0]].copy(),
             hand_orientation_xyzw=_normalized_xyzw(state.xquat[:, self.keypoint_body_ids[0]]),
             hand_keypoint_orientations_xyzw=state.keypoint_quats,
-            object_position=state.xpos[:, self.object_body_id].copy(),
-            object_orientation_xyzw=_normalized_xyzw(state.xquat[:, self.object_body_id]),
-            object_linear_velocity=state.qvel[:, self.object_qvel_address : self.object_qvel_address + 3].copy(),
+            object_position=object_position.copy(),
+            object_orientation_xyzw=_normalized_xyzw(object_orientation),
+            object_linear_velocity=object_linear_velocity.copy(),
             hand_keypoint_positions=state.keypoints,
             fingertip_positions=state.fingertips,
             hand_keypoint_contact_forces=forces,
@@ -891,6 +935,67 @@ class MjxWarpPhysicalProducer:
             hand_object_force_on_object_world_N=hand_object_forces,
             contact_count=per_world_count,
         )
+
+
+class UnifiedMjxWarpPhysicalProducer(MjxWarpPhysicalProducer):
+    """Extract source fields for one active object per unified MJX world."""
+
+    def __init__(
+        self, mujoco: Any, model: Any, *, object_types: Sequence[str]
+    ) -> None:
+        names = tuple(dict.fromkeys(object_types))
+        if not names:
+            raise ValueError("unified producer requires at least one object type")
+        super().__init__(mujoco, model, object_type=names[0])
+        self.object_types = names
+        self.object_body_ids_by_type = np.asarray(
+            [
+                mujoco.mj_name2id(
+                    model,
+                    mujoco.mjtObj.mjOBJ_BODY,
+                    object_runtime(name).body_name,
+                )
+                for name in names
+            ],
+            dtype=np.int64,
+        )
+        self.object_qvel_addresses_by_type = np.asarray(
+            [
+                model.jnt_dofadr[
+                    mujoco.mj_name2id(
+                        model,
+                        mujoco.mjtObj.mjOBJ_JOINT,
+                        object_runtime(name).free_joint_name,
+                    )
+                ]
+                for name in names
+            ],
+            dtype=np.int64,
+        )
+        self.object_geom_ids_by_type = np.asarray(
+            [
+                next(
+                    geom_id
+                    for geom_id in range(model.ngeom)
+                    if int(model.geom_bodyid[geom_id]) == int(body_id)
+                )
+                for body_id in self.object_body_ids_by_type
+            ],
+            dtype=np.int64,
+        )
+        if np.any(self.object_body_ids_by_type < 0) or np.any(
+            self.object_qvel_addresses_by_type < 0
+        ):
+            raise ValueError("unified object body or free-joint mapping is incomplete")
+        self.object_geom_ids = set(int(value) for value in self.object_geom_ids_by_type)
+
+    def set_active_objects(self, object_indices: NDArray[np.int64]) -> None:
+        indices = np.asarray(object_indices, dtype=np.int64)
+        if indices.ndim != 1 or np.any(indices < 0) or np.any(indices >= len(self.object_types)):
+            raise ValueError("active object indices must be a valid one-dimensional batch")
+        self.active_object_body_ids = self.object_body_ids_by_type[indices]
+        self.active_object_qvel_addresses = self.object_qvel_addresses_by_type[indices]
+        self.active_object_geom_ids = self.object_geom_ids_by_type[indices]
 
 
 def _scatter_routed_value(
@@ -976,6 +1081,11 @@ class MujocoManoEnvironment:
             raise ValueError("each trajectory identity must be object_action_sequence")
         object_types = {parts[0] for parts in identity_parts}
         if len(object_types) != 1:
+            if config.unified_object_batch:
+                self._initialize_unified_batch(
+                    trajectories, identity_parts, object_types, config
+                )
+                return
             self._initialize_heterogeneous_router(
                 trajectories, identity_parts, object_types, config
             )
@@ -1060,6 +1170,160 @@ class MujocoManoEnvironment:
             torch.rand(config.num_envs, device="cuda")
         self._static_template = _source_surface_template(42, self.object_type)
         self._dynamic_templates: NDArray[np.float64] | None = None
+        self.progress = np.zeros(config.num_envs, dtype=np.int64)
+        self.trajectory_steps = np.zeros(config.num_envs, dtype=np.int64)
+        self.cumulative_offset = np.zeros((config.num_envs, 3), dtype=np.float64)
+        self.cumulative_joint_offset = np.zeros((config.num_envs, 20), dtype=np.float64)
+        self.reset_mask = np.zeros(config.num_envs, dtype=bool)
+        self.episode_returns = np.zeros(config.num_envs, dtype=np.float64)
+        self.last_physical: PhysicalSnapshot | None = None
+        self.last_observation: ObservationResult | None = None
+        self.last_reward: RewardDiagnostics | None = None
+        self.last_termination: TerminationResult | None = None
+        self.last_controller_targets: NDArray[np.float64] | None = np.zeros((config.num_envs, 26), dtype=np.float64)
+        self.control_call = 0
+        self.last_transition: TransitionSnapshot | None = None
+        self._initializing_point_templates = True
+        self.reset()
+        self._initializing_point_templates = False
+        self.reset_phase_profile()
+
+    def _initialize_unified_batch(
+        self,
+        trajectories: Sequence[ReferenceTrajectory],
+        identity_parts: list[list[str]],
+        object_types: set[str],
+        config: EnvironmentConfig,
+    ) -> None:
+        """Build one fixed-topology MJX model for all mixed-object worlds."""
+
+        names = tuple(sorted(object_types))
+        for object_type in names:
+            object_runtime(object_type)
+        self.config = config
+        self.object_type = "unified"
+        self.object_types = tuple(parts[0] for parts in identity_parts)
+        self.action_ids = np.asarray([int(parts[1]) for parts in identity_parts], dtype=np.int64)
+        self._object_routes = {}
+        self._unified_object_batch = True
+        self._unified_object_types = names
+        type_to_index = {name: index for index, name in enumerate(names)}
+        self._unified_object_indices = np.asarray(
+            [type_to_index[name] for name in self.object_types], dtype=np.int64
+        )
+        try:
+            import jax
+            from mujoco import mjx
+        except ImportError as exc:
+            raise RuntimeError("jax and mujoco-mjx are required for the unified environment") from exc
+        jax_platform = "cuda" if config.device == "gpu" else "cpu"
+        devices = jax.devices(jax_platform)
+        if not devices:
+            raise RuntimeError(f"no JAX {jax_platform} device is available")
+        self.jax = jax
+        self.jp = jax.numpy
+        self.device = devices[0]
+        self.mjx = mjx
+        self.phase_timings = PhaseTimings(enabled=config.profile_phases)
+        self.mujoco, self.model = compile_unified_model(
+            config.servo, object_types=names
+        )
+        minimum_contact_capacity = (
+            UNIFIED_WARP_CONTACTS_PER_WORLD * config.num_envs + 64
+        )
+        if config.contact_capacity < minimum_contact_capacity:
+            raise ValueError(
+                f"contact_capacity {config.contact_capacity} is below {minimum_contact_capacity} "
+                f"required for {config.num_envs} unified worlds"
+            )
+        self.producer = UnifiedMjxWarpPhysicalProducer(
+            self.mujoco, self.model, object_types=names
+        )
+        self.producer.set_active_objects(self._unified_object_indices)
+        self._unified_qpos_addresses = np.asarray(
+            [
+                self.model.jnt_qposadr[
+                    self.mujoco.mj_name2id(
+                        self.model,
+                        self.mujoco.mjtObj.mjOBJ_JOINT,
+                        object_runtime(object_type).free_joint_name,
+                    )
+                ]
+                for object_type in names
+            ],
+            dtype=np.int64,
+        )
+        self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
+        if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
+            raise RuntimeError(f"MJX did not select Warp: {self.mjx_model.impl}")
+        self.joint_lower = self.model.jnt_range[:26, 0].astype(np.float64, copy=True)
+        self.joint_upper = self.model.jnt_range[:26, 1].astype(np.float64, copy=True)
+        self._step_fn = jax.jit(jax.vmap(lambda world: mjx.step(self.mjx_model, world)))
+        self._forward_fn = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
+        self._build_reference_tables()
+        self._reset_qpos = self._initial_qpos()
+        single_data = mjx.put_data(
+            self.model,
+            self._initial_host_data(0),
+            device=self.device,
+            impl="warp",
+            naconmax=config.contact_capacity,
+            njmax=config.constraint_capacity,
+        )
+        batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
+        self.data = jax.vmap(lambda _: single_data)(batch_index)
+        self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
+        self._reset_ctrl_device = jax.device_put(self.reference_q[:, 0], self.device)
+        self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
+        self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
+        self._controller_targets_fn = jax.jit(self._device_controller_targets)
+        self.expected_keypoint_ids = tuple(
+            _expected_keypoint_ids(parts[0], parts[1]) for parts in identity_parts
+        )
+        self.expected_contact_mask = np.zeros((config.num_envs, len(KEYPOINT_NAMES)), dtype=np.float64)
+        for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):
+            self.expected_contact_mask[env_id, keypoint_ids] = 1.0
+        self.expected_contact_weights = self.expected_contact_mask.copy()
+        self.active_joint_mask = _active_joint_mask(self.expected_contact_mask)
+        self.object_geometry = np.stack(
+            [
+                geometry_encoding(
+                    object_name=object_type,
+                    geometry_type=object_runtime(object_type).geometry_type,
+                    dimensions=np.ptp(object_collision_vertices(object_type), axis=0),
+                )
+                for object_type in self.object_types
+            ]
+        )
+        self.object_support_points = tuple(
+            object_collision_vertices(object_type).copy() for object_type in self.object_types
+        )
+        self.object_gravity_world_force = np.stack(
+            [
+                np.asarray(self.model.opt.gravity, dtype=np.float64)
+                * float(
+                    self.model.body_subtreemass[
+                        self.producer.object_body_ids_by_type[type_to_index[object_type]]
+                    ]
+                )
+                for object_type in self.object_types
+            ]
+        )
+        self.object_gravity_force = np.linalg.norm(self.object_gravity_world_force, axis=1)
+        self._static_templates = tuple(
+            _source_surface_template(42, object_type) for object_type in self.object_types
+        )
+        self._static_template = self._static_templates[0]
+        self._dynamic_templates = None
+        self._point_rngs = [
+            np.random.default_rng(config.point_seed + index) for index in range(config.num_envs)
+        ]
+        if config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
+            import torch
+
+            if not torch.cuda.is_available():
+                raise RuntimeError("torch_cuda_global point sampling requires CUDA")
+            torch.rand(config.num_envs, device="cuda")
         self.progress = np.zeros(config.num_envs, dtype=np.int64)
         self.trajectory_steps = np.zeros(config.num_envs, dtype=np.int64)
         self.cumulative_offset = np.zeros((config.num_envs, 3), dtype=np.float64)
@@ -1308,6 +1572,23 @@ class MujocoManoEnvironment:
     def _initial_qpos(self) -> NDArray[np.float64]:
         qpos = np.zeros((self.config.num_envs, self.model.nq), dtype=np.float64)
         qpos[:, :26] = self.reference_q[:, 0]
+        if getattr(self, "_unified_object_batch", False):
+            # Inactive bodies retain native gravity but start high enough that
+            # a bounded episode cannot reach the floor or hand workspace.
+            for object_index, address in enumerate(self._unified_qpos_addresses):
+                qpos[:, address + 3] = 1.0
+                qpos[:, address : address + 3] = (
+                    1000.0 + 10.0 * object_index,
+                    0.0,
+                    1000.0,
+                )
+            active_addresses = self._unified_qpos_addresses[self._unified_object_indices]
+            for env_id, address in enumerate(active_addresses):
+                qpos[env_id, address : address + 3] = self.reference_object_pos[env_id, 0]
+                qpos[env_id, address + 3 : address + 7] = xyzw_to_wxyz(
+                    self.reference_object_quat_xyzw[env_id, 0]
+                )
+            return qpos
         address = self.producer.object_qpos_address
         qpos[:, address : address + 3] = self.reference_object_pos[:, 0]
         qpos[:, address + 3 : address + 7] = xyzw_to_wxyz(self.reference_object_quat_xyzw[:, 0])
@@ -1319,6 +1600,7 @@ class MujocoManoEnvironment:
         data.qpos[:] = self._reset_qpos[env_id]
         data.qvel[:] = 0.0
         data.ctrl[:] = self.reference_q[env_id, 0]
+        data.qfrc_applied[:] = 0.0
         self.mujoco.mj_forward(self.model, data)
         return data
 
@@ -1328,18 +1610,39 @@ class MujocoManoEnvironment:
         if self._dynamic_templates is None:
             self._dynamic_templates = np.zeros((self.config.num_envs, POINT_COUNT, 3), dtype=np.float64)
         if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
-            if self._initializing_point_templates:
-                self._dynamic_templates[env_ids] = _source_surface_points(
-                    42, self.object_type
+            for object_type in (
+                sorted(set(self.object_types[index] for index in env_ids))
+                if getattr(self, "_unified_object_batch", False)
+                else (self.object_type,)
+            ):
+                selected = np.asarray(
+                    [
+                        int(index)
+                        for index in env_ids
+                        if not getattr(self, "_unified_object_batch", False)
+                        or self.object_types[int(index)] == object_type
+                    ],
+                    dtype=np.int64,
                 )
-                return
-            self._dynamic_templates[env_ids] = _torch_global_surface_templates(
-                len(env_ids), self.object_type
-            )
+                if len(selected) == 0:
+                    continue
+                if self._initializing_point_templates:
+                    self._dynamic_templates[selected] = np.stack(
+                        [_source_surface_points(42, object_type) for _ in selected]
+                    )
+                else:
+                    self._dynamic_templates[selected] = _torch_global_surface_templates(
+                        len(selected), object_type
+                    )
             return
         for env_id in env_ids:
+            object_type = (
+                self.object_types[int(env_id)]
+                if getattr(self, "_unified_object_batch", False)
+                else self.object_type
+            )
             self._dynamic_templates[env_id] = _dynamic_surface_template(
-                self._point_rngs[int(env_id)], self.object_type
+                self._point_rngs[int(env_id)], object_type
             )
 
     def reseed_point_templates(self, seed: int) -> None:
@@ -1403,6 +1706,17 @@ class MujocoManoEnvironment:
 
     def _point_template(self) -> PointCloudTemplate:
         if self.config.compatibility.point_template_mode == "static_seed_42":
+            if getattr(self, "_unified_object_batch", False):
+                templates = [
+                    self._static_templates[int(index)]
+                    for index in self._unified_object_indices
+                ]
+                return PointCloudTemplate(
+                    np.stack([template.local_points for template in templates]),
+                    mode="static_seed_42",
+                    normalized=True,
+                    scale=np.stack([template.scale for template in templates]),
+                )
             return self._static_template
         if self._dynamic_templates is None:
             raise RuntimeError("dynamic point templates were not initialized")

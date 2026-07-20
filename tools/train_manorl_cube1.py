@@ -48,6 +48,7 @@ from sim.manorl.trajectory import (
 )
 
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
+UNIFIED_WARP_CONTACTS_PER_WORLD = 64
 WARP_CONTACT_CAPACITY_MARGIN = 64
 DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
 REWARD_UPDATE_COMPONENTS = (
@@ -203,6 +204,7 @@ class TrainingBudget:
     device_resident_controls: bool = False
     profile_phases: bool = False
     capture_transition_diagnostics: bool | None = None
+    unified_object_batch: bool = False
 
     @property
     def transitions(self) -> int:
@@ -1663,6 +1665,11 @@ def _build_evaluation_runtime(
     if not 1 <= num_envs <= maximum:
         raise ValueError(f"evaluation num_envs must be within 1..{maximum}")
     trajectories = load_assigned_trajectory_batch(selection, num_envs=num_envs)
+    contacts_per_world = (
+        UNIFIED_WARP_CONTACTS_PER_WORLD
+        if budget.unified_object_batch
+        else WARP_BROADPHASE_CONTACTS_PER_WORLD
+    )
     physical = MujocoManoEnvironment(
         trajectories,
         EnvironmentConfig(
@@ -1670,7 +1677,8 @@ def _build_evaluation_runtime(
             device="gpu",
             residual_enabled=budget.residual_enabled,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
-            contact_capacity=max(128, WARP_BROADPHASE_CONTACTS_PER_WORLD * num_envs + WARP_CONTACT_CAPACITY_MARGIN),
+            contact_capacity=max(128, contacts_per_world * num_envs + WARP_CONTACT_CAPACITY_MARGIN),
+            unified_object_batch=budget.unified_object_batch,
         ),
     )
     ppo_config = _evaluation_ppo_config(training_config, num_envs=num_envs)
@@ -1836,9 +1844,14 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     np.random.seed(budget.seed)
     torch.cuda.manual_seed_all(budget.seed)
 
+    contacts_per_world = (
+        UNIFIED_WARP_CONTACTS_PER_WORLD
+        if budget.unified_object_batch
+        else WARP_BROADPHASE_CONTACTS_PER_WORLD
+    )
     contact_capacity = max(
         128,
-        WARP_BROADPHASE_CONTACTS_PER_WORLD * budget.num_envs + WARP_CONTACT_CAPACITY_MARGIN,
+        contacts_per_world * budget.num_envs + WARP_CONTACT_CAPACITY_MARGIN,
     )
     selection = TrajectorySelection(
         object_type=budget.object_type,
@@ -1873,6 +1886,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             device_resident_controls=budget.device_resident_controls,
             capture_transition_diagnostics=budget.resolved_capture_transition_diagnostics,
             profile_phases=budget.profile_phases,
+            unified_object_batch=budget.unified_object_batch,
         ),
     )
     ppo_config = ManoPPOConfig(
@@ -2237,6 +2251,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="synchronize CUDA/JAX at explicit rollout and PPO phase boundaries and emit timings",
     )
+    parser.add_argument(
+        "--unified-object-batch",
+        action="store_true",
+        help="use one fixed-topology MJX model for mixed-object batches",
+    )
     parser.add_argument("--wandb", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
@@ -2345,6 +2364,7 @@ def main(argv: list[str] | None = None) -> int:
             device_resident_controls=args.device_resident_controls,
             profile_phases=args.profile_phases,
             capture_transition_diagnostics=args.capture_transition_diagnostics,
+            unified_object_batch=args.unified_object_batch,
         ),
     )
     if args.console_format == "json":
