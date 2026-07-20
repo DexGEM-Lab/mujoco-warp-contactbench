@@ -159,8 +159,30 @@ def test_train_without_wall_clock_cap_completes_all_updates(monkeypatch: pytest.
     assert [update["episode_total_mean"] for update in updates] == [48.0, 96.0]
     assert [update["episode_total_min"] for update in updates] == [48.0, 96.0]
     assert [update["episode_total_max"] for update in updates] == [48.0, 96.0]
-    assert all(update["reward_mean"] == update["total"] == 1.0 for update in updates)
-    assert all(np.isclose(update["distance_x"], 0.1) and update["action_penalty"] == 0.0 for update in updates)
+    assert [update["distance_reward_x_instant/step"] for update in updates] == [0.1, 0.1]
+    assert [update["distance_reward_instant/step"] for update in updates] == pytest.approx([0.6, 0.6])
+    assert [update["episode_lengths/step"] for update in updates] == [48.0, 48.0]
+    assert [update["rewards/iter"] for update in updates] == [48.0, 96.0]
+    assert [update["rewards/step"] for update in updates] == [48.0, 96.0]
+    assert [update["rewards/time"] for update in updates] == [48.0, 96.0]
+    assert [update["episode_cumulative/distance_reward_x"] for update in updates] == pytest.approx([4.8, 4.8])
+    assert [update["episode_cumulative_min/distance_reward_x_min"] for update in updates] == pytest.approx([4.8, 4.8])
+    assert [update["episode_cumulative_max/distance_reward_x_max"] for update in updates] == pytest.approx([4.8, 4.8])
+    assert [update["episode_cumulative/contact_reward"] for update in updates] == pytest.approx([24.0, 24.0])
+    assert [update["episode_reward/cube1_01"] for update in updates] == [48.0, 96.0]
+    assert [update["episode_reward/object_cube1"] for update in updates] == [48.0, 96.0]
+    assert [update["distance_reward"] for update in updates] == pytest.approx([28.8, 28.8])
+    assert [update["distance_reward/cube1_01"] for update in updates] == pytest.approx([28.8, 28.8])
+    assert [update["distance_reward/object_cube1"] for update in updates] == pytest.approx([28.8, 28.8])
+    assert [update["episode_cumulative/distance_reward_x/cube1_01"] for update in updates] == pytest.approx([4.8, 4.8])
+    assert [update["episode_cumulative_min/distance_reward_x/cube1_01_min"] for update in updates] == pytest.approx([4.8, 4.8])
+    assert [update["episode_cumulative_max/distance_reward_x/cube1_01_max"] for update in updates] == pytest.approx([4.8, 4.8])
+    assert all(update["reward_mean"] == update["manorl/reward_mean"] == 1.0 for update in updates)
+    assert all(
+        np.isclose(update["manorl/distance_x_mean"], 0.1)
+        and update["manorl/action_penalty_mean"] == 0.0
+        for update in updates
+    )
     assert elapsed == 27.0
     assert clock.calls == 6
 
@@ -342,6 +364,15 @@ def test_train_omits_episode_return_mean_without_completed_episode(monkeypatch: 
     assert "episode_total_mean" not in updates[0]
     assert "episode_total_min" not in updates[0]
     assert "episode_total_max" not in updates[0]
+    assert "rewards/frame" not in updates[0]
+    assert "rewards/iter" not in updates[0]
+    assert "rewards/step" not in updates[0]
+    assert "rewards/time" not in updates[0]
+    assert "episode_reward" not in updates[0]
+    assert "distance_reward_x" not in updates[0]
+    assert "episode_reward/cube1_01" not in updates[0]
+    assert "episode_lengths/step" not in updates[0]
+    assert not any(name.startswith("episode_cumulative/") for name in updates[0])
 
 
 def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.MonkeyPatch) -> None:
