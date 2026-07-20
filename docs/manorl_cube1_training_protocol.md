@@ -128,11 +128,13 @@ configuration and update semantics remain unchanged. The initial training
 policy, value, optimizer, and normalizer state is written to an owned temporary
 native checkpoint, loaded for the untrained row, then loaded again immediately
 before training. That temporary checkpoint and sidecar are removed after the
-boundary completes, and the initial bounded runtime is released before
-training begins. The trained row is always evaluated from a fresh bounded
-runtime after loading the final native checkpoint. It is the executable artifact
-a user receives, and avoids reporting train-process-only normalizer or BatchNorm
-state. Native training resume requires the reward, PPO, and environment contract
+boundary completes. The bounded evaluator remains alive through training so
+JAX/Warp does not have to allocate and compile a second set of all-object
+evaluation routes. The large training runtime is released before the trained
+row, then the final native checkpoint is loaded into the bounded evaluator. The
+checkpoint is the executable artifact a user receives, and this load boundary
+avoids reporting train-process-only normalizer or BatchNorm state. Native
+training resume requires the reward, PPO, and environment contract
 IDs emitted by the current runtime. Inference checks the checkpoint schema,
 finite tensor state, provenance, and strict model key/shape compatibility;
 sidecar PointNet, sampling, action, and timing values are versioned metadata, not

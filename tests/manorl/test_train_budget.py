@@ -1107,14 +1107,13 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
     assert recorder_closed == [True]
 
 
-def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
+def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tool = _load_tool()
     constructions: list[tuple[str, int, int]] = []
     loads: list[tuple[str, str]] = []
     modes: list[tuple[str, str]] = []
-    released: list[str] = []
     initial_runtime_ref: list[weakref.ReferenceType[object]] = []
     training_runtime_ref: list[weakref.ReferenceType[object]] = []
     training_physical_ref: list[weakref.ReferenceType[object]] = []
@@ -1144,9 +1143,6 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
         return SimpleNamespace(num_envs=num_envs)
 
     def build_physical(_: object, config: object) -> Physical:
-        if len(constructions) == 2:
-            assert training_runtime_ref[0]() is None
-            assert training_physical_ref[0]() is None
         physical = Physical(config)
         if not constructions:
             training_physical_ref.append(weakref.ref(physical))
@@ -1154,16 +1150,12 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
 
     def build_runtime(physical: Physical, config: object) -> Runtime:
         name = "training" if not constructions else f"evaluation-{len(constructions)}"
-        if name == "evaluation-2":
-            assert released == ["evaluation-1"]
-            assert initial_runtime_ref[0]() is None
         constructions.append((name, physical.config.num_envs, config.minibatch_size))
         runtime = Runtime(name, config)
         if name == "training":
             training_runtime_ref.append(weakref.ref(runtime))
         if name == "evaluation-1":
             initial_runtime_ref.append(weakref.ref(runtime))
-            weakref.finalize(runtime, released.append, name)
         return runtime
 
     def assignments(trajectory_batch: SimpleNamespace) -> list[dict[str, object]]:
@@ -1173,8 +1165,16 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
         return path
 
     def evaluate(runtime: Runtime, mode: str) -> object:
+        if mode == "trained":
+            assert runtime is initial_runtime_ref[0]()
+            assert training_runtime_ref[0]() is None
+            assert training_physical_ref[0]() is None
         modes.append((runtime.name, mode))
         return tool.EvaluationResult(mode, 1, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, False, False, True, [1.0], [0.0])
+
+    def train(*_: object, **__: object) -> tuple[list[object], int, float]:
+        assert initial_runtime_ref[0]() is not None
+        return [], 0, 0.0
 
     monkeypatch.setattr(tool, "_assert_cuda_runtime", lambda: None)
     monkeypatch.setattr(tool, "load_assigned_trajectory_batch", trajectories)
@@ -1186,7 +1186,7 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     monkeypatch.setattr(tool, "_update_last_checkpoint", lambda output, checkpoint: output / "last.pt")
     monkeypatch.setattr(tool, "load_skrl_checkpoint", lambda agent, path: loads.append((agent.name, path.name)) or path)
     monkeypatch.setattr(tool, "_evaluate", evaluate)
-    monkeypatch.setattr(tool, "_train", lambda *args, **kwargs: ([], 0, 0.0))
+    monkeypatch.setattr(tool, "_train", train)
 
     result = tool.run(
         tmp_path / "run",
@@ -1199,11 +1199,11 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
         ),
     )
 
-    assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048), ("evaluation-2", 128, 2048)]
-    assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-2", "trained")]
+    assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048)]
+    assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-1", "trained")]
     assert loads[0][0] == "evaluation-1" and loads[1][0] == "training"
     assert loads[0][1] == loads[1][1] and loads[0][1].startswith(".initial-")
-    assert loads[2] == ("evaluation-2", "run.pt")
+    assert loads[2] == ("evaluation-1", "run.pt")
     assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
     assert result["budget"]["evaluation_num_envs"] == 128
     assert result["learning_starts"] == 0
