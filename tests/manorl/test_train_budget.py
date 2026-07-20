@@ -1116,6 +1116,8 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     modes: list[tuple[str, str]] = []
     released: list[str] = []
     initial_runtime_ref: list[weakref.ReferenceType[object]] = []
+    training_runtime_ref: list[weakref.ReferenceType[object]] = []
+    training_physical_ref: list[weakref.ReferenceType[object]] = []
 
     class Runtime:
         def __init__(self, name: str, config: object) -> None:
@@ -1142,7 +1144,13 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
         return SimpleNamespace(num_envs=num_envs)
 
     def build_physical(_: object, config: object) -> Physical:
-        return Physical(config)
+        if len(constructions) == 2:
+            assert training_runtime_ref[0]() is None
+            assert training_physical_ref[0]() is None
+        physical = Physical(config)
+        if not constructions:
+            training_physical_ref.append(weakref.ref(physical))
+        return physical
 
     def build_runtime(physical: Physical, config: object) -> Runtime:
         name = "training" if not constructions else f"evaluation-{len(constructions)}"
@@ -1151,6 +1159,8 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
             assert initial_runtime_ref[0]() is None
         constructions.append((name, physical.config.num_envs, config.minibatch_size))
         runtime = Runtime(name, config)
+        if name == "training":
+            training_runtime_ref.append(weakref.ref(runtime))
         if name == "evaluation-1":
             initial_runtime_ref.append(weakref.ref(runtime))
             weakref.finalize(runtime, released.append, name)
