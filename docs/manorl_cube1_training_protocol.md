@@ -28,15 +28,16 @@ current native checkpoint contracts. The file-by-file implementation map is in
   reference-only: the fixture lacks pair-filtered hand-object forces and cannot
   establish reward equality.
 - Training uses source-aligned reward contract
-  `source_aligned_hand_object_contact_1x_threshold_2n_v1`: expected hand-object
+  `source_aligned_hand_object_contact_1x_threshold_0p2n_v1`: expected hand-object
   contacts receive weighted proportional credit only when their pair-filtered
-  world-force norm is strictly greater than `2.0 N`. The direct contact
+  world-force norm is strictly greater than `0.2 N`. Observation contact
+  directions use the same strict `0.2 N` gate. The direct contact
   contribution is `1.0x` its unscaled contact quality, whose maximum remains
   `0.4`. Action and one-shot deviation-failure penalties
   default to zero while deviation still terminates at the target training
   threshold `0.10 m`.
 - PPO applies the source `0.5x` shaper under
-  `source_aligned_hand_object_contact_1x_threshold_2n_shaper_0p5_v1`.
+  `source_aligned_hand_object_contact_1x_threshold_0p2n_shaper_0p5_v1`.
   Native loads, including
   inference-only visualization, reject sidecars that do not declare the current
   environment/control contract.
@@ -329,7 +330,8 @@ completed update and environment-transition progress. Payloads are prepared as
 temporary files and published with replacements. `last.pt.json` is installed
 once before the first payload and remains fixed compatibility metadata, so later
 updates replace only complete `last.pt` payloads. Every checkpoint sidecar
-records the source-aligned environment/control contract and 0.5x PPO reward boundary. The post-training
+records the source-aligned environment/control contract, aligned `0.2 N`
+observation/reward gates, and 0.5x PPO reward boundary. The post-training
 viewer consumes the same actual `MujocoManoEnvironment` path and reports
-the contact threshold plus the PPO reward scale in
+both contact thresholds plus the PPO reward scale in
 Rerun metadata.

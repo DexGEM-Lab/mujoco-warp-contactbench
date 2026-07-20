@@ -63,7 +63,7 @@ OBSERVATION_SLICES: Final[dict[str, slice]] = {
 RAW_OBSERVATION_DIM: Final[int] = 476
 POINT_COUNT: Final[int] = 64
 POLICY_OBSERVATION_CLIP: Final[float] = 5.0
-CONTACT_FORCE_THRESHOLD: Final[float] = 2.0
+CONTACT_FORCE_THRESHOLD: Final[float] = 0.2
 
 
 @dataclass(frozen=True)

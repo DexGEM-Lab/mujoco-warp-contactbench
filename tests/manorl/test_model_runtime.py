@@ -169,6 +169,7 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
 
     from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
     from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
+    from sim.manorl.observations import CONTACT_FORCE_THRESHOLD
     from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
     from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 
@@ -177,6 +178,12 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
     assert runtime.checkpoint_metadata()["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert runtime.checkpoint_metadata()["ppo_reward_scale"] == PPO_REWARD_SCALE
     assert runtime.checkpoint_metadata()["environment_contract"] == ENVIRONMENT_CONTRACT_ID
+    assert (
+        runtime.checkpoint_metadata()["environment"]["observation_contact_threshold_N"]
+        == runtime.checkpoint_metadata()["environment"]["reward"]["contact_force_threshold"]
+        == CONTACT_FORCE_THRESHOLD
+        == 0.2
+    )
     assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.005, 0.005, 0.005)
     assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.05, 0.05, 0.05)
     assert runtime.checkpoint_metadata()["environment"]["max_deviation_distance"] == 1_000_000.0

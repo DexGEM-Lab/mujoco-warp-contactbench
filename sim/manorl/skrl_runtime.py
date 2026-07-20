@@ -23,6 +23,7 @@ from sim.manorl.environment import PhaseTimings
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
 from sim.manorl.normalization import PointCloudAwareRunningStandardScaler, SourceRunningStandardScaler
+from sim.manorl.observations import CONTACT_FORCE_THRESHOLD
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_CONTRACT_ID
 from sim.manorl.rl_games_ppo import RlGamesAdaptiveLR, RlGamesPPO
 
@@ -286,6 +287,7 @@ class ManoSkrlRuntime:
                 "residual_action": asdict(self.gymnasium_env.environment.config.residual_action),
                 "compatibility": asdict(self.gymnasium_env.environment.config.compatibility),
                 "point_sampling_backend": self.gymnasium_env.environment.config.point_sampling_backend,
+                "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
                 "reward": asdict(self.gymnasium_env.environment.config.reward_config),
                 "max_deviation_distance": self.gymnasium_env.environment.config.max_deviation_distance,
             },
