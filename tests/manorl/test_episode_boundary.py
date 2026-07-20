@@ -3,10 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from pathlib import Path
 
-import gymnasium as gym
 import numpy as np
-import torch
-from gymnasium.vector.utils import batch_space
 
 from sim.manorl.abi import (
     TERMINATION_REASON_DEVIATION,
@@ -15,11 +12,6 @@ from sim.manorl.abi import (
     TerminationResult,
     check_termination,
 )
-from sim.manorl.skrl_runtime import ResettableGymnasiumWrapper
-from sim.manorl.rerun_recorder import ManoRerunRecorder
-from sim.manorl.view_environment import _CheckpointPolicyStepper
-from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv, OBSERVATION_DIM
-from tools.train_manorl_cube1 import TrainingBudget, _train
 
 
 def test_termination_reason_masks_are_position_only_and_failure_wins() -> None:
@@ -44,6 +36,8 @@ def test_termination_reason_masks_are_position_only_and_failure_wins() -> None:
 
 
 def test_gym_adapter_marks_success_and_failure_terminated_without_truncation() -> None:
+    from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv, OBSERVATION_DIM
+
     termination = TerminationResult(
         reset=np.array([True, True]),
         deviation_reset=np.array([False, True]),
@@ -79,49 +73,54 @@ def test_gym_adapter_marks_success_and_failure_terminated_without_truncation() -
     np.testing.assert_array_equal(info["deviation_reset_mask"], [False, True])
 
 
-class _IndexedResetVectorEnv(gym.vector.VectorEnv):
-    metadata = {"autoreset_mode": gym.vector.AutoresetMode.NEXT_STEP}
-
-    def __init__(self) -> None:
-        self.num_envs = 3
-        self.single_observation_space = gym.spaces.Box(
-            low=-10_000.0, high=10_000.0, shape=(1,), dtype=np.float32
-        )
-        self.single_action_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(1,), dtype=np.float32
-        )
-        self.observation_space = batch_space(self.single_observation_space, self.num_envs)
-        self.action_space = batch_space(self.single_action_space, self.num_envs)
-        self.device = "cpu"
-        self.values = np.array([[10.0], [20.0], [30.0]], dtype=np.float32)
-        self.reset_calls: list[tuple[int | None, list[int]]] = []
-
-    def reset(self, *, seed=None, options=None):
-        ids = (
-            np.arange(self.num_envs, dtype=np.int64)
-            if options is None
-            else np.asarray(options["env_ids"], dtype=np.int64)
-        )
-        self.reset_calls.append((seed, ids.tolist()))
-        if options is None:
-            self.values[:, 0] = np.array([100.0, 200.0, 300.0], dtype=np.float32)
-        else:
-            self.values[ids, 0] = 1_000.0 + ids
-        return self.values.copy(), {"env_ids": ids.copy()}
-
-    def step(self, actions):
-        del actions
-        return (
-            self.values.copy(),
-            np.zeros(self.num_envs, dtype=np.float32),
-            np.zeros(self.num_envs, dtype=bool),
-            np.zeros(self.num_envs, dtype=bool),
-            {},
-        )
-
-
 def test_indexed_wrapper_reset_bypasses_cache_and_preserves_seed() -> None:
-    environment = _IndexedResetVectorEnv()
+    import gymnasium as gym
+    import torch
+    from gymnasium.vector.utils import batch_space
+
+    from sim.manorl.skrl_runtime import ResettableGymnasiumWrapper
+
+    class IndexedResetVectorEnv(gym.vector.VectorEnv):
+        metadata = {"autoreset_mode": gym.vector.AutoresetMode.NEXT_STEP}
+
+        def __init__(self) -> None:
+            self.num_envs = 3
+            self.single_observation_space = gym.spaces.Box(
+                low=-10_000.0, high=10_000.0, shape=(1,), dtype=np.float32
+            )
+            self.single_action_space = gym.spaces.Box(
+                low=-1.0, high=1.0, shape=(1,), dtype=np.float32
+            )
+            self.observation_space = batch_space(self.single_observation_space, self.num_envs)
+            self.action_space = batch_space(self.single_action_space, self.num_envs)
+            self.device = "cpu"
+            self.values = np.array([[10.0], [20.0], [30.0]], dtype=np.float32)
+            self.reset_calls: list[tuple[int | None, list[int]]] = []
+
+        def reset(self, *, seed=None, options=None):
+            ids = (
+                np.arange(self.num_envs, dtype=np.int64)
+                if options is None
+                else np.asarray(options["env_ids"], dtype=np.int64)
+            )
+            self.reset_calls.append((seed, ids.tolist()))
+            if options is None:
+                self.values[:, 0] = np.array([100.0, 200.0, 300.0], dtype=np.float32)
+            else:
+                self.values[ids, 0] = 1_000.0 + ids
+            return self.values.copy(), {"env_ids": ids.copy()}
+
+        def step(self, actions):
+            del actions
+            return (
+                self.values.copy(),
+                np.zeros(self.num_envs, dtype=np.float32),
+                np.zeros(self.num_envs, dtype=bool),
+                np.zeros(self.num_envs, dtype=bool),
+                {},
+            )
+
+    environment = IndexedResetVectorEnv()
     wrapper = ResettableGymnasiumWrapper(environment)
     wrapper._seed = 123
 
@@ -143,6 +142,10 @@ def test_indexed_wrapper_reset_bypasses_cache_and_preserves_seed() -> None:
 
 
 def test_checkpoint_viewer_resets_terminal_rows_before_second_action() -> None:
+    import torch
+
+    from sim.manorl.view_environment import _CheckpointPolicyStepper
+
     class WrappedEnv:
         def __init__(self) -> None:
             self.calls = 0
@@ -189,7 +192,7 @@ class _BoundaryAgent:
     device = "cpu"
 
     def __init__(self) -> None:
-        self.observations_seen: list[torch.Tensor] = []
+        self.observations_seen: list[object] = []
         self.recorded_timesteps: list[int] = []
         self.post_interaction_timesteps: list[int] = []
         self.training = True
@@ -197,7 +200,9 @@ class _BoundaryAgent:
     def enable_training_mode(self, enabled: bool) -> None:
         self.training = enabled
 
-    def act(self, observations: torch.Tensor, *_args, **_kwargs):
+    def act(self, observations, *_args, **_kwargs):
+        import torch
+
         self.observations_seen.append(observations.detach().clone())
         return torch.zeros_like(observations), None
 
@@ -216,6 +221,8 @@ class _BoundaryEnv:
         self.reset_calls: list[list[int] | None] = []
 
     def reset(self, *, options=None):
+        import torch
+
         ids = None if options is None else np.asarray(options["env_ids"], dtype=np.int64).tolist()
         self.reset_calls.append(ids)
         values = (
@@ -225,7 +232,9 @@ class _BoundaryEnv:
         )
         return values, {}
 
-    def step(self, actions: torch.Tensor):
+    def step(self, actions):
+        import torch
+
         self.step_calls += 1
         batch = actions.shape[0]
         reward_values = {
@@ -260,6 +269,10 @@ class _BoundaryEnv:
 
 
 def test_training_resets_done_world_before_next_action_without_extra_transition() -> None:
+    import torch
+
+    from tools.train_manorl_cube1 import TrainingBudget, _train
+
     environment = SimpleNamespace(
         config=SimpleNamespace(num_envs=2),
         last_reward=None,
@@ -292,6 +305,10 @@ def test_training_resets_done_world_before_next_action_without_extra_transition(
 
 
 def test_training_forces_terminal_rerun_sample_even_off_stride() -> None:
+    import torch
+
+    from tools.train_manorl_cube1 import TrainingBudget, _train
+
     environment = SimpleNamespace(
         config=SimpleNamespace(num_envs=2),
         last_reward=None,
@@ -322,7 +339,9 @@ def test_training_forces_terminal_rerun_sample_even_off_stride() -> None:
 
 def _bare_rerun_recorder(
     termination: TerminationResult, *, archive: bool
-) -> tuple[ManoRerunRecorder, list[object], list[list[int]]]:
+) -> tuple[object, list[object], list[list[int]]]:
+    from sim.manorl.rerun_recorder import ManoRerunRecorder
+
     snapshot = SimpleNamespace(
         termination=termination,
         episode_return=np.array([7.0], dtype=np.float64),
@@ -350,7 +369,7 @@ def _bare_rerun_recorder(
     return recorder, events, queued
 
 
-def test_rerun_publishes_terminal_snapshot_and_never_promotes_failure() -> None:
+def test_rerun_publishes_terminal_snapshot_and_preserves_threshold_archive_semantics() -> None:
     success = TerminationResult(
         reset=np.array([True]),
         deviation_reset=np.array([False]),
@@ -374,5 +393,11 @@ def test_rerun_publishes_terminal_snapshot_and_never_promotes_failure() -> None:
     )
     failure_recorder, failure_events, failure_queued = _bare_rerun_recorder(failure, archive=True)
     failure_recorder.record_transition()
-    assert failure_queued == [[]]
-    assert failure_events == ["capture", "record", ("publish", None), "start"]
+    assert failure_queued == [[0]]
+    assert failure_events == [
+        "capture",
+        "record",
+        ("archive", 7.0),
+        ("publish", Path("high.rrd")),
+        "start",
+    ]

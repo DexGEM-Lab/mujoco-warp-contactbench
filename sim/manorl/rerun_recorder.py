@@ -541,8 +541,8 @@ class ManoRerunRecorder:
         self._capture_replay_action(snapshot)
         if self.archive_dir is not None and self.archive_threshold is not None:
             terminal_returns = np.asarray(snapshot.episode_return, dtype=np.float64)
-            success_mask = np.asarray(snapshot.termination.success, dtype=bool)
-            high_envs = np.flatnonzero(success_mask & (terminal_returns >= self.archive_threshold))
+            terminal_mask = np.asarray(snapshot.termination.reset, dtype=bool)
+            high_envs = np.flatnonzero(terminal_mask & (terminal_returns >= self.archive_threshold))
             self._queue_high_return_replays(snapshot, high_envs)
             if high_envs.size and self._pending_high_env_id is None:
                 self._pending_high_env_id = int(high_envs[0])
@@ -562,11 +562,11 @@ class ManoRerunRecorder:
             # it before any indexed reset can replace physical/return state.
             completed_return = float(snapshot.episode_return[self.env_id])
             self._episode_return = completed_return
-            archive_path = (
-                self._high_return_archive_path(completed_return)
-                if bool(snapshot.termination.success[self.env_id])
-                else None
-            )
+            # Archive-following is a stream policy: after a high-return success,
+            # the configured following episodes are archived regardless of their
+            # own success/failure reason. The terminal-threshold replay/archive
+            # trigger remains source-compatible as well.
+            archive_path = self._high_return_archive_path(completed_return)
             self._publish_episode(archive_path=archive_path)
             self.episode_id += 1
             self._start_episode()
