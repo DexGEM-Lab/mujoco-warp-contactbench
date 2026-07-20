@@ -592,10 +592,16 @@ def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64
     if not isinstance(aliases, list) or not all(isinstance(alias, str) for alias in aliases):
         raise ValueError(f"invalid source grasp aliases for {object_type!r}/{action_id!r}")
     alias_map = {
+        "palm": "palm",
+        "thumb1": "thumb_cmc",
         "thumb2": "thumb_mcp", "thumb3": "thumb_ip",
+        "index1": "index_mcp",
         "index2": "index_pip", "index3": "index_dip",
+        "middle1": "middle_mcp",
         "middle2": "middle_pip", "middle3": "middle_dip",
+        "ring1": "ring_mcp",
         "ring2": "ring_pip", "ring3": "ring_dip",
+        "pinky1": "pinky_mcp",
         "pinky2": "pinky_pip", "pinky3": "pinky_dip",
     }
     names = [alias_map.get(alias) for alias in aliases]

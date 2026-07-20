@@ -138,6 +138,20 @@ def test_all_pair_selector_discovers_s02_pairs_without_suffix_rows() -> None:
 
 
 @pytest.mark.integration
+def test_all_s02_pairs_have_valid_runtime_grasp_mappings() -> None:
+    available, reason = _dataset_available()
+    if not available:
+        pytest.skip(reason)
+    from sim.manorl.environment import _expected_keypoint_ids
+
+    batch = load_assigned_trajectory_batch(TrajectorySelection(selector="all"), num_envs=77)
+    for pair in batch.resolved_pairs:
+        keypoint_ids = _expected_keypoint_ids(pair.object_type, pair.action_id)
+        assert keypoint_ids.ndim == 1
+        assert len(keypoint_ids) >= 2
+
+
+@pytest.mark.integration
 def test_explicit_pair_selector_does_not_form_cartesian_product() -> None:
     available, reason = _dataset_available()
     if not available:
