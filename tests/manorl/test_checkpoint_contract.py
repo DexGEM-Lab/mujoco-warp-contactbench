@@ -64,7 +64,7 @@ else:
     raise AssertionError("missing reward contract was accepted")
 
 incompatible = dict(metadata)
-incompatible["reward_contract"] = "legacy_source_contact_v1"
+incompatible["reward_contract"] = "source_aligned_hand_object_contact_1x_threshold_2n_v1"
 sidecar(checkpoint).write_text(json.dumps(incompatible), encoding="utf-8")
 try:
     load_skrl_checkpoint(agent, checkpoint)
@@ -73,13 +73,25 @@ except CheckpointFormatError as exc:
 else:
     raise AssertionError("mismatched reward contract was accepted")
 
+incompatible_ppo = dict(metadata)
+incompatible_ppo["ppo_reward_contract"] = (
+    "source_aligned_hand_object_contact_1x_threshold_2n_shaper_0p5_v1"
+)
+sidecar(checkpoint).write_text(json.dumps(incompatible_ppo), encoding="utf-8")
+try:
+    load_skrl_checkpoint(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "PPO reward contract" in str(exc) and "required" in str(exc)
+else:
+    raise AssertionError("mismatched PPO reward contract was accepted")
+
 legacy = dict(metadata)
 legacy["format"] = "manorl.skrl.ppo.v1"
 sidecar(checkpoint).write_text(json.dumps(legacy), encoding="utf-8")
 try:
     load_skrl_checkpoint(agent, checkpoint)
 except CheckpointFormatError as exc:
-    assert "legacy 0.5x-reward checkpoints" in str(exc)
+    assert "native ManoRL skrl v2 checkpoint" in str(exc)
 else:
     raise AssertionError("legacy reward-scale checkpoint was accepted")
 
@@ -113,7 +125,10 @@ else:
     raise AssertionError("inference accepted a missing environment contract")
 
 mismatched_environment = dict(metadata)
-mismatched_environment["environment_contract"] = "target_residual_reduced_thumb_authority_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v2"
+mismatched_environment["environment_contract"] = (
+    "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_"
+    "deviation_0p10_v1"
+)
 sidecar(checkpoint).write_text(json.dumps(mismatched_environment), encoding="utf-8")
 agent.loaded = None
 try:
@@ -130,6 +145,7 @@ except CheckpointFormatError as exc:
     assert agent.loaded is None
 else:
     raise AssertionError("inference accepted a mismatched environment contract")
+
 '''
     result = subprocess.run(
         [sys.executable, "-c", script, str(tmp_path)],

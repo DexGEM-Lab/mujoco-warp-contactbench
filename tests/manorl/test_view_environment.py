@@ -321,7 +321,7 @@ def test_viewer_reports_missing_reset_completed_rerun_artifact(capsys: pytest.Ca
             return None
 
     assert _close_rerun_recorder(FakeRecorder()) is None
-    assert capsys.readouterr().out == "No reset-complete Rerun episode was published.\n"
+    assert capsys.readouterr().out == "No terminal-complete Rerun episode was published.\n"
 
 
 @pytest.mark.parametrize(
@@ -462,16 +462,91 @@ def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
         "load_skrl_checkpoint_for_inference",
         lambda agent, path: captured.update(path=path),
     )
+    monkeypatch.setattr(
+        checkpoint_module,
+        "checkpoint_runtime_metadata",
+        lambda path: {"runtime_config": {"model": {"use_film": False}}},
+    )
 
     stepper = _build_checkpoint_stepper(environment, checkpoint)
     assert captured["adapter_environment"] is environment
     assert captured["path"] == checkpoint
     assert captured["config"].rollouts == 1
     assert captured["config"].minibatch_size == 2
+    assert captured["config"].use_film is False
     assert captured["training_enabled"] is False
     assert captured["eval"] is True
     assert captured["reset"] is True
     assert stepper is not None
+
+
+def test_inference_config_defaults_to_film_when_sidecar_has_no_model_variant(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from sim.manorl import checkpoint as checkpoint_module
+    from sim.manorl.view_environment import _inference_ppo_config
+    from sim.manorl.view_environment import _checkpoint_use_film
+
+    assert _inference_ppo_config(2).use_film is True
+    assert _inference_ppo_config(2, use_film=False).use_film is False
+    checkpoint = tmp_path / "policy.pt"
+    checkpoint.touch()
+    monkeypatch.setattr(
+        checkpoint_module,
+        "checkpoint_runtime_metadata",
+        lambda path: {"runtime_config": {}},
+    )
+    assert _checkpoint_use_film(checkpoint) is True
+
+
+def test_stochastic_record_stepper_uses_sidecar_model_variant(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import torch
+
+    record_tool = _load_tool("record_manorl_rerun")
+    from sim.manorl import checkpoint as checkpoint_module
+    from sim.manorl import gymnasium_env, skrl_runtime
+
+    captured: dict[str, object] = {}
+
+    class FakeAdapter:
+        def __init__(self, environment: object) -> None:
+            captured["environment"] = environment
+
+    class FakeAgent:
+        def enable_training_mode(self, enabled: bool) -> None:
+            captured["training"] = enabled
+
+    class FakeWrappedEnv:
+        def reset(self):
+            return torch.zeros((2, 1)), {}
+
+    class FakeRuntime:
+        def __init__(self, adapter: object, config: object) -> None:
+            captured["adapter"] = adapter
+            captured["config"] = config
+            self.agent = FakeAgent()
+            self.env = FakeWrappedEnv()
+
+    checkpoint = tmp_path / "policy.pt"
+    checkpoint.touch()
+    monkeypatch.setattr(gymnasium_env, "ManoGymnasiumVectorEnv", FakeAdapter)
+    monkeypatch.setattr(skrl_runtime, "ManoSkrlRuntime", FakeRuntime)
+    monkeypatch.setattr(record_tool, "_checkpoint_use_film", lambda path: False)
+    monkeypatch.setattr(
+        checkpoint_module,
+        "load_skrl_checkpoint_for_inference",
+        lambda agent, path: captured.update(path=path),
+    )
+
+    environment = type("Environment", (), {"config": type("Config", (), {"num_envs": 2})()})()
+    stepper = record_tool._StochasticCheckpointStepper(environment, checkpoint)
+
+    assert stepper is not None
+    assert captured["config"].use_film is False
+    assert captured["path"] == checkpoint
+    assert captured["training"] is True
 
 
 @pytest.mark.parametrize("tile_envs", [1, 2])
@@ -543,6 +618,11 @@ def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytes
             use_residual=False,
             checkpoint=Path("policy.pt"),
         )
+
+
+def test_removed_policy_contract_cli_is_rejected() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--policy-contract", "auto"])
 
 
 def test_viewer_requires_a_graphical_session(monkeypatch: pytest.MonkeyPatch) -> None:

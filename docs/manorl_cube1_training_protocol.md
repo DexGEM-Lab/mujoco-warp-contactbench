@@ -2,17 +2,29 @@
 
 ## Scope
 
-This experiment trains from scratch from a versioned Lance selector. The user
-chooses one object and one gesture/action ID; the target discovers every fully
-pre/post-padded matching row, sorts by source trajectory identity, and assigns
-world `i` to candidate `i % candidate_count`. Assignments are fixed across
-normal episode resets and reported in metrics/Rerun metadata. The formal
-reference fixture remains `cube1_01_009`; it is not the training-data default.
-Isaac rl-games checkpoints are not inputs. The catalog can inspect assignments
-for every object/action present in Lance. Physical MJX execution currently has
-an object runtime for `cube1`; another selected object is reported with its
-actual assigned Lance identities and then rejected before simulation, rather
-than being simulated using cube geometry.
+This experiment trains from scratch from a versioned Lance selector. It accepts
+the legacy single `--object`/`--gesture` pair, an exact comma-separated `--pairs`
+list, or `--all-pairs`. Exact pairs are canonicalized and sorted; they never form
+a Cartesian product. Pair slots round-robin over the resolved pairs, while each
+pair independently round-robins its sorted source trajectories. Assignments are
+fixed across normal episode resets and reported in metrics and checkpoint
+sidecars. The formal reference fixture remains `cube1_01_009`; it is not the
+training-data default. Isaac rl-games checkpoints are not inputs.
+
+The s02 catalog has runtime support for all 13 discovered objects. Each object
+uses its pinned URDF, decomposed collision mesh, mass/inertia, geometry encoding,
+support points, and grasp mapping. Mixed batches route environments through one
+static MJX-Warp model per object and scatter outputs back to global environment
+order. Mixed-object training is headless: the viewer and Rerun recorder require
+one native MuJoCo model and therefore reject a batch containing multiple object
+types.
+
+This protocol starts from the completed Gym-to-MuJoCo aligned contract. Earlier
+MuJoCo runs used different policy, action, point-cloud, timing, reward, and PPO
+semantics; their poor returns and checkpoints are not comparable training
+baselines. New experiments use only the current source-aligned defaults and
+current native checkpoint contracts. The file-by-file implementation map is in
+`docs/manorl_phase5_abi_inventory.md` under "Implementation summary".
 
 ## Preconditions
 
@@ -20,17 +32,18 @@ than being simulated using cube geometry.
   observation, and termination evidence. Its source reward fields are
   reference-only: the fixture lacks pair-filtered hand-object forces and cannot
   establish reward equality.
-- Training uses target reward contract
-  `target_hand_object_contact_no_action_deviation_penalty_v2`: expected
-  hand-object contacts receive weighted proportional credit only when their
-  pair-filtered world-force norm is strictly greater than `1.0 N`. The unchanged
-  observation contact encoding uses its separate `2.0 N` threshold. Action and
-  one-shot deviation-failure penalties default to zero while deviation still
-  terminates at the target training threshold `0.10 m`.
-- PPO optimizes that environment reward at raw `1.0x` under
-  `target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`;
-  no skrl reward shaper is configured. This intentionally diverges from the
-  sibling IsaacGym setup's fixed `0.5x` shaper. Native loads, including
+- Training uses source-aligned reward contract
+  `source_aligned_hand_object_contact_1x_threshold_0p2n_v1`: expected hand-object
+  contacts receive weighted proportional credit only when their pair-filtered
+  world-force norm is strictly greater than `0.2 N`. Observation contact
+  directions use the same strict `0.2 N` gate. The direct contact
+  contribution is `1.0x` its unscaled contact quality, whose maximum remains
+  `0.4`. Action and one-shot deviation-failure penalties
+  default to zero while deviation still terminates at the target training
+  threshold `0.10 m`.
+- PPO applies the source `0.5x` shaper under
+  `source_aligned_hand_object_contact_1x_threshold_0p2n_shaper_0p5_v1`.
+  Native loads, including
   inference-only visualization, reject sidecars that do not declare the current
   environment/control contract.
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
@@ -39,29 +52,48 @@ than being simulated using cube geometry.
 - Training defaults to `--use_residual true` and `--terminal true`. Pass
   `--use_residual false` only for source-reference diagnostics, or
   `--terminal false` for formal source-horizon termination. Target training uses
-  the current-source early phase of 100 steps and the target `0.10 m` deviation threshold.
-  Its normalized `[-1, 1]^26` action Box maps XYZ residual actions with scale
-  `0.003 m`, gamma `0.9`, and cap `+/-0.03 m`; rotation and joint mappings retain
-  their historical target values.
+  the validated early phase of 50 steps, movement pre-padding 250, and the
+  `0.10 m` deviation threshold. Its normalized `[-1, 1]^26` action Box maps XYZ
+  residual actions with per-step scale `0.005 m`, gamma `0.9`, and cap
+  `+/-0.05 m`. The first two thumb scales/caps are `0.10/0.12` and `1.0/1.2`.
+  FiLM and dynamic PointNet are enabled by default; GPU sampling uses the
+  global CUDA Torch RNG.
+- PPO records the terminal transition and its terminal observation. Before the
+  next policy action, only completed vector worlds are reset and their reset
+  `s0` rows replace the terminal rows; reset work is not stored as a PPO
+  transition. Trajectory completion and position-deviation failure both set
+  `terminated=True`, while `truncated` remains false and reason code/masks keep
+  success (`1`) separate from deviation failure (`2`).
 
 ## Fixed Budget
 
-Use 64 vector worlds, 48 rollout steps, and 64 PPO updates. This is 196,608
-environment transitions. By default training completes all 64 updates; it
-stops earlier only on non-finite values, CUDA failure, or a semantic/reset
-invariant failure. An explicit `--wall-clock-seconds` safety cap may stop the
-run before all requested updates complete.
-The 64-world Warp broadphase uses `naconmax=2048`: Warp requires at least 31
-contacts per world in this scene, and the remaining 64 slots are margin.
+The production defaults use 2,048 vector worlds, 48 rollout steps, and 8,000
+PPO updates. This is 786,432,000 environment transitions. A numbered native
+checkpoint is written every 200 completed updates by default. Training stops
+earlier only on non-finite values, CUDA failure, or a semantic/reset invariant
+failure. An explicit `--wall-clock-seconds` safety cap may stop the run before
+all requested updates complete. Smaller world/update counts remain available
+as explicit smoke or diagnostic overrides; they are not convergence claims.
+The Warp broadphase capacity is derived from the active world count (at least
+31 contacts per world plus the configured margin).
 
 The fast protocol uses the source model initialization: source-compatible
 orthogonal actor/critic MLP initialization, untouched PointNet/condition/FiLM
 initialization, and trainable `log_std=-0.99`. It does not inject a target-only
 action bias or alter the source initial exploration scale.
 
-PPO defers its first update until source contact onset step 250. Earlier
-rollouts are pure tracking phases; optimizing them changes shared actor/critic
-features before the contact reward can discriminate residual corrections.
+PPO updates begin after the first completed rollout (`learning_starts=0`), as
+in the source rl-games contract. The contact onset frame is an environment
+phase, not a training-start gate.
+
+The policy update uses the resolved Gym run's legacy adaptive-KL contract.
+Each rollout stores the Gaussian policy mean and standard deviation. Every
+completed minibatch computes the source rl-games exact Gaussian KL against
+those stored parameters, updates the stored reference for that minibatch, and
+immediately adjusts learning rate by factor `1.5` within `[1e-6, 1e-2]` around
+the `0.016` threshold. The target does not use skrl's sampled-log-ratio KL to
+stop a learning epoch early. Exact and approximate KL are both telemetry, but
+only exact KL controls the scheduler.
 
 ## Evaluation
 
@@ -81,65 +113,106 @@ and does not reset before that zero-reference call count. Completing all 791 cal
 reported as a stretch result, not silently assumed. The reference baseline is a
 controller diagnostic, not a learned-policy comparator.
 
-Evaluation uses `min(--num-envs, 128)` worlds by default; pass
-`--evaluation-num-envs <count>` to override that bounded count only within
-`1..min(--num-envs, 128)`. This prevents a requested evaluation from recreating
-a second full-size training runtime. The zero, untrained, and trained rows all
-use the same evaluation trajectory prefix.
+Evaluation uses one world for a single selected pair, matching the Gym
+reference and avoiding a worst-of-many early-reset statistic. For multi-pair
+training, the trainer raises the requested `--evaluation-num-envs` count until
+every resolved pair has at least one deterministic evaluation world. The final
+count remains limited to `1..min(--num-envs, 128)`, preventing evaluation from
+silently reporting only the first sorted pair or recreating a second full-size
+training runtime. The zero, untrained, and trained rows all use the same fixed
+evaluation assignments. Aggregate rows include every assignment; W&B also
+receives object and object/action rows for direct comparison.
 Their evaluation-only PPO configuration selects the largest divisor shared by
 the training minibatch and evaluation rollout batch, while the training PPO
 configuration and update semantics remain unchanged. The initial training
 policy, value, optimizer, and normalizer state is written to an owned temporary
 native checkpoint, loaded for the untrained row, then loaded again immediately
 before training. That temporary checkpoint and sidecar are removed after the
-boundary completes, and the initial bounded runtime is released before
-training begins. The trained row is always evaluated from a fresh bounded
-runtime after loading the final native checkpoint. It is the executable artifact
-a user receives, and avoids reporting train-process-only normalizer or BatchNorm
-state. Native checkpoint sidecars must declare both
-`reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2` and
-`ppo_reward_contract: target_hand_object_contact_no_action_deviation_penalty_v2_raw_ppo_reward_1x_v2`, and
-`environment_contract: target_residual_xyz_0p003_gamma_0p9_cap_0p03_deviation_0p10_v1`.
-Missing or mismatched environment contracts fail before `agent.load` for both
-resume and inference, so a visualization cannot silently run under different
-control or terminal dynamics.
+boundary completes. The bounded evaluator remains alive through training so
+JAX/Warp does not have to allocate and compile a second set of all-object
+evaluation routes. The large training runtime is released before the trained
+row, then the final native checkpoint is loaded into the bounded evaluator. The
+checkpoint is the executable artifact a user receives, and this load boundary
+avoids reporting train-process-only normalizer or BatchNorm state. Native
+training resume requires the reward, PPO, and environment contract
+IDs emitted by the current runtime. Inference checks the checkpoint schema,
+finite tensor state, provenance, and strict model key/shape compatibility;
+sidecar PointNet, sampling, action, and timing values are versioned metadata, not
+permanent equality constraints on future runtime versions.
 
 ## Launch
 
-Start a scratch run with the source-compatible model initialization and no
-checkpoint input:
+Start the production run with the source-compatible model initialization and
+no checkpoint input. The object, gesture, world count, update budget,
+checkpoint cadence, evaluation count, FiLM, residual, terminal, and W&B values
+below are also the CLI defaults:
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
-  --output outputs/manorl/cube1_03_scratch_run \
+  --output outputs/manorl/cube1_01_default \
   --object cube1 \
-  --gesture 03 \
-  --num-envs 64 \
-  --updates 64
+  --gesture 01 \
+  --num-envs 2048 \
+  --updates 8000 \
+  --checkpoint-interval-updates 200 \
+  --evaluation-num-envs 1 \
+  --film true \
+  --use_residual true \
+  --terminal true \
+  --wandb true
 ```
 
 To apply an opt-in time cap, add `--wall-clock-seconds <positive-seconds>`.
-The cap may stop the run before the fixed 64-update, 196,608-transition budget
-is complete.
+The cap may stop the run before the fixed 8,000-update, 786,432,000-transition
+budget is complete.
 
-PPO uses a 1024-sample minibatch by default. `--minibatch-size 4096` selects
-the IsaacGym-sized minibatch for the 4096-world Server2 run; the selected value
-must divide the 48-rollout vector batch and is recorded in both metrics and
-native checkpoint runtime configuration.
+Select exact object/action pairs without creating unintended combinations:
 
-For the 2,500-update Server2 run, add `--checkpoint-interval-updates 100`.
-After every 100 completed PPO updates, the output-prefix namespace receives
-`<output>/checkpoint-000100.pt` and `<output>/checkpoint-000100.pt.json`.
+```bash
+JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.train_manorl_cube1 \
+  --output outputs/manorl/cube1_cube2_actions \
+  --pairs cube1:01,cube1:02,cube2:01 \
+  --num-envs 2048 --updates 8000
+```
+
+Select every eligible source pair in the pinned s02 Lance version with
+`--all-pairs`. Opt-in pair selectors clip the requested 250-frame context at
+source boundaries so every eligible pair remains trainable. The legacy
+`--object`/`--gesture` path retains strict full pre/post padding for compatibility.
+Suffix identities with more than the exact `object_action_sequence` fields and
+rows explicitly marked as generated are excluded.
+
+The trainer defaults to the repository's pinned absolute Lance path. When a
+machine exposes the same dataset version at a different mount point, pass
+`--dataset-path /absolute/path/to/npy_s02_v3.lance`. The resolved path is
+recorded in W&B, metrics, and checkpoint runtime configuration; dataset version
+and row validation remain unchanged.
+
+The validated Gym checkpoint's resolved run config uses a 4096-sample
+minibatch. ManoRL therefore defaults to the largest divisor shared by `4096`
+and the configured 48-step rollout batch. The production 2,048-world default
+therefore uses `4096` (24 minibatches per rollout, three epochs). For smaller
+explicit diagnostic world counts, omission resolves to the largest valid
+divisor; `--minibatch-size` remains an explicit override. Any selected value
+must divide the rollout batch and is recorded in metrics and native checkpoint
+runtime configuration.
+
+The default checkpoint cadence is 200 updates. After every 200 completed PPO
+updates, the output-prefix namespace receives
+`<output>/checkpoint-000200.pt` and `<output>/checkpoint-000200.pt.json`.
+Pass `--checkpoint-interval-updates <count>` to select another positive cadence.
 `<output>/last.pt` atomically follows the most recent completed periodic or
 final checkpoint. Its fixed sidecar records native compatibility only; exact
 progress remains in the numbered and final checkpoint sidecars. The legacy final
 `<output>.pt` checkpoint remains separate.
 
-### Optional W&B Tracking
+### W&B Tracking
 
-W&B tracking is disabled unless `--wandb true` is passed. Provision the exact
-training interpreter from the locked W&B release before enabling it:
+W&B tracking is enabled by default. Pass `--wandb false` for an explicit local
+or diagnostic run that must not initialize W&B. Provision the exact training
+interpreter from the locked W&B release before using the default:
 
 ```bash
 /home/jay/anaconda3/envs/manorl_mujoco/bin/uv pip install \
@@ -159,20 +232,39 @@ output prefix plus the selected object and gesture; its default tags are
   --wandb-tags manorl,mujoco,skrl
 ```
 
-The training process initializes one W&B run after resolving trajectory
-assignments and devices. It creates the output parent before initialization and
+The training process initializes one W&B run for the one shared policy after
+resolving trajectory assignments and devices. It does not create one run per
+object or action. It creates the output parent before initialization and
 passes it as W&B's local directory, so SDK state is stored at
 `<output-parent>/wandb` under ignored training outputs rather than the repository
 root. It records the complete serializable training/PPO/raw reward configuration,
-logs each PPO update against monotonic environment transitions with scalar means
+logs each PPO update against its completed PPO update count as the primary W&B axis, with monotonic environment transitions retained as the `transitions` secondary metric. It records scalar means
 for `total`, `distance_x`, `distance_y`, `distance_z`, `rotation`,
 `action_penalty`, `contact`, `object_stability`, `survival`, and
 `deviation_penalty`, alongside `reward_mean`. It also records
-`completed_episode_count` and, only when one or more episodes complete in that
-update, `episode_return_mean`. It also records instantaneous and cumulative
-environment transitions per second for each PPO update, plus final throughput.
-Each completed vector step emits one `manorl.completed_episode_returns.v1` JSON
-record with parallel `env_ids` and exact `returns` arrays to
+`completed_episode_count`, `success_count`, `failure_count` and, only when one
+or more episodes complete in that update, `episode_return_mean`. It also records
+instantaneous and cumulative environment transitions per second for each PPO
+update, plus final throughput. Initial and final evaluations use the
+corresponding completed PPO update count as their W&B step.
+
+Global keys retain the existing names. In the same update log call, Gym-aligned
+grouped keys add an `object_<object>` suffix for object aggregates and an
+`<object>_<action>` suffix for exact pairs, for example
+`contact_reward_instant/object_cube1` and
+`contact_reward_instant/cube1_01`. The hierarchy covers rollout reward means,
+instant reward components, attempts/successes/failures/success rate, completed
+episode reward and components, and zero/untrained/trained evaluation results.
+Episode-only grouped values are emitted only when that group completes an
+episode; attempt counters and success rates remain present at zero otherwise.
+Every PPO update also records exact KL mean/min/max, approximate KL mean,
+learning-rate start/end/min/max, scheduler increase/decrease counts, and the
+number of completed minibatches. These metrics are emitted even when no episode
+completes, so early scheduler failures cannot be hidden by episode logging.
+Each completed vector step emits one `manorl.completed_episode_returns.v2` JSON
+record with parallel `env_ids`, object types, zero-padded action IDs, trajectory
+identities, exact returns, reward-component totals, termination reason codes,
+and success/failure env-id arrays to
 `<output>.episodes.jsonl`; active records first accumulate in
 `<output>.episodes.jsonl.partial`, which is preserved after an interruption and
 atomically published only after successful training. This JSONL is the complete
@@ -185,8 +277,8 @@ current update, bounded by one rollout batch (196,608 values at 4096 worlds and
 48 rollout steps), then discarded. W&B artifacts include that episode JSONL
 alongside the checkpoint and
 sidecar, metrics JSON, evaluation trace, and a completed Rerun recording when
-one exists. These target-native aggregates are semantically related to IsaacGym
-reward telemetry, but their logger key names are not an identity contract. It
+one exists. Grouped logger names intentionally follow the Isaac Gym hierarchy;
+the underlying MuJoCo reward contract remains independently versioned. It
 writes the zero/untrained/trained evaluation summaries and final acceptance
 values, preserving `evaluation/policy/*` as the untrained and trained policy
 comparison time series for existing dashboards, then uploads those artifacts.
@@ -205,7 +297,7 @@ once every four vector control calls:
 
 The default recording is env 0 only. It keeps one stable artifact:
 `cube1_03_scratch_run.rrd`. The recorder writes the active episode privately,
-then atomically replaces that path when the next delayed reset is applied; it
+then atomically replaces that path after writing the terminal snapshot; it
 does not retain an episode archive. Recording never opens a second GUI; open
 the latest completed recording from another terminal with:
 
@@ -283,7 +375,8 @@ completed update and environment-transition progress. Payloads are prepared as
 temporary files and published with replacements. `last.pt.json` is installed
 once before the first payload and remains fixed compatibility metadata, so later
 updates replace only complete `last.pt` payloads. Every checkpoint sidecar
-records the target environment/control contract and raw-1.0x PPO reward boundaries. The post-training
+records the source-aligned environment/control contract, aligned `0.2 N`
+observation/reward gates, and 0.5x PPO reward boundary. The post-training
 viewer consumes the same actual `MujocoManoEnvironment` path and reports
-separate observation/reward contact thresholds plus the raw PPO reward scale in
+both contact thresholds plus the PPO reward scale in
 Rerun metadata.

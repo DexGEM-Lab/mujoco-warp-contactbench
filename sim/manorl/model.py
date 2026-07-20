@@ -1,8 +1,6 @@
 """Source-authoritative ManoRL PointNet actor-critic for skrl.
 
-The Gym baseline is the standard PointNet + MLP policy.  FiLM remains
-available as an explicit opt-in for experiments, but is deliberately not part
-of the default model so new checkpoints match the baseline architecture.
+The production model is the validated PointNet + FiLM policy.
 """
 
 from __future__ import annotations
@@ -22,7 +20,6 @@ POINT_FEATURE_DIM = 64
 CONDITION_DIM = 62
 CONDITION_EMBED_DIM = 32
 BASE_FEATURE_DIM = 286
-PROCESSED_FEATURE_DIM = 348
 HIDDEN_UNITS = (512, 512, 256, 128)
 LOG_STD_LIMITS = (-10.0, 2.0)
 
@@ -30,14 +27,16 @@ LOG_STD_LIMITS = (-10.0, 2.0)
 class PointNetEncoder(nn.Module):
     """Source PointNet: shared 3→64→128→256 MLP, max pool, 256→64 MLP."""
 
-    def __init__(self) -> None:
+    def __init__(self, device: str | torch.device = "cpu") -> None:
         super().__init__()
         self.point_mlp = nn.Sequential(
             nn.Linear(3, 64), nn.LayerNorm(64), nn.ReLU(),
             nn.Linear(64, 128), nn.LayerNorm(128), nn.ReLU(),
             nn.Linear(128, 256), nn.LayerNorm(256), nn.ReLU(),
-        )
-        self.global_mlp = nn.Sequential(nn.Linear(256, POINT_FEATURE_DIM), nn.LayerNorm(POINT_FEATURE_DIM), nn.ReLU())
+        ).to(device)
+        self.global_mlp = nn.Sequential(
+            nn.Linear(256, POINT_FEATURE_DIM), nn.LayerNorm(POINT_FEATURE_DIM), nn.ReLU()
+        ).to(device)
 
     def forward(self, points: torch.Tensor) -> torch.Tensor:
         if points.ndim != 3 or points.shape[1:] != (POINT_COUNT, 3):
@@ -49,9 +48,9 @@ class PointNetEncoder(nn.Module):
 class FiLMLayer(nn.Module):
     """Source identity-centered feature modulation namespace."""
 
-    def __init__(self, feature_dim: int) -> None:
+    def __init__(self, feature_dim: int, device: str | torch.device = "cpu") -> None:
         super().__init__()
-        self.film_generator = nn.Linear(CONDITION_EMBED_DIM, 2 * feature_dim)
+        self.film_generator = nn.Linear(CONDITION_EMBED_DIM, 2 * feature_dim).to(device)
         nn.init.normal_(self.film_generator.weight, mean=0.0, std=0.001)
         nn.init.zeros_(self.film_generator.bias)
 
@@ -63,11 +62,16 @@ class FiLMLayer(nn.Module):
 class FiLMBlock(nn.Module):
     """Source identity-centered FiLM: Linear → (1 + gamma) * x + beta → ELU."""
 
-    def __init__(self, input_dim: int, output_dim: int) -> None:
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        device: str | torch.device = "cpu",
+    ) -> None:
         super().__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
-        self.film = FiLMLayer(output_dim)
-        self.activation = nn.ELU()
+        self.linear = nn.Linear(input_dim, output_dim).to(device)
+        self.film = FiLMLayer(output_dim, device)
+        self.activation = nn.ELU().to(device)
 
     def forward(self, features: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
         return self.activation(self.film(self.linear(features), condition))
@@ -78,7 +82,7 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
 
     State-dict names intentionally describe the target architecture rather than
     masquerading as rl-games checkpoint keys. ``state_dict_manifest`` supplies
-    the explicit namespace/shape contract needed by future conversion work.
+    the explicit namespace/shape contract used by the Gym checkpoint converter.
     """
 
     def __init__(
@@ -87,46 +91,56 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         state_space,
         action_space,
         device: str | torch.device = "cpu",
-        *,
-        use_film: bool = False,
+        use_film: bool = True,
     ) -> None:
         Model.__init__(self, observation_space=observation_space, state_space=state_space, action_space=action_space, device=device)
         if self.num_observations != OBSERVATION_DIM or self.num_actions != ACTION_DIM:
             raise ValueError("ManoActorCritic requires the fixed 476D / 26D ABI")
         GaussianMixin.__init__(
-            self, clip_actions=True, clip_mean_actions=False, clip_log_std=True,
+            self, clip_actions=False, clip_mean_actions=False, clip_log_std=True,
             min_log_std=LOG_STD_LIMITS[0], max_log_std=LOG_STD_LIMITS[1], reduction="sum", role="policy",
         )
         DeterministicMixin.__init__(self, clip_actions=False, role="value")
         self.use_film = bool(use_film)
-        self.pointnet = PointNetEncoder()
+        self.pointnet = PointNetEncoder(device)
+        self.condition_encoder = nn.Sequential(
+            nn.Linear(CONDITION_DIM, CONDITION_EMBED_DIM), nn.ReLU()
+        ).to(device)
         if self.use_film:
-            self.condition_encoder = nn.Sequential(nn.Linear(CONDITION_DIM, CONDITION_EMBED_DIM), nn.ReLU())
             self.actor_backbone = nn.ModuleList(
                 [
-                    FiLMBlock(BASE_FEATURE_DIM, HIDDEN_UNITS[0]),
-                    nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]),
+                    FiLMBlock(BASE_FEATURE_DIM, HIDDEN_UNITS[0], device),
+                    nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]).to(device),
                     nn.ELU(),
-                    nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]),
+                    nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]).to(device),
                     nn.ELU(),
-                    nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]),
+                    nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]).to(device),
                     nn.ELU(),
                 ]
             )
-            critic_input_dim = BASE_FEATURE_DIM + CONDITION_EMBED_DIM
+            actor_input_dim = BASE_FEATURE_DIM
         else:
-            # This is the Gym baseline: explicit action/object condition
-            # features are retained in the processed observation instead of
-            # being compressed into a FiLM embedding.
-            self.actor_backbone = nn.Sequential(
-                nn.Linear(PROCESSED_FEATURE_DIM, HIDDEN_UNITS[0]), nn.ELU(),
-                nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]), nn.ELU(),
-                nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]), nn.ELU(),
-                nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]), nn.ELU(),
+            # Single-task mode keeps the source condition features as ordinary
+            # inputs while removing FiLM modulation. This preserves action and
+            # geometry information for an eventual multi-task run.
+            actor_input_dim = BASE_FEATURE_DIM + CONDITION_EMBED_DIM
+            self.actor_backbone = nn.ModuleList(
+                [
+                    nn.Linear(actor_input_dim, HIDDEN_UNITS[0]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]).to(device),
+                    nn.ELU(),
+                    nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]).to(device),
+                    nn.ELU(),
+                ]
             )
-            critic_input_dim = PROCESSED_FEATURE_DIM
-        self.actor_head = nn.Linear(HIDDEN_UNITS[-1], ACTION_DIM)
-        self.log_std = nn.Parameter(torch.full((ACTION_DIM,), -0.99, dtype=torch.float32))
+        critic_input_dim = BASE_FEATURE_DIM + CONDITION_EMBED_DIM
+        self.actor_head = nn.Linear(HIDDEN_UNITS[-1], ACTION_DIM).to(device)
+        self.log_std = nn.Parameter(
+            torch.full((ACTION_DIM,), -0.99, dtype=torch.float32, device=device)
+        )
         self.critic = nn.Sequential(
             nn.Linear(critic_input_dim, HIDDEN_UNITS[0]), nn.ELU(),
             nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]), nn.ELU(),
@@ -134,6 +148,7 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
             nn.Linear(HIDDEN_UNITS[2], HIDDEN_UNITS[3]), nn.ELU(),
             nn.Linear(HIDDEN_UNITS[3], 1),
         )
+        self.critic = self.critic.to(device)
         self._initialize_source_weights()
 
     @staticmethod
@@ -144,11 +159,10 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
     def _initialize_source_weights(self) -> None:
         """Match source init: orthogonal MLPs, untouched PointNet/condition/FiLM."""
         skipped = set(self.pointnet.modules())
-        if self.use_film:
-            skipped.update(self.condition_encoder.modules())
-            for block in self.actor_backbone:
-                if isinstance(block, FiLMBlock):
-                    skipped.update(block.film.modules())
+        skipped.update(self.condition_encoder.modules())
+        for block in self.actor_backbone:
+            if isinstance(block, FiLMBlock):
+                skipped.update(block.film.modules())
         for module in self.modules():
             if isinstance(module, nn.Linear) and module not in skipped:
                 nn.init.orthogonal_(module.weight, gain=1.0)
@@ -175,7 +189,7 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         condition_input = torch.cat([
             self._slice(observations, "action_types"), self._slice(observations, "object_geometry")
         ], dim=-1)
-        condition = self.condition_encoder(condition_input) if self.use_film else condition_input
+        condition = self.condition_encoder(condition_input)
         if base.shape[1] != BASE_FEATURE_DIM:
             raise RuntimeError(f"source feature split changed: expected {BASE_FEATURE_DIM}, got {base.shape[1]}")
         return base, condition
@@ -189,7 +203,9 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
                 for layer in self.actor_backbone[1:]:
                     features = layer(features)
             else:
-                features = self.actor_backbone(torch.cat([base, condition], dim=-1))
+                features = torch.cat([base, condition], dim=-1)
+                for layer in self.actor_backbone:
+                    features = layer(features)
             mean = self.actor_head(features)
             return mean, {"log_std": self.log_std.expand_as(mean)}
         if role == "value":
@@ -208,13 +224,12 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         return {name: tuple(parameter.shape) for name, parameter in self.state_dict().items()}
 
     @classmethod
-    def expected_state_dict_manifest(cls, *, use_film: bool = False) -> dict[str, tuple[int, ...]]:
+    def expected_state_dict_manifest(cls) -> dict[str, tuple[int, ...]]:
         # Uses canonical spaces only to make the expected namespace executable.
         import gymnasium as gym
         model = cls(
             gym.spaces.Box(-5.0, 5.0, shape=(OBSERVATION_DIM,), dtype=float),
             None,
             gym.spaces.Box(-1.0, 1.0, shape=(ACTION_DIM,), dtype=float),
-            use_film=use_film,
         )
         return model.state_dict_manifest()

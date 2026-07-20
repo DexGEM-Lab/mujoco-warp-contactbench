@@ -63,7 +63,7 @@ OBSERVATION_SLICES: Final[dict[str, slice]] = {
 RAW_OBSERVATION_DIM: Final[int] = 476
 POINT_COUNT: Final[int] = 64
 POLICY_OBSERVATION_CLIP: Final[float] = 5.0
-CONTACT_FORCE_THRESHOLD: Final[float] = 2.0
+CONTACT_FORCE_THRESHOLD: Final[float] = 0.2
 
 
 @dataclass(frozen=True)
@@ -90,6 +90,11 @@ CHECKPOINT_SIDECAR_COMPATIBILITY: Final = ObservationCompatibility(
     name="checkpoint_sidecar", early_phase_steps=50, movement_pre_padding=200,
     point_template_mode="dynamic_reset",
 )
+GYM_EVAL_ALIGNED_COMPATIBILITY: Final = ObservationCompatibility(
+    name="gym_eval_aligned", early_phase_steps=50, movement_pre_padding=250,
+    point_template_mode="dynamic_reset",
+)
+SOURCE_ALIGNED_COMPATIBILITY: Final = GYM_EVAL_ALIGNED_COMPATIBILITY
 
 
 @dataclass(frozen=True)

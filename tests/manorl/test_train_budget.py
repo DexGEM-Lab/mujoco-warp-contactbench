@@ -420,6 +420,166 @@ def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.M
     assert tool._episode_records_path(Path("outputs/manorl/run")) == Path("outputs/manorl/run.episodes.jsonl")
 
 
+def test_train_emits_gym_style_object_and_pair_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 1
+    environment = runtime.gymnasium_env.environment
+    environment.config.num_envs = 4
+    environment.object_types = ("cube1", "cube1", "cube2", "cube2")
+    environment.action_ids = np.asarray([1, 2, 1, 2], dtype=np.int64)
+    environment.trajectories = tuple(
+        SimpleNamespace(identity=SimpleNamespace(identity=identity))
+        for identity in ("cube1_01_001", "cube1_02_001", "cube2_01_001", "cube2_02_001")
+    )
+    runtime.env.reset = lambda: (torch.zeros((4, 1)), {})
+    completed = np.asarray([False, True, False, True])
+    success = np.asarray([False, True, False, False])
+    failure = np.asarray([False, False, False, True])
+    component_values = np.arange(1.0, 5.0, dtype=np.float64)
+
+    def step(actions: torch.Tensor):
+        environment.last_reward = SimpleNamespace(**{
+            source: component_values.copy()
+            for source in set(tool.REWARD_UPDATE_COMPONENTS) | set(tool.GROUPED_REWARD_COMPONENTS)
+        })
+        environment.last_termination = SimpleNamespace(
+            reset=completed,
+            success=success,
+            failure=failure,
+            reason_code=np.asarray([0, 1, 0, 2], dtype=np.int32),
+        )
+        environment.episode_returns = np.asarray([1.0, 2.5, 3.0, -4.0])
+        return (
+            torch.zeros_like(actions),
+            torch.ones((4, 1)),
+            torch.as_tensor(completed).reshape(-1, 1),
+            torch.zeros((4, 1), dtype=torch.bool),
+            {},
+        )
+
+    runtime.env.step = step
+    clock = FakeClock([0.0, 1.0, 3.0, 5.0, 7.0])
+    monkeypatch.setattr(tool.time, "monotonic", clock)
+    raw_updates: list[dict[str, object]] = []
+    episode_records: list[dict[str, object]] = []
+    updates, _, _ = tool._train(
+        runtime,
+        tool.TrainingBudget(num_envs=4, updates=1),
+        on_update=raw_updates.append,
+        on_completed_episodes=episode_records.append,
+    )
+
+    grouped = raw_updates[0]["grouped_metrics"]
+    assert grouped["reward_mean/object_cube1"] == 1.5
+    assert grouped["reward_mean/object_cube2"] == 3.5
+    assert grouped["reward_mean/cube1_01"] == 1.0
+    assert grouped["contact_reward_instant/cube2_02"] == 4.0
+    assert grouped["attempts/object_cube1"] == 1.0
+    assert grouped["success_rate/object_cube1"] == 100.0
+    assert grouped["success_rate/object_cube2"] == 0.0
+    assert grouped["episode_reward/cube1_02"] == 2.5
+    assert grouped["episode_reward/cube2_02"] == -4.0
+    assert grouped["distance_reward_x/cube1_02"] == 2.0
+    assert grouped["distance_reward/cube2_02"] == 12.0
+    assert "grouped_metrics" not in updates[0]
+    assert episode_records[0]["schema"] == "manorl.completed_episode_returns.v2"
+    assert episode_records[0]["object_types"] == ["cube1", "cube2"]
+    assert episode_records[0]["action_ids"] == ["02", "02"]
+    assert episode_records[0]["identities"] == ["cube1_02_001", "cube2_02_001"]
+    assert episode_records[0]["reward_components"]["contact_reward"] == [2.0, 4.0]
+
+
+def test_evaluate_waits_for_each_pair_first_termination() -> None:
+    tool = _load_tool()
+
+    class Agent:
+        def enable_models_training_mode(self, _: bool) -> None:
+            pass
+
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=2),
+        object_types=("cube1", "cube2"),
+        action_ids=np.asarray([1, 2], dtype=np.int64),
+        trajectories=tuple(
+            SimpleNamespace(identity=SimpleNamespace(identity=value))
+            for value in ("cube1_01_001", "cube2_02_001")
+        ),
+        trajectory_lengths=np.asarray([3, 5], dtype=np.int64),
+        trajectory_steps=np.zeros(2, dtype=np.int64),
+        reference_object_pos=np.zeros((2, 5, 3), dtype=np.float64),
+        last_physical=None,
+        last_reward=None,
+        last_termination=None,
+    )
+
+    class Env:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def reset(self):
+            self.calls = 0
+            return torch.zeros((2, 1)), {}
+
+        def step(self, actions: torch.Tensor):
+            self.calls += 1
+            environment.trajectory_steps = np.minimum(
+                np.asarray([self.calls, self.calls]), environment.trajectory_lengths - 1
+            )
+            positions = np.asarray(
+                [[0.1 * self.calls, 0.0, 0.0], [0.2 * self.calls, 0.0, 0.0]],
+                dtype=np.float64,
+            )
+            environment.last_physical = SimpleNamespace(object_position=positions)
+            environment.last_reward = SimpleNamespace(contact=np.asarray([0.1, 0.2]))
+            done = np.asarray([self.calls == 2, self.calls == 4])
+            environment.last_termination = SimpleNamespace(
+                reason_code=np.asarray([1 if done[0] else 0, 2 if done[1] else 0]),
+                success=np.asarray([done[0], False]),
+                failure=np.asarray([False, done[1]]),
+            )
+            return (
+                torch.zeros((2, 1)),
+                torch.as_tensor([[1.0], [2.0]]),
+                torch.as_tensor(done).reshape(-1, 1),
+                torch.zeros((2, 1), dtype=torch.bool),
+                {},
+            )
+
+    runtime = SimpleNamespace(
+        agent=Agent(),
+        env=Env(),
+        gymnasium_env=SimpleNamespace(environment=environment),
+        device="cpu",
+    )
+    result = tool._evaluate(runtime, "zero")
+
+    assert result.calls == 4
+    assert result.return_mean == 5.0
+    assert result.reward_mean == 1.5
+    assert result.success_seen is True and result.failure_seen is True
+    assert result.completed_horizon is False
+    by_label = {group.label: group for group in result.groups}
+    assert by_label["cube1_01"].return_mean == 2.0
+    assert by_label["cube1_01"].success_count == 1
+    assert by_label["cube2_02"].return_mean == 8.0
+    assert by_label["cube2_02"].failure_count == 1
+
+
+def test_full_pair_evaluation_uses_at_least_one_environment_per_pair() -> None:
+    tool = _load_tool()
+    trajectories = SimpleNamespace(resolved_pairs=tuple(range(77)))
+    assert tool._full_coverage_evaluation_num_envs(
+        tool.TrainingBudget(num_envs=2048, evaluation_num_envs=1), trajectories
+    ) == 77
+    with pytest.raises(ValueError, match="needs 77 environments"):
+        tool._full_coverage_evaluation_num_envs(
+            tool.TrainingBudget(num_envs=64, evaluation_num_envs=1), trajectories
+        )
+
+
 def test_episode_record_write_flushes_before_stdout_on_broken_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
     tool = _load_tool()
     events: list[str] = []
@@ -673,8 +833,17 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
 
     assert tool.main(["--output", str(tmp_path / "default")]) == 0
     assert captured[-1][1].wall_clock_seconds is None
-    assert captured[-1][1].checkpoint_interval_updates is None
-    assert captured[-1][1].minibatch_size == 1024
+    assert captured[-1][1].num_envs == 2048
+    assert captured[-1][1].updates == 8000
+    assert captured[-1][1].checkpoint_interval_updates == 200
+    assert captured[-1][1].evaluation_num_envs == 1
+    assert captured[-1][1].minibatch_size is None
+    assert captured[-1][1].resolved_minibatch_size == 4096
+    assert captured[-1][1].use_film is True
+    assert captured[-1][1].residual_enabled is True
+    assert captured[-1][1].terminal is True
+    assert captured[-1][1].wandb.enabled is True
+    assert captured[-1][1].dataset_path == tool.DATASET_PATH
 
     assert tool.main([
         "--output", str(tmp_path / "capped"),
@@ -688,6 +857,70 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
         "--output", str(tmp_path / "server2"), "--num-envs", "4096", "--minibatch-size", "4096",
     ]) == 0
     assert captured[-1][1].minibatch_size == 4096
+
+    assert tool.main([
+        "--output", str(tmp_path / "server2-default"), "--num-envs", "2048",
+    ]) == 0
+    assert captured[-1][1].minibatch_size is None
+    assert captured[-1][1].resolved_minibatch_size == 4096
+
+
+def test_cli_parses_all_and_exact_pair_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured = []
+    monkeypatch.setattr(tool, "run", lambda output, budget: captured.append((output, budget)) or {})
+
+    dataset_path = tmp_path / "restored-s02.lance"
+    assert tool.main([
+        "--output", str(tmp_path / "all"),
+        "--all-pairs",
+        "--dataset-path", str(dataset_path),
+    ]) == 0
+    assert captured[-1][1].trajectory_selector == "all"
+    assert captured[-1][1].dataset_path == str(dataset_path.resolve())
+
+    assert tool.main([
+        "--output", str(tmp_path / "pairs"),
+        "--pairs", "cube2:1,cube1:02",
+    ]) == 0
+    assert captured[-1][1].trajectory_selector == "cube1:02,cube2:01"
+
+
+def test_cli_rejects_pair_selector_conflicts(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid"),
+            "--all-pairs", "--pairs", "cube1:01",
+        ])
+    assert "not allowed with argument" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid-legacy"),
+            "--pairs", "cube1:01", "--object", "cube1", "--gesture", "01",
+        ])
+    assert "cannot be combined" in capsys.readouterr().err
+
+
+def test_cli_rejects_local_rerun_and_grpc_stream_together(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid"),
+            "--rerun-output", str(tmp_path / "episode.rrd"),
+            "--rerun-grpc-url", "rerun+http://127.0.0.1:9876/proxy",
+            "--wandb", "false",
+        ])
+
+    assert "--rerun-output and --rerun-grpc-url are mutually exclusive" in capsys.readouterr().err
 
 
 def test_training_observer_quiets_viewer_for_json_console(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -799,16 +1032,18 @@ def test_cli_rejects_invalid_explicit_wall_clock_cap(
     assert "wall-clock-seconds must be a finite positive value when provided" in capsys.readouterr().err
 
 
-def test_evaluation_budget_defaults_to_bounded_prefix_and_uses_valid_minibatch() -> None:
+def test_evaluation_budget_defaults_to_single_world_and_supports_bounded_override() -> None:
     tool = _load_tool()
 
     training = tool.TrainingBudget(num_envs=4096, minibatch_size=4096)
     small = tool.TrainingBudget(num_envs=64)
     override = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=96, minibatch_size=4096)
+    bounded = tool.TrainingBudget(num_envs=4096, evaluation_num_envs=None, minibatch_size=4096)
 
-    assert training.resolved_evaluation_num_envs == 128
-    assert small.resolved_evaluation_num_envs == 64
+    assert training.resolved_evaluation_num_envs == 1
+    assert small.resolved_evaluation_num_envs == 1
     assert override.resolved_evaluation_num_envs == 96
+    assert bounded.resolved_evaluation_num_envs == 128
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=128).minibatch_size == 2048
     assert tool._evaluation_ppo_config(tool.ManoPPOConfig(minibatch_size=4096), num_envs=96).minibatch_size == 512
     for invalid in (0, 129, 4096):
@@ -826,7 +1061,7 @@ def test_cli_serializes_default_and_override_evaluation_counts(
     monkeypatch.setattr(tool, "run", lambda output, budget: captured.append(budget) or {})
 
     tool.main(["--output", str(tmp_path / "default"), "--num-envs", "4096", "--minibatch-size", "4096"])
-    assert captured[-1].resolved_evaluation_num_envs == 128
+    assert captured[-1].resolved_evaluation_num_envs == 1
     tool.main([
         "--output", str(tmp_path / "override"), "--num-envs", "4096", "--minibatch-size", "4096",
         "--evaluation-num-envs", "96",
@@ -892,27 +1127,37 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
     with pytest.raises(RuntimeError, match="viewer failed"):
         tool.run(
             tmp_path / "run",
-            tool.TrainingBudget(num_envs=1, updates=1, minibatch_size=1, rerun_output=str(rerun_output)),
+            tool.TrainingBudget(
+                num_envs=1,
+                updates=1,
+                minibatch_size=1,
+                rerun_output=str(rerun_output),
+                wandb=tool.WandbOptions(enabled=False),
+            ),
         )
     assert recorder_closed == [True]
 
 
-def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
+def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tool = _load_tool()
     constructions: list[tuple[str, int, int]] = []
     loads: list[tuple[str, str]] = []
     modes: list[tuple[str, str]] = []
-    released: list[str] = []
     initial_runtime_ref: list[weakref.ReferenceType[object]] = []
+    training_runtime_ref: list[weakref.ReferenceType[object]] = []
+    training_physical_ref: list[weakref.ReferenceType[object]] = []
 
     class Runtime:
         def __init__(self, name: str, config: object) -> None:
             self.name = name
             self.device = "cuda"
             self.config = config
-            self.agent = SimpleNamespace(name=name, cfg=SimpleNamespace(learning_starts=None))
+            self.agent = SimpleNamespace(
+                name=name,
+                cfg=SimpleNamespace(learning_starts=config.learning_starts),
+            )
             self.gymnasium_env = SimpleNamespace(environment=None)
             self.model = SimpleNamespace(parameters=lambda: [])
 
@@ -929,18 +1174,19 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
         return SimpleNamespace(num_envs=num_envs)
 
     def build_physical(_: object, config: object) -> Physical:
-        return Physical(config)
+        physical = Physical(config)
+        if not constructions:
+            training_physical_ref.append(weakref.ref(physical))
+        return physical
 
     def build_runtime(physical: Physical, config: object) -> Runtime:
         name = "training" if not constructions else f"evaluation-{len(constructions)}"
-        if name == "evaluation-2":
-            assert released == ["evaluation-1"]
-            assert initial_runtime_ref[0]() is None
         constructions.append((name, physical.config.num_envs, config.minibatch_size))
         runtime = Runtime(name, config)
+        if name == "training":
+            training_runtime_ref.append(weakref.ref(runtime))
         if name == "evaluation-1":
             initial_runtime_ref.append(weakref.ref(runtime))
-            weakref.finalize(runtime, released.append, name)
         return runtime
 
     def assignments(trajectory_batch: SimpleNamespace) -> list[dict[str, object]]:
@@ -950,8 +1196,16 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
         return path
 
     def evaluate(runtime: Runtime, mode: str) -> object:
+        if mode == "trained":
+            assert runtime is initial_runtime_ref[0]()
+            assert training_runtime_ref[0]() is None
+            assert training_physical_ref[0]() is None
         modes.append((runtime.name, mode))
         return tool.EvaluationResult(mode, 1, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, False, False, True, [1.0], [0.0])
+
+    def train(*_: object, **__: object) -> tuple[list[object], int, float]:
+        assert initial_runtime_ref[0]() is not None
+        return [], 0, 0.0
 
     monkeypatch.setattr(tool, "_assert_cuda_runtime", lambda: None)
     monkeypatch.setattr(tool, "load_assigned_trajectory_batch", trajectories)
@@ -963,17 +1217,27 @@ def test_run_uses_bounded_fresh_evaluators_and_native_initial_checkpoint(
     monkeypatch.setattr(tool, "_update_last_checkpoint", lambda output, checkpoint: output / "last.pt")
     monkeypatch.setattr(tool, "load_skrl_checkpoint", lambda agent, path: loads.append((agent.name, path.name)) or path)
     monkeypatch.setattr(tool, "_evaluate", evaluate)
-    monkeypatch.setattr(tool, "_train", lambda *args, **kwargs: ([], 0, 0.0))
+    monkeypatch.setattr(tool, "_train", train)
 
-    result = tool.run(tmp_path / "run", tool.TrainingBudget(num_envs=4096, updates=1, minibatch_size=4096))
+    result = tool.run(
+        tmp_path / "run",
+        tool.TrainingBudget(
+            num_envs=4096,
+            updates=1,
+            minibatch_size=4096,
+            evaluation_num_envs=128,
+            wandb=tool.WandbOptions(enabled=False),
+        ),
+    )
 
-    assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048), ("evaluation-2", 128, 2048)]
-    assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-2", "trained")]
+    assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048)]
+    assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-1", "trained")]
     assert loads[0][0] == "evaluation-1" and loads[1][0] == "training"
     assert loads[0][1] == loads[1][1] and loads[0][1].startswith(".initial-")
-    assert loads[2] == ("evaluation-2", "run.pt")
+    assert loads[2] == ("evaluation-1", "run.pt")
     assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
     assert result["budget"]["evaluation_num_envs"] == 128
+    assert result["learning_starts"] == 0
     assert not list((tmp_path / "run").glob(".initial-*"))
 
 

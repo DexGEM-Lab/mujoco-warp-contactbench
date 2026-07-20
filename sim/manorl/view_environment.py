@@ -3,8 +3,8 @@
 This uses :class:`MujocoManoEnvironment`, not the narrow reference-replay
 helper. The default viewer mirrors one MJX state into native ``MjData``;
 the tiled mode renders several independently batched states in one window.
-Observations, rewards, termination, delayed reset, and action processing all
-remain on the production environment path.
+Observations, rewards, termination, indexed episode reset, and action processing
+all remain on the production environment path.
 """
 
 from __future__ import annotations
@@ -48,9 +48,40 @@ class _ZeroActionStepper:
     def __init__(self, environment: MujocoManoEnvironment) -> None:
         self._environment = environment
         self._actions = np.zeros((environment.config.num_envs, 26), dtype=np.float64)
+        self._pending_done = np.zeros(environment.config.num_envs, dtype=bool)
 
     def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]:
-        return self._environment.step(self._actions)
+        if np.any(self._pending_done):
+            self._environment.reset(
+                env_ids=np.flatnonzero(self._pending_done).astype(np.int64)
+            )
+            self._pending_done[:] = False
+        transition = self._environment.step(self._actions)
+        self._pending_done = np.asarray(transition[2], dtype=bool).copy()
+        return transition
+
+
+def _reset_runtime_done(runtime: Any, observations: Any, done: Any) -> Any:
+    """Reset terminal rows through a runtime or its wrapped vector env."""
+
+    if not bool(done.any()):
+        return observations
+    runtime_reset_done = getattr(runtime, "reset_done", None)
+    if callable(runtime_reset_done):
+        return runtime_reset_done(observations, done)
+    mask = done.reshape(-1)
+    row_ids = mask.nonzero(as_tuple=False).reshape(-1)
+    env_ids = row_ids.detach().cpu().numpy().astype(np.int64)
+    try:
+        reset_observations, _ = runtime.env.reset(options={"env_ids": env_ids})
+    except TypeError:
+        reset_observations, _ = runtime.env.reset()
+    if not hasattr(reset_observations, "to"):
+        reset_observations = observations.new_tensor(reset_observations)
+    updated = observations.clone()
+    device_row_ids = row_ids.to(updated.device)
+    updated[device_row_ids] = reset_observations.to(updated.device)[device_row_ids]
+    return updated
 
 
 class _CheckpointPolicyStepper:
@@ -59,22 +90,54 @@ class _CheckpointPolicyStepper:
     def __init__(self, runtime: ManoSkrlRuntime, observations: Any) -> None:
         self._runtime = runtime
         self._observations = observations
+        self._pending_done = None
 
     def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]:
+        if self._pending_done is not None and bool(self._pending_done.any()):
+            self._observations = _reset_runtime_done(
+                self._runtime,
+                self._observations,
+                self._pending_done,
+            )
+            self._pending_done = None
         actions = self._runtime.deterministic_actions(self._observations)
         observations, rewards, terminated, truncated, info = self._runtime.env.step(actions)
         self._observations = observations
         rewards_array = rewards.detach().cpu().numpy().reshape(-1)
-        resets = (terminated | truncated).detach().cpu().numpy().reshape(-1)
+        self._pending_done = terminated | truncated
+        resets = self._pending_done.detach().cpu().numpy().reshape(-1)
         return observations, rewards_array, resets, info
 
 
-def _inference_ppo_config(num_envs: int) -> ManoPPOConfig:
+def _inference_ppo_config(num_envs: int, *, use_film: bool = True) -> ManoPPOConfig:
     """Create a non-training PPO shell valid for any positive vector batch size."""
 
     from sim.manorl.skrl_runtime import ManoPPOConfig
 
-    return ManoPPOConfig(rollouts=1, minibatch_size=num_envs, learning_epochs=1)
+    return ManoPPOConfig(
+        rollouts=1,
+        minibatch_size=num_envs,
+        learning_epochs=1,
+        use_film=use_film,
+    )
+
+
+def _checkpoint_use_film(checkpoint: Path) -> bool:
+    """Resolve the model variant recorded by a checkpoint, defaulting to FiLM."""
+
+    from sim.manorl.checkpoint import CheckpointFormatError, checkpoint_runtime_metadata
+
+    metadata = checkpoint_runtime_metadata(checkpoint)
+    runtime_config = metadata.get("runtime_config")
+    if not isinstance(runtime_config, dict):
+        return True
+    model = runtime_config.get("model")
+    if not isinstance(model, dict) or "use_film" not in model:
+        return True
+    use_film = model["use_film"]
+    if not isinstance(use_film, bool):
+        raise CheckpointFormatError("checkpoint model use_film must be a boolean")
+    return use_film
 
 
 def _validate_checkpoint_path(checkpoint: Path) -> Path:
@@ -87,7 +150,9 @@ def _validate_checkpoint_path(checkpoint: Path) -> Path:
     return checkpoint
 
 
-def _build_checkpoint_stepper(environment: MujocoManoEnvironment, checkpoint: Path) -> ViewerStepper:
+def _build_checkpoint_stepper(
+    environment: MujocoManoEnvironment, checkpoint: Path
+) -> ViewerStepper:
     """Load the native policy and reset through its vector wrapper before rendering."""
 
     from sim.manorl.checkpoint import load_skrl_checkpoint_for_inference
@@ -95,7 +160,13 @@ def _build_checkpoint_stepper(environment: MujocoManoEnvironment, checkpoint: Pa
     from sim.manorl.skrl_runtime import ManoSkrlRuntime
 
     adapter = ManoGymnasiumVectorEnv(environment)
-    runtime = ManoSkrlRuntime(adapter, _inference_ppo_config(environment.config.num_envs))
+    runtime = ManoSkrlRuntime(
+        adapter,
+        _inference_ppo_config(
+            environment.config.num_envs,
+            use_film=_checkpoint_use_film(checkpoint),
+        ),
+    )
     load_skrl_checkpoint_for_inference(runtime.agent, checkpoint)
     runtime.agent.enable_training_mode(False)
     runtime.model.eval()
@@ -113,11 +184,13 @@ def _telemetry(environment: MujocoManoEnvironment, env_id: int, reward: float, r
         suppress_small=True,
         max_line_width=240,
     )
+    termination = environment.last_termination
+    reason = 0 if termination is None else int(termination.reason_code[env_id])
     return (
         f"env={env_id} trajectory={environment.trajectories[env_id].identity.identity} "
         f"call={call:03d}/{environment.trajectory_lengths[env_id] - 2} command_ref={command_index:03d} "
         f"post_ref={post_index:03d} source_ref={environment.reference_source_indices[env_id, post_index]:04d} "
-        f"reward={reward:.4f} reset={reset} ctrl={command}"
+        f"reward={reward:.4f} reset={reset} termination_reason={reason} ctrl={command}"
     )
 
 
@@ -443,7 +516,7 @@ def _view_single(
 def _close_rerun_recorder(recorder: ManoRerunRecorder) -> Path | None:
     artifact = recorder.close()
     if artifact is None:
-        print("No reset-complete Rerun episode was published.", flush=True)
+        print("No terminal-complete Rerun episode was published.", flush=True)
     else:
         print(f"Rerun artifact: {artifact}", flush=True)
     return artifact
@@ -481,6 +554,15 @@ def view_environment(
     if checkpoint is not None and not use_residual:
         raise ValueError("--checkpoint requires --use_residual true so policy actions reach the controller")
     checkpoint = None if checkpoint is None else _validate_checkpoint_path(checkpoint)
+    if checkpoint is not None:
+        from sim.manorl.checkpoint import checkpoint_runtime_metadata
+
+        checkpoint_runtime_metadata(checkpoint)
+    if device == "gpu":
+        import torch
+
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
     _require_graphical_session()
 
     if (object_type is None) != (gesture is None):
@@ -615,7 +697,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--loop",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Continue through the environment's source-compatible delayed reset after terminal.",
+        help="Continue through explicit indexed episode resets after terminal.",
     )
     parser.add_argument(
         "--rerun-output",

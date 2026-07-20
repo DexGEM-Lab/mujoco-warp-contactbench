@@ -87,8 +87,10 @@ The first migration slice is isolated under `sim/manorl/`. It reads one settled
 trajectory without `lance_manager`, builds a MuJoCo model from curated source
 URDF/collision assets, and runs residual-off reference control. The current
 ManoRL path implements observations, target rewards, native SKRL PPO training,
-and native checkpoint round trips; conversion from Isaac rl-games checkpoints
-remains deliberately unsupported.
+and native checkpoint round trips. Raw Isaac rl-games checkpoints are still
+rejected by the native loader; for the validated source format, run the
+explicit `tools/convert_gym_checkpoint.py` converter to produce a native skrl
+checkpoint and provenance sidecar before loading it.
 
 Copying the PhysX drive values into an external MuJoCo torque law was falsified
 in free space: the explicit damping kick drove the maximum DOF velocity to about
@@ -151,8 +153,8 @@ forces` pane combines the 16 source-order hand-contact magnitude curves with an
 `Object gravity` magnitude reference; each hand curve is the net world-frame
 force exerted on the object by one mapped hand collision geom, with floor and
 non-hand-object rows excluded. The all-geometry tab records cube gravity as
-`body_subtreemass * gravity` in N. The stable `.rrd` changes only
-after the delayed reset is applied; interrupting the run discards its active
+`body_subtreemass * gravity` in N. The stable `.rrd` changes immediately after
+the terminal snapshot is recorded; interrupting the run discards its active
 partial episode.
 
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
@@ -160,46 +162,63 @@ single 791-call replay. Both runtime controls default to `true`: use
 `--use_residual false` for source-reference diagnostics and `--terminal false`
 for formal source-horizon termination only.
 
-To render the deterministic mean policy from the copied Server2 checkpoint,
-keep its native `.pt.json` sidecar beside the checkpoint:
+To render a deterministic mean policy, keep its `.pt.json` sidecar beside the
+checkpoint. The sidecar records the checkpoint's versioned runtime and migration
+provenance; model key/shape compatibility is checked against the current runtime
+when the checkpoint loads. Native resume separately requires current training
+contract IDs.
 
 ```bash
 JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
   --device gpu \
-  --checkpoint outputs/manorl/server2_best_cube1_01_2500/server2_cube1_01_128env_2500u_20260716_010529.pt \
-  --object cube1 --gesture 01 --num-envs 128 --render-env 0 --no-loop
+  --checkpoint outputs/gym_checkpoint_alignment_20260717/MANOHand_film_dynamic_residual_true_v7.pt \
+  --object cube1 --gesture 01 --num-envs 1 --render-env 0 --no-loop
 ```
 
 ### ManoRL PPO Training
 
-The Cube1 fast-training contract is documented in
+The Cube1 production training contract is documented in
 [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
-PPO optimizes the raw environment reward at `1.0x`; it intentionally does not
-reuse IsaacGym's `0.5x` reward shaper. Run the fixed 64-world budget with W&B
-tracking disabled by default. This executes 64 updates of 48 rollout steps
-(196,608 transitions); it has no wall-clock cutoff unless one is explicitly
+PPO uses the source-aligned `0.5x` reward shaper over the raw environment
+reward. Observation contact direction and the `1.0x` pair-filtered contact
+reward use the same strict `0.2 N` threshold; maximum contact quality remains
+`0.4`. W&B tracking is
+enabled by default; pass `--wandb false` for a local-only diagnostic. The
+default run uses 2,048 worlds, 8,000 updates, 48 rollout steps, a 4,096-sample
+minibatch, FiLM, dynamic point-cloud sampling, residual actions, terminal
+deviation handling, and deterministic evaluation that covers every selected
+object/action pair. A single-pair run uses one evaluation world; a multi-pair
+run automatically uses at least one world per pair, bounded at 128. This is
+786,432,000 transitions; it has no wall-clock cutoff unless one is explicitly
 requested:
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
-  --output outputs/manorl/cube1_03_scratch_run \
-  --object cube1 --gesture 03 --num-envs 64 --updates 64
+  --output outputs/manorl/cube1_01_default \
+  --object cube1 --gesture 01 --num-envs 2048 --updates 8000 \
+  --checkpoint-interval-updates 200 --evaluation-num-envs 1
 ```
 
-For an opt-in safety cap that may stop before all 64 updates complete, add
-`--wall-clock-seconds <positive-seconds>`. Evaluation defaults to
-`min(--num-envs, 128)` worlds, so a 4096-world training run performs all three
-comparison rows on the same 128-world trajectory prefix. Override the bounded
-count explicitly with `--evaluation-num-envs <count>` when needed; accepted values are
-within `1..min(--num-envs, 128)`, so evaluation cannot recreate a second full-size runtime.
+The trainer also accepts exact multi-object/action selection. Use
+`--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
+every eligible pair in the pinned Lance dataset. Mixed-object batches run
+headless through one static MJX-Warp model per object; GUI and Rerun recording
+remain single-object modes.
 
-For a 2,500-update Server2 run, add `--checkpoint-interval-updates 100`. Each
-completed interval writes `<output>/checkpoint-000100.pt` plus its `.pt.json`
-sidecar. `<output>/last.pt` atomically follows the latest completed checkpoint;
-its fixed sidecar records compatibility only. Exact progress remains in the
-immutable numbered and final checkpoint sidecars. Sibling output prefixes have
-independent checkpoint namespaces.
+For an opt-in safety cap that may stop before all 8,000 updates complete, add
+`--wall-clock-seconds <positive-seconds>`. `--evaluation-num-envs` requests a
+minimum diagnostic count within `1..min(--num-envs, 128)`. The trainer raises
+that count when necessary to cover every resolved object/action pair once, so
+evaluation cannot silently report only the first pair or recreate a second
+full-size runtime.
+
+Every 200 completed updates, the default cadence writes
+`<output>/checkpoint-000200.pt` plus its `.pt.json` sidecar. Override the cadence
+with `--checkpoint-interval-updates <count>`. `<output>/last.pt` atomically
+follows the latest completed checkpoint; its fixed sidecar records compatibility
+only. Exact progress remains in the immutable numbered and final checkpoint
+sidecars. Sibling output prefixes have independent checkpoint namespaces.
 
 Training stdout defaults to compact human summaries. Exact completed episode
 returns are first flushed to `<output>.episodes.jsonl.partial`, then summarized
@@ -250,9 +269,13 @@ options. No API key or credentials belong in this repository:
 An omitted W&B name is derived from the output prefix, object, and gesture. The
 SDK cache is stored at `<output-parent>/wandb`, so the documented
 `outputs/manorl/...` prefixes keep it under ignored outputs. The run logs PPO
-updates by environment transitions, records zero/untrained/trained evaluation
-summaries and final acceptance values, then uploads the checkpoint and sidecar,
-metrics JSON, evaluation trace, and any completed Rerun recording.
+updates by environment transitions. One shared policy produces one W&B run;
+global metrics remain at their existing keys, while Gym-aligned object keys
+such as `reward_mean/object_cube1` and object/action keys such as
+`reward_mean/cube1_01` keep pair behavior separate. Episode, success, reward
+component, and zero/untrained/trained evaluation metrics use the same hierarchy.
+The run then uploads the checkpoint and sidecar, metrics JSON, evaluation trace,
+episode JSONL, and any completed Rerun recording.
 
 To inspect the explicitly selected generated cube1 Lance row 507 under current
 training termination semantics, use the same production environment with its
@@ -287,7 +310,7 @@ JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
 ```
 
 The batch contains ten distinct fully padded action-`01` trajectories. They
-retain independent reference progress and delayed resets while sharing one
+retain independent reference progress and indexed episode resets while sharing one
 compiled cube1 model and batched MJX-Warp physics. `--tile-envs 1` preserves
 the native actuator-pane viewer; larger values render the first N batch worlds
 as tiles in one GLFW/MuJoCo window. In tiled mode, drag with the left mouse button to rotate, right mouse button to pan horizontally, middle mouse button to pan vertically, use the scroll wheel to zoom, press `R` to reset the view, and press `Esc` to close the window.

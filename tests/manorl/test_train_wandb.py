@@ -75,7 +75,9 @@ def test_wandb_disabled_never_imports_or_initializes(monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(sys.modules, "wandb", fake)
 
     with tool._wandb_run(
-        output=Path("outputs/manorl/cube1"), budget=tool.TrainingBudget(), config={}
+        output=Path("outputs/manorl/cube1"),
+        budget=tool.TrainingBudget(wandb=tool.WandbOptions(enabled=False)),
+        config={},
     ) as (run, wandb):
         assert run is None
         assert wandb is None
@@ -195,18 +197,30 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert json.loads(json.dumps(config)) == config
     assert config["training_budget"]["planned_transitions"] == budget.transitions
     assert config["training_budget"]["wall_clock_seconds"] is None
-    assert config["reward"]["ppo_scale"] == 1.0
-    assert config["environment"]["contract"] == "target_residual_reduced_thumb_authority_xy_0p001_z_0p003_gamma_0p9_cap_xy_0p01_z_0p03_deviation_0p10_v3"
-    assert config["environment"]["residual_action"]["position_scale"] == [0.001, 0.001, 0.003]
-    assert config["environment"]["residual_action"]["max_position_offset"] == [0.01, 0.01, 0.03]
+    assert config["wandb"]["primary_axis"] == "completed_ppo_updates"
+    assert config["wandb"]["secondary_metrics"] == ["transitions"]
+    assert config["wandb"]["shared_policy_run"] is True
+    assert config["wandb"]["aggregation_levels"] == ["global", "object", "object_action"]
+    assert config["wandb"]["object_label"] == "object_{object}"
+    assert config["wandb"]["object_action_label"] == "{object}_{action:02d}"
+    assert "contact_reward_instant" in config["wandb"]["grouped_instant_metrics"]
+    assert "episode_reward" in config["wandb"]["grouped_episode_metrics"]
+    assert config["reward"]["ppo_scale"] == 0.5
+    assert config["reward"]["contact_force_threshold_N"] == 0.2
+    assert config["environment"]["contract"] == tool.ENVIRONMENT_CONTRACT_ID
+    assert config["environment"]["observation_contact_threshold_N"] == 0.2
+    assert config["environment"]["residual_action"]["position_scale"] == [0.005, 0.005, 0.005]
+    assert config["environment"]["residual_action"]["max_position_offset"] == [0.05, 0.05, 0.05]
+    assert config["environment"]["residual_action"]["joint_scale"][:4] == [0.1, 0.12, 0.044, 0.01]
+    assert config["environment"]["residual_action"]["early_phase_steps"] == 50
     assert config["environment"]["max_deviation_distance"] == 0.10
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
-    assert config["evaluation"]["num_envs"] == 64
+    assert config["evaluation"]["num_envs"] == 1
     assert config["evaluation"]["ppo_config"]["minibatch_size"] == 768
     assert config["device"]["skrl"] == "cuda"
 
 
-def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
+def test_wandb_update_metrics_use_completed_update_steps() -> None:
     tool = _load_tool()
     run = FakeRun()
     wandb = FakeWandb()
@@ -348,9 +362,16 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
         "losses/entropy": -0.01,
         "info/last_lr": 0.0003,
         "info/policy_std": 0.8,
+        "grouped_metrics": {
+            "reward_mean/object_cube1": 1.5,
+            "reward_mean/cube1_01": 2.5,
+            "success_rate/cube1_01": 50.0,
+        },
     })
 
-    assert [step for _, step in run.logs] == [3072, 6144]
+    assert [step for _, step in run.logs] == [1, 2]
+    assert [metrics["update"] for metrics, _ in run.logs] == [1, 2]
+    assert [metrics["global_step"] for metrics, _ in run.logs] == [1, 2]
     assert [metrics["transitions"] for metrics, _ in run.logs] == [3072, 6144]
     assert all({"reward_mean", "manorl/reward_mean", "manorl/total_mean", "manorl/distance_x_mean", "manorl/distance_y_mean", "manorl/distance_z_mean", "manorl/rotation_mean", "manorl/action_penalty_mean", "manorl/contact_mean", "manorl/object_stability_mean", "manorl/survival_mean", "manorl/deviation_penalty_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "performance/total_fps", "performance/step_fps", "performance/update_time", "performance/play_time", "info/epochs", "distance_reward_x_instant/step", "distance_reward_y_instant/step", "distance_reward_z_instant/step", "distance_reward_instant/step", "rotation_reward_instant/step", "action_penalty_instant/step", "contact_reward_instant/step", "object_stability_reward_instant/step", "survival_reward_instant/step"} <= metrics.keys()
                for metrics, _ in run.logs)
@@ -406,6 +427,9 @@ def test_wandb_update_metrics_use_monotonic_transition_steps() -> None:
     assert run.logs[1][0]["info/policy_std"] == 0.8
     assert run.logs[1][0]["performance/algorithm_update_time_ms"] == 42.0
     assert not any(name.startswith("mu/") for name in run.logs[1][0])
+    assert run.logs[1][0]["reward_mean/object_cube1"] == 1.5
+    assert run.logs[1][0]["reward_mean/cube1_01"] == 2.5
+    assert run.logs[1][0]["success_rate/cube1_01"] == 50.0
 
 
 def test_latest_skrl_tracking_metrics_maps_only_available_latest_values() -> None:
@@ -453,17 +477,37 @@ def test_wandb_evaluation_summaries_preserve_policy_alias_for_both_comparisons()
             completed_horizon=True,
             rewards_by_call=[0.1],
             object_target_distance_by_call=[0.3],
+            groups=(tool.EvaluationGroupResult(
+                label="cube1_01",
+                kind="object_action",
+                num_envs=1,
+                return_mean=return_mean,
+                reward_mean=0.1,
+                action_abs_mean=0.2,
+                final_object_target_distance=0.3,
+                max_object_target_distance=0.4,
+                contact_reward_mean=0.5,
+                success_count=1,
+                failure_count=0,
+            ),),
         )
 
-    tool._log_wandb_evaluations(run, [result("zero", 0.0), result("untrained", 1.0)], transitions=0)
-    tool._log_wandb_evaluations(run, [result("trained", 2.0)], transitions=6144)
+    tool._log_wandb_evaluations(
+        run, [result("zero", 0.0), result("untrained", 1.0)], update=0, transitions=0
+    )
+    tool._log_wandb_evaluations(run, [result("trained", 2.0)], update=2, transitions=6144)
 
-    assert [step for _, step in run.logs] == [0, 6144]
+    assert [step for _, step in run.logs] == [0, 2]
+    assert [metrics["update"] for metrics, _ in run.logs] == [0, 2]
+    assert [metrics["global_step"] for metrics, _ in run.logs] == [0, 2]
+    assert [metrics["transitions"] for metrics, _ in run.logs] == [0, 6144]
     assert run.logs[0][0]["evaluation/zero/return_mean"] == 0.0
     assert run.logs[0][0]["evaluation/untrained/return_mean"] == 1.0
     assert run.logs[0][0]["evaluation/policy/return_mean"] == 1.0
     assert run.logs[1][0]["evaluation/trained/return_mean"] == 2.0
     assert run.logs[1][0]["evaluation/policy/return_mean"] == 2.0
+    assert run.logs[1][0]["evaluation/trained/return_mean/cube1_01"] == 2.0
+    assert run.logs[1][0]["evaluation/policy/return_mean/cube1_01"] == 2.0
     assert run.summary["evaluation/policy/return_mean"] == 2.0
 
 
@@ -504,7 +548,7 @@ def test_wandb_cli_parses_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch
 
     assert tool.main([
         "--output", str(tmp_path / "override"),
-        "--wandb", "true",
+        "--wandb", "false",
         "--wandb-project", "project",
         "--wandb-group", "group",
         "--wandb-entity", "entity",
@@ -514,7 +558,7 @@ def test_wandb_cli_parses_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch
     ]) == 0
     override = captured[-1][1].wandb
     assert override == tool.WandbOptions(
-        enabled=True,
+        enabled=False,
         project="project",
         group="group",
         entity="entity",
