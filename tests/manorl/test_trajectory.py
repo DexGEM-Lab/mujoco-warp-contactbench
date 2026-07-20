@@ -11,10 +11,12 @@ from sim.manorl.contracts import DATASET_PATH, EXPECTED_DATASET_VERSION
 from sim.manorl.trajectory import (
     CUBE1_ACTION_01_BATCH_ROWS,
     LANCE_COLUMNS,
+    ObjectActionPair,
     TrajectorySelection,
     load_assigned_trajectory_batch,
     load_cube1_action_01_batch10,
     load_reference_trajectory,
+    parse_trajectory_selector,
     trajectory_from_row,
 )
 
@@ -95,6 +97,60 @@ def test_selector_accepts_non_default_cube1_gesture() -> None:
     assert [trajectory.identity.row_index for trajectory in batch.trajectories] == [71, 72, 74]
     assert [trajectory.identity.identity for trajectory in batch.trajectories] == [
         "cube1_03_004", "cube1_03_005", "cube1_03_007"
+    ]
+
+
+def test_pair_selector_normalizes_and_preserves_exact_pairs() -> None:
+    assert parse_trajectory_selector("cube2:1,cube1:02") == (
+        ObjectActionPair("cube1", "02"),
+        ObjectActionPair("cube2", "01"),
+    )
+    assert TrajectorySelection(selector="all").canonical_selector == "all"
+    assert TrajectorySelection("cube1", "1").canonical_selector == "cube1:01"
+
+
+@pytest.mark.parametrize(
+    "selector, message",
+    [
+        ("", "non-empty"),
+        ("cube1:01,", "empty"),
+        ("cube1", "expected object:action"),
+        ("cube1:01,cube1:1", "duplicate"),
+        ("ALL", "spelled exactly"),
+    ],
+)
+def test_pair_selector_rejects_malformed_values(selector: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_trajectory_selector(selector)
+
+
+@pytest.mark.integration
+def test_all_pair_selector_discovers_s02_pairs_without_suffix_rows() -> None:
+    available, reason = _dataset_available()
+    if not available:
+        pytest.skip(reason)
+    batch = load_assigned_trajectory_batch(TrajectorySelection(selector="all"), num_envs=77)
+    assert len(batch.resolved_pairs) == 77
+    assert batch.resolved_pairs == tuple(sorted(batch.resolved_pairs))
+    assert batch.resolved_pairs[0].canonical == "cube1:01"
+    assert batch.resolved_pairs[-1].canonical == "sphere3:02"
+    assert all(identity.count("_") == 2 for identity in (t.identity.identity for t in batch.trajectories))
+
+
+@pytest.mark.integration
+def test_explicit_pair_selector_does_not_form_cartesian_product() -> None:
+    available, reason = _dataset_available()
+    if not available:
+        pytest.skip(reason)
+    selection = TrajectorySelection(selector="cube1:01,cube2:01")
+    batch = load_assigned_trajectory_batch(selection, num_envs=2)
+    assert batch.resolved_pairs == (
+        ObjectActionPair("cube1", "01"),
+        ObjectActionPair("cube2", "01"),
+    )
+    assert [t.identity.identity.split("_")[:2] for t in batch.trajectories] == [
+        ["cube1", "01"],
+        ["cube2", "01"],
     ]
 
 

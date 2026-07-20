@@ -10,6 +10,9 @@ from sim.manorl.assets import (
     HAND_SELF_COLLISION_GROUPS,
     build_scene_xml,
     compile_model,
+    object_collision_vertices,
+    object_runtime,
+    supported_object_types,
     urdf_zero_fk,
     validate_asset_manifest,
 )
@@ -52,6 +55,64 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     np.testing.assert_allclose(palm_quat, expected, atol=5e-10)
     palm_mesh = root.find("./asset/mesh[@name='hand_palm']")
     assert palm_mesh is not None and palm_mesh.get("scale") == "0.7 0.7 0.7"
+
+
+def test_s02_object_registry_is_closed_materialized_and_digest_checked() -> None:
+    expected = (
+        "cube1",
+        "cube2",
+        "cuboid1",
+        "cuboid2",
+        "cylinder1",
+        "cylinder2",
+        "cylinder3",
+        "cylinder4",
+        "cylinder5",
+        "cylinder6",
+        "sphere1",
+        "sphere2",
+        "sphere3",
+    )
+    assert supported_object_types() == expected
+    validate_asset_manifest()
+
+    bounds = {}
+    for object_type in expected:
+        runtime = object_runtime(object_type)
+        assert runtime.urdf_path.is_file()
+        assert runtime.collision_mesh_path.is_file()
+        assert runtime.grasp_mapping_path.is_file()
+        vertices = object_collision_vertices(object_type)
+        dimensions = np.ptp(vertices, axis=0)
+        assert np.all(dimensions > 0.0)
+        bounds[object_type] = tuple(np.round(dimensions, decimals=6))
+
+    assert bounds["cube1"] != bounds["cube2"]
+    assert bounds["cuboid1"] != bounds["sphere1"]
+    with pytest.raises(ValueError, match="unsupported ManoRL object runtime"):
+        object_runtime("unknown_object")
+
+
+def test_all_s02_object_models_compile_with_object_specific_mass_and_geometry() -> None:
+    if importlib.util.find_spec("mujoco") is None:
+        pytest.skip("mujoco is not installed in this environment")
+
+    signatures = {}
+    for object_type in supported_object_types():
+        mujoco, model = compile_model(object_type=object_type)
+        runtime = object_runtime(object_type)
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name)
+        geom_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, f"{object_type}_collision"
+        )
+        assert body_id >= 0 and geom_id >= 0
+        assert float(model.body_mass[body_id]) > 0.0
+        signatures[object_type] = (
+            round(float(model.body_mass[body_id]), 6),
+            tuple(np.round(np.ptp(object_collision_vertices(object_type), axis=0), 6)),
+        )
+
+    assert len(set(signatures.values())) == len(signatures)
 
 
 def test_independent_zero_fk_contains_fixed_palm_rotation() -> None:

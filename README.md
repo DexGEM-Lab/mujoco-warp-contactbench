@@ -198,6 +198,12 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --checkpoint-interval-updates 200 --evaluation-num-envs 1
 ```
 
+The trainer also accepts exact multi-object/action selection. Use
+`--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
+every eligible pair in the pinned Lance dataset. Mixed-object batches run
+headless through one static MJX-Warp model per object; GUI and Rerun recording
+remain single-object modes.
+
 For an opt-in safety cap that may stop before all 8,000 updates complete, add
 `--wall-clock-seconds <positive-seconds>`. Evaluation defaults to one world to
 match the Gym reference; pass `--evaluation-num-envs <count>` explicitly for a

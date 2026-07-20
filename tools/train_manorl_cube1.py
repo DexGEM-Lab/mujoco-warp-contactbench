@@ -40,7 +40,11 @@ from sim.manorl.rewards import (
     REWARD_HAND_OBJECT_THRESHOLD_N,
 )
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
-from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
+from sim.manorl.trajectory import (
+    TRAJECTORY_IDENTITY_SCHEMA,
+    TrajectorySelection,
+    load_assigned_trajectory_batch,
+)
 
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
 WARP_CONTACT_CAPACITY_MARGIN = 64
@@ -114,6 +118,7 @@ class TrainingBudget:
     rerun_stride: int = 1
     object_type: str = "cube1"
     gesture: str = "01"
+    trajectory_selector: str | None = None
     residual_enabled: bool = True
     use_film: bool = True
     terminal: bool = True
@@ -179,7 +184,13 @@ class EvaluationResult:
 
 
 def _wandb_run_name(output: Path, budget: TrainingBudget) -> str:
-    return budget.wandb.name or f"{output.name}-{budget.object_type}-{budget.gesture}"
+    if budget.wandb.name:
+        return budget.wandb.name
+    selector = budget.trajectory_selector
+    if selector is None:
+        selector = f"{budget.object_type}-{int(budget.gesture):02d}"
+    selector_label = selector.replace(":", "-").replace(",", "_")
+    return f"{output.name}-{selector_label}"
 
 
 def _parse_wandb_tags(values: list[str]) -> tuple[str, ...]:
@@ -194,6 +205,7 @@ def _wandb_config(
     trajectory_assignments: list[dict[str, object]],
     evaluation_ppo_config: ManoPPOConfig,
     evaluation_trajectory_assignments: list[dict[str, object]],
+    trajectory_selection: dict[str, object] | None = None,
     device: dict[str, object],
 ) -> dict[str, object]:
     residual_action = ResidualActionConfig()
@@ -237,6 +249,7 @@ def _wandb_config(
             "max_deviation_distance": TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
         },
         "trajectory_assignments": trajectory_assignments,
+        "trajectory_selection": trajectory_selection,
         "device": device,
     }
     try:
@@ -570,7 +583,9 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trai
         if physical is None or diagnostics is None:
             raise RuntimeError("environment omitted physical/reward diagnostics during evaluation")
         indices = environment.trajectory_steps
-        target = environment.trajectory.object_pos[indices]
+        target = environment.reference_object_pos[
+            np.arange(environment.config.num_envs), indices
+        ]
         distances = np.linalg.norm(physical.object_position - target, axis=1)
         distance_means.append(float(distances.mean()))
         contacts.append(float(diagnostics.contact.mean()))
@@ -925,14 +940,22 @@ def _last_checkpoint_path(output: Path) -> Path:
     return output / "last.pt"
 
 
-def _checkpoint_runtime_config(runtime: ManoSkrlRuntime, update: dict[str, float]) -> dict[str, object]:
-    return {
+def _checkpoint_runtime_config(
+    runtime: ManoSkrlRuntime,
+    update: dict[str, float],
+    *,
+    trajectory_selection: dict[str, object] | None = None,
+) -> dict[str, object]:
+    config = {
         **runtime.checkpoint_metadata(),
         "training_progress": {
             "completed_updates": int(update["update"]),
             "environment_transitions": int(update["environment_transitions"]),
         },
     }
+    if trajectory_selection is not None:
+        config["trajectory_selection"] = trajectory_selection
+    return config
 
 
 def _checkpoint_sidecar_path(checkpoint: Path) -> Path:
@@ -984,12 +1007,49 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
         {
             "env_id": env_id,
             "identity": item.identity.identity,
+            "object": item.identity.identity.split("_")[0],
+            "action": item.identity.identity.split("_")[1],
             "row_index": item.identity.row_index,
             "uuid": item.identity.uuid,
             "source_slice": [item.identity.source_start, item.identity.source_stop],
         }
         for env_id, item in enumerate(trajectories.trajectories)
     ]
+
+
+def _trajectory_selection_metadata(
+    selection: TrajectorySelection,
+    trajectories: Any,
+    *,
+    assignments: list[dict[str, object]],
+    evaluation_assignments: list[dict[str, object]],
+) -> dict[str, object]:
+    resolved_pairs = [
+        {"object": pair.object_type, "action": pair.action_id}
+        for pair in getattr(trajectories, "resolved_pairs", ())
+    ]
+    if not resolved_pairs:
+        pairs = {
+            (fields[0], fields[1])
+            for item in assignments
+            if len(fields := str(item["identity"]).split("_")) == 3
+        }
+        resolved_pairs = [
+            {"object": object_type, "action": action_id}
+            for object_type, action_id in sorted(pairs)
+        ]
+    return {
+        "selector": selection.canonical_selector,
+        "mode": selection.mode,
+        "include_suffix_files": False,
+        "identity_schema": TRAJECTORY_IDENTITY_SCHEMA,
+        "padding_policy": "full" if selection.require_full_padding else "clip_to_source",
+        "dataset_path": str(selection.dataset_path),
+        "dataset_version": selection.expected_dataset_version,
+        "resolved_pairs": resolved_pairs,
+        "assignments": assignments,
+        "evaluation_assignments": evaluation_assignments,
+    }
 
 
 def _build_training_observer(
@@ -1083,14 +1143,22 @@ def _update_last_checkpoint(output: Path, checkpoint: Path) -> Path:
 
 
 def _save_periodic_checkpoint(
-    runtime: ManoSkrlRuntime, output: Path, update: dict[str, float]
+    runtime: ManoSkrlRuntime,
+    output: Path,
+    update: dict[str, float],
+    *,
+    trajectory_selection: dict[str, object] | None = None,
 ) -> Path:
     checkpoint = _numbered_checkpoint_path(output, int(update["update"]))
     sidecar = _checkpoint_sidecar_path(checkpoint)
     if checkpoint.exists() or sidecar.exists():
         raise FileExistsError(f"refusing to replace periodic checkpoint artifact: {checkpoint}")
     return _save_checkpoint_atomically(
-        runtime.agent, checkpoint, runtime_config=_checkpoint_runtime_config(runtime, update)
+        runtime.agent,
+        checkpoint,
+        runtime_config=_checkpoint_runtime_config(
+            runtime, update, trajectory_selection=trajectory_selection
+        ),
     )
 
 
@@ -1099,11 +1167,15 @@ def _maybe_save_periodic_checkpoint(
     output: Path,
     checkpoint_interval_updates: int | None,
     update: dict[str, float],
+    *,
+    trajectory_selection: dict[str, object] | None = None,
 ) -> Path | None:
     completed_updates = int(update["update"])
     if checkpoint_interval_updates is None or completed_updates % checkpoint_interval_updates != 0:
         return None
-    checkpoint = _save_periodic_checkpoint(runtime, output, update)
+    checkpoint = _save_periodic_checkpoint(
+        runtime, output, update, trajectory_selection=trajectory_selection
+    )
     _update_last_checkpoint(output, checkpoint)
     return checkpoint
 
@@ -1162,8 +1234,26 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         128,
         WARP_BROADPHASE_CONTACTS_PER_WORLD * budget.num_envs + WARP_CONTACT_CAPACITY_MARGIN,
     )
-    selection = TrajectorySelection(object_type=budget.object_type, gesture=budget.gesture)
+    selection = TrajectorySelection(
+        object_type=budget.object_type,
+        gesture=budget.gesture,
+        selector=budget.trajectory_selector,
+    )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
+    assigned_object_types = {
+        item.identity.identity.split("_")[0]
+        for item in getattr(trajectories, "trajectories", ())
+    }
+    if len(assigned_object_types) > 1 and (
+        budget.rerun_output is not None
+        or budget.rerun_grpc_url is not None
+        or budget.rerun_high_return_dir is not None
+        or not budget.headless
+    ):
+        raise ValueError(
+            "mixed-object training supports headless execution only; "
+            "the viewer and Rerun recorder require one MuJoCo object model"
+        )
     physical = MujocoManoEnvironment(
         trajectories,
         EnvironmentConfig(
@@ -1190,6 +1280,12 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     evaluation_runtime, evaluation_ppo_config, evaluation_trajectory_assignments = _build_evaluation_runtime(
         selection=selection, budget=budget, training_config=ppo_config
     )
+    trajectory_selection = _trajectory_selection_metadata(
+        selection,
+        trajectories,
+        assignments=trajectory_assignments,
+        evaluation_assignments=evaluation_trajectory_assignments,
+    )
     device = {
         "torch": torch.__version__,
         "torch_cuda": torch.version.cuda,
@@ -1202,6 +1298,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         trajectory_assignments=trajectory_assignments,
         evaluation_ppo_config=evaluation_ppo_config,
         evaluation_trajectory_assignments=evaluation_trajectory_assignments,
+        trajectory_selection=trajectory_selection,
         device=device,
     )
     with _wandb_run(output=output, budget=budget, config=wandb_config) as (wandb_run, wandb):
@@ -1210,7 +1307,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 runtime.agent,
                 initial_checkpoint,
                 runtime_config=_checkpoint_runtime_config(
-                    runtime, {"update": 0.0, "environment_transitions": 0.0}
+                    runtime,
+                    {"update": 0.0, "environment_transitions": 0.0},
+                    trajectory_selection=trajectory_selection,
                 ),
             )
             load_skrl_checkpoint(evaluation_runtime.agent, initial_checkpoint)
@@ -1233,7 +1332,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
 
         def on_update(update: dict[str, Any]) -> None:
             periodic_checkpoint = _maybe_save_periodic_checkpoint(
-                runtime, output, budget.checkpoint_interval_updates, update
+                runtime,
+                output,
+                budget.checkpoint_interval_updates,
+                update,
+                trajectory_selection=trajectory_selection,
             )
             if periodic_checkpoint is not None:
                 periodic_checkpoints.append(periodic_checkpoint)
@@ -1296,7 +1399,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "environment_transitions": float(transitions),
         }
         _save_checkpoint_atomically(
-            runtime.agent, checkpoint, runtime_config=_checkpoint_runtime_config(runtime, final_update)
+            runtime.agent,
+            checkpoint,
+            runtime_config=_checkpoint_runtime_config(
+                runtime, final_update, trajectory_selection=trajectory_selection
+            ),
         )
         _update_last_checkpoint(output, checkpoint)
         # Evaluate exactly what a user will later load. skrl preprocessor/module
@@ -1320,12 +1427,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         )
         result = {
             "schema": "manorl.cube1_fast_training.v1",
-            "trajectory_selection": {
-                "object": selection.object_type,
-                "gesture": selection.action_id,
-                "assignments": trajectory_assignments,
-                "evaluation_assignments": evaluation_trajectory_assignments,
-            },
+            "trajectory_selection": trajectory_selection,
             "checkpoint_conversion": "tools/convert_gym_checkpoint.py",
             "initialization": {
                 "actor_mean": "source_default",
@@ -1458,8 +1560,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--rerun-env-id", type=int, default=0)
     parser.add_argument("--rerun-stride", type=int, default=1)
-    parser.add_argument("--object", dest="object_type", default="cube1")
-    parser.add_argument("--gesture", default="01")
+    selection_group = parser.add_mutually_exclusive_group()
+    selection_group.add_argument(
+        "--all-pairs",
+        action="store_true",
+        help="select every eligible non-suffix object/action pair in the Lance dataset",
+    )
+    selection_group.add_argument(
+        "--pairs",
+        metavar="OBJECT:ACTION[,OBJECT:ACTION...]",
+        help="select exact object/action pairs, for example cube1:01,cube2:01",
+    )
+    selection_group.add_argument(
+        "--trajectory-selector",
+        metavar="all|OBJECT:ACTION[,OBJECT:ACTION...]",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--object",
+        dest="object_type",
+        help="legacy single-pair object selector; requires --gesture",
+    )
+    parser.add_argument(
+        "--gesture",
+        help="legacy single-pair action selector; requires --object",
+    )
     parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--film", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
@@ -1493,6 +1618,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wandb-name")
     parser.add_argument("--wandb-tags", action="append", default=[], metavar="TAG[,TAG...]")
     args = parser.parse_args(argv)
+    selector = (
+        "all"
+        if args.all_pairs
+        else args.pairs
+        if args.pairs is not None
+        else args.trajectory_selector
+    )
+    if selector is not None and (args.object_type is not None or args.gesture is not None):
+        parser.error("--all-pairs/--pairs cannot be combined with --object or --gesture")
+    if (args.object_type is None) != (args.gesture is None):
+        parser.error("--object and --gesture must be supplied together")
+    object_type = args.object_type or "cube1"
+    gesture = args.gesture or "01"
+    try:
+        parsed_selection = TrajectorySelection(
+            object_type=object_type, gesture=gesture, selector=selector
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
     evaluation_num_envs_maximum = min(args.num_envs, 128)
@@ -1545,8 +1689,11 @@ def main(argv: list[str] | None = None) -> int:
             rerun_high_return_following=args.rerun_high_return_following,
             rerun_env_id=args.rerun_env_id,
             rerun_stride=args.rerun_stride,
-            object_type=args.object_type,
-            gesture=args.gesture,
+            object_type=object_type,
+            gesture=gesture,
+            trajectory_selector=(
+                None if selector is None else parsed_selection.canonical_selector
+            ),
             residual_enabled=args.use_residual,
             use_film=args.film,
             terminal=args.terminal,
