@@ -899,7 +899,7 @@ def test_rerun_close_disconnects_fresh_active_stream_once(tmp_path) -> None:
     assert not recorder.active_path.exists()
 
 
-def test_rerun_finalizes_terminal_episode_before_delayed_reset(trajectory, tmp_path) -> None:
+def test_rerun_finalizes_terminal_episode_without_reset_tick(trajectory, tmp_path) -> None:
     from sim.manorl.rerun_recorder import ManoRerunRecorder
 
     env = _environment(trajectory)
@@ -909,13 +909,6 @@ def test_rerun_finalizes_terminal_episode_before_delayed_reset(trajectory, tmp_p
     env.step(np.zeros((1, 26), dtype=np.float64))
     assert env.last_transition is not None
     assert bool(env.last_transition.termination.reset[0])
-    recorder.record_transition()
-    assert recorder.active_path.exists()
-    assert not recorder.output.exists()
-
-    env.step(np.zeros((1, 26), dtype=np.float64))
-    assert env.last_transition is not None
-    assert bool(env.last_transition.reset_applied[0])
     recorder.record_transition()
     assert recorder.output.name == "episodes.rrd"
     stable_bytes = recorder.output.read_bytes()

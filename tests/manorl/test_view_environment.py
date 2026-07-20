@@ -321,7 +321,7 @@ def test_viewer_reports_missing_reset_completed_rerun_artifact(capsys: pytest.Ca
             return None
 
     assert _close_rerun_recorder(FakeRecorder()) is None
-    assert capsys.readouterr().out == "No reset-complete Rerun episode was published.\n"
+    assert capsys.readouterr().out == "No terminal-complete Rerun episode was published.\n"
 
 
 @pytest.mark.parametrize(
