@@ -182,6 +182,12 @@ source boundaries so every eligible pair remains trainable. The legacy
 Suffix identities with more than the exact `object_action_sequence` fields and
 rows explicitly marked as generated are excluded.
 
+The trainer defaults to the repository's pinned absolute Lance path. When a
+machine exposes the same dataset version at a different mount point, pass
+`--dataset-path /absolute/path/to/npy_s02_v3.lance`. The resolved path is
+recorded in W&B, metrics, and checkpoint runtime configuration; dataset version
+and row validation remain unchanged.
+
 The validated Gym checkpoint's resolved run config uses a 4096-sample
 minibatch. ManoRL therefore defaults to the largest divisor shared by `4096`
 and the configured 48-step rollout batch. The production 2,048-world default

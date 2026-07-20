@@ -29,6 +29,7 @@ from sim.manorl.abi import (
 )
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.cli import parse_cli_bool
+from sim.manorl.contracts import DATASET_PATH
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.observations import CONTACT_FORCE_THRESHOLD
@@ -144,6 +145,7 @@ class TrainingBudget:
     object_type: str = "cube1"
     gesture: str = "01"
     trajectory_selector: str | None = None
+    dataset_path: str = DATASET_PATH
     residual_enabled: bool = True
     use_film: bool = True
     terminal: bool = True
@@ -1698,6 +1700,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         object_type=budget.object_type,
         gesture=budget.gesture,
         selector=budget.trajectory_selector,
+        dataset_path=Path(budget.dataset_path),
     )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
     evaluation_num_envs = _full_coverage_evaluation_num_envs(budget, trajectories)
@@ -1998,6 +2001,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-envs", type=int, default=2048)
     parser.add_argument("--evaluation-num-envs", type=int, default=1)
     parser.add_argument(
+        "--dataset-path",
+        type=Path,
+        default=Path(DATASET_PATH),
+        help="pinned Lance dataset path (default: repository contract path)",
+    )
+    parser.add_argument(
         "--minibatch-size",
         type=int,
         help="override resolved Gym minibatch size (default: largest 4096-compatible divisor)",
@@ -2100,7 +2109,10 @@ def main(argv: list[str] | None = None) -> int:
     gesture = args.gesture or "01"
     try:
         parsed_selection = TrajectorySelection(
-            object_type=object_type, gesture=gesture, selector=selector
+            object_type=object_type,
+            gesture=gesture,
+            selector=selector,
+            dataset_path=args.dataset_path,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -2161,6 +2173,7 @@ def main(argv: list[str] | None = None) -> int:
             trajectory_selector=(
                 None if selector is None else parsed_selection.canonical_selector
             ),
+            dataset_path=str(args.dataset_path.resolve()),
             residual_enabled=args.use_residual,
             use_film=args.film,
             terminal=args.terminal,
