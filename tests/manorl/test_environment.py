@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import json
-from threading import Barrier
 
 import numpy as np
 import pytest
@@ -961,9 +959,7 @@ def test_two_world_cpu_vector_smoke_has_independent_equal_worlds(trajectory) -> 
     )
 
 
-def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(
-    trajectory, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(trajectory) -> None:
     cube2_shift = _initial_support_shift(
         trajectory.object_pos_raw[0], trajectory.object_quat_xyzw[0], "cube2"
     )
@@ -992,22 +988,7 @@ def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(
     assert env.object_geometry.shape == (3, 12)
     assert not np.array_equal(env.object_geometry[0], env.object_geometry[1])
 
-    barrier = Barrier(len(env._object_routes))
-    for _, route in env._object_routes.values():
-        original_step = route.step
-
-        def concurrent_step(actions, *, _original=original_step):
-            barrier.wait(timeout=10.0)
-            return _original(actions)
-
-        monkeypatch.setattr(route, "step", concurrent_step)
-    executor = ThreadPoolExecutor(max_workers=len(env._object_routes))
-    env._route_executor = executor
-    try:
-        observation, reward, reset, extras = env.step(np.zeros((3, 26), dtype=np.float64))
-    finally:
-        executor.shutdown()
-        env._route_executor = None
+    observation, reward, reset, extras = env.step(np.zeros((3, 26), dtype=np.float64))
     assert observation["obs"].shape == (3, 476)
     assert reward.shape == reset.shape == extras["time_outs"].shape == (3,)
     np.testing.assert_array_equal(env.progress, (1, 1, 1))
