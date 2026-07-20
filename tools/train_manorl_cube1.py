@@ -61,6 +61,31 @@ REWARD_UPDATE_COMPONENTS = (
     "survival",
     "deviation_penalty",
 )
+GYM_INSTANT_GROUP_COMPONENTS = {
+    "distance_x": "distance_reward_x_instant",
+    "distance_y": "distance_reward_y_instant",
+    "distance_z": "distance_reward_z_instant",
+    "rotation": "rotation_reward_instant",
+    "action_penalty": "action_penalty_instant",
+    "position_penalty": "position_penalty_instant",
+    "joint_penalty": "joint_penalty_instant",
+    "contact": "contact_reward_instant",
+    "object_stability": "object_stability_reward_instant",
+    "object_speed": "object_speed_instant",
+}
+GYM_EPISODE_GROUP_COMPONENTS = {
+    "distance_x": "distance_reward_x",
+    "distance_y": "distance_reward_y",
+    "distance_z": "distance_reward_z",
+    "rotation": "rotation_reward",
+    "survival": "survival_reward",
+    "action_penalty": "action_penalty",
+    "contact": "contact_reward",
+    "object_stability": "object_stability_reward",
+}
+GROUPED_REWARD_COMPONENTS = tuple(
+    dict.fromkeys(("total", *GYM_INSTANT_GROUP_COMPONENTS, *GYM_EPISODE_GROUP_COMPONENTS))
+)
 SKRL_TRACKING_METRICS = (
     ("Loss / Policy loss", "losses/a_loss"),
     ("Loss / Value loss", "losses/c_loss"),
@@ -164,6 +189,21 @@ class TrainingBudget:
 
 
 @dataclass(frozen=True)
+class EvaluationGroupResult:
+    label: str
+    kind: Literal["object", "object_action"]
+    num_envs: int
+    return_mean: float
+    reward_mean: float
+    action_abs_mean: float
+    final_object_target_distance: float
+    max_object_target_distance: float
+    contact_reward_mean: float
+    success_count: int
+    failure_count: int
+
+
+@dataclass(frozen=True)
 class EvaluationResult:
     mode: str
     calls: int
@@ -181,6 +221,228 @@ class EvaluationResult:
     success_seen: bool = False
     failure_seen: bool = False
     termination_reason_code: int = 0
+    groups: tuple[EvaluationGroupResult, ...] = ()
+
+
+@dataclass(frozen=True)
+class _MetricGroupAxis:
+    kind: Literal["object", "object_action"]
+    labels: tuple[str, ...]
+    env_group_ids: np.ndarray
+
+
+@dataclass(frozen=True)
+class _EnvironmentTelemetryLayout:
+    object_types: tuple[str, ...]
+    action_ids: tuple[str, ...]
+    identities: tuple[str, ...]
+    axes: tuple[_MetricGroupAxis, ...]
+
+
+def _environment_telemetry_layout(
+    environment: Any, *, num_envs: int
+) -> _EnvironmentTelemetryLayout | None:
+    """Resolve stable Gym-style object and object/action groups for vector rows."""
+
+    object_values = getattr(environment, "object_types", None)
+    action_values = getattr(environment, "action_ids", None)
+    if object_values is None or action_values is None:
+        return None
+    object_types = tuple(str(value) for value in object_values)
+    action_array = np.asarray(action_values)
+    if len(object_types) != num_envs or action_array.shape != (num_envs,):
+        raise RuntimeError("environment object/action telemetry has an invalid vector shape")
+    try:
+        action_ids = tuple(f"{int(value):02d}" for value in action_array)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("environment action telemetry must contain integer action IDs") from exc
+    pair_values = tuple(zip(object_types, action_ids, strict=True))
+    object_names = tuple(sorted(set(object_types)))
+    pair_names = tuple(sorted(set(pair_values)))
+    object_indices = {name: index for index, name in enumerate(object_names)}
+    pair_indices = {name: index for index, name in enumerate(pair_names)}
+    trajectories = getattr(environment, "trajectories", ())
+    if len(trajectories) == num_envs:
+        identities = tuple(str(item.identity.identity) for item in trajectories)
+    else:
+        identities = tuple(
+            f"{object_type}_{action_id}_env{env_id:06d}"
+            for env_id, (object_type, action_id) in enumerate(pair_values)
+        )
+    return _EnvironmentTelemetryLayout(
+        object_types=object_types,
+        action_ids=action_ids,
+        identities=identities,
+        axes=(
+            _MetricGroupAxis(
+                kind="object",
+                labels=tuple(f"object_{name}" for name in object_names),
+                env_group_ids=np.asarray(
+                    [object_indices[name] for name in object_types], dtype=np.int64
+                ),
+            ),
+            _MetricGroupAxis(
+                kind="object_action",
+                labels=tuple(f"{object_type}_{action_id}" for object_type, action_id in pair_names),
+                env_group_ids=np.asarray(
+                    [pair_indices[name] for name in pair_values], dtype=np.int64
+                ),
+            ),
+        ),
+    )
+
+
+class _GroupedUpdateTelemetry:
+    """Accumulate one PPO update at Gym's object and object/action levels."""
+
+    _instant_sources = ("total", *GYM_INSTANT_GROUP_COMPONENTS)
+
+    def __init__(self, layout: _EnvironmentTelemetryLayout) -> None:
+        self.layout = layout
+        self.component_sums = {
+            axis.kind: np.zeros((len(axis.labels), len(self._instant_sources)), dtype=np.float64)
+            for axis in layout.axes
+        }
+        self.sample_counts = {
+            axis.kind: np.zeros(len(axis.labels), dtype=np.int64) for axis in layout.axes
+        }
+        self.completed_counts = {
+            axis.kind: np.zeros(len(axis.labels), dtype=np.int64) for axis in layout.axes
+        }
+        self.success_counts = {
+            axis.kind: np.zeros(len(axis.labels), dtype=np.int64) for axis in layout.axes
+        }
+        self.failure_counts = {
+            axis.kind: np.zeros(len(axis.labels), dtype=np.int64) for axis in layout.axes
+        }
+        self.episode_returns = {
+            axis.kind: [[] for _ in axis.labels] for axis in layout.axes
+        }
+        self.episode_components = {
+            axis.kind: {
+                source: [[] for _ in axis.labels] for source in GYM_EPISODE_GROUP_COMPONENTS
+            }
+            for axis in layout.axes
+        }
+
+    @staticmethod
+    def _bincount(
+        axis: _MetricGroupAxis, values: np.ndarray | None = None
+    ) -> np.ndarray:
+        return np.bincount(
+            axis.env_group_ids,
+            weights=values,
+            minlength=len(axis.labels),
+        )
+
+    def add_step(
+        self,
+        *,
+        components: dict[str, np.ndarray],
+        completed: np.ndarray,
+        success: np.ndarray,
+        failure: np.ndarray,
+        episode_returns: np.ndarray,
+        episode_component_totals: dict[str, np.ndarray],
+    ) -> None:
+        num_envs = len(self.layout.object_types)
+        required = set(self._instant_sources) | set(GYM_EPISODE_GROUP_COMPONENTS)
+        if set(components) != required:
+            missing = sorted(required - set(components))
+            extra = sorted(set(components) - required)
+            raise RuntimeError(f"grouped reward telemetry mismatch; missing={missing}, extra={extra}")
+        if any(np.asarray(values).shape != (num_envs,) for values in components.values()):
+            raise RuntimeError("grouped reward telemetry has an invalid vector shape")
+        for values in (completed, success, failure, episode_returns):
+            if np.asarray(values).shape != (num_envs,):
+                raise RuntimeError("grouped episode telemetry has an invalid vector shape")
+        component_matrix = np.stack(
+            [np.asarray(components[source], dtype=np.float64) for source in self._instant_sources]
+        )
+        for axis in self.layout.axes:
+            self.sample_counts[axis.kind] += self._bincount(axis).astype(np.int64)
+            for component_index, values in enumerate(component_matrix):
+                self.component_sums[axis.kind][:, component_index] += self._bincount(axis, values)
+            self.completed_counts[axis.kind] += self._bincount(
+                axis, completed.astype(np.float64)
+            ).astype(np.int64)
+            self.success_counts[axis.kind] += self._bincount(
+                axis, success.astype(np.float64)
+            ).astype(np.int64)
+            self.failure_counts[axis.kind] += self._bincount(
+                axis, failure.astype(np.float64)
+            ).astype(np.int64)
+            if not completed.any():
+                continue
+            completed_group_ids = axis.env_group_ids[completed]
+            completed_returns = episode_returns[completed]
+            for group_id in np.unique(completed_group_ids):
+                selected = completed_group_ids == group_id
+                self.episode_returns[axis.kind][int(group_id)].extend(
+                    completed_returns[selected].tolist()
+                )
+                for source in GYM_EPISODE_GROUP_COMPONENTS:
+                    self.episode_components[axis.kind][source][int(group_id)].extend(
+                        np.asarray(episode_component_totals[source], dtype=np.float64)[completed][
+                            selected
+                        ].tolist()
+                    )
+
+    def metrics(self) -> dict[str, float]:
+        metrics: dict[str, float] = {}
+        source_indices = {source: index for index, source in enumerate(self._instant_sources)}
+        for axis in self.layout.axes:
+            for group_id, label in enumerate(axis.labels):
+                samples = int(self.sample_counts[axis.kind][group_id])
+                if samples < 1:
+                    continue
+                sums = self.component_sums[axis.kind][group_id]
+                metrics[f"reward_mean/{label}"] = float(sums[source_indices["total"]] / samples)
+                for source, metric_name in GYM_INSTANT_GROUP_COMPONENTS.items():
+                    metrics[f"{metric_name}/{label}"] = float(
+                        sums[source_indices[source]] / samples
+                    )
+                completed = int(self.completed_counts[axis.kind][group_id])
+                successes = int(self.success_counts[axis.kind][group_id])
+                failures = int(self.failure_counts[axis.kind][group_id])
+                metrics[f"attempts/{label}"] = float(completed)
+                metrics[f"successes/{label}"] = float(successes)
+                metrics[f"failures/{label}"] = float(failures)
+                metrics[f"success_rate/{label}"] = (
+                    100.0 * successes / completed if completed else 0.0
+                )
+                returns = np.asarray(
+                    self.episode_returns[axis.kind][group_id], dtype=np.float64
+                )
+                if returns.size == 0:
+                    continue
+                episode_mean = float(returns.mean())
+                metrics[f"episode_reward/{label}"] = episode_mean
+                metrics[f"episode_cumulative/episode_reward/{label}"] = episode_mean
+                metrics[f"episode_cumulative_min/episode_reward/{label}_min"] = float(
+                    returns.min()
+                )
+                metrics[f"episode_cumulative_max/episode_reward/{label}_max"] = float(
+                    returns.max()
+                )
+                distance_total = np.zeros(returns.size, dtype=np.float64)
+                for source, metric_name in GYM_EPISODE_GROUP_COMPONENTS.items():
+                    values = np.asarray(
+                        self.episode_components[axis.kind][source][group_id],
+                        dtype=np.float64,
+                    )
+                    if values.shape != returns.shape:
+                        raise RuntimeError("grouped episode reward telemetry lost alignment")
+                    value_mean = float(values.mean())
+                    metrics[f"{metric_name}/{label}"] = value_mean
+                    metrics[f"episode_cumulative/{metric_name}/{label}"] = value_mean
+                    if source in {"distance_x", "distance_y", "distance_z"}:
+                        distance_total += values
+                metrics[f"distance_reward/{label}"] = float(distance_total.mean())
+                metrics[f"episode_cumulative/distance_reward/{label}"] = float(
+                    distance_total.mean()
+                )
+        return metrics
 
 
 def _wandb_run_name(output: Path, budget: TrainingBudget) -> str:
@@ -219,9 +481,19 @@ def _wandb_config(
         "wandb": {
             "primary_axis": "completed_ppo_updates",
             "secondary_metrics": ["transitions"],
+            "shared_policy_run": True,
+            "aggregation_levels": ["global", "object", "object_action"],
+            "object_label": "object_{object}",
+            "object_action_label": "{object}_{action:02d}",
+            "grouped_instant_metrics": list(GYM_INSTANT_GROUP_COMPONENTS.values()),
+            "grouped_episode_metrics": [
+                "episode_reward",
+                *GYM_EPISODE_GROUP_COMPONENTS.values(),
+            ],
         },
         "evaluation": {
-            "num_envs": budget.resolved_evaluation_num_envs,
+            "num_envs": len(evaluation_trajectory_assignments),
+            "coverage": "at_least_one_environment_per_resolved_pair",
             "ppo_config": asdict(evaluation_ppo_config),
             "trajectory_assignments": evaluation_trajectory_assignments,
         },
@@ -365,15 +637,28 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
         if "episode_total_max" in update:
             metrics["episode_cumulative/total_max"] = update["episode_total_max"]
         metrics["episode_return_distribution"] = wandb.Histogram(update["episode_return_values"])
+    grouped_metrics = update.get("grouped_metrics", {})
+    if not isinstance(grouped_metrics, dict) or any(
+        not isinstance(name, str) or not isinstance(value, (int, float))
+        for name, value in grouped_metrics.items()
+    ):
+        raise RuntimeError("grouped W&B telemetry must be a flat numeric mapping")
+    metrics.update(grouped_metrics)
     run.log(metrics, step=completed_updates)
 
 
 def _evaluation_metrics(result: EvaluationResult) -> dict[str, object]:
-    return {
+    metrics = {
         f"evaluation/{result.mode}/{key}": value
         for key, value in asdict(result).items()
-        if key not in {"rewards_by_call", "object_target_distance_by_call", "mode"}
+        if key not in {"rewards_by_call", "object_target_distance_by_call", "mode", "groups"}
     }
+    for group in result.groups:
+        for key, value in asdict(group).items():
+            if key in {"label", "kind"}:
+                continue
+            metrics[f"evaluation/{result.mode}/{key}/{group.label}"] = value
+    return metrics
 
 
 def _log_wandb_evaluations(
@@ -443,7 +728,8 @@ def _latest_skrl_tracking_metrics(agent: Any) -> dict[str, float]:
 def _public_update_metrics(update: dict[str, Any]) -> dict[str, Any]:
     """Exclude in-memory W&B histogram samples from persisted update metrics."""
 
-    return {name: value for name, value in update.items() if name != "episode_return_values"}
+    private = {"episode_return_values", "grouped_metrics"}
+    return {name: value for name, value in update.items() if name not in private}
 
 
 def _completed_episode_record(
@@ -455,6 +741,8 @@ def _completed_episode_record(
     completed: np.ndarray,
     episode_returns: np.ndarray,
     termination_reason_codes: np.ndarray | None = None,
+    telemetry_layout: _EnvironmentTelemetryLayout | None = None,
+    episode_component_totals: dict[str, np.ndarray] | None = None,
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "schema": "manorl.completed_episode_returns.v1",
@@ -476,6 +764,20 @@ def _completed_episode_record(
         record["failure_env_ids"] = np.flatnonzero(
             completed & (reason_codes == TERMINATION_REASON_FAILURE)
         ).tolist()
+    if telemetry_layout is not None:
+        if len(telemetry_layout.object_types) != completed.size:
+            raise ValueError("episode telemetry layout must match completed mask")
+        record["schema"] = "manorl.completed_episode_returns.v2"
+        record["object_types"] = np.asarray(telemetry_layout.object_types)[completed].tolist()
+        record["action_ids"] = np.asarray(telemetry_layout.action_ids)[completed].tolist()
+        record["identities"] = np.asarray(telemetry_layout.identities)[completed].tolist()
+        if episode_component_totals is not None:
+            record["reward_components"] = {
+                metric_name: np.asarray(episode_component_totals[source], dtype=np.float64)[
+                    completed
+                ].tolist()
+                for source, metric_name in GYM_EPISODE_GROUP_COMPONENTS.items()
+            }
     return record
 
 
@@ -550,6 +852,40 @@ def _assert_cuda_runtime() -> None:
         raise RuntimeError("CUDA-capable target Torch is required for fast ManoRL training")
 
 
+def _evaluation_group_results(
+    layout: _EnvironmentTelemetryLayout | None,
+    *,
+    returns: np.ndarray,
+    reward_means: np.ndarray,
+    action_abs_means: np.ndarray,
+    final_distances: np.ndarray,
+    max_distances: np.ndarray,
+    contact_means: np.ndarray,
+    success: np.ndarray,
+    failure: np.ndarray,
+) -> tuple[EvaluationGroupResult, ...]:
+    if layout is None:
+        return ()
+    groups: list[EvaluationGroupResult] = []
+    for axis in layout.axes:
+        for group_id, label in enumerate(axis.labels):
+            selected = axis.env_group_ids == group_id
+            groups.append(EvaluationGroupResult(
+                label=label,
+                kind=axis.kind,
+                num_envs=int(selected.sum()),
+                return_mean=float(returns[selected].mean()),
+                reward_mean=float(reward_means[selected].mean()),
+                action_abs_mean=float(action_abs_means[selected].mean()),
+                final_object_target_distance=float(final_distances[selected].mean()),
+                max_object_target_distance=float(max_distances[selected].max()),
+                contact_reward_mean=float(contact_means[selected].mean()),
+                success_count=int(success[selected].sum()),
+                failure_count=int(failure[selected].sum()),
+            ))
+    return tuple(groups)
+
+
 def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trained"]) -> EvaluationResult:
     environment = runtime.gymnasium_env.environment
     # ``deterministic_actions`` only selects the Gaussian mean. PointNet/FiLM
@@ -557,69 +893,127 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trai
     # eval mode or the reported policy changes with vector batch statistics.
     runtime.agent.enable_models_training_mode(False)
     observations, _ = runtime.env.reset()
-    returns = torch.zeros((environment.config.num_envs, 1), device=runtime.device)
-    action_abs: list[float] = []
-    contacts: list[float] = []
-    reward_means: list[float] = []
+    num_envs = environment.config.num_envs
+    layout = _environment_telemetry_layout(environment, num_envs=num_envs)
+    returns = np.zeros(num_envs, dtype=np.float64)
+    action_abs_sums = np.zeros(num_envs, dtype=np.float64)
+    reward_sums = np.zeros(num_envs, dtype=np.float64)
+    contact_sums = np.zeros(num_envs, dtype=np.float64)
+    sample_counts = np.zeros(num_envs, dtype=np.int64)
+    max_distances = np.zeros(num_envs, dtype=np.float64)
+    final_distances = np.zeros(num_envs, dtype=np.float64)
+    reason_codes = np.full(num_envs, TERMINATION_REASON_NONE, dtype=np.int32)
+    success = np.zeros(num_envs, dtype=bool)
+    failure = np.zeros(num_envs, dtype=bool)
+    timeout = np.zeros(num_envs, dtype=bool)
+    active = np.ones(num_envs, dtype=bool)
+    rewards_by_call: list[float] = []
     distance_means: list[float] = []
-    reset_seen = False
-    timeout_seen = False
-    success_seen = False
-    failure_seen = False
-    termination_reason_code = 0
-    for call in range(791):
+    trajectory_lengths = np.asarray(
+        getattr(environment, "trajectory_lengths", np.full(num_envs, 792)), dtype=np.int64
+    )
+    if trajectory_lengths.shape != (num_envs,) or np.any(trajectory_lengths < 2):
+        raise RuntimeError("evaluation trajectory lengths have an invalid vector shape")
+    max_calls = int(trajectory_lengths.max()) + 1
+    for call in range(max_calls):
         if mode == "zero":
-            actions = torch.zeros((environment.config.num_envs, 26), device=runtime.device)
+            actions = torch.zeros((num_envs, 26), device=runtime.device)
         else:
             actions = runtime.deterministic_actions(observations)
         observations, rewards, terminated, truncated, info = runtime.env.step(actions)
         if not torch.isfinite(rewards).all() or not torch.isfinite(observations).all():
             raise RuntimeError(f"non-finite {mode} evaluation value at call {call}")
-        returns += rewards
-        action_abs.append(float(actions.abs().mean().item()))
-        reward_means.append(float(rewards.mean().item()))
+        reward_values = rewards.detach().cpu().numpy().reshape(-1).astype(np.float64)
+        action_values = actions.detach().abs().mean(dim=1).cpu().numpy().astype(np.float64)
+        if reward_values.shape != (num_envs,) or action_values.shape != (num_envs,):
+            raise RuntimeError("evaluation policy tensors have an invalid vector shape")
+        active_before = active.copy()
+        returns[active_before] += reward_values[active_before]
+        reward_sums[active_before] += reward_values[active_before]
+        action_abs_sums[active_before] += action_values[active_before]
+        sample_counts[active_before] += 1
+        rewards_by_call.append(float(reward_values[active_before].mean()))
         physical = environment.last_physical
         diagnostics = environment.last_reward
         if physical is None or diagnostics is None:
             raise RuntimeError("environment omitted physical/reward diagnostics during evaluation")
         indices = environment.trajectory_steps
         target = environment.reference_object_pos[
-            np.arange(environment.config.num_envs), indices
+            np.arange(num_envs), indices
         ]
         distances = np.linalg.norm(physical.object_position - target, axis=1)
-        distance_means.append(float(distances.mean()))
-        contacts.append(float(diagnostics.contact.mean()))
-        done = terminated | truncated
-        reset_seen |= bool(done.any().item())
-        timeout_seen |= bool(truncated.any().item())
+        contacts = np.asarray(diagnostics.contact, dtype=np.float64)
+        if distances.shape != (num_envs,) or contacts.shape != (num_envs,):
+            raise RuntimeError("evaluation physical diagnostics have an invalid vector shape")
+        distance_means.append(float(distances[active_before].mean()))
+        max_distances[active_before] = np.maximum(
+            max_distances[active_before], distances[active_before]
+        )
+        contact_sums[active_before] += contacts[active_before]
+        done = (terminated | truncated).detach().cpu().numpy().reshape(-1).astype(bool)
+        truncated_values = truncated.detach().cpu().numpy().reshape(-1).astype(bool)
+        if done.shape != (num_envs,) or truncated_values.shape != (num_envs,):
+            raise RuntimeError("evaluation termination tensors have an invalid vector shape")
+        newly_done = active_before & done
         termination = environment.last_termination
-        if termination is not None:
-            success_seen |= bool(np.asarray(termination.success, dtype=bool).any())
-            failure_seen |= bool(np.asarray(termination.failure, dtype=bool).any())
-            if bool(done.any().item()):
-                done_ids = np.flatnonzero(done.detach().cpu().numpy().reshape(-1))
-                reason_codes = np.asarray(termination.reason_code, dtype=np.int32).reshape(-1)
-                termination_reason_code = int(reason_codes[int(done_ids[0])])
-        if bool(done.any().item()):
+        if termination is None:
+            raise RuntimeError("environment omitted termination diagnostics during evaluation")
+        step_reason_codes = np.asarray(termination.reason_code, dtype=np.int32).reshape(-1)
+        step_success = np.asarray(termination.success, dtype=bool).reshape(-1)
+        step_failure = np.asarray(termination.failure, dtype=bool).reshape(-1)
+        if any(
+            values.shape != (num_envs,)
+            for values in (step_reason_codes, step_success, step_failure)
+        ):
+            raise RuntimeError("evaluation termination diagnostics have an invalid vector shape")
+        if newly_done.any():
+            final_distances[newly_done] = distances[newly_done]
+            reason_codes[newly_done] = step_reason_codes[newly_done]
+            success[newly_done] = step_success[newly_done]
+            failure[newly_done] = step_failure[newly_done]
+            timeout[newly_done] = truncated_values[newly_done]
+            active[newly_done] = False
+        if not active.any():
+            reward_means = reward_sums / sample_counts
+            action_abs_means = action_abs_sums / sample_counts
+            contact_means = contact_sums / sample_counts
+            unique_reason_codes = np.unique(reason_codes)
+            termination_reason_code = (
+                int(unique_reason_codes[0]) if unique_reason_codes.size == 1 else TERMINATION_REASON_NONE
+            )
             return EvaluationResult(
                 mode=mode,
                 calls=call + 1,
-                return_mean=float(returns.mean().item()),
-                reward_mean=float(np.mean(reward_means)),
-                action_abs_mean=float(np.mean(action_abs)),
-                final_object_target_distance=float(distances.mean()),
-                max_object_target_distance=float(np.max(distance_means)),
-                contact_reward_mean=float(np.mean(contacts)),
-                reset_seen=reset_seen,
-                timeout_seen=timeout_seen,
-                completed_horizon=call == 790 and reset_seen,
-                rewards_by_call=reward_means,
+                return_mean=float(returns.mean()),
+                reward_mean=float(reward_means.mean()),
+                action_abs_mean=float(action_abs_means.mean()),
+                final_object_target_distance=float(final_distances.mean()),
+                max_object_target_distance=float(max_distances.max()),
+                contact_reward_mean=float(contact_means.mean()),
+                reset_seen=True,
+                timeout_seen=bool(timeout.any()),
+                completed_horizon=bool(success.all()),
+                rewards_by_call=rewards_by_call,
                 object_target_distance_by_call=distance_means,
-                success_seen=success_seen,
-                failure_seen=failure_seen,
+                success_seen=bool(success.any()),
+                failure_seen=bool(failure.any()),
                 termination_reason_code=termination_reason_code,
+                groups=_evaluation_group_results(
+                    layout,
+                    returns=returns,
+                    reward_means=reward_means,
+                    action_abs_means=action_abs_means,
+                    final_distances=final_distances,
+                    max_distances=max_distances,
+                    contact_means=contact_means,
+                    success=success,
+                    failure=failure,
+                ),
             )
-    raise RuntimeError(f"{mode} evaluation did not terminate at the source horizon")
+    remaining = np.flatnonzero(active).tolist()
+    raise RuntimeError(
+        f"{mode} evaluation did not terminate every environment; remaining env_ids={remaining[:16]}"
+    )
 
 
 def _post_interaction_runs_optimizer(
@@ -689,6 +1083,17 @@ def _train(
     pending_done = torch.zeros(
         (environment.config.num_envs, 1), device=observations.device, dtype=torch.bool
     )
+    telemetry_layout = _environment_telemetry_layout(
+        environment, num_envs=environment.config.num_envs
+    )
+    episode_component_totals = (
+        {
+            source: np.zeros(environment.config.num_envs, dtype=np.float64)
+            for source in GYM_EPISODE_GROUP_COMPONENTS
+        }
+        if telemetry_layout is not None
+        else None
+    )
     profile_totals: dict[str, float] = {}
     profile_counts: dict[str, int] = {}
     profile_cuda = str(getattr(runtime, "device", getattr(runtime.agent, "device", "cpu"))).startswith("cuda")
@@ -743,6 +1148,11 @@ def _train(
         reset_count = 0
         success_count = 0
         failure_count = 0
+        grouped_telemetry = (
+            _GroupedUpdateTelemetry(telemetry_layout)
+            if telemetry_layout is not None
+            else None
+        )
         for update_step in range(config.rollouts):
             boundary_reset_phase = phase_start("episode_boundary_reset")
             if bool(pending_done.any()):
@@ -818,6 +1228,16 @@ def _train(
                 episode_returns = np.asarray(environment.episode_returns, dtype=np.float64)
             for name in REWARD_UPDATE_COMPONENTS:
                 reward_components[name].append(np.asarray(getattr(diagnostics, name), dtype=np.float64))
+            grouped_components: dict[str, np.ndarray] | None = None
+            if grouped_telemetry is not None:
+                grouped_components = {
+                    source: np.asarray(getattr(diagnostics, source), dtype=np.float64)
+                    for source in GROUPED_REWARD_COMPONENTS
+                }
+                if episode_component_totals is None:
+                    raise RuntimeError("grouped episode accumulator was not initialized")
+                for source in GYM_EPISODE_GROUP_COMPONENTS:
+                    episode_component_totals[source] += grouped_components[source]
             completed = np.asarray(termination.reset, dtype=bool)
             failure_value = getattr(termination, "failure", None)
             if failure_value is None:
@@ -847,6 +1267,17 @@ def _train(
             success_count += int(success.sum())
             failure_count += int(failure.sum())
             completed_episode_returns.extend(episode_returns[completed].tolist())
+            if grouped_telemetry is not None:
+                if grouped_components is None or episode_component_totals is None:
+                    raise RuntimeError("grouped update telemetry was not initialized")
+                grouped_telemetry.add_step(
+                    components=grouped_components,
+                    completed=completed,
+                    success=success,
+                    failure=failure,
+                    episode_returns=episode_returns,
+                    episode_component_totals=episode_component_totals,
+                )
             if completed.any() and on_completed_episodes is not None:
                 on_completed_episodes(_completed_episode_record(
                     update=update + 1,
@@ -858,7 +1289,12 @@ def _train(
                     termination_reason_codes=reason_codes
                     if hasattr(termination, "reason_code")
                     else None,
+                    telemetry_layout=telemetry_layout,
+                    episode_component_totals=episode_component_totals,
                 ))
+            if completed.any() and episode_component_totals is not None:
+                for values in episode_component_totals.values():
+                    values[completed] = 0.0
             phase_stop("host_telemetry", telemetry_phase)
             reset_item_phase = phase_start("reset_count_host_item")
             reset_increment = int(done.sum().item())
@@ -908,6 +1344,8 @@ def _train(
             "rewards/iter": reward_mean,
             **component_means,
         }
+        if grouped_telemetry is not None:
+            update_metrics["grouped_metrics"] = grouped_telemetry.metrics()
         update_metrics.update(_latest_skrl_tracking_metrics(runtime.agent))
         if completed_episode_returns:
             episode_return_array = np.asarray(completed_episode_returns, dtype=np.float64)
@@ -1068,9 +1506,16 @@ def _build_training_observer(
 
 
 def _build_evaluation_runtime(
-    *, selection: TrajectorySelection, budget: TrainingBudget, training_config: ManoPPOConfig
+    *,
+    selection: TrajectorySelection,
+    budget: TrainingBudget,
+    training_config: ManoPPOConfig,
+    num_envs: int | None = None,
 ) -> tuple[ManoSkrlRuntime, ManoPPOConfig, list[dict[str, object]]]:
-    num_envs = budget.resolved_evaluation_num_envs
+    num_envs = budget.resolved_evaluation_num_envs if num_envs is None else num_envs
+    maximum = min(budget.num_envs, 128)
+    if not 1 <= num_envs <= maximum:
+        raise ValueError(f"evaluation num_envs must be within 1..{maximum}")
     trajectories = load_assigned_trajectory_batch(selection, num_envs=num_envs)
     physical = MujocoManoEnvironment(
         trajectories,
@@ -1084,6 +1529,21 @@ def _build_evaluation_runtime(
     )
     ppo_config = _evaluation_ppo_config(training_config, num_envs=num_envs)
     return ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config), ppo_config, _trajectory_assignments(trajectories)
+
+
+def _full_coverage_evaluation_num_envs(
+    budget: TrainingBudget, trajectories: Any
+) -> int:
+    """Use at least one deterministic evaluation environment per resolved pair."""
+
+    pair_count = max(1, len(getattr(trajectories, "resolved_pairs", ())))
+    num_envs = max(budget.resolved_evaluation_num_envs, pair_count)
+    maximum = min(budget.num_envs, 128)
+    if num_envs > maximum:
+        raise ValueError(
+            f"full-pair evaluation needs {num_envs} environments but the bounded maximum is {maximum}"
+        )
+    return num_envs
 
 
 def _save_checkpoint_atomically(
@@ -1240,6 +1700,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         selector=budget.trajectory_selector,
     )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
+    evaluation_num_envs = _full_coverage_evaluation_num_envs(budget, trajectories)
     assigned_object_types = {
         item.identity.identity.split("_")[0]
         for item in getattr(trajectories, "trajectories", ())
@@ -1278,7 +1739,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         raise RuntimeError(f"skrl runtime must train on CUDA, got {runtime.device!r}")
     trajectory_assignments = _trajectory_assignments(trajectories)
     evaluation_runtime, evaluation_ppo_config, evaluation_trajectory_assignments = _build_evaluation_runtime(
-        selection=selection, budget=budget, training_config=ppo_config
+        selection=selection,
+        budget=budget,
+        training_config=ppo_config,
+        num_envs=evaluation_num_envs,
     )
     trajectory_selection = _trajectory_selection_metadata(
         selection,
@@ -1410,7 +1874,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         # state may differ in-process after PPO training, so a fresh native load is
         # the reproducibility boundary rather than an implementation detail.
         evaluation_runtime, _, final_evaluation_trajectory_assignments = _build_evaluation_runtime(
-            selection=selection, budget=budget, training_config=ppo_config
+            selection=selection,
+            budget=budget,
+            training_config=ppo_config,
+            num_envs=evaluation_num_envs,
         )
         if final_evaluation_trajectory_assignments != evaluation_trajectory_assignments:
             raise RuntimeError("evaluation trajectory assignments changed during training")
@@ -1456,7 +1923,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "planned_transitions": budget.transitions,
                 "resolved_capture_transition_diagnostics": budget.resolved_capture_transition_diagnostics,
                 "warp_contact_capacity": contact_capacity,
-                "evaluation_num_envs": budget.resolved_evaluation_num_envs,
+                "evaluation_num_envs": evaluation_num_envs,
                 "evaluation_ppo_config": asdict(evaluation_ppo_config),
             },
             "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},

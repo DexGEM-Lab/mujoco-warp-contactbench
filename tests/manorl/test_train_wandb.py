@@ -197,10 +197,14 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert json.loads(json.dumps(config)) == config
     assert config["training_budget"]["planned_transitions"] == budget.transitions
     assert config["training_budget"]["wall_clock_seconds"] is None
-    assert config["wandb"] == {
-        "primary_axis": "completed_ppo_updates",
-        "secondary_metrics": ["transitions"],
-    }
+    assert config["wandb"]["primary_axis"] == "completed_ppo_updates"
+    assert config["wandb"]["secondary_metrics"] == ["transitions"]
+    assert config["wandb"]["shared_policy_run"] is True
+    assert config["wandb"]["aggregation_levels"] == ["global", "object", "object_action"]
+    assert config["wandb"]["object_label"] == "object_{object}"
+    assert config["wandb"]["object_action_label"] == "{object}_{action:02d}"
+    assert "contact_reward_instant" in config["wandb"]["grouped_instant_metrics"]
+    assert "episode_reward" in config["wandb"]["grouped_episode_metrics"]
     assert config["reward"]["ppo_scale"] == 0.5
     assert config["reward"]["contact_force_threshold_N"] == 0.2
     assert config["environment"]["contract"] == tool.ENVIRONMENT_CONTRACT_ID
@@ -282,6 +286,11 @@ def test_wandb_update_metrics_use_completed_update_steps() -> None:
         "losses/entropy": -0.01,
         "info/last_lr": 0.0003,
         "info/policy_std": 0.8,
+        "grouped_metrics": {
+            "reward_mean/object_cube1": 1.5,
+            "reward_mean/cube1_01": 2.5,
+            "success_rate/cube1_01": 50.0,
+        },
     })
 
     assert [step for _, step in run.logs] == [1, 2]
@@ -306,6 +315,9 @@ def test_wandb_update_metrics_use_completed_update_steps() -> None:
     assert run.logs[1][0]["info/last_lr"] == 0.0003
     assert run.logs[1][0]["info/policy_std"] == 0.8
     assert run.logs[1][0]["performance/algorithm_update_time_ms"] == 42.0
+    assert run.logs[1][0]["reward_mean/object_cube1"] == 1.5
+    assert run.logs[1][0]["reward_mean/cube1_01"] == 2.5
+    assert run.logs[1][0]["success_rate/cube1_01"] == 50.0
 
 
 def test_latest_skrl_tracking_metrics_maps_only_available_latest_values() -> None:
@@ -343,6 +355,19 @@ def test_wandb_evaluation_summaries_preserve_policy_alias_for_both_comparisons()
             completed_horizon=True,
             rewards_by_call=[0.1],
             object_target_distance_by_call=[0.3],
+            groups=(tool.EvaluationGroupResult(
+                label="cube1_01",
+                kind="object_action",
+                num_envs=1,
+                return_mean=return_mean,
+                reward_mean=0.1,
+                action_abs_mean=0.2,
+                final_object_target_distance=0.3,
+                max_object_target_distance=0.4,
+                contact_reward_mean=0.5,
+                success_count=1,
+                failure_count=0,
+            ),),
         )
 
     tool._log_wandb_evaluations(
@@ -359,6 +384,8 @@ def test_wandb_evaluation_summaries_preserve_policy_alias_for_both_comparisons()
     assert run.logs[0][0]["evaluation/policy/return_mean"] == 1.0
     assert run.logs[1][0]["evaluation/trained/return_mean"] == 2.0
     assert run.logs[1][0]["evaluation/policy/return_mean"] == 2.0
+    assert run.logs[1][0]["evaluation/trained/return_mean/cube1_01"] == 2.0
+    assert run.logs[1][0]["evaluation/policy/return_mean/cube1_01"] == 2.0
     assert run.summary["evaluation/policy/return_mean"] == 2.0
 
 

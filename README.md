@@ -186,7 +186,9 @@ reward use the same strict `0.2 N` threshold; maximum contact quality remains
 enabled by default; pass `--wandb false` for a local-only diagnostic. The
 default run uses 2,048 worlds, 8,000 updates, 48 rollout steps, a 4,096-sample
 minibatch, FiLM, dynamic point-cloud sampling, residual actions, terminal
-deviation handling, and one-world deterministic evaluation. This is
+deviation handling, and deterministic evaluation that covers every selected
+object/action pair. A single-pair run uses one evaluation world; a multi-pair
+run automatically uses at least one world per pair, bounded at 128. This is
 786,432,000 transitions; it has no wall-clock cutoff unless one is explicitly
 requested:
 
@@ -205,10 +207,11 @@ headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
 For an opt-in safety cap that may stop before all 8,000 updates complete, add
-`--wall-clock-seconds <positive-seconds>`. Evaluation defaults to one world to
-match the Gym reference; pass `--evaluation-num-envs <count>` explicitly for a
-bounded diagnostic count within `1..min(--num-envs, 128)`, so evaluation cannot
-recreate a second full-size runtime.
+`--wall-clock-seconds <positive-seconds>`. `--evaluation-num-envs` requests a
+minimum diagnostic count within `1..min(--num-envs, 128)`. The trainer raises
+that count when necessary to cover every resolved object/action pair once, so
+evaluation cannot silently report only the first pair or recreate a second
+full-size runtime.
 
 Every 200 completed updates, the default cadence writes
 `<output>/checkpoint-000200.pt` plus its `.pt.json` sidecar. Override the cadence
@@ -266,9 +269,13 @@ options. No API key or credentials belong in this repository:
 An omitted W&B name is derived from the output prefix, object, and gesture. The
 SDK cache is stored at `<output-parent>/wandb`, so the documented
 `outputs/manorl/...` prefixes keep it under ignored outputs. The run logs PPO
-updates by environment transitions, records zero/untrained/trained evaluation
-summaries and final acceptance values, then uploads the checkpoint and sidecar,
-metrics JSON, evaluation trace, and any completed Rerun recording.
+updates by environment transitions. One shared policy produces one W&B run;
+global metrics remain at their existing keys, while Gym-aligned object keys
+such as `reward_mean/object_cube1` and object/action keys such as
+`reward_mean/cube1_01` keep pair behavior separate. Episode, success, reward
+component, and zero/untrained/trained evaluation metrics use the same hierarchy.
+The run then uploads the checkpoint and sidecar, metrics JSON, evaluation trace,
+episode JSONL, and any completed Rerun recording.
 
 To inspect the explicitly selected generated cube1 Lance row 507 under current
 training termination semantics, use the same production environment with its
