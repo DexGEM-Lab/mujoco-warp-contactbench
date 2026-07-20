@@ -9,7 +9,7 @@ array retains capacity-padding entries after the solved records.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 import time
 from typing import Any, Sequence
 
@@ -24,7 +24,12 @@ from sim.manorl.abi import (
     early_phase_mask,
     process_residual_actions,
 )
-from sim.manorl.assets import ASSET_ROOT, compile_model, object_collision_vertices
+from sim.manorl.assets import (
+    ASSET_ROOT,
+    compile_model,
+    object_collision_vertices,
+    object_runtime,
+)
 from sim.manorl.contracts import (
     FLOOR_TOP_Z,
     KEYPOINT_NAMES,
@@ -497,10 +502,12 @@ def _normalized_xyzw(quaternions_wxyz: NDArray[object]) -> NDArray[np.float64]:
     return quaternions / norm
 
 
-def _source_surface_points(seed: int) -> NDArray[np.float64]:
-    """Reproduce trimesh.sample.sample_surface(mesh, 64, seed=seed) for cube1."""
+def _source_surface_points(
+    seed: int, object_type: str = OBJECT_TYPE
+) -> NDArray[np.float64]:
+    """Reproduce trimesh surface sampling for one registered object."""
 
-    triangles = object_collision_vertices().reshape(-1, 3, 3)
+    triangles = object_collision_vertices(object_type).reshape(-1, 3, 3)
     edge_a = triangles[:, 1] - triangles[:, 0]
     edge_b = triangles[:, 2] - triangles[:, 0]
     areas = np.linalg.norm(np.cross(edge_a, edge_b), axis=1) * 0.5
@@ -515,22 +522,28 @@ def _source_surface_points(seed: int) -> NDArray[np.float64]:
     return origins + (vectors * np.abs(lengths)).sum(axis=1)
 
 
-def _source_surface_template(seed: int) -> PointCloudTemplate:
-    points = _source_surface_points(seed)
+def _source_surface_template(
+    seed: int, object_type: str = OBJECT_TYPE
+) -> PointCloudTemplate:
+    points = _source_surface_points(seed, object_type)
     lower, upper = points.min(axis=0), points.max(axis=0)
     scale = np.maximum((upper - lower) / 2.0, 1e-6)
     normalized = (points - (upper + lower) / 2.0) / scale
     return PointCloudTemplate(normalized, mode="static_seed_42", normalized=True, scale=scale)
 
 
-def _dynamic_surface_template(generator: np.random.Generator) -> NDArray[np.float64]:
+def _dynamic_surface_template(
+    generator: np.random.Generator, object_type: str = OBJECT_TYPE
+) -> NDArray[np.float64]:
     """Use the source mesh sampler with the caller's explicit reset RNG."""
 
     seed = int(generator.integers(0, np.iinfo(np.int64).max))
-    return _source_surface_points(seed)
+    return _source_surface_points(seed, object_type)
 
 
-def _torch_global_surface_templates(batch_size: int) -> NDArray[np.float64]:
+def _torch_global_surface_templates(
+    batch_size: int, object_type: str = OBJECT_TYPE
+) -> NDArray[np.float64]:
     """Run the source CUDA sampler against PyTorch's global CUDA RNG."""
 
     if batch_size < 1:
@@ -541,7 +554,7 @@ def _torch_global_surface_templates(batch_size: int) -> NDArray[np.float64]:
         raise RuntimeError("torch_cuda_global point sampling requires CUDA")
     device = torch.device("cuda")
     triangles = torch.as_tensor(
-        object_collision_vertices().reshape(-1, 3, 3).copy(),
+        object_collision_vertices(object_type).reshape(-1, 3, 3).copy(),
         dtype=torch.float32,
         device=device,
     )
@@ -569,13 +582,18 @@ def _torch_global_surface_templates(batch_size: int) -> NDArray[np.float64]:
 
 
 def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64]:
-    if object_type != OBJECT_TYPE:
-        raise NotImplementedError(
-            f"MuJoCo object runtime is not implemented for {object_type!r}; only {OBJECT_TYPE!r} assets are compiled"
-        )
-    aliases = _CUBE1_GRASP_ALIASES.get(action_id)
+    runtime = object_runtime(object_type)
+    import yaml
+
+    payload = yaml.safe_load(runtime.grasp_mapping_path.read_text(encoding="utf-8"))
+    mappings = payload.get(object_type) if isinstance(payload, dict) else None
+    if not isinstance(mappings, dict):
+        raise ValueError(f"invalid grasp mapping asset for {object_type!r}")
+    aliases = mappings.get(action_id)
     if aliases is None:
         raise ValueError(f"no source grasp mapping for object={object_type!r}, gesture={action_id!r}")
+    if not isinstance(aliases, list) or not all(isinstance(alias, str) for alias in aliases):
+        raise ValueError(f"invalid source grasp aliases for {object_type!r}/{action_id!r}")
     alias_map = {
         "thumb2": "thumb_mcp", "thumb3": "thumb_ip",
         "index2": "index_pip", "index3": "index_dip",
@@ -618,13 +636,20 @@ class MjxWarpPhysicalProducer:
     sign convention, then aggregates only the declared source keypoint bodies.
     """
 
-    def __init__(self, mujoco: Any, model: Any) -> None:
+    def __init__(
+        self, mujoco: Any, model: Any, *, object_type: str = OBJECT_TYPE
+    ) -> None:
         self.mujoco = mujoco
         self.model = model
-        self.object_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, OBJECT_BODY_NAME)
-        object_joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, OBJECT_FREE_JOINT_NAME)
+        runtime = object_runtime(object_type)
+        self.object_body_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name
+        )
+        object_joint_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_JOINT, runtime.free_joint_name
+        )
         if self.object_body_id < 0 or object_joint_id < 0:
-            raise ValueError("compiled cube body/free joint is absent")
+            raise ValueError(f"compiled {object_type} body/free joint is absent")
         self.object_qpos_address = int(model.jnt_qposadr[object_joint_id])
         self.object_qvel_address = int(model.jnt_dofadr[object_joint_id])
         self.keypoint_geom_ids: list[int] = []
@@ -646,8 +671,10 @@ class MjxWarpPhysicalProducer:
         self.object_geom_ids = {
             geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) == self.object_body_id
         }
-        if len(self.object_geom_ids) != 1:
-            raise ValueError("the bounded cube contract requires exactly one object collision geom")
+        if len(self.object_geom_ids) != runtime.collision_geom_count:
+            raise ValueError(
+                f"the {object_type} runtime requires {runtime.collision_geom_count} object collision geoms"
+            )
         if self.object_geom_ids & set(self.keypoint_geom_ids):
             raise ValueError("source hand and object collision geoms must be disjoint")
         self.reset_profile()
@@ -863,6 +890,43 @@ class MjxWarpPhysicalProducer:
         )
 
 
+def _scatter_routed_value(
+    routed: list[tuple[NDArray[np.int64], Any]], total: int
+) -> Any:
+    """Scatter matching route-local arrays/dataclasses into global env order."""
+
+    non_null = [(indices, value) for indices, value in routed if value is not None]
+    if not non_null:
+        return None
+    if len(non_null) != len(routed):
+        raise RuntimeError("heterogeneous routes produced inconsistent optional diagnostics")
+    sample = non_null[0][1]
+    if is_dataclass(sample):
+        cls = type(sample)
+        return cls(
+            **{
+                item.name: _scatter_routed_value(
+                    [(indices, getattr(value, item.name)) for indices, value in non_null],
+                    total,
+                )
+                for item in fields(sample)
+            }
+        )
+    if isinstance(sample, np.ndarray):
+        if sample.ndim == 0:
+            return sample.copy()
+        result = np.empty((total, *sample.shape[1:]), dtype=sample.dtype)
+        for indices, value in non_null:
+            array = np.asarray(value)
+            if array.shape[0] != len(indices) or array.shape[1:] != sample.shape[1:]:
+                raise RuntimeError("heterogeneous routes produced incompatible array shapes")
+            result[indices] = array
+        return result
+    if all(value == sample for _, value in non_null[1:]):
+        return sample
+    raise RuntimeError("heterogeneous routes produced incompatible scalar diagnostics")
+
+
 class MujocoManoEnvironment:
     """A bounded MJX-Warp vector environment for the accepted ManoRL trajectory.
 
@@ -909,27 +973,33 @@ class MujocoManoEnvironment:
             raise ValueError("each trajectory identity must be object_action_sequence")
         object_types = {parts[0] for parts in identity_parts}
         if len(object_types) != 1:
-            raise NotImplementedError("one MJX batch must use one object runtime; split mixed-object selections first")
-        self.object_type = next(iter(object_types))
-        self.action_ids = np.asarray([int(parts[1]) for parts in identity_parts], dtype=np.int64)
-        if self.object_type != OBJECT_TYPE:
-            raise NotImplementedError(
-                f"selected {self.object_type!r} trajectories are assigned but its MuJoCo object runtime is not yet migrated; "
-                f"available runtime: {OBJECT_TYPE!r}"
+            self._initialize_heterogeneous_router(
+                trajectories, identity_parts, object_types, config
             )
+            return
+        self.object_type = next(iter(object_types))
+        self.object_types = tuple(self.object_type for _ in trajectories)
+        self.action_ids = np.asarray([int(parts[1]) for parts in identity_parts], dtype=np.int64)
+        object_runtime(self.object_type)
+        self._object_routes: dict[str, tuple[NDArray[np.int64], MujocoManoEnvironment]] = {}
         self.config = config
         self.jax = jax
         self.jp = jax.numpy
         self.phase_timings = PhaseTimings(enabled=config.profile_phases)
         self.mjx = mjx
         self.device = devices[0]
-        self.mujoco, self.model = compile_model(config.servo)
+        self.mujoco, self.model = compile_model(
+            config.servo, object_type=self.object_type
+        )
         minimum_contact_capacity = 31 * config.num_envs
         if config.contact_capacity < minimum_contact_capacity:
             raise ValueError(
-                f"contact_capacity {config.contact_capacity} is below {minimum_contact_capacity} required for {config.num_envs} cube1 worlds"
+                f"contact_capacity {config.contact_capacity} is below {minimum_contact_capacity} "
+                f"required for {config.num_envs} {self.object_type} worlds"
             )
-        self.producer = MjxWarpPhysicalProducer(self.mujoco, self.model)
+        self.producer = MjxWarpPhysicalProducer(
+            self.mujoco, self.model, object_type=self.object_type
+        )
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
             raise RuntimeError(f"MJX did not select Warp: {self.mjx_model.impl}")
@@ -966,11 +1036,11 @@ class MujocoManoEnvironment:
         self.expected_contact_weights = self.expected_contact_mask.copy()
         self.active_joint_mask = _active_joint_mask(self.expected_contact_mask)
         self.object_geometry = geometry_encoding(
-            object_name="cube1",
-            geometry_type="box",
-            dimensions=np.ptp(object_collision_vertices(), axis=0),
+            object_name=self.object_type,
+            geometry_type=object_runtime(self.object_type).geometry_type,
+            dimensions=np.ptp(object_collision_vertices(self.object_type), axis=0),
         )
-        self.object_support_points = object_collision_vertices().copy()
+        self.object_support_points = object_collision_vertices(self.object_type).copy()
         self.object_gravity_world_force = (
             np.asarray(self.model.opt.gravity, dtype=np.float64)
             * float(self.model.body_subtreemass[self.producer.object_body_id])
@@ -985,7 +1055,7 @@ class MujocoManoEnvironment:
             # Source task construction samples one random-force probability per
             # environment before policy construction and the first point reset.
             torch.rand(config.num_envs, device="cuda")
-        self._static_template = _source_surface_template(42)
+        self._static_template = _source_surface_template(42, self.object_type)
         self._dynamic_templates: NDArray[np.float64] | None = None
         self.progress = np.zeros(config.num_envs, dtype=np.int64)
         self.trajectory_steps = np.zeros(config.num_envs, dtype=np.int64)
@@ -1004,6 +1074,204 @@ class MujocoManoEnvironment:
         self.reset()
         self._initializing_point_templates = False
         self.reset_phase_profile()
+
+    def _initialize_heterogeneous_router(
+        self,
+        trajectories: Sequence[ReferenceTrajectory],
+        identity_parts: list[list[str]],
+        object_types: set[str],
+        config: EnvironmentConfig,
+    ) -> None:
+        """Build one homogeneous MJX sub-batch per object and preserve env order."""
+
+        for object_type in sorted(object_types):
+            object_runtime(object_type)
+        self.config = config
+        self.object_type = "heterogeneous"
+        self.object_types = tuple(parts[0] for parts in identity_parts)
+        self.action_ids = np.asarray([int(parts[1]) for parts in identity_parts], dtype=np.int64)
+        self._object_routes: dict[
+            str, tuple[NDArray[np.int64], MujocoManoEnvironment]
+        ] = {}
+        for object_type in sorted(object_types):
+            env_ids = np.asarray(
+                [index for index, value in enumerate(self.object_types) if value == object_type],
+                dtype=np.int64,
+            )
+            route_config = replace(
+                config,
+                num_envs=len(env_ids),
+                contact_capacity=max(128, 31 * len(env_ids) + 64),
+            )
+            route = MujocoManoEnvironment(
+                TrajectoryBatch(tuple(trajectories[int(index)] for index in env_ids)),
+                route_config,
+            )
+            self._object_routes[object_type] = (env_ids, route)
+
+        first_route = next(iter(self._object_routes.values()))[1]
+        self.jax = first_route.jax
+        self.jp = first_route.jp
+        self.device = first_route.device
+        self.joint_lower = first_route.joint_lower.copy()
+        self.joint_upper = first_route.joint_upper.copy()
+        for _, route in self._object_routes.values():
+            if not np.array_equal(route.joint_lower, self.joint_lower) or not np.array_equal(
+                route.joint_upper, self.joint_upper
+            ):
+                raise RuntimeError("heterogeneous object routes changed the MANO joint limits")
+
+        self._build_reference_tables()
+        keypoint_ids: list[NDArray[np.int64] | None] = [None] * config.num_envs
+        for env_ids, route in self._object_routes.values():
+            for local_id, global_id in enumerate(env_ids):
+                keypoint_ids[int(global_id)] = route.expected_keypoint_ids[local_id]
+        if any(value is None for value in keypoint_ids):
+            raise RuntimeError("heterogeneous keypoint routing omitted an environment")
+        self.expected_keypoint_ids = tuple(value for value in keypoint_ids if value is not None)
+        self.expected_contact_mask = _scatter_routed_value(
+            [(env_ids, route.expected_contact_mask) for env_ids, route in self._object_routes.values()],
+            config.num_envs,
+        )
+        self.expected_contact_weights = _scatter_routed_value(
+            [(env_ids, route.expected_contact_weights) for env_ids, route in self._object_routes.values()],
+            config.num_envs,
+        )
+        self.active_joint_mask = _scatter_routed_value(
+            [(env_ids, route.active_joint_mask) for env_ids, route in self._object_routes.values()],
+            config.num_envs,
+        )
+        self.object_geometry = _scatter_routed_value(
+            [
+                (env_ids, np.broadcast_to(route.object_geometry, (len(env_ids), 12)).copy())
+                for env_ids, route in self._object_routes.values()
+            ],
+            config.num_envs,
+        )
+        self.object_support_points = tuple(
+            object_collision_vertices(object_type).copy() for object_type in self.object_types
+        )
+        self.object_gravity_world_force = _scatter_routed_value(
+            [
+                (
+                    env_ids,
+                    np.broadcast_to(route.object_gravity_world_force, (len(env_ids), 3)).copy(),
+                )
+                for env_ids, route in self._object_routes.values()
+            ],
+            config.num_envs,
+        )
+        self.object_gravity_force = np.linalg.norm(self.object_gravity_world_force, axis=1)
+        self._sync_heterogeneous_state()
+        self.reset_phase_profile()
+
+    @property
+    def is_heterogeneous(self) -> bool:
+        return bool(self._object_routes)
+
+    def _sync_heterogeneous_state(self) -> None:
+        routes = list(self._object_routes.values())
+        total = self.config.num_envs
+        for name in (
+            "progress",
+            "trajectory_steps",
+            "cumulative_offset",
+            "cumulative_joint_offset",
+            "reset_mask",
+            "episode_returns",
+        ):
+            setattr(
+                self,
+                name,
+                _scatter_routed_value(
+                    [(env_ids, getattr(route, name)) for env_ids, route in routes], total
+                ),
+            )
+        self.last_physical = _scatter_routed_value(
+            [(env_ids, route.last_physical) for env_ids, route in routes], total
+        )
+        self.last_observation = _scatter_routed_value(
+            [(env_ids, route.last_observation) for env_ids, route in routes], total
+        )
+        self.last_reward = _scatter_routed_value(
+            [(env_ids, route.last_reward) for env_ids, route in routes], total
+        )
+        self.last_termination = _scatter_routed_value(
+            [(env_ids, route.last_termination) for env_ids, route in routes], total
+        )
+        self.last_transition = _scatter_routed_value(
+            [(env_ids, route.last_transition) for env_ids, route in routes], total
+        )
+        controller_values = [route.last_controller_targets for _, route in routes]
+        self.last_controller_targets = (
+            None
+            if any(value is None for value in controller_values)
+            else _scatter_routed_value(
+                [(env_ids, route.last_controller_targets) for env_ids, route in routes],
+                total,
+            )
+        )
+        self.control_call = max(route.control_call for _, route in routes)
+
+    def _heterogeneous_reset(
+        self, env_ids: NDArray[object] | None
+    ) -> dict[str, NDArray[np.float64]]:
+        if env_ids is None:
+            selected = np.arange(self.config.num_envs, dtype=np.int64)
+        else:
+            selected = np.asarray(env_ids)
+            if selected.ndim != 1 or not np.issubdtype(selected.dtype, np.integer):
+                raise ValueError("env_ids must be a one-dimensional integer array")
+            selected = np.unique(selected.astype(np.int64, copy=False))
+            if np.any(selected < 0) or np.any(selected >= self.config.num_envs):
+                raise ValueError("env_ids contains an invalid environment index")
+        for route_env_ids, route in self._object_routes.values():
+            local_ids = np.flatnonzero(np.isin(route_env_ids, selected)).astype(np.int64)
+            if len(local_ids):
+                route.reset(env_ids=None if env_ids is None else local_ids)
+        self._sync_heterogeneous_state()
+        assert self.last_observation is not None
+        return {"obs": self.last_observation.policy_input.copy()}
+
+    def _heterogeneous_step(
+        self, raw_actions: NDArray[object]
+    ) -> tuple[
+        dict[str, NDArray[np.float64]],
+        NDArray[np.float64],
+        NDArray[np.bool_],
+        dict[str, NDArray[Any]],
+    ]:
+        actions = np.asarray(raw_actions, dtype=np.float64)
+        if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
+            raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
+        routed_outputs = []
+        for env_ids, route in self._object_routes.values():
+            observation, rewards, resets, extras = route.step(actions[env_ids])
+            routed_outputs.append((env_ids, observation, rewards, resets, extras))
+        self._sync_heterogeneous_state()
+        observations = _scatter_routed_value(
+            [(env_ids, output["obs"]) for env_ids, output, _, _, _ in routed_outputs],
+            self.config.num_envs,
+        )
+        rewards = _scatter_routed_value(
+            [(env_ids, values) for env_ids, _, values, _, _ in routed_outputs],
+            self.config.num_envs,
+        )
+        resets = _scatter_routed_value(
+            [(env_ids, values) for env_ids, _, _, values, _ in routed_outputs],
+            self.config.num_envs,
+        )
+        extra_keys = tuple(routed_outputs[0][4])
+        if any(tuple(item[4]) != extra_keys for item in routed_outputs[1:]):
+            raise RuntimeError("heterogeneous routes returned incompatible step extras")
+        extras = {
+            key: _scatter_routed_value(
+                [(env_ids, item_extras[key]) for env_ids, _, _, _, item_extras in routed_outputs],
+                self.config.num_envs,
+            )
+            for key in extra_keys
+        }
+        return {"obs": observations}, rewards, resets, extras
 
     def _build_reference_tables(self) -> None:
         self.trajectory_lengths = np.asarray([len(item.q_ref) for item in self.trajectories], dtype=np.int64)
@@ -1058,18 +1326,36 @@ class MujocoManoEnvironment:
             self._dynamic_templates = np.zeros((self.config.num_envs, POINT_COUNT, 3), dtype=np.float64)
         if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
             if self._initializing_point_templates:
-                self._dynamic_templates[env_ids] = _source_surface_points(42)
+                self._dynamic_templates[env_ids] = _source_surface_points(
+                    42, self.object_type
+                )
                 return
-            self._dynamic_templates[env_ids] = _torch_global_surface_templates(len(env_ids))
+            self._dynamic_templates[env_ids] = _torch_global_surface_templates(
+                len(env_ids), self.object_type
+            )
             return
         for env_id in env_ids:
-            self._dynamic_templates[env_id] = _dynamic_surface_template(self._point_rngs[int(env_id)])
+            self._dynamic_templates[env_id] = _dynamic_surface_template(
+                self._point_rngs[int(env_id)], self.object_type
+            )
 
     def reseed_point_templates(self, seed: int) -> None:
         """Set deterministic reset-local RNGs without changing static templates."""
 
         if not isinstance(seed, (int, np.integer)):
             raise TypeError("point-template seed must be an integer")
+        if self.is_heterogeneous:
+            if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
+                import torch
+
+                torch.cuda.manual_seed_all(int(seed))
+            else:
+                for env_ids, route in self._object_routes.values():
+                    route._point_rngs = [
+                        np.random.default_rng(int(seed) + int(global_id))
+                        for global_id in env_ids
+                    ]
+            return
         if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
             import torch
 
@@ -1088,11 +1374,25 @@ class MujocoManoEnvironment:
 
         if not 0 <= env_id < self.config.num_envs:
             raise IndexError(f"env_id must be in [0, {self.config.num_envs - 1}]")
+        if self.is_heterogeneous:
+            for env_ids, route in self._object_routes.values():
+                matches = np.flatnonzero(env_ids == env_id)
+                if len(matches):
+                    return route.host_data(int(matches[0]))
+            raise RuntimeError("heterogeneous host-data route is absent")
         return self.host_data_batch()[env_id]
 
     def host_data_batch(self) -> list[Any]:
         """Transfer the complete batch once for tiled rendering diagnostics."""
 
+        if self.is_heterogeneous:
+            result: list[Any | None] = [None] * self.config.num_envs
+            for env_ids, route in self._object_routes.values():
+                for local_id, value in enumerate(route.host_data_batch()):
+                    result[int(env_ids[local_id])] = value
+            if any(value is None for value in result):
+                raise RuntimeError("heterogeneous host-data routing omitted a world")
+            return [value for value in result if value is not None]
         host_data = self.mjx.get_data(self.model, self.data)
         if not isinstance(host_data, list) or len(host_data) != self.config.num_envs:
             raise RuntimeError("batched MJX environment did not produce one host state per world")
@@ -1108,6 +1408,14 @@ class MujocoManoEnvironment:
     def object_point_cloud_local(self) -> NDArray[np.float64]:
         """Return the metric 64-point template in every object's local frame."""
 
+        if self.is_heterogeneous:
+            return _scatter_routed_value(
+                [
+                    (env_ids, route.object_point_cloud_local())
+                    for env_ids, route in self._object_routes.values()
+                ],
+                self.config.num_envs,
+            )
         template = self._point_template()
         points = np.asarray(template.local_points, dtype=np.float64)
         batch = self.config.num_envs
@@ -1129,6 +1437,16 @@ class MujocoManoEnvironment:
     def object_point_cloud_world(self, physical: PhysicalSnapshot | None = None) -> NDArray[np.float64]:
         """Return the actual 64-point object template in each world's coordinates."""
 
+        if self.is_heterogeneous:
+            resolved = self.last_physical if physical is None else physical
+            if resolved is None:
+                raise RuntimeError("object point cloud requires a resolved physical snapshot")
+            points = self.object_point_cloud_local()
+            quaternions = np.broadcast_to(
+                resolved.object_orientation_xyzw[:, None, :],
+                (self.config.num_envs, POINT_COUNT, 4),
+            )
+            return quat_rotate_xyzw(quaternions, points) + resolved.object_position[:, None, :]
         resolved = self.last_physical if physical is None else physical
         if resolved is None:
             raise RuntimeError("object point cloud requires a resolved physical snapshot")
@@ -1184,14 +1502,28 @@ class MujocoManoEnvironment:
     def phase_profile(self) -> dict[str, dict[str, float | int]]:
         """Return accumulated phase timings without changing production behavior."""
 
+        if self.is_heterogeneous:
+            return {
+                object_type: route.phase_profile()
+                for object_type, (_, route) in self._object_routes.items()
+            }
         return self.phase_timings.summary()
 
     def contact_profile(self) -> dict[str, object]:
         """Return opt-in contact materialization metadata and per-step nacon samples."""
 
+        if self.is_heterogeneous:
+            return {
+                object_type: route.contact_profile()
+                for object_type, (_, route) in self._object_routes.items()
+            }
         return self.producer.contact_profile() if self.phase_timings.enabled else {}
 
     def reset_phase_profile(self) -> None:
+        if self.is_heterogeneous:
+            for _, route in self._object_routes.values():
+                route.reset_phase_profile()
+            return
         self.phase_timings.reset()
         self.producer.reset_profile()
 
@@ -1269,6 +1601,8 @@ class MujocoManoEnvironment:
         return self.last_observation
 
     def reset(self, env_ids: NDArray[object] | None = None) -> dict[str, NDArray[np.float64]]:
+        if self.is_heterogeneous:
+            return self._heterogeneous_reset(env_ids)
         if env_ids is None:
             indices = np.arange(self.config.num_envs, dtype=np.int64)
         else:
@@ -1291,6 +1625,8 @@ class MujocoManoEnvironment:
         NDArray[np.bool_],
         dict[str, NDArray[Any]],
     ]:
+        if self.is_heterogeneous:
+            return self._heterogeneous_step(raw_actions)
         materialization_phase = self._phase_start("action_numpy_materialization")
         actions = np.asarray(raw_actions, dtype=np.float64)
         self._phase_stop("action_numpy_materialization", materialization_phase)

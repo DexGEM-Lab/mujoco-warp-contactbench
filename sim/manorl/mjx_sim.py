@@ -8,15 +8,12 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from sim.manorl.assets import compile_model
+from sim.manorl.assets import compile_model, object_runtime
 from sim.manorl.contracts import (
     CONTROL_STEP_COUNT,
     FINGER_SERVO_DAMPRATIO,
     FINGER_SERVO_KP,
     JOINT_NAMES,
-    OBJECT_BODY_NAME,
-    OBJECT_COLLISION_GEOM_COUNT,
-    OBJECT_FREE_JOINT_NAME,
     PHYSICS_SUBSTEPS_PER_TARGET,
     PHYSICS_TIMESTEP,
     ServoConfig,
@@ -125,16 +122,21 @@ class _ReplayBase:
     ) -> None:
         self.trajectory = trajectory
         self.servo = servo
-        self.mujoco, self.model = compile_model(servo)
+        parts = trajectory.identity.identity.split("_")
+        if len(parts) != 3 or not parts[1].isdigit():
+            raise ValueError("trajectory identity must be object_action_sequence")
+        self.object_type = parts[0]
+        runtime = object_runtime(self.object_type)
+        self.mujoco, self.model = compile_model(servo, object_type=self.object_type)
         self.joint_lower, self.joint_upper = _joint_limits(self.mujoco, self.model)
         object_joint = self.mujoco.mj_name2id(
-            self.model, self.mujoco.mjtObj.mjOBJ_JOINT, OBJECT_FREE_JOINT_NAME
+            self.model, self.mujoco.mjtObj.mjOBJ_JOINT, runtime.free_joint_name
         )
         if object_joint < 0:
             raise ValueError("compiled cube free joint is absent")
         self.object_qpos_address = int(self.model.jnt_qposadr[object_joint])
         object_body = self.mujoco.mj_name2id(
-            self.model, self.mujoco.mjtObj.mjOBJ_BODY, OBJECT_BODY_NAME
+            self.model, self.mujoco.mjtObj.mjOBJ_BODY, runtime.body_name
         )
         self.object_geom_ids = {
             geom_id
@@ -146,7 +148,7 @@ class _ReplayBase:
             for geom_id in range(self.model.ngeom)
             if int(self.model.geom_bodyid[geom_id]) not in (0, object_body)
         }
-        if len(self.object_geom_ids) != OBJECT_COLLISION_GEOM_COUNT or len(self.hand_geom_ids) != 16:
+        if len(self.object_geom_ids) != runtime.collision_geom_count or len(self.hand_geom_ids) != 16:
             raise ValueError("compiled hand/object geom partition is inconsistent")
         self.replay_step = 0
 
