@@ -27,6 +27,7 @@ from sim.manorl.contracts import (
 
 LANCE_COLUMNS = ("index", "trajectory_metadata", "timestamp", "hands", "objects")
 LANCE_DISCOVERY_COLUMNS = ("index", "trajectory_metadata")
+LANCE_DECODE_CHUNK_SIZE = 128
 TRAJECTORY_IDENTITY_SCHEMA = "object_action_sequence"
 GENERATED_CUBE1_DATASET_PATH = Path(
     "/mnt/nas-222-project/mocap/dataAugmentation/for_retargeting/new_all_with_keypoints/"
@@ -878,12 +879,78 @@ def _selected_trajectory_from_row(
     )
 
 
+def _decode_valid_candidates(
+    dataset: Any,
+    dataset_version: int,
+    *,
+    selection: TrajectorySelection,
+    resolved_pairs: tuple[ObjectActionPair, ...],
+    candidates_by_pair: dict[ObjectActionPair, tuple[_TrajectoryCandidate, ...]],
+    limits: dict[ObjectActionPair, int],
+) -> dict[ObjectActionPair, tuple[ReferenceTrajectory, ...]]:
+    """Decode valid pair candidates in cross-pair, bounded-memory chunks."""
+
+    if any(limits.get(pair, 0) < 1 for pair in resolved_pairs):
+        raise ValueError("candidate decode limits must be positive")
+    decoded: dict[ObjectActionPair, list[ReferenceTrajectory]] = {
+        pair: [] for pair in resolved_pairs
+    }
+    rejected: dict[ObjectActionPair, list[str]] = {pair: [] for pair in resolved_pairs}
+    cursors = {pair: 0 for pair in resolved_pairs}
+    while True:
+        requests: list[tuple[ObjectActionPair, _TrajectoryCandidate]] = []
+        requested_counts = {pair: 0 for pair in resolved_pairs}
+        while len(requests) < LANCE_DECODE_CHUNK_SIZE:
+            progressed = False
+            for pair in resolved_pairs:
+                candidates = candidates_by_pair[pair]
+                remaining = limits[pair] - len(decoded[pair]) - requested_counts[pair]
+                if remaining <= 0 or cursors[pair] >= len(candidates):
+                    continue
+                candidate = candidates[cursors[pair]]
+                cursors[pair] += 1
+                requested_counts[pair] += 1
+                requests.append((pair, candidate))
+                progressed = True
+                if len(requests) == LANCE_DECODE_CHUNK_SIZE:
+                    break
+            if not progressed:
+                break
+        if not requests:
+            break
+        rows = dataset.take(
+            [candidate.row_index for _, candidate in requests],
+            columns=list(LANCE_COLUMNS),
+        ).to_pylist()
+        if len(rows) != len(requests):
+            raise ValueError("Lance did not return every candidate trajectory row")
+        for (pair, candidate), row in zip(requests, rows, strict=True):
+            try:
+                trajectory = _selected_trajectory_from_row(
+                    row,
+                    dataset_version,
+                    row_index=candidate.row_index,
+                    selection=selection,
+                    expected_pair=pair,
+                )
+            except (IndexError, KeyError, TypeError, ValueError) as exc:
+                rejected[pair].append(f"row {candidate.row_index}: {exc}")
+                continue
+            decoded[pair].append(trajectory)
+    for pair in resolved_pairs:
+        if decoded[pair]:
+            continue
+        detail = "; ".join(rejected[pair][:4]) or "no full rows were decoded"
+        raise LookupError(f"no valid Lance trajectories for {pair.canonical}; {detail}")
+    return {pair: tuple(decoded[pair]) for pair in resolved_pairs}
+
+
 def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: int) -> TrajectoryBatch:
     """Discover eligible pairs and deterministically assign them to vector worlds.
 
     Pair slots round-robin over sorted resolved pairs; each pair independently
-    round-robins its sorted exact-identity trajectories. Only distinct assigned
-    rows are decoded from Lance.
+    round-robins its sorted exact-identity trajectories. Full rows are decoded
+    in bounded chunks and malformed candidates are skipped before assignment.
     """
 
     if not isinstance(selection, TrajectorySelection):
@@ -901,31 +968,32 @@ def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: 
     if version != selection.expected_dataset_version:
         raise ValueError(f"dataset version {version} != requested {selection.expected_dataset_version}")
     resolved_pairs, candidates_by_pair = _discover_trajectory_candidates(dataset, selection)
-    assignments: list[_TrajectoryCandidate] = []
     pair_count = len(resolved_pairs)
+    pair_slot_counts = {pair: 0 for pair in resolved_pairs}
     for env_id in range(num_envs):
         pair = resolved_pairs[env_id % pair_count]
-        candidates = candidates_by_pair[pair]
-        pair_slot = env_id // pair_count
-        assignments.append(candidates[pair_slot % len(candidates)])
-
-    assigned_by_row = {candidate.row_index: candidate for candidate in assignments}
-    assigned_row_indices = sorted(assigned_by_row)
-    rows = dataset.take(assigned_row_indices, columns=list(LANCE_COLUMNS)).to_pylist()
-    if len(rows) != len(assigned_row_indices):
-        raise ValueError("Lance did not return every assigned trajectory row")
-    decoded = {
-        row_index: _selected_trajectory_from_row(
-            row,
-            version,
-            row_index=row_index,
-            selection=selection,
-            expected_pair=assigned_by_row[row_index].pair,
-        )
-        for row_index, row in zip(assigned_row_indices, rows, strict=True)
-    }
+        pair_slot_counts[pair] += 1
+    decoded_by_pair = _decode_valid_candidates(
+        dataset,
+        version,
+        selection=selection,
+        resolved_pairs=resolved_pairs,
+        candidates_by_pair=candidates_by_pair,
+        limits={
+            pair: min(pair_slot_counts[pair], len(candidates_by_pair[pair]))
+            for pair in resolved_pairs
+        },
+    )
+    pair_slots = {pair: 0 for pair in resolved_pairs}
+    assignments: list[ReferenceTrajectory] = []
+    for env_id in range(num_envs):
+        pair = resolved_pairs[env_id % pair_count]
+        decoded = decoded_by_pair[pair]
+        pair_slot = pair_slots[pair]
+        assignments.append(decoded[pair_slot % len(decoded)])
+        pair_slots[pair] += 1
     return TrajectoryBatch(
-        tuple(decoded[candidate.row_index] for candidate in assignments),
+        tuple(assignments),
         resolved_pairs=resolved_pairs,
         selection_mode=selection.mode,
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -204,6 +205,52 @@ def test_timestamps_require_strict_monotonicity_only() -> None:
     non_monotonic[301] = non_monotonic[300]
     with pytest.raises(ValueError, match="strictly increasing"):
         trajectory_from_row(_accepted_fake_row(non_monotonic), EXPECTED_DATASET_VERSION)
+
+
+def test_assigned_loader_skips_invalid_full_candidate_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "source.lance"
+    path.mkdir()
+    timestamps = np.arange(1373, dtype=np.float64) / 111.0
+    invalid = _accepted_fake_row(timestamps.copy())
+    invalid["timestamp"][100] = invalid["timestamp"][99]
+    valid = deepcopy(_accepted_fake_row(timestamps))
+    rows = [invalid, valid]
+    for sequence, row in enumerate(rows, start=1):
+        identity = f"cube1_01_{sequence:03d}"
+        row["index"].update(
+            scene="cube1",
+            source_path=f"cube1/{identity}/{identity}_mano.npy",
+            uuid=f"row-{sequence}",
+        )
+
+    class FakeTable:
+        def __init__(self, values: list[dict[str, object]]) -> None:
+            self.values = values
+
+        def to_pylist(self) -> list[dict[str, object]]:
+            return self.values
+
+    class FakeDataset:
+        version = EXPECTED_DATASET_VERSION
+
+        def to_table(self, *, columns: list[str]) -> FakeTable:
+            assert columns == ["index", "trajectory_metadata"]
+            return FakeTable(rows)
+
+        def take(self, indices: list[int], *, columns: list[str]) -> FakeTable:
+            assert columns == list(LANCE_COLUMNS)
+            return FakeTable([rows[index] for index in indices])
+
+    import lance
+
+    monkeypatch.setattr(lance, "dataset", lambda _: FakeDataset())
+    batch = load_assigned_trajectory_batch(
+        TrajectorySelection("cube1", "01", dataset_path=path), num_envs=1
+    )
+    assert batch.trajectories[0].identity.row_index == 1
+    assert batch.trajectories[0].identity.identity == "cube1_01_002"
 
 
 def test_loader_uses_exact_take_and_columns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
