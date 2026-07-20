@@ -2,6 +2,8 @@
 
 Standalone MJX-Warp sim-to-Lance export repo.
 
+This repository migrates [DexHandRL](http://192.168.10.116/dexrobot-oss/dexrobot_isaac/-/tree/dev/change_source?ref_type=heads) from the Isaac Gym simulator to MuJoCo.
+
 This repo is intentionally decoupled from the larger `contactbench` workspace. The MANO hand asset and `lance_manager` are git submodules. The repo contains MuJoCo scene builders, MJX-Warp contact extraction, direct Lance export, and Docker/runtime helpers.
 
 ## Layout
