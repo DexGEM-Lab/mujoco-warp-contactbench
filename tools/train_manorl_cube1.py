@@ -1786,10 +1786,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             # the native policy, value, optimizer, and normalizer state reported
             # by the untrained comparison, independent of RNG construction.
             load_skrl_checkpoint(runtime.agent, initial_checkpoint)
-        # Free the initial bounded physical runtime before training. The final
-        # checkpoint evaluation constructs its own fresh bounded runtime later.
-        del evaluation_runtime
-        gc.collect()
+        # Keep this bounded evaluator alive for the trained row. Reconstructing
+        # all object routes after a large training runtime leaves JAX/Warp
+        # allocator caches competing with a second set of evaluator buffers.
         if wandb_run is not None:
             _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], update=0, transitions=0)
         recorder: ManoRerunRecorder | None = None
@@ -1887,9 +1886,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "contact": physical.contact_profile() if hasattr(physical, "contact_profile") else {},
             "training": getattr(runtime, "training_phase_profile", {}),
         }
-        # The fresh full-pair evaluator must not overlap the 2,048-world
-        # training runtime in GPU memory. Preserve plain result metadata first,
-        # then remove every training-only owner before constructing it.
+        # The full-pair evaluator must not execute while the 2,048-world
+        # training runtime is still owned. Preserve plain result metadata first,
+        # then remove every training-only owner before reusing the bounded
+        # evaluator constructed for the initial comparison.
         observer = None
         recorder = None
         del runtime
@@ -1898,16 +1898,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         # Evaluate exactly what a user will later load. skrl preprocessor/module
-        # state may differ in-process after PPO training, so a fresh native load is
-        # the reproducibility boundary rather than an implementation detail.
-        evaluation_runtime, _, final_evaluation_trajectory_assignments = _build_evaluation_runtime(
-            selection=selection,
-            budget=budget,
-            training_config=ppo_config,
-            num_envs=evaluation_num_envs,
-        )
-        if final_evaluation_trajectory_assignments != evaluation_trajectory_assignments:
-            raise RuntimeError("evaluation trajectory assignments changed during training")
+        # state may differ after PPO training, so loading the final native
+        # checkpoint remains the reproducibility boundary even though the
+        # already-built physical evaluator is reused.
         load_skrl_checkpoint(evaluation_runtime.agent, checkpoint)
         trained = _evaluate(evaluation_runtime, "trained")
         np.savez_compressed(
