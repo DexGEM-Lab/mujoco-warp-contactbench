@@ -73,6 +73,81 @@ def test_gym_adapter_marks_success_and_failure_terminated_without_truncation() -
     np.testing.assert_array_equal(info["deviation_reset_mask"], [False, True])
 
 
+def test_gym_adapter_consumes_pending_terminal_ids_before_direct_step() -> None:
+    from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv, OBSERVATION_DIM
+
+    class Physical:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, list[int] | None]] = []
+            self.step_count = 0
+            self.last_termination = TerminationResult(
+                reset=np.zeros(2, dtype=bool),
+                deviation_reset=np.zeros(2, dtype=bool),
+                deviation_penalty=np.zeros(2, dtype=np.float64),
+            )
+
+        def reset(self, *, env_ids=None):
+            ids = None if env_ids is None else np.asarray(env_ids, dtype=np.int64).tolist()
+            self.events.append(("reset", ids))
+            return {"obs": np.zeros((2, OBSERVATION_DIM), dtype=np.float64)}
+
+        def step(self, actions):
+            del actions
+            self.step_count += 1
+            self.events.append(("step", None))
+            done = np.asarray(
+                {
+                    1: [True, False],
+                    2: [False, False],
+                    3: [True, True],
+                    4: [False, False],
+                    5: [True, False],
+                    6: [False, False],
+                }[self.step_count],
+                dtype=bool,
+            )
+            deviation = done & np.array([False, True], dtype=bool)
+            self.last_termination = TerminationResult(
+                reset=done,
+                deviation_reset=deviation,
+                deviation_penalty=np.zeros(2, dtype=np.float64),
+            )
+            return (
+                {"obs": np.zeros((2, OBSERVATION_DIM), dtype=np.float64)},
+                np.zeros(2, dtype=np.float64),
+                done,
+                {"time_outs": np.zeros(2, dtype=bool)},
+            )
+
+    physical = Physical()
+    adapter = object.__new__(ManoGymnasiumVectorEnv)
+    adapter.num_envs = 2
+    adapter.environment = physical
+    adapter._last_seed = None
+    adapter._pending_reset = np.zeros(2, dtype=bool)
+
+    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [0])
+    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [])
+    assert physical.events[:3] == [("step", None), ("reset", [0]), ("step", None)]
+
+    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [0, 1])
+    adapter.reset(options={"env_ids": np.array([0], dtype=np.int64)})
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [1])
+    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [])
+    assert physical.events[-2:] == [("reset", [1]), ("step", None)]
+
+    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [0])
+    adapter.reset()
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [])
+    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    assert physical.events[-2:] == [("reset", None), ("step", None)]
+
+
 def test_indexed_wrapper_reset_bypasses_cache_and_preserves_seed() -> None:
     import gymnasium as gym
     import torch

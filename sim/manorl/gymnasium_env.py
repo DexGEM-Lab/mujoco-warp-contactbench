@@ -19,11 +19,13 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
     """Expose :class:`MujocoManoEnvironment` with Gymnasium vector semantics.
 
     The physical environment returns its terminal observation and supports an
-    explicit indexed reset on the following policy boundary.  ``NEXT_STEP`` is
+    explicit indexed reset on the following policy boundary. ``NEXT_STEP`` is
     retained as the compatibility mode for callers that still use the legacy
-    source loop, while the skrl runtime calls ``reset(options={"env_ids": ...})``
-    before requesting the next action. ``time_outs`` becomes ``truncated``;
-    deviation/trajectory ends are always ``terminated``.
+    source loop. The adapter latches terminal IDs and consumes them with an
+    indexed physical reset immediately before the next direct ``step`` action;
+    explicit indexed/full ``reset`` calls clear the corresponding latch.
+    ``time_outs`` becomes ``truncated``; deviation/trajectory ends are always
+    ``terminated``.
     """
 
     metadata = {"autoreset_mode": gym.vector.AutoresetMode.NEXT_STEP, "render_modes": []}
@@ -43,6 +45,39 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
         self.action_space = batch_space(self.single_action_space, self.num_envs)
         self.render_mode = None
         self._last_seed: int | None = None
+        self._pending_reset = np.zeros(self.num_envs, dtype=bool)
+
+    def _pending_reset_mask(self) -> NDArray[np.bool_]:
+        pending = getattr(self, "_pending_reset", None)
+        if pending is None or pending.shape != (self.num_envs,):
+            pending = np.zeros(self.num_envs, dtype=bool)
+            self._pending_reset = pending
+        return pending
+
+    def _normalize_reset_ids(self, env_ids: Any) -> NDArray[np.int64]:
+        ids = np.asarray(env_ids)
+        if ids.ndim != 1 or not np.issubdtype(ids.dtype, np.integer):
+            raise ValueError("env_ids must be a one-dimensional integer array")
+        ids = np.unique(ids.astype(np.int64, copy=False))
+        if np.any(ids < 0) or np.any(ids >= self.num_envs):
+            raise ValueError("env_ids contains an invalid environment index")
+        return ids
+
+    def _consume_pending_resets(self) -> None:
+        pending = self._pending_reset_mask()
+        env_ids = np.flatnonzero(pending).astype(np.int64)
+        if env_ids.size == 0:
+            return
+        # Keep this at the adapter boundary so direct callers get s0 before
+        # their next action even when they bypass the skrl runtime helper.
+        self.environment.reset(env_ids=env_ids)
+        pending[env_ids] = False
+
+    @property
+    def pending_terminal_env_ids(self) -> NDArray[np.int64]:
+        """Return terminal worlds awaiting an explicit/direct-step reset."""
+
+        return np.flatnonzero(self._pending_reset_mask()).astype(np.int64)
 
     @property
     def device(self) -> str:
@@ -69,17 +104,23 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
             # Dynamic source-compatible point templates are reset-local. Static
             # seed-42 templates remain unchanged, as prescribed by the source.
             self.environment.reseed_point_templates(self._last_seed)
-        env_ids = None if options is None else options.get("env_ids")
+        raw_env_ids = None if options is None else options.get("env_ids")
+        env_ids = None if raw_env_ids is None else self._normalize_reset_ids(raw_env_ids)
         output = self.environment.reset(env_ids=env_ids)
         observation = np.asarray(output["obs"], dtype=np.float32)
         if observation.shape != (self.num_envs, OBSERVATION_DIM):
             raise RuntimeError("physical environment returned an invalid observation batch")
+        pending = self._pending_reset_mask()
+        if env_ids is None:
+            pending[:] = False
+        else:
+            pending[env_ids] = False
         return observation, {
             "seed": self._last_seed,
             "time_outs": np.zeros(self.num_envs, dtype=bool),
             "reset_applied": np.ones(self.num_envs, dtype=bool)
             if env_ids is None
-            else np.isin(np.arange(self.num_envs), np.asarray(env_ids, dtype=np.int64)),
+            else np.isin(np.arange(self.num_envs), env_ids),
         }
 
     def reset_done(self, done: NDArray[object]) -> tuple[NDArray[np.float32], dict[str, Any]]:
@@ -99,6 +140,7 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
         actions_array = np.asarray(actions, dtype=np.float64)
         if actions_array.shape != (self.num_envs, ACTION_DIM) or not np.all(np.isfinite(actions_array)):
             raise ValueError(f"actions must be finite ({self.num_envs}, {ACTION_DIM})")
+        self._consume_pending_resets()
         # Match IsaacGym VecTask: PPO keeps raw samples, while the environment
         # clips the normalized action at its boundary before physical processing.
         clipped_actions = np.clip(actions_array, -1.0, 1.0)
@@ -140,6 +182,7 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
             # state. Gymnasium consumers that need it can read this standard key.
             infos["final_observation"] = observation.copy()
             infos["_final_observation"] = done.copy()
+        self._pending_reset_mask()[:] = done
         return observation, reward, terminated, truncated, infos
 
     def close_extras(self, **kwargs: Any) -> None:

@@ -562,7 +562,7 @@ class ManoRerunRecorder:
             # it before any indexed reset can replace physical/return state.
             completed_return = float(snapshot.episode_return[self.env_id])
             self._episode_return = completed_return
-            # Archive-following is a stream policy: after a high-return success,
+            # Archive-following is a stream policy: after a high-return terminal episode,
             # the configured following episodes are archived regardless of their
             # own success/failure reason. The terminal-threshold replay/archive
             # trigger remains source-compatible as well.
