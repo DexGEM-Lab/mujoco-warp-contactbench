@@ -62,6 +62,41 @@ REWARD_UPDATE_COMPONENTS = (
     "survival",
     "deviation_penalty",
 )
+# Isaac Gym's completed-episode keys are the names used by its episode
+# statistics tracker. These aliases are backed by the same target diagnostics.
+EPISODE_REWARD_ALIASES = (
+    ("episode_reward", "total"),
+    ("distance_reward", None),
+    ("distance_reward_x", "distance_x"),
+    ("distance_reward_y", "distance_y"),
+    ("distance_reward_z", "distance_z"),
+    ("rotation_reward", "rotation"),
+    ("action_penalty", "action_penalty"),
+    ("contact_reward", "contact"),
+    ("object_stability_reward", "object_stability"),
+    ("survival_reward", "survival"),
+)
+GYM_INSTANT_REWARD_ALIASES = (
+    ("distance_reward_x_instant/step", "distance_x"),
+    ("distance_reward_y_instant/step", "distance_y"),
+    ("distance_reward_z_instant/step", "distance_z"),
+    ("rotation_reward_instant/step", "rotation"),
+    ("action_penalty_instant/step", "action_penalty"),
+    ("contact_reward_instant/step", "contact"),
+    ("object_stability_reward_instant/step", "object_stability"),
+    ("survival_reward_instant/step", "survival"),
+)
+GYM_STEP_ALIASES = (
+    "rewards/frame",
+    "rewards/iter",
+    "rewards/step",
+    "rewards/time",
+    "episode_lengths/frame",
+    "episode_lengths/iter",
+    "episode_lengths/step",
+)
+# The Gym reference also publishes mu/* policy summaries. skrl exposes only
+# sampled actions on this path, so emitting mu/* here would be fabricated.
 GYM_INSTANT_GROUP_COMPONENTS = {
     "distance_x": "distance_reward_x_instant",
     "distance_y": "distance_reward_y_instant",
@@ -88,22 +123,27 @@ GROUPED_REWARD_COMPONENTS = tuple(
     dict.fromkeys(("total", *GYM_INSTANT_GROUP_COMPONENTS, *GYM_EPISODE_GROUP_COMPONENTS))
 )
 SKRL_TRACKING_METRICS = (
-    ("Loss / Policy loss", "losses/a_loss"),
-    ("Loss / Value loss", "losses/c_loss"),
-    ("Loss / Entropy loss", "losses/entropy"),
-    ("Learning / Learning rate", "info/last_lr"),
-    ("Learning / Learning rate start", "info/lr_start"),
-    ("Learning / Learning rate min", "info/lr_min"),
-    ("Learning / Learning rate max", "info/lr_max"),
-    ("Learning / Exact KL mean", "info/exact_kl_mean"),
-    ("Learning / Exact KL min", "info/exact_kl_min"),
-    ("Learning / Exact KL max", "info/exact_kl_max"),
-    ("Learning / Approximate KL mean", "info/approximate_kl_mean"),
-    ("Learning / Scheduler increases", "info/lr_scheduler_increases"),
-    ("Learning / Scheduler decreases", "info/lr_scheduler_decreases"),
-    ("Learning / Completed minibatches", "info/completed_minibatches"),
-    ("Policy / Standard deviation", "info/policy_std"),
-    ("Stats / Algorithm update time (ms)", "performance/algorithm_update_time_ms"),
+    (("Loss / Policy loss",), "losses/a_loss"),
+    (("Loss / Value loss",), "losses/c_loss"),
+    (("Loss / Entropy loss",), "losses/entropy"),
+    (("Loss / Bounds loss",), "losses/bounds_loss"),
+    (("Learning / Learning rate",), "info/last_lr"),
+    (("Learning / Learning rate multiplier", "Learning / LR multiplier"), "info/lr_mul"),
+    (("Learning / E-clip", "Policy / E-clip", "Info / E-clip"), "info/e_clip"),
+    (("Info / Clip fraction", "Stats / Clip fraction"), "info/clip_frac"),
+    (("Info / KL", "Stats / KL divergence"), "info/kl"),
+    (("Learning / Learning rate start",), "info/lr_start"),
+    (("Learning / Learning rate min",), "info/lr_min"),
+    (("Learning / Learning rate max",), "info/lr_max"),
+    (("Learning / Exact KL mean",), "info/exact_kl_mean"),
+    (("Learning / Exact KL min",), "info/exact_kl_min"),
+    (("Learning / Exact KL max",), "info/exact_kl_max"),
+    (("Learning / Approximate KL mean",), "info/approximate_kl_mean"),
+    (("Learning / Scheduler increases",), "info/lr_scheduler_increases"),
+    (("Learning / Scheduler decreases",), "info/lr_scheduler_decreases"),
+    (("Learning / Completed minibatches",), "info/completed_minibatches"),
+    (("Policy / Standard deviation",), "info/policy_std"),
+    (("Stats / Algorithm update time (ms)",), "performance/algorithm_update_time_ms"),
 )
 
 
@@ -593,14 +633,25 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
             "cumulative_environment_transitions_per_second"
         ],
     }
-    metrics.update({name: update[name] for name in REWARD_UPDATE_COMPONENTS})
+    metrics["manorl/reward_mean"] = update["manorl/reward_mean"]
+    metrics.update({
+        f"manorl/{name}_mean": update[f"manorl/{name}_mean"]
+        for name in REWARD_UPDATE_COMPONENTS
+    })
+    # Preserve the established raw W&B component panels from rollout means.
+    metrics.update({
+        name: update[f"manorl/{name}_mean"]
+        for name in REWARD_UPDATE_COMPONENTS
+    })
     metrics.update({
         name: update[name]
         for name in (
             "performance/total_fps",
             "performance/step_fps",
             "performance/update_time",
+            "performance/play_time",
             "performance/algorithm_update_time_ms",
+            "info/epochs",
             "losses/a_loss",
             "losses/c_loss",
             "losses/entropy",
@@ -616,16 +667,38 @@ def _log_wandb_update(run: Any, wandb: Any, update: dict[str, Any]) -> None:
             "info/lr_scheduler_decreases",
             "info/completed_minibatches",
             "info/policy_std",
-            "rewards/frame",
-            "rewards/iter",
+            *GYM_STEP_ALIASES,
+            *(alias for alias, _ in GYM_INSTANT_REWARD_ALIASES),
+            "distance_reward_instant/step",
+            *(f"episode_cumulative/{alias}" for alias, _ in EPISODE_REWARD_ALIASES),
+            *(f"episode_cumulative_min/{alias}_min" for alias, _ in EPISODE_REWARD_ALIASES),
+            *(f"episode_cumulative_max/{alias}_max" for alias, _ in EPISODE_REWARD_ALIASES),
         )
         if name in update
     })
+    direct_episode_keys = tuple(alias for alias, _ in EPISODE_REWARD_ALIASES)
+    # ``action_penalty`` already has a public rollout panel. Keep that raw
+    # W&B key stable; its selected-group Gym alias remains unambiguous.
+    direct_raw_collisions = {"action_penalty"}
+    metrics.update({
+        name: update[name]
+        for name in update
+        if (
+            name not in direct_raw_collisions
+            and (
+                name in direct_episode_keys
+                or any(name.startswith(f"{alias}/") for alias in direct_episode_keys)
+            )
+        )
+        or name.startswith((
+            "episode_cumulative/",
+            "episode_cumulative_min/",
+            "episode_cumulative_max/",
+        ))
+    })
     if "episode_return_mean" in update:
-        # ``total`` above is the rollout-batch reward mean.  Keep that
-        # historical key, and expose the completed-episode cumulative total
-        # under an explicit namespace so the two quantities cannot be
-        # confused in W&B.
+        # Completed-episode aliases are emitted only after a reset. Rollout
+        # means use the explicit ``manorl/*_mean`` namespace above.
         episode_total_mean = update.get("episode_total_mean")
         if episode_total_mean is None:
             episode_total_mean = update["episode_return_mean"]
@@ -720,8 +793,8 @@ def _latest_skrl_tracking_metrics(agent: Any) -> dict[str, float]:
     if tracking_data is None:
         return {}
     metrics: dict[str, float] = {}
-    for source_name, metric_name in SKRL_TRACKING_METRICS:
-        values = tracking_data.get(source_name)
+    for source_names, metric_name in SKRL_TRACKING_METRICS:
+        values = next((tracking_data.get(name) for name in source_names if tracking_data.get(name)), None)
         if values:
             metrics[metric_name] = float(values[-1])
     return metrics
@@ -819,7 +892,7 @@ def _format_training_update(update: dict[str, Any]) -> str:
             )
     return (
         f"update={int(update['update'])} transitions={int(update['environment_transitions'])} "
-        f"reward={update['reward_mean']:.4f} contact={update['contact']:.4f} "
+        f"reward={update['reward_mean']:.4f} contact={update.get('manorl/contact_mean', update.get('contact', 0.0)):.4f} "
         f"resets={int(update['reset_count'])} success={int(update.get('success_count', 0))} "
         f"failure={int(update.get('failure_count', 0))} speed={update['update_environment_transitions_per_second']:.1f}/s "
         f"elapsed={update['elapsed_seconds']:.1f}s{episode}"
@@ -1088,17 +1161,19 @@ def _train(
     telemetry_layout = _environment_telemetry_layout(
         environment, num_envs=environment.config.num_envs
     )
-    episode_component_totals = (
-        {
-            source: np.zeros(environment.config.num_envs, dtype=np.float64)
-            for source in GYM_EPISODE_GROUP_COMPONENTS
-        }
-        if telemetry_layout is not None
-        else None
-    )
+    episode_component_totals: dict[str, np.ndarray] = {
+        source: np.zeros(environment.config.num_envs, dtype=np.float64)
+        for source in GYM_EPISODE_GROUP_COMPONENTS
+    }
+    episode_component_totals.update({
+        alias: np.zeros(environment.config.num_envs, dtype=np.float64)
+        for alias, _ in EPISODE_REWARD_ALIASES
+        if alias not in episode_component_totals
+    })
     profile_totals: dict[str, float] = {}
     profile_counts: dict[str, int] = {}
     profile_cuda = str(getattr(runtime, "device", getattr(runtime.agent, "device", "cpu"))).startswith("cuda")
+    episode_lengths = np.zeros(environment.config.num_envs, dtype=np.int64)
 
     def synchronize() -> None:
         if profile_cuda:
@@ -1147,7 +1222,13 @@ def _train(
         action_magnitudes: list[torch.Tensor] = []
         reward_components: dict[str, list[np.ndarray]] = {name: [] for name in REWARD_UPDATE_COMPONENTS}
         completed_episode_returns: list[float] = []
+        completed_episode_lengths: list[int] = []
+        completed_episode_components: dict[str, list[float]] = {
+            alias: [] for alias, _ in EPISODE_REWARD_ALIASES
+        }
+        instant_component_means: dict[str, float] = {}
         reset_count = 0
+        rollout_started = time.perf_counter()
         success_count = 0
         failure_count = 0
         grouped_telemetry = (
@@ -1228,16 +1309,31 @@ def _train(
                 episode_returns = np.asarray(snapshot.episode_return, dtype=np.float64)
             else:
                 episode_returns = np.asarray(environment.episode_returns, dtype=np.float64)
-            for name in REWARD_UPDATE_COMPONENTS:
-                reward_components[name].append(np.asarray(getattr(diagnostics, name), dtype=np.float64))
+            diagnostic_arrays = {
+                name: np.asarray(getattr(diagnostics, name), dtype=np.float64)
+                for name in REWARD_UPDATE_COMPONENTS
+            }
+            for name, values in diagnostic_arrays.items():
+                reward_components[name].append(values)
+                instant_component_means[name] = float(values.mean())
+            episode_lengths += 1
+            for alias, source_name in EPISODE_REWARD_ALIASES:
+                if telemetry_layout is not None and alias in GYM_EPISODE_GROUP_COMPONENTS:
+                    continue
+                if source_name is None:
+                    episode_component_totals[alias] += (
+                        diagnostic_arrays["distance_x"]
+                        + diagnostic_arrays["distance_y"]
+                        + diagnostic_arrays["distance_z"]
+                    )
+                else:
+                    episode_component_totals[alias] += diagnostic_arrays[source_name]
             grouped_components: dict[str, np.ndarray] | None = None
             if grouped_telemetry is not None:
                 grouped_components = {
                     source: np.asarray(getattr(diagnostics, source), dtype=np.float64)
                     for source in GROUPED_REWARD_COMPONENTS
                 }
-                if episode_component_totals is None:
-                    raise RuntimeError("grouped episode accumulator was not initialized")
                 for source in GYM_EPISODE_GROUP_COMPONENTS:
                     episode_component_totals[source] += grouped_components[source]
             completed = np.asarray(termination.reset, dtype=bool)
@@ -1270,8 +1366,8 @@ def _train(
             failure_count += int(failure.sum())
             completed_episode_returns.extend(episode_returns[completed].tolist())
             if grouped_telemetry is not None:
-                if grouped_components is None or episode_component_totals is None:
-                    raise RuntimeError("grouped update telemetry was not initialized")
+                if grouped_components is None:
+                    raise RuntimeError("grouped reward telemetry was not initialized")
                 grouped_telemetry.add_step(
                     components=grouped_components,
                     completed=completed,
@@ -1280,6 +1376,13 @@ def _train(
                     episode_returns=episode_returns,
                     episode_component_totals=episode_component_totals,
                 )
+            if completed.any():
+                completed_episode_lengths.extend(episode_lengths[completed].tolist())
+                for alias, _ in EPISODE_REWARD_ALIASES:
+                    completed_episode_components[alias].extend(
+                        episode_component_totals[alias][completed].tolist()
+                    )
+                episode_lengths[completed] = 0
             if completed.any() and on_completed_episodes is not None:
                 on_completed_episodes(_completed_episode_record(
                     update=update + 1,
@@ -1294,7 +1397,7 @@ def _train(
                     telemetry_layout=telemetry_layout,
                     episode_component_totals=episode_component_totals,
                 ))
-            if completed.any() and episode_component_totals is not None:
+            if completed.any():
                 for values in episode_component_totals.values():
                     values[completed] = 0.0
             phase_stop("host_telemetry", telemetry_phase)
@@ -1303,6 +1406,7 @@ def _train(
             phase_stop("reset_count_host_item", reset_item_phase)
             reset_count += reset_increment
             global_timestep += 1
+        rollout_elapsed = time.perf_counter() - rollout_started
         parameter_finite_phase = phase_start("trainer_parameter_finite_checks")
         finite_parameters = all(torch.isfinite(parameter).all() for parameter in runtime.model.parameters())
         phase_stop("trainer_parameter_finite_checks", parameter_finite_phase)
@@ -1340,11 +1444,20 @@ def _train(
             ),
             "performance/step_fps": _transitions_per_second(update_transitions, update_elapsed),
             "performance/update_time": update_elapsed,
-            # Gym's frame/iteration reward aliases both represent the mean
-            # reward over this completed rollout batch in the skrl runtime.
-            "rewards/frame": reward_mean,
-            "rewards/iter": reward_mean,
-            **component_means,
+            "performance/play_time": rollout_elapsed,
+            "info/epochs": float(update + 1),
+            # Gym reward aliases are completed-episode metrics and are added
+            # only below when an episode actually finishes.
+            "manorl/reward_mean": reward_mean,
+            **{
+                alias: instant_component_means[source_name]
+                for alias, source_name in GYM_INSTANT_REWARD_ALIASES
+            },
+            # RewardCalculator defines distance_reward as x + y + z.
+            "distance_reward_instant/step": sum(
+                instant_component_means[name] for name in ("distance_x", "distance_y", "distance_z")
+            ),
+            **{f"manorl/{name}_mean": value for name, value in component_means.items()},
         }
         if grouped_telemetry is not None:
             update_metrics["grouped_metrics"] = grouped_telemetry.metrics()
@@ -1352,10 +1465,41 @@ def _train(
         if completed_episode_returns:
             episode_return_array = np.asarray(completed_episode_returns, dtype=np.float64)
             episode_total_mean = float(np.mean(episode_return_array))
+            episode_length_array = np.asarray(completed_episode_lengths, dtype=np.float64)
             update_metrics["episode_return_mean"] = episode_total_mean
             update_metrics["episode_total_mean"] = episode_total_mean
             update_metrics["episode_total_min"] = float(np.min(episode_return_array))
             update_metrics["episode_total_max"] = float(np.max(episode_return_array))
+            update_metrics["episode_reward"] = episode_total_mean
+            update_metrics["rewards/iter"] = episode_total_mean
+            update_metrics["rewards/step"] = episode_total_mean
+            update_metrics["rewards/time"] = episode_total_mean
+            update_metrics["rewards/frame"] = episode_total_mean
+            update_metrics["episode_lengths/frame"] = float(np.mean(episode_length_array))
+            update_metrics["episode_lengths/iter"] = float(np.mean(episode_length_array))
+            update_metrics["episode_lengths/step"] = float(np.mean(episode_length_array))
+            # RLGPUAlgoObserver writes completed episode_data keys directly.
+            for alias, values in completed_episode_components.items():
+                component_values = np.asarray(values, dtype=np.float64)
+                update_metrics[alias] = float(np.mean(component_values))
+                update_metrics[f"episode_cumulative/{alias}"] = float(np.mean(component_values))
+                update_metrics[f"episode_cumulative_min/{alias}_min"] = float(np.min(component_values))
+                update_metrics[f"episode_cumulative_max/{alias}_max"] = float(np.max(component_values))
+            # This bounded trainer resolves one global object/gesture group.
+            # Mirror the source observer's selected-group reward/component keys.
+            groups = (f"{budget.object_type}_{budget.gesture}", f"object_{budget.object_type}")
+            for group in groups:
+                update_metrics[f"episode_reward/{group}"] = episode_total_mean
+                for alias, values in completed_episode_components.items():
+                    if alias == "episode_reward":
+                        continue
+                    component_values = np.asarray(values, dtype=np.float64)
+                    key = f"{alias}/{group}"
+                    component_mean = float(np.mean(component_values))
+                    update_metrics[key] = component_mean
+                    update_metrics[f"episode_cumulative/{key}"] = component_mean
+                    update_metrics[f"episode_cumulative_min/{key}_min"] = float(np.min(component_values))
+                    update_metrics[f"episode_cumulative_max/{key}_max"] = float(np.max(component_values))
             # One update retains at most one rollout batch: 48 * 4096 = 196,608
             # values for the target Server2 scale, then this list is discarded.
             update_metrics["episode_return_values"] = completed_episode_returns

@@ -241,14 +241,34 @@ def test_wandb_update_metrics_use_completed_update_steps() -> None:
         "object_stability": 0.6,
         "survival": 0.001,
         "deviation_penalty": 0.0,
+        "manorl/reward_mean": 1.0,
+        "manorl/total_mean": 1.0,
+        "manorl/distance_x_mean": 0.1,
+        "manorl/distance_y_mean": 0.2,
+        "manorl/distance_z_mean": 0.3,
+        "manorl/rotation_mean": 0.4,
+        "manorl/action_penalty_mean": 0.0,
+        "manorl/contact_mean": 0.5,
+        "manorl/object_stability_mean": 0.6,
+        "manorl/survival_mean": 0.001,
+        "manorl/deviation_penalty_mean": 0.0,
         "elapsed_seconds": 1.5,
         "update_environment_transitions_per_second": 2048.0,
         "cumulative_environment_transitions_per_second": 2048.0,
         "performance/total_fps": 2048.0,
         "performance/step_fps": 2048.0,
         "performance/update_time": 1.0,
-        "rewards/frame": 1.0,
-        "rewards/iter": 1.0,
+        "performance/play_time": 0.8,
+        "info/epochs": 1.0,
+        "distance_reward_x_instant/step": 0.1,
+        "distance_reward_y_instant/step": 0.2,
+        "distance_reward_z_instant/step": 0.3,
+        "distance_reward_instant/step": 0.6,
+        "rotation_reward_instant/step": 0.4,
+        "action_penalty_instant/step": 0.0,
+        "contact_reward_instant/step": 0.5,
+        "object_stability_reward_instant/step": 0.6,
+        "survival_reward_instant/step": 0.001,
     })
     tool._log_wandb_update(run, wandb, {
         "update": 2.0,
@@ -272,15 +292,71 @@ def test_wandb_update_metrics_use_completed_update_steps() -> None:
         "object_stability": 0.7,
         "survival": 0.001,
         "deviation_penalty": 0.0,
+        "manorl/reward_mean": 2.0,
+        "manorl/total_mean": 2.0,
+        "manorl/distance_x_mean": 0.2,
+        "manorl/distance_y_mean": 0.3,
+        "manorl/distance_z_mean": 0.4,
+        "manorl/rotation_mean": 0.5,
+        "manorl/action_penalty_mean": 0.0,
+        "manorl/contact_mean": 0.6,
+        "manorl/object_stability_mean": 0.7,
+        "manorl/survival_mean": 0.001,
+        "manorl/deviation_penalty_mean": 0.0,
         "elapsed_seconds": 3.0,
         "update_environment_transitions_per_second": 2048.0,
         "cumulative_environment_transitions_per_second": 2048.0,
         "performance/total_fps": 2048.0,
         "performance/step_fps": 2048.0,
         "performance/update_time": 1.5,
+        "performance/play_time": 1.2,
+        "info/epochs": 2.0,
         "performance/algorithm_update_time_ms": 42.0,
-        "rewards/frame": 2.0,
-        "rewards/iter": 2.0,
+        "rewards/frame": 12.5,
+        "rewards/iter": 12.5,
+        "rewards/step": 12.5,
+        "rewards/time": 12.5,
+        "episode_reward": 12.5,
+        "distance_reward": 15.0,
+        "distance_reward/cube1_01": 15.0,
+        "distance_reward/object_cube1": 15.0,
+        "distance_reward_x": 4.0,
+        "distance_reward_y": 5.0,
+        "distance_reward_z": 6.0,
+        "rotation_reward": 7.0,
+        "action_penalty": -1.0,
+        "contact_reward": 8.0,
+        "object_stability_reward": 9.0,
+        "survival_reward": 10.0,
+        "episode_lengths/frame": 48.0,
+        "episode_lengths/iter": 48.0,
+        "episode_lengths/step": 48.0,
+        "episode_cumulative/distance_reward_x": 4.0,
+        "episode_cumulative/distance_reward_y": 5.0,
+        "episode_cumulative/distance_reward_z": 6.0,
+        "episode_cumulative/rotation_reward": 7.0,
+        "episode_cumulative/action_penalty": -1.0,
+        "episode_cumulative/contact_reward": 8.0,
+        "episode_cumulative/object_stability_reward": 9.0,
+        "episode_cumulative/survival_reward": 10.0,
+        "episode_cumulative_min/episode_reward_min": 1.0,
+        "episode_cumulative_max/episode_reward_max": 24.0,
+        "episode_cumulative_min/distance_reward_x_min": 2.0,
+        "episode_cumulative_max/distance_reward_x_max": 6.0,
+        "episode_reward/cube1_01": 12.5,
+        "episode_reward/object_cube1": 12.5,
+        "episode_cumulative/distance_reward_x/cube1_01": 4.0,
+        "episode_cumulative_min/distance_reward_x/cube1_01_min": 2.0,
+        "episode_cumulative_max/distance_reward_x/cube1_01_max": 6.0,
+        "distance_reward_x_instant/step": 0.2,
+        "distance_reward_y_instant/step": 0.3,
+        "distance_reward_z_instant/step": 0.4,
+        "distance_reward_instant/step": 0.9,
+        "rotation_reward_instant/step": 0.5,
+        "action_penalty_instant/step": 0.0,
+        "contact_reward_instant/step": 0.6,
+        "object_stability_reward_instant/step": 0.7,
+        "survival_reward_instant/step": 0.001,
         "losses/a_loss": 0.25,
         "losses/c_loss": 0.5,
         "losses/entropy": -0.01,
@@ -297,12 +373,47 @@ def test_wandb_update_metrics_use_completed_update_steps() -> None:
     assert [metrics["update"] for metrics, _ in run.logs] == [1, 2]
     assert [metrics["global_step"] for metrics, _ in run.logs] == [1, 2]
     assert [metrics["transitions"] for metrics, _ in run.logs] == [3072, 6144]
-    assert all({"reward_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "total", "distance_x", "distance_y", "distance_z", "rotation", "action_penalty", "contact", "object_stability", "survival", "deviation_penalty", "update_environment_transitions_per_second", "cumulative_environment_transitions_per_second", "performance/total_fps", "performance/step_fps", "performance/update_time", "rewards/frame", "rewards/iter"} <= metrics.keys()
+    assert all({"reward_mean", "manorl/reward_mean", "manorl/total_mean", "manorl/distance_x_mean", "manorl/distance_y_mean", "manorl/distance_z_mean", "manorl/rotation_mean", "manorl/action_penalty_mean", "manorl/contact_mean", "manorl/object_stability_mean", "manorl/survival_mean", "manorl/deviation_penalty_mean", "action_abs_mean", "reset_count", "completed_episode_count", "elapsed_seconds", "update", "performance/total_fps", "performance/step_fps", "performance/update_time", "performance/play_time", "info/epochs", "distance_reward_x_instant/step", "distance_reward_y_instant/step", "distance_reward_z_instant/step", "distance_reward_instant/step", "rotation_reward_instant/step", "action_penalty_instant/step", "contact_reward_instant/step", "object_stability_reward_instant/step", "survival_reward_instant/step"} <= metrics.keys()
                for metrics, _ in run.logs)
+    assert not {"rewards/frame", "rewards/iter", "rewards/step", "rewards/time"} & run.logs[0][0].keys()
+    assert not {"episode_reward", "distance_reward", "distance_reward_x", "distance_reward/cube1_01"} & run.logs[0][0].keys()
     assert "episode_return_mean" not in run.logs[0][0]
     assert not any(name.startswith("episode_cumulative/") for name in run.logs[0][0])
     assert run.logs[1][0]["episode_return_mean"] == 12.5
+    assert run.logs[1][0]["total"] == 2.0
+    assert run.logs[1][0]["distance_x"] == 0.2
+    assert run.logs[1][0]["action_penalty"] == 0.0
+    assert run.logs[1][0]["manorl/reward_mean"] == 2.0
+    assert run.logs[1][0]["performance/play_time"] == 1.2
+    assert run.logs[1][0]["info/epochs"] == 2.0
     assert run.logs[1][0]["episode_reward"] == 12.5
+    assert run.logs[1][0]["distance_reward_x"] == 4.0
+    assert run.logs[1][0]["distance_reward_y"] == 5.0
+    assert run.logs[1][0]["distance_reward_z"] == 6.0
+    assert run.logs[1][0]["rotation_reward"] == 7.0
+    assert run.logs[1][0]["contact_reward"] == 8.0
+    assert run.logs[1][0]["object_stability_reward"] == 9.0
+    assert run.logs[1][0]["survival_reward"] == 10.0
+    assert run.logs[1][0]["action_penalty"] == 0.0
+    assert run.logs[1][0]["distance_reward"] == 15.0
+    assert run.logs[1][0]["distance_reward/cube1_01"] == 15.0
+    assert run.logs[1][0]["distance_reward/object_cube1"] == 15.0
+    assert run.logs[1][0]["episode_lengths/frame"] == 48.0
+    assert run.logs[1][0]["episode_lengths/iter"] == 48.0
+    assert run.logs[1][0]["episode_lengths/step"] == 48.0
+    assert run.logs[1][0]["rewards/frame"] == 12.5
+    assert run.logs[1][0]["rewards/iter"] == 12.5
+    assert run.logs[1][0]["rewards/step"] == 12.5
+    assert run.logs[1][0]["rewards/time"] == 12.5
+    assert run.logs[1][0]["episode_cumulative/distance_reward_x"] == 4.0
+    assert run.logs[1][0]["episode_cumulative_min/distance_reward_x_min"] == 2.0
+    assert run.logs[1][0]["episode_cumulative_max/distance_reward_x_max"] == 6.0
+    assert run.logs[1][0]["episode_reward/cube1_01"] == 12.5
+    assert run.logs[1][0]["episode_reward/object_cube1"] == 12.5
+    assert run.logs[1][0]["episode_cumulative/distance_reward_x/cube1_01"] == 4.0
+    assert run.logs[1][0]["episode_cumulative_min/distance_reward_x/cube1_01_min"] == 2.0
+    assert run.logs[1][0]["episode_cumulative_max/distance_reward_x/cube1_01_max"] == 6.0
+    assert run.logs[1][0]["episode_cumulative/action_penalty"] == -1.0
     assert run.logs[1][0]["episode_cumulative/total"] == 12.5
     assert run.logs[1][0]["episode_cumulative/episode_reward"] == 12.5
     assert run.logs[1][0]["episode_cumulative/total_mean"] == 12.5
@@ -315,6 +426,7 @@ def test_wandb_update_metrics_use_completed_update_steps() -> None:
     assert run.logs[1][0]["info/last_lr"] == 0.0003
     assert run.logs[1][0]["info/policy_std"] == 0.8
     assert run.logs[1][0]["performance/algorithm_update_time_ms"] == 42.0
+    assert not any(name.startswith("mu/") for name in run.logs[1][0])
     assert run.logs[1][0]["reward_mean/object_cube1"] == 1.5
     assert run.logs[1][0]["reward_mean/cube1_01"] == 2.5
     assert run.logs[1][0]["success_rate/cube1_01"] == 50.0
@@ -326,13 +438,23 @@ def test_latest_skrl_tracking_metrics_maps_only_available_latest_values() -> Non
         "Loss / Policy loss": [1.0, 0.25],
         "Loss / Value loss": [0.5],
         "Learning / Learning rate": [0.0003],
+        "Loss / Bounds loss": [0.125],
+        "Learning / LR multiplier": [0.75],
+        "Info / E-clip": [0.15],
+        "Stats / Clip fraction": [0.2],
+        "Info / KL": [0.01],
         "Unknown / Value": [99.0],
     })
 
     assert tool._latest_skrl_tracking_metrics(agent) == {
         "losses/a_loss": 0.25,
         "losses/c_loss": 0.5,
+        "losses/bounds_loss": 0.125,
         "info/last_lr": 0.0003,
+        "info/lr_mul": 0.75,
+        "info/e_clip": 0.15,
+        "info/clip_frac": 0.2,
+        "info/kl": 0.01,
     }
 
 
