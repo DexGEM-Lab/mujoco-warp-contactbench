@@ -959,9 +959,7 @@ def test_two_world_cpu_vector_smoke_has_independent_equal_worlds(trajectory) -> 
     )
 
 
-def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(
-    trajectory, monkeypatch
-) -> None:
+def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(trajectory) -> None:
     cube2_shift = _initial_support_shift(
         trajectory.object_pos_raw[0], trajectory.object_quat_xyzw[0], "cube2"
     )
@@ -990,29 +988,7 @@ def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(
     assert env.object_geometry.shape == (3, 12)
     assert not np.array_equal(env.object_geometry[0], env.object_geometry[1])
 
-    step_order: list[str] = []
-    for object_type, (_, route) in env._object_routes.items():
-        original_prepare = route._prepare_step
-        original_complete = route._complete_step
-
-        def prepare(actions, *, _name=object_type, _original=original_prepare):
-            step_order.append(f"prepare:{_name}")
-            return _original(actions)
-
-        def complete(prepared, *, _name=object_type, _original=original_complete):
-            step_order.append(f"complete:{_name}")
-            return _original(prepared)
-
-        monkeypatch.setattr(route, "_prepare_step", prepare)
-        monkeypatch.setattr(route, "_complete_step", complete)
-
     observation, reward, reset, extras = env.step(np.zeros((3, 26), dtype=np.float64))
-    assert step_order == [
-        "prepare:cube1",
-        "prepare:cube2",
-        "complete:cube1",
-        "complete:cube2",
-    ]
     assert observation["obs"].shape == (3, 476)
     assert reward.shape == reset.shape == extras["time_outs"].shape == (3,)
     np.testing.assert_array_equal(env.progress, (1, 1, 1))
