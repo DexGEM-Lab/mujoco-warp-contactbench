@@ -253,6 +253,53 @@ def test_assigned_loader_skips_invalid_full_candidate_rows(
     assert batch.trajectories[0].identity.identity == "cube1_01_002"
 
 
+def test_assigned_loader_does_not_decode_pairs_without_environment_slots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "source.lance"
+    path.mkdir()
+    timestamps = np.arange(1373, dtype=np.float64) / 111.0
+    rows = [_accepted_fake_row(timestamps), deepcopy(_accepted_fake_row(timestamps))]
+    for row in rows:
+        row["index"]["scene"] = "cube1"
+    rows[1]["index"].update(
+        gesture="02",
+        source_path="cube1/cube1_02_001/cube1_02_001_mano.npy",
+        uuid="row-2",
+    )
+    taken_indices: list[int] = []
+
+    class FakeTable:
+        def __init__(self, values: list[dict[str, object]]) -> None:
+            self.values = values
+
+        def to_pylist(self) -> list[dict[str, object]]:
+            return self.values
+
+    class FakeDataset:
+        version = EXPECTED_DATASET_VERSION
+
+        def to_table(self, *, columns: list[str]) -> FakeTable:
+            assert columns == ["index", "trajectory_metadata"]
+            return FakeTable(rows)
+
+        def take(self, indices: list[int], *, columns: list[str]) -> FakeTable:
+            assert columns == list(LANCE_COLUMNS)
+            taken_indices.extend(indices)
+            return FakeTable([rows[index] for index in indices])
+
+    import lance
+
+    monkeypatch.setattr(lance, "dataset", lambda _: FakeDataset())
+    monkeypatch.setattr("sim.manorl.trajectory._initial_support_shift", lambda *_: 0.0)
+    batch = load_assigned_trajectory_batch(
+        TrajectorySelection(selector="all", dataset_path=path), num_envs=1
+    )
+    assert [pair.canonical for pair in batch.resolved_pairs] == ["cube1:01", "cube1:02"]
+    assert [trajectory.identity.row_index for trajectory in batch.trajectories] == [0]
+    assert taken_indices == [0]
+
+
 def test_loader_uses_exact_take_and_columns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     path = tmp_path / "source.lance"
     path.mkdir()

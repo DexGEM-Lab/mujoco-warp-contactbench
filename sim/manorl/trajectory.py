@@ -890,8 +890,8 @@ def _decode_valid_candidates(
 ) -> dict[ObjectActionPair, tuple[ReferenceTrajectory, ...]]:
     """Decode valid pair candidates in cross-pair, bounded-memory chunks."""
 
-    if any(limits.get(pair, 0) < 1 for pair in resolved_pairs):
-        raise ValueError("candidate decode limits must be positive")
+    if any(limits.get(pair, 0) < 0 for pair in resolved_pairs):
+        raise ValueError("candidate decode limits must be non-negative")
     decoded: dict[ObjectActionPair, list[ReferenceTrajectory]] = {
         pair: [] for pair in resolved_pairs
     }
@@ -938,7 +938,7 @@ def _decode_valid_candidates(
                 continue
             decoded[pair].append(trajectory)
     for pair in resolved_pairs:
-        if decoded[pair]:
+        if limits[pair] == 0 or decoded[pair]:
             continue
         detail = "; ".join(rejected[pair][:4]) or "no full rows were decoded"
         raise LookupError(f"no valid Lance trajectories for {pair.canonical}; {detail}")
