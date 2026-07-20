@@ -1,0 +1,631 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="marvin_021pro_right_hand">
+  <link name="right_hand_base" />
+  <joint name="right_hand_base_to_palm" type="fixed">
+    <origin xyz="0 0 0" rpy="0 1.5707963267948966 0" />
+    <parent link="right_hand_base" />
+    <child link="RFH1" />
+  </joint>
+  <link name="RFH1">
+    <inertial>
+      <origin xyz="-0.0281357631256852 0.00116684069530026 0.0629760763934342" rpy="0 0 0" />
+      <mass value="0.552446471191886" />
+      <inertia ixx="0.000978194028981453" ixy="-1.24773316782625E-06" ixz="6.92295259456392E-05" iyy="0.000800462955315249" iyz="1.60079814286245E-07" izz="0.000456980491604078" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RFH1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.858823529411765 0.858823529411765 0.858823529411765 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RFH1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_1_1" type="revolute">
+    <origin xyz="0.00100000000001333 0.0173445602785594 0.060947125774099" rpy="1.57079632679489 0.916297857296865 1.5707963267949" />
+    <parent link="RFH1" />
+    <child link="RH0_0" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="2" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH0_0">
+    <inertial>
+      <origin xyz="0.0166000000000736 0.00521327808422134 0.000919241584205043" rpy="0 0 0" />
+      <mass value="0.0505242867562445" />
+      <inertia ixx="1.25329562191836E-06" ixy="-4.36350075817747E-18" ixz="5.49153628145379E-19" iyy="6.10012837060415E-07" iyz="-1.23147578251533E-07" izz="1.2867032180634E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_0.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.929411764705882 0.866666666666667 0.509803921568627 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_1_2" type="revolute">
+    <origin xyz="0.0166000000000355 0.0160247874130681 0.0127767831775244" rpy="2.23270279024695 1.39626340159546 1.57079632679474" />
+    <parent link="RH0_0" />
+    <child link="RH0_1" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH0_1">
+    <inertial>
+      <origin xyz="0.00979982892691597 0.0148825069432138 -0.0104531402281481" rpy="0 0 0" />
+      <mass value="0.0246804493675454" />
+      <inertia ixx="7.69892174607913E-06" ixy="9.93084504641505E-11" ixz="-3.99626407624253E-11" iyy="3.89934571033323E-06" iyz="2.84877964497747E-06" izz="5.54920831564934E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.458823529411765 0.529411764705882 0.6 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_1_3" type="revolute">
+    <origin xyz="0.00379999999999994 0.0339193422023141 -0.0264287386108816" rpy="0 0 0" />
+    <parent link="RH0_1" />
+    <child link="RH0_2" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH0_2">
+    <inertial>
+      <origin xyz="0.00600000918300941 0.0119040416459426 -0.00882205940717629" rpy="0 0 0" />
+      <mass value="0.0122867535546083" />
+      <inertia ixx="1.78095920550916E-06" ixy="1.11551343577217E-12" ixz="3.52216853538403E-12" iyy="1.09334395045213E-06" iyz="5.54213494723083E-07" izz="1.38544250374249E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_2.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.407843137254902 0.407843137254902 0.549019607843137 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_1_4" type="revolute">
+    <origin xyz="0 0.0214559559977436 -0.0167177137259533" rpy="-3.14159265358979 0 3.14159265358979" />
+    <parent link="RH0_2" />
+    <child link="RH0_3" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH0_3">
+    <inertial>
+      <origin xyz="-0.0060169458187958 0.0109867266017507 0.00765050833131975" rpy="0 0 0" />
+      <mass value="0.0110115288248458" />
+      <inertia ixx="1.47864901904124E-06" ixy="1.72439356503791E-09" ixz="6.25666978100137E-10" iyy="8.31608044645451E-07" iyz="-4.3001555573024E-07" izz="1.15050003492575E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_3.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.949019607843137 0.819607843137255 0.549019607843137 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH0_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_2_1" type="revolute">
+    <origin xyz="-0.0107999999976446 0.0304500000002516 0.120779999999401" rpy="0 0 0" />
+    <parent link="RFH1" />
+    <child link="RH1_0" />
+    <axis xyz="-1 0 0" />
+    <limit lower="-0.1570796327" upper="0.4537856055" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH1_0">
+    <inertial>
+      <origin xyz="-0.007234838569811 6.56575770701107E-05 0.00156067580355124" rpy="0 0 0" />
+      <mass value="0.0038413206465803" />
+      <inertia ixx="1.98166028972206E-07" ixy="-2.13073095087666E-11" ixz="8.42889212492412E-10" iyy="1.94693498412904E-07" iyz="-2.53219737360808E-09" izz="1.29265929749434E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_0.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.43921568627451 0.619607843137255 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_2_2" type="revolute">
+    <origin xyz="-0.00715 0.00780000000000136 0.0115999999999988" rpy="-1.56219388225413 0 1.5707963267949" />
+    <parent link="RH1_0" />
+    <child link="RH1_1" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH1_1">
+    <inertial>
+      <origin xyz="-0.0075795059779773 -0.0216787916735738 0.000842089314530448" rpy="0 0 0" />
+      <mass value="0.0143435345187347" />
+      <inertia ixx="3.16152534307448E-06" ixy="6.16874611332834E-08" ixz="1.81705527166432E-09" iyy="7.98400921147991E-07" iyz="2.51288330511977E-08" izz="3.19330964299394E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.517647058823529 0.8 0.976470588235294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_2_3" type="revolute">
+    <origin xyz="0.0015000000000005 -0.0429984089656923 0.000369900552980437" rpy="3.14159265358979 0 3.14159265358979" />
+    <parent link="RH1_1" />
+    <child link="RH1_2" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH1_2">
+    <inertial>
+      <origin xyz="0.0102511088803841 -0.0127505618783299 -0.00136023481961261" rpy="0 0 0" />
+      <mass value="0.00665207707264815" />
+      <inertia ixx="6.9861002701327E-07" ixy="-5.4748865203202E-09" ixz="-7.06950691821553E-09" iyy="4.2859404415312E-07" iyz="4.64797610367809E-09" izz="7.86770833894284E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_2.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.486274509803922 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_2_4" type="revolute">
+    <origin xyz="0 -0.0249990749800533 -0.000215058461035097" rpy="0 0 0" />
+    <parent link="RH1_2" />
+    <child link="RH1_3" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH1_3">
+    <inertial>
+      <origin xyz="0.00894424348306067 -0.0126892891011749 -0.000480629933175135" rpy="0 0 0" />
+      <mass value="0.00790882474447943" />
+      <inertia ixx="5.99156455011656E-07" ixy="2.38113938135429E-08" ixz="3.42959463670849E-09" iyy="2.71611180603311E-07" iyz="-9.0460571339989E-08" izz="6.21776831045074E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_3.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.568627450980392 0.427450980392157 0.847058823529412 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH1_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_3_1" type="revolute">
+    <origin xyz="-0.0104999999976446 0.0101500000002526 0.125779999999404" rpy="0 0 0" />
+    <parent link="RFH1" />
+    <child link="RH2_0" />
+    <axis xyz="-1 0 0" />
+    <limit lower="-0.4537856055" upper="0.4537856055" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH2_0">
+    <inertial>
+      <origin xyz="-0.007534838569811 6.56575770699996E-05 0.00156067580355135" rpy="0 0 0" />
+      <mass value="0.00384132064658031" />
+      <inertia ixx="1.98166028972206E-07" ixy="-2.13073095087186E-11" ixz="8.42889212492435E-10" iyy="1.94693498412904E-07" iyz="-2.53219737360807E-09" izz="1.29265929749434E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_0.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.43921568627451 0.619607843137255 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_3_2" type="revolute">
+    <origin xyz="-0.00744999999999994 0.00810000000000144 0.0115999999999987" rpy="-1.56219388225413 0 1.5707963267949" />
+    <parent link="RH2_0" />
+    <child link="RH2_1" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH2_1">
+    <inertial>
+      <origin xyz="-0.00787950597797726 -0.0216787916735736 0.000842089314530439" rpy="0 0 0" />
+      <mass value="0.0143435345187348" />
+      <inertia ixx="3.1615253430745E-06" ixy="6.16874611332901E-08" ixz="1.81705527165972E-09" iyy="7.98400921147995E-07" iyz="2.5128833051196E-08" izz="3.19330964299395E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.517647058823529 0.8 0.976470588235294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_3_3" type="revolute">
+    <origin xyz="0.00120000000000042 -0.042998408965692 0.000369900552980502" rpy="3.14159265358979 0 3.14159265358979" />
+    <parent link="RH2_1" />
+    <child link="RH2_2" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH2_2">
+    <inertial>
+      <origin xyz="0.0102511088803846 -0.0127505618783303 -0.00136023481961269" rpy="0 0 0" />
+      <mass value="0.00665207707264782" />
+      <inertia ixx="6.9861002701324E-07" ixy="-5.474886520317E-09" ixz="-7.06950691821764E-09" iyy="4.28594044153091E-07" iyz="4.64797610368523E-09" izz="7.86770833894263E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_2.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.486274509803922 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_3_4" type="revolute">
+    <origin xyz="0 -0.0249990749800535 -0.000215058461035098" rpy="0 0 0" />
+    <parent link="RH2_2" />
+    <child link="RH2_3" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH2_3">
+    <inertial>
+      <origin xyz="0.00894424348306022 -0.0126892891011752 -0.00048062993317541" rpy="0 0 0" />
+      <mass value="0.00790882474447909" />
+      <inertia ixx="5.99156455011723E-07" ixy="2.38113938135363E-08" ixz="3.42959463670613E-09" iyy="2.7161118060329E-07" iyz="-9.04605713400071E-08" izz="6.21776831045122E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_3.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 0.498039215686275 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH2_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_4_1" type="revolute">
+    <origin xyz="-0.0108000000000406 -0.010149999999749 0.120779999999404" rpy="0 0 0" />
+    <parent link="RFH1" />
+    <child link="RH3_0" />
+    <axis xyz="-1 0 0" />
+    <limit lower="-0.4537856055" upper="0.1570796327" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH3_0">
+    <inertial>
+      <origin xyz="-0.007234838569811 6.56575770699996E-05 0.00156067580355135" rpy="0 0 0" />
+      <mass value="0.0038413206465803" />
+      <inertia ixx="1.98166028972206E-07" ixy="-2.13073095088009E-11" ixz="8.42889212492423E-10" iyy="1.94693498412904E-07" iyz="-2.53219737360805E-09" izz="1.29265929749434E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_0.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.43921568627451 0.619607843137255 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_4_2" type="revolute">
+    <origin xyz="-0.00715000000000002 -0.00964999999999827 0.0116000000000016" rpy="-1.57939877133567 0 -1.5707963267949" />
+    <parent link="RH3_0" />
+    <child link="RH3_1" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH3_1">
+    <inertial>
+      <origin xyz="-0.00987049402202245 -0.0216787916735736 -0.000842089314530382" rpy="0 0 0" />
+      <mass value="0.014343534518735" />
+      <inertia ixx="3.16152534307452E-06" ixy="-6.16874611332859E-08" ixz="1.81705527165745E-09" iyy="7.98400921148012E-07" iyz="-2.51288330512017E-08" izz="3.19330964299396E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.517647058823529 0.8 0.976470588235294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_4_3" type="revolute">
+    <origin xyz="-0.00325000000000009 -0.042998408965692 -0.000369900552980412" rpy="0 0 0" />
+    <parent link="RH3_1" />
+    <child link="RH3_2" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH3_2">
+    <inertial>
+      <origin xyz="-0.005448891119616 -0.0127505618783299 -0.00136023481961262" rpy="0 0 0" />
+      <mass value="0.00665207707264848" />
+      <inertia ixx="6.98610027013307E-07" ixy="-5.47488652031187E-09" ixz="-7.06950691822215E-09" iyy="4.28594044153143E-07" iyz="4.64797610367446E-09" izz="7.86770833894327E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_2.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.486274509803922 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_4_4" type="revolute">
+    <origin xyz="0 -0.0249990749800537 -0.000215058461035103" rpy="0 0 0" />
+    <parent link="RH3_2" />
+    <child link="RH3_3" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH3_3">
+    <inertial>
+      <origin xyz="-0.00675575651693383 -0.0126892891011756 -0.000480629933175331" rpy="0 0 0" />
+      <mass value="0.00790882474447917" />
+      <inertia ixx="5.99156455011702E-07" ixy="2.38113938135456E-08" ixz="3.4295946366982E-09" iyy="2.71611180603293E-07" iyz="-9.04605713400077E-08" izz="6.21776831045106E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_3.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.568627450980392 0.427450980392157 0.847058823529412 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH3_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_5_1" type="revolute">
+    <origin xyz="-0.0104999999976326 -0.030449999999749 0.115779999999404" rpy="0 0 0" />
+    <parent link="RFH1" />
+    <child link="RH4_0" />
+    <axis xyz="-1 0 0" />
+    <limit lower="-0.4537856055" upper="0.0872664626" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH4_0">
+    <inertial>
+      <origin xyz="-0.00753483856981099 6.56575770698886E-05 0.00156067580355124" rpy="0 0 0" />
+      <mass value="0.00384132064658029" />
+      <inertia ixx="1.98166028972206E-07" ixy="-2.13073095086841E-11" ixz="8.42889212492437E-10" iyy="1.94693498412904E-07" iyz="-2.53219737360807E-09" izz="1.29265929749434E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_0.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.43921568627451 0.619607843137255 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_5_2" type="revolute">
+    <origin xyz="-0.00745000000000002 -0.00964999999999827 0.0116000000000016" rpy="-1.57939877133567 0 -1.5707963267949" />
+    <parent link="RH4_0" />
+    <child link="RH4_1" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH4_1">
+    <inertial>
+      <origin xyz="-0.00987049402202234 -0.0216787916735736 -0.000842089314530478" rpy="0 0 0" />
+      <mass value="0.0143435345187349" />
+      <inertia ixx="3.16152534307451E-06" ixy="-6.16874611332772E-08" ixz="1.81705527166269E-09" iyy="7.98400921148003E-07" iyz="-2.51288330512058E-08" izz="3.19330964299396E-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.517647058823529 0.8 0.976470588235294 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_5_3" type="revolute">
+    <origin xyz="-0.00325000000000009 -0.042998408965692 -0.000369900552980412" rpy="0 0 0" />
+    <parent link="RH4_1" />
+    <child link="RH4_2" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH4_2">
+    <inertial>
+      <origin xyz="-0.00544889111961566 -0.0127505618783306 -0.00136023481961266" rpy="0 0 0" />
+      <mass value="0.00665207707264783" />
+      <inertia ixx="6.98610027013238E-07" ixy="-5.47488652032205E-09" ixz="-7.06950691821903E-09" iyy="4.28594044153093E-07" iyz="4.64797610368322E-09" izz="7.8677083389426E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_2.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.486274509803922 1 0 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_f_jiont_5_4" type="revolute">
+    <origin xyz="0 -0.0249990749800537 -0.000215058461035103" rpy="0 0 0" />
+    <parent link="RH4_2" />
+    <child link="RH4_3" />
+    <axis xyz="-1 0 0" />
+    <limit lower="0" upper="1.57" effort="0" velocity="0" />
+    <dynamics damping="1" />
+  </joint>
+  <link name="RH4_3">
+    <inertial>
+      <origin xyz="-0.00675575651693416 -0.0126892891011738 -0.000480629933175396" rpy="0 0 0" />
+      <mass value="0.00790882474447871" />
+      <inertia ixx="5.9915645501167E-07" ixy="2.38113938135365E-08" ixz="3.4295946366966E-09" iyy="2.71611180603289E-07" iyz="-9.04605713399949E-08" izz="6.21776831045076E-07" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_3.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0 0.498039215686275 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="../meshes/RH4_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+</robot>

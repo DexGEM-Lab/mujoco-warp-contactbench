@@ -1,0 +1,453 @@
+# @package _global_
+# DexhandReconstruction Task Configuration
+#
+# Mocap-based hand trajectory reconstruction task for validation and RL refinement.
+# Provides expert mocap baselines via pre-action rule, enabling future RL policy
+# to learn correction offsets.
+#
+# Key Features:
+# - Loads mocap data from Lance trajectory datasets
+# - Applies euler angle unwrapping for smooth trajectories
+# - Synchronizes object poses with hand motion
+# - Supports single-shot or loop playback modes
+# - Dynamic episode length based on trajectory
+
+defaults:
+  - BaseTask
+  - override /train: DexhandReconstructionPPO
+  - _self_
+
+# Simulation timing - higher frequency for accurate mocap playback
+sim:
+  dt: 0.01  # 200Hz physics for accurate trajectory following
+  substeps: 2  # Reduced from default 4 for training throughput (effective 400Hz internal)
+  physx:
+    num_threads: 4
+    num_position_iterations: 16   # Balanced precision
+    num_velocity_iterations: 0    # NVIDIA recommendation
+    gpu_contact_pairs_per_env: 163840  # Increase GPU contact buffer for dense hand-object contacts
+    default_buffer_size_multiplier: 16.0  # Extra PhysX GPU buffer headroom for contact-heavy scenes
+
+
+train:
+  config:
+    wandb_activate: true
+    wandb_entity: "sunjay45711-dexerto"
+    wandb_project: "dexhand021pro_reconstruction"
+    wandb_tags: ["mocap", "reconstruction", "ppo", "hand-tracking", "021pro"]
+    wandb_logcode_dir: "./"
+    wandb_group: "dexhand021pro"
+    wandb_name: null
+
+# Environment configuration
+env:
+  numEnvs: 4  # Multiple envs for RL training (increase to 64-512 for real training)
+  episodeLength: 1000  # Placeholder - overridden dynamically by task based on trajectory length
+  viewer: false  # Disable viewer for training (set true for visualization)
+  handModel: "dexhand021pro"  # Canonical 021pro asset; this now always loads the simplified XML
+
+  # Clipping to prevent extreme values causing network issues
+  clipObservations: 5.0  # Clip normalized observations
+  clipActions: 1.0  # Actions already in [-1, 1]
+
+  # CRITICAL: Hand initial position for mocap coordinate alignment
+  # This position allows mocap DOF data to be used with minimal coordinate transformation
+  # Must match the coordinate system used during mocap data collection
+  initialHandPos: [0.0, 0.00, 0.0]  # X, Y, Z positions in meters
+  initialHandRot: [0.0, 0.0, 0.0, 1.0]
+
+# Task-specific configuration
+task:
+  name: Dexhand021proReconstruction
+
+  # Mocap configuration - batch training mode
+  mocap:
+    format: "lance"
+    basePath: "/mnt/nas-222-project/mocap/for_retargeting/dexhand021pro/results_all_mano/all/lance_new_all_generated_mano/lance_result_archive_full/dexhand021pro_lance_new_all_generated_mano_retarget_result_archive.lance"
+    objectType: ["cylinder1"]  # Object types to train on (subdirectories under basePath)
+    actions: ["02"]  # Action IDs to train on (from Lance index.gesture)
+    load_multi_object: false  # Auto-discover all actions for each objectType (when true, ignores actions field)
+    sequenceOffset: 1  # Deterministic test/recording offset into discovered trajectories (seq1)
+    numActionTypes: 50  # Total number of action types for one-hot encoding (fixed dimension)
+    hand_pose_key: "intrinsic_euler_hand_pose_controls_world"  # Canonical 021pro hand pose/control field; no fallback is configured
+
+  # Early phase configuration (mocap-only warm-up period)
+  early_phase_frames: 130  # Number of frames to run pure mocap baseline before enabling policy
+                           # During early phase: use_residual is temporarily disabled, terminal checks are skipped
+                           # This allows hand to establish grasp using mocap before policy takes over
+  # Trajectory configuration
+  pre_contact_frames: 200  # Number of pre-contact frames to keep before first is_contact_frame
+                           # start_frame = max(0, first_contact_frame - pre_contact_frames)
+                           # Example: first_contact=500, pre_contact_frames=200 → start at frame 300
+  post_contact_frames: 250  # Number of post-contact frames to keep after last contact
+                            # end_frame = min(traj_length - 1, last_contact_frame + post_contact_frames)
+  loop_trajectory: false  # Whether to loop trajectory continuously (false = single playback)
+
+  # Control mode configuration
+  # NOTE: controlMode is overridden by custom action_rule in DexhandReconstructionTask
+  # The actual behavior is: new_target = mocap_baseline + policy_correction (each frame)
+  controlMode: "position"  # Custom mocap correction mode via action_rule
+  policy_controls_hand_base: true  # Policy learns correction offsets for base DOFs
+  policy_controls_fingers: true  # Policy learns correction offsets for finger DOFs
+
+  # Residual control mode
+  use_residual: true  # If false, only use mocap baseline (no policy offset) - useful for debugging/visualization
+
+
+  # Debug options
+  debug_print_observations: false  # Print all observations each step (for validation)
+  debug_print_actions: false       # Print actions, mocap baseline, and cumulative offsets each step
+  debug_print_reward: false         # Print reward components and total reward each step
+  debug_print_terminal_state: false  # Print terminal state failures and distances each step
+  debug_print_contacts: false  # Temporary: print env0 contact bodies above visualization threshold
+
+  disable_hand_self_collision: true  # Backward-compat toggle; mode below is the authoritative 021pro behavior
+  hand_self_collision_mode: "disable_within_finger"  # Disable self-collision within each finger, keep finger-finger collisions  disable_within_finger all_disabled
+
+  # Test-only toggles
+  test:
+    disable_hand_collision_with_anything: false  # True: hand has no collision with any actor/ground
+
+  # Velocity limits (same as BaseTask defaults)
+  max_finger_joint_velocity: 2
+  max_base_linear_velocity: 3
+  max_base_angular_velocity: 10
+
+  dof_properties:
+    enable: true  # Set to true to override MJCF values with config values
+
+    # Base DOFs (0-5): floating base position and rotation
+    base_position:      # DOF 0-2 (X, Y, Z translation)
+      stiffness: 5000   # Position control gain Kp (N/m for translation)
+      damping: 500      # Velocity control gain Kd (N·s/m)
+      effort: 500       # Maximum force limit (N)
+
+    base_rotation:      # DOF 3-5 (Roll, Pitch, Yaw)
+      stiffness: 5000   # Position control gain Kp (N·m/rad for rotation)
+      damping: 500      # Velocity control gain Kd (N·m·s/rad)
+      effort: 200       # Maximum torque limit (N·m)
+
+    # Finger DOFs (6-25): 20 finger joints grouped by joint type
+    # Joint hierarchy: MCP (metacarpophalangeal) -> PIP (proximal) -> DIP (middle/distal)
+    finger_mcp:         # MCP joints - base joints (外展/内收 + 弯曲)
+      # DexHand MCP indices: [6, 11, 15, 19, 23] for [Thumb, Index, Middle, Ring, Pinky]
+      stiffness: 300    # Lower than base for compliant grasping
+      damping: 20       # Moderate damping for stable control
+      effort: 50         # Sufficient for small joints (N·m)
+
+    finger_pip:         # PIP joints - proximal interphalangeal
+      # DexHand PIP indices: [7, 12, 16, 20, 24]
+      stiffness: 300    # Softer than MCP
+      damping: 20       # Lower damping
+      effort: 50         # Lower force limit (N·m)
+
+    finger_dip:         # DIP joints - distal interphalangeal (middle + distal phalanges)
+      # DexHand DIP indices: [8, 9, 10, 13, 14, 17, 18, 21, 22, 25]
+      stiffness: 300    # Softest, allows natural finger curvature
+      damping: 20       # Minimal damping
+      effort: 50         # Minimal force limit (N·m)
+  
+  # Cumulative action scaling parameters (for mocap correction mode)
+  # Aligned with MANOHand values for consistent residual control behavior
+  actionScaling:
+    # Decay factors (cumulative offset decay per step)
+    gamma: 0.90              # XY position offset decay (MANOHand: 0.90)
+    gammaZ: 0.90             # Z position offset decay (MANOHand: 0.90)
+    gammaJoints: 0.90        # Joint offset decay (MANOHand: 0.90)
+    postContactGamma: 0.90   # XY position offset decay after last contact frame
+    postContactGammaZ: 0.90  # Z position offset decay after last contact frame
+    postContactGammaJoints: 1.0  # Joint offset decay after last contact frame
+
+    # Base position action scales (m/step)
+    baseScaleX: 0.002        # X action scale (MANOHand: 0.004)
+    baseScaleY: 0.002        # Y action scale (MANOHand: 0.004)
+    baseScaleZ: 0.003        # Z action scale (MANOHand: 0.004)
+
+    # Joint action scales
+    jointBaseScale: 3.0      # Joint action base scale (MANOHand: 1.2)
+
+    # Offset limits
+    maxOffsetScale: 2.0      # Offset limit scale factor (MANOHand: 1.2)
+    baseMaxOffset: 0.02      # Max cumulative position offset in meters (MANOHand: 0.04)
+
+    # Per-joint cumulative action scales (× jointBaseScale)
+    # Aligned with MANOHand values
+    jointCumulativeScales:
+      thumbCmcAbd: 0.01      # th_rot (MANOHand: 0.05)【左右】
+      thumbCmcFlex: 0.035     # th_mcp (MANOHand: 0.06)【上下】
+      thumbDip: 0.02        # th_dip (MANOHand: 0.005)
+      fingerMcpAbd: 0.01    # ff_spr (MANOHand: 0.012)
+      fingerMcpFlex: 0.03   # ff_mcp, mf_mcp, rf_mcp, lf_mcp (MANOHand: 0.020)
+      fingerDip: 0.02       # ff_dip, mf_dip, rf_dip, lf_dip (MANOHand: 0.005)
+
+    # Per-joint max cumulative offsets (rad, × maxOffsetScale)
+    # Aligned with MANOHand values
+    jointMaxOffsets:
+      thumbCmcAbd: 0.1       # th_rot (MANOHand: 0.5)
+      thumbCmcFlex: 0.35      # th_mcp (MANOHand: 0.6)
+      thumbDip: 0.2         # th_dip (MANOHand: 0.05)
+      fingerMcpAbd: 0.1     # ff_spr (MANOHand: 0.12)
+      fingerMcpFlex: 0.4    # ff_mcp, mf_mcp, rf_mcp, lf_mcp (MANOHand: 0.20)
+      fingerDip: 0.2        # ff_dip, mf_dip, rf_dip, lf_dip (MANOHand: 0.05)
+      default: 0.30          # Default for any unmapped joints (MANOHand: 0.30)
+
+  # Observation configuration
+  # Includes standard proprioception plus trajectory progress for tracking
+  policy_observation_keys:
+    # FiLM CONVENTION: First two keys MUST be action_type_onehot and object_geometry_encoding
+    - "action_type_onehot"  # One-hot encoding of action type (numActionTypes dim, e.g., 18dim) - MUST BE FIRST
+    - "object_geometry_encoding" # 12dim - MUST BE SECOND
+    # Regular observations (any order)
+    - "active_finger_dof_pos" # current finger DOF positions 16dim  verify
+    - "hand_pose" # spawn pose + dof pose 7dim (pos + quat) verify
+    # - "fingertip_poses_hand"  # 35dim (5 fingers × 7) verify
+    - "fingertip_positions_world"  # 15dim = 5 fingertip spheres × XYZ in world frame
+    - "16_body_pose_world"  # 48dim (fixed 16 bodies × XYZ in world frame) verify
+    - "episode_time"  # Useful for temporal context verify
+    - "object_position"  # Current object world position 3dim (from simulation) verify
+    - "object_orientation"  # Current object quaternion orientation 4dim (from simulation) verify
+    - "object_linear_velocity"  # Current object linear velocity 3dim (from simulation) verify
+    - "target_object_position"  # Mocap reference object position 3dim (frame N, from mocap) verify
+    - "target_object_orientation"  # Mocap reference object quaternion 4dim (frame N, from mocap) verify
+    - "target_object_pos_next_5"  # 5-step look-ahead object position 3dim (frame N+5, from mocap) verify
+    - "expected_contact_mask"  # Expected contact bodies for current (object, action), 16dim in contact_force_bodies order
+    - "contact_force_magnitude"  # Contact force magnitude for each contact body (16dim = 16 bodies) verify
+    - "contact_force_directions"  # Unit-normalized 3D force direction per contact body (48dim = 16 bodies × 3) verify
+    - "object_contact_force_magnitude"  # Object contact force magnitude (1dim = scalar) verify
+    - "cumulative_offset"  # Cumulative position offset from mocap baseline (3dim) verify
+    - "cumulative_joint_offset"  # Cumulative joint offset from mocap baseline (16dim) verify
+    # PointNet CONVENTION: Point cloud MUST be last (if PointNet enabled)
+    - "object_point_cloud_hand_frame"   # Object point cloud in hand frame (N*3 dim, N=pointCloudEncoding.num_points, relative to hand_pose) verify - MUST BE LAST
+
+    # Disabled observations (uncomment to enable):
+    # - "base_dof_pos" # current base DOF positions 6dim
+    # - "base_dof_vel"
+    # - "active_finger_dof_vel"
+    # - "prev_actions"
+    # - "base_dof_target"
+    # - "active_finger_dof_target"
+    # - "fingertip_poses_world"
+    # - "trajectory_progress"  # Task-specific: fraction of trajectory completed (0.0 to 1.0)
+    # - "object_point_cloud_world_frame"  # Object point cloud in world frame (N*3 dim, N=pointCloudEncoding.num_points) verify
+
+  # Point cloud observation/encoding configuration
+  # IMPORTANT: num_points is the SINGLE SOURCE OF TRUTH for point cloud sampling
+  # The task will automatically sample this many points from object meshes.
+  # These settings also control raw point-cloud observations even when PointNet is disabled.
+  pointCloudEncoding:
+    enabled: true  # Enable PointNet processing
+    observation_key: 'object_point_cloud_hand_frame'  # Which point cloud to process (hand_frame or world_frame)
+    observation_keys: ${..policy_observation_keys}  # Reference to observation keys for validation (..=parent level)
+    num_points: 64  # Number of points to sample from object mesh (controls both sampling and network input)
+    feature_dim: 64  # PointNet output dimension (tune-able hyperparameter)
+    isDynamic: true  # true: random point-cloud variants on reset; false: fixed seed=42 sample for identical train/test observations
+
+  # FiLM configuration for multi-task conditioning
+  # Feature-wise Linear Modulation allows the policy to adapt to different action types and object geometries
+  # Enable by setting film.enabled=true; train.network.separate will auto-switch to true
+  # (no need to change network name)
+  film:
+    enabled: true  # Set to true to enable FiLM conditioning
+
+    # Condition keys: observations to use as FiLM conditioning inputs
+    # train.py will automatically compute their slice positions from environment
+    condition_keys:
+      - action_type_onehot           # 18-dim one-hot encoding of action type (grasp type)
+      - object_geometry_encoding     # 12-dim geometry encoding (box/cylinder/sphere/irregular)
+
+    # Which actor MLP layers to apply FiLM modulation to
+    apply_layers: [0, 1]  # Apply FiLM to first 2 layers (common practice for multi-task RL)
+
+  # Termination criteria
+  termination:
+    active_success_criteria: []  # No success criteria
+    disable_all_failures: false  # True: disable all failure-based terminations (keep timeout/success only)
+    active_failure_criteria:
+      - "object_position_tracking_error"  # Terminate if sim object deviates too far from dataset baseline
+    object_position_terminal_threshold: 0.1  # meters; ||sim_object_pos - dataset_object_pos|| > threshold => failure
+
+    # Height threshold used by the rising-phase reward shaping.
+    # This no longer defines a terminal condition.
+    object_height_threshold_factor: 1.5  # Object center must be lifted to 1.5× its physical height
+
+    # Height safety thresholds (inherit from BaseTask)
+    height_safety:
+      handbase_threshold: -1.0
+      fingertip_threshold: -1.0
+      fingerpad_threshold: -1.0
+
+  reward_weights:
+    # Simple alive reward to keep policy active
+    alive: 0.001
+
+    # Object position tracking rewards (per-axis)
+    # Formula: reward = weight × exp(-40.0 × |distance|)
+    # Encourages policy to match mocap object trajectory
+    object_pos_tracking_x: 0.05  # X-axis tracking (horizontal)
+    object_pos_tracking_y: 0.05  # Y-axis tracking (horizontal)
+    object_pos_tracking_z: 1.0   # Z-axis tracking (vertical - higher priority)
+
+    # Contact quality reward (finger-object contact strength)
+    # Contact is counted when monitored hand bodies exceed contact_force_threshold.
+    # Max reward: 0.4, distributed among qualifying expected-contact bodies.
+    contact_quality: 1.5
+
+    # Post-contact object stability reward
+    # Enabled only after the trajectory's last labeled contact frame.
+    # Keep at 1.0 so the final maximum remains 0.4.
+    object_stability_velocity: 1.0
+
+    # Object rotation tracking reward (MANOHand-aligned)
+    # Final reward is produced directly by the task-specific piecewise function:
+    #   0-20°:  reward = 0.3 - 0.0005 * theta^2
+    #   20-90°: smooth transition down to -0.5
+    #   >90°: fixed penalty of -0.5
+    # Keep weight at 1.0 so the final value matches the MANOHand design directly.
+    object_rot_tracking: 1.0
+
+    # Height safety: Penalizes fingertips close to ground (not needed - mocap stays above ground)
+    height_safety: 0.0
+
+    # Velocity penalties: Penalize high joint/hand velocities (not needed - mocap controls velocity)
+    finger_velocity: 0.0           # Finger joint velocity penalty
+    hand_velocity: 0.0             # Hand linear velocity penalty
+    hand_angular_velocity: 0.0     # Hand rotational velocity penalty
+
+    # Joint limit penalty: Penalizes joints near their limits (not needed - mocap respects limits)
+    joint_limit: 0.0
+
+    # Acceleration penalties: Penalize rapid velocity changes (not needed - mocap is smooth)
+    finger_acceleration: 0.0       # Finger joint acceleration penalty
+    hand_acceleration: 0.0         # Hand linear acceleration penalty
+    hand_angular_acceleration: 0.0 # Hand angular acceleration penalty
+
+    # Contact stability: Rewards consistent contacts over time (not prioritized for reconstruction)
+    contact_stability: 0.0
+
+    # Fingertip penetration penalty:
+    # - uses only active fingertips for the current action
+    # - penetration <= 1mm: no penalty
+    # - penetration >= 3mm: full per-fingertip penalty
+    # - total raw penalty is capped at -0.4 and normalized by active fingertip count
+    fingertip_inside_object_penalty: 1.5
+
+    # Action penalties (MANOHand-aligned): penalize large cumulative offsets from mocap
+    # These are critical for keeping policy corrections small and smooth
+    # MANOHand values: position=0.025, joint=0.0072
+    action_penalty_position: 0.075     # Position offset penalty weight (cm-scale)
+    action_penalty_joint: 0.016       # Joint offset penalty weight (normalized)
+
+    # Termination rewards: One-time bonuses/penalties at episode end
+    termination_success: 0.0           # No success criteria for reconstruction task
+    termination_failure_penalty: -200.0  # Penalty when object drifts too far from dataset baseline
+    termination_timeout_penalty: 0.0   # Neutral - completing full trajectory is expected
+
+  # Contact force bodies - 16 bodies to monitor (palm + 3 links per finger)
+  # Matches MANOHand's 16-keypoint contact scheme for observation alignment
+  contact_force_bodies:
+    - "RFH1"   # palm
+    - "RH0_0"  # thumb proximal
+    - "RH0_2"  # thumb middle
+    - "RH0_3"  # thumb distal
+    - "RH1_0"  # index proximal
+    - "RH1_2"  # index middle
+    - "RH1_3"  # index distal
+    - "RH2_0"  # middle proximal
+    - "RH2_2"  # middle middle
+    - "RH2_3"  # middle distal
+    - "RH3_0"  # ring proximal
+    - "RH3_2"  # ring middle
+    - "RH3_3"  # ring distal
+    - "RH4_0"  # pinky proximal
+    - "RH4_2"  # pinky middle
+    - "RH4_3"  # pinky distal
+
+  # Per-object-per-action active contact bodies for contact reward
+  # Loaded from external YAML file with body-level granularity (e.g., thumb distal, index middle, palm)
+  # Uses simplified naming: {finger}{1=proximal, 2=middle, 3=distal}, palm
+  # See assets/all_assets/Assets/object_grasps_simple.yaml for the full mapping
+  active_contact_bodies_file: "all_assets/Assets/object_grasps_simple.yaml"
+
+  # Per-object rotation reward disabling
+  # Disable rotation tracking reward for certain (object_type, action_id) combinations
+  # Useful for symmetric objects (cylinders, spheres) where rotation alignment is meaningless
+  # Format:
+  #   - List of action IDs: ["01", "02", ...] - only these actions are disabled
+  #   - "all": all actions for this object type are disabled (MUST use quotes!)
+  disableObjectRotation:
+    "cylinder4": ["01", "02", "03", "04", "18"]
+    "cylinder5": "all"  # All actions disabled (use quotes!)
+    "cuboid1": "all"
+    "sphere1": "all"
+    # "cylinder1": ["13"]
+    # "cylinder2": ["08"]
+    # "cylinder6": ["08"]
+
+  contact_binary_threshold: 5.0
+
+  # Contact reward parameters
+  contact_force_threshold: 5.0  # N - minimum force on monitored hand bodies to count as contact
+  object_stability_velocity_scale: 0.1  # m/s - speed scale for post-contact stability reward exp(-(speed/scale)^2)
+  fingertip_inside_object_min_depth: 0.001  # m - penetration at/below this depth is ignored
+  fingertip_inside_object_max_depth: 0.003  # m - penetration at/above this depth gets full per-fingertip penalty
+
+  # Observation normalization parameters
+  obs_normalization:
+    enable: true  # Enable observation normalization
+
+    # Contact force normalization
+    max_contact_force: 100.0  # Maximum expected contact force (Newtons) - values above this are clamped to 1.0
+    normalize_contact_force: true  # Enable contact force normalization to [0, 1]
+
+    # Joint position normalization
+    normalize_joint_positions: true  # Normalize joint positions to [-1, 1] based on joint limits from URDF
+
+    # Episode time normalization
+    normalize_episode_time: true  # Normalize episode time to [0, 1] based on episode_length
+
+  # Contact visualization (inherit from BaseTask)
+  contact_visualization:
+    enabled: true
+    forceThreshold: 5.0  # N; forces above this threshold will be visualized
+    forceMaxIntensity: 10.0
+    baseColor: [1.0, 0.2, 0.2]
+    defaultColor: [0.7, 0.7, 0.7]
+
+  # Rerun debug logging (single env, offline recording)
+  rerun_logging:
+    enabled: false                          # Save only the latest completed episode atomically to the .rrd file
+    save_path: "logs/rerun/dexhand_env0.rrd"  # Output file path
+    env_id: 0                               # Which environment to record
+    log_all_state: false                    # Dump the full obs_dict as raw state tensors
+    log_all_reward_components: false        # Dump all reward components, not just the highlighted ones
+    log_task_states: false                 # Dump observation_encoder.task_states as raw state tensors
+
+  # Synthetic data export (intended for test/eval runs)
+  synthetic_data_export:
+    enabled: false
+    save_dir: "/mnt/nas-222-project/mocap/dataAugmentation/Dexhand021pro"  # Directory to save synthetic data (e.g., point clouds, observations, actions)
+    min_reward_threshold: 50.0
+    min_length_margin: 10
+    video_fps: 30
+    max_attempts_per_env: 3  # Maximum attempts per env (0 = unlimited)
+    max_exports_per_trajectory: 2  # Maximum successful exports per trajectory (0 = unlimited)
+
+  # Reference-PD tracking diagnostics (single env, explicit opt-in)
+  reference_tracking_export:
+    enabled: false
+    output_path: "outputs/reference_tracking/isaacgym_reference_tracking.json"
+    env_id: 0
+    max_frames: 0  # 0 = write at episode reset
+    keep_trajectory: true
+    keep_observation: false  # Include the processed 461D policy observation in each record
+
+  enable_component_debug_logs: false
+
+# Training configuration (if training RL policy for refinement)
+# train:
+#   params:
+#     config:
+#       name: "DexhandReconstruction"
+#       minibatch_size: 32
+#       learning_rate: 5e-4
+#       # ... other training parameters

@@ -1,0 +1,483 @@
+<!--
+  VTLA_021PRO MuJoCo Scene
+  ────────────────────────
+  机器人配置:
+    双臂:  左/右各 7-DOF
+    灵巧手: 左/右各 21-DOF (SharpaWave)
+    颈部:  2-DOF (yaw + pitch)
+    触觉:  每根手指 3 个触觉传感器 (10 根手指 × 3 = 30 个传感器位置)
+    相机:  4 路 (头部双目立体 + 双腕鱼眼)
+
+  NOTE: 本文件为模板骨架，关节参数/mesh路径需替换为真实 URDF 导出值。
+        替换步骤:
+          1. 将机器人 URDF 用 mujoco 工具转换: python -m mujoco.viewer --mjcf=robot.xml
+          2. 把各关节的 range/gear/kp 值填入对应 joint/actuator 标签
+          3. 把 mesh 文件放入 sim/assets/meshes/ 目录
+-->
+<mujoco model="vitacformer_scene">
+
+  <!-- ── 全局选项 ──────────────────────────────────────────────────────── -->
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast">
+    <flag contact="enable" />
+  </option>
+
+  <size njmax="2000" nconmax="500" />
+
+  <!-- ── 资源路径 ──────────────────────────────────────────────────────── -->
+  <compiler meshdir="meshes" texturedir="textures" angle="radian" />
+
+  <!-- ── 默认关节/执行器属性 ──────────────────────────────────────────── -->
+  <default>
+    <joint damping="0.1" armature="0.01" frictionloss="0.01" />
+    <geom condim="3" friction="1 0.005 0.0001" />
+    <motor ctrllimited="true" ctrlrange="-1 1" gear="1" />
+    <camera fovy="60" />
+  </default>
+
+  <!-- ── 资源声明 ──────────────────────────────────────────────────────── -->
+  <asset>
+    <!-- 占位材质 (替换为真实 mesh) -->
+    <material name="robot_body" rgba="0.7 0.7 0.7 1" />
+    <material name="table"      rgba="0.9 0.8 0.6 1" />
+    <material name="finger_tip" rgba="0.3 0.3 0.8 1" />
+  </asset>
+
+  <!-- ── 世界 ─────────────────────────────────────────────────────────── -->
+  <worldbody>
+
+    <!-- 光源 -->
+    <light name="top_light"   pos="0 0 3"    dir="0 0 -1" diffuse="0.8 0.8 0.8" />
+    <light name="front_light" pos="1 0 2"    dir="-1 0 -1" diffuse="0.4 0.4 0.4" />
+
+    <!-- 地面 -->
+    <geom name="floor" type="plane" size="5 5 0.1" material="table" pos="0 0 0" />
+
+    <!-- 桌面 -->
+    <body name="table" pos="0 0 0.4">
+      <geom name="table_top" type="box" size="0.8 0.5 0.02" material="table" />
+      <!-- 任务物体占位符 (由具体 task 脚本动态添加) -->
+    </body>
+
+    <!-- ── 机器人底座 ────────────────────────────────────────────────── -->
+    <body name="base" pos="0 -0.5 0.42">
+      <geom name="base_geom" type="box" size="0.15 0.15 0.02" material="robot_body" />
+      <inertial pos="0 0 0" mass="50" diaginertia="1 1 1" />
+
+      <!-- 颈部 (2-DOF: yaw + pitch) -->
+      <body name="neck_yaw_link" pos="0 0 0.5">
+        <joint name="neck_yaw"   type="hinge" axis="0 0 1"  range="-1.57 1.57" />
+        <geom  name="neck_yaw_geom"  type="cylinder" size="0.04 0.05" material="robot_body" />
+
+        <body name="neck_pitch_link" pos="0 0 0.1">
+          <joint name="neck_pitch" type="hinge" axis="0 1 0"  range="-0.5 0.5" />
+          <geom  name="neck_pitch_geom" type="cylinder" size="0.03 0.04" material="robot_body" />
+
+          <!-- ── 头部相机 ──────────────────────────────────────────── -->
+          <camera name="/observe/vision/head/stereo/lefteye/rgb"
+                  pos="-0.03 0.12 0.05" euler="1.5708 0 0"
+                  fovy="80" />
+          <camera name="/observe/vision/head/stereo/righteye/rgb"
+                  pos=" 0.03 0.12 0.05" euler="1.5708 0 0"
+                  fovy="80" />
+        </body>
+      </body>
+
+      <!-- ════════════════════════════════════════════════════════════
+           右臂 (7-DOF)
+           joint 命名: right_arm_j{1..7}
+           ════════════════════════════════════════════════════════════ -->
+      <body name="right_arm_link0" pos="0.15 0 0.3">
+        <joint name="right_arm_j1" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+        <geom  type="capsule" size="0.04" fromto="0 0 0  0 0 0.15" material="robot_body" />
+
+        <body name="right_arm_link1" pos="0 0 0.15">
+          <joint name="right_arm_j2" type="hinge" axis="0 1 0" range="-1.76 1.76" />
+          <geom  type="capsule" size="0.035" fromto="0 0 0  0 0 0.13" material="robot_body" />
+
+          <body name="right_arm_link2" pos="0 0 0.13">
+            <joint name="right_arm_j3" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+            <geom  type="capsule" size="0.03" fromto="0 0 0  0 0 0.12" material="robot_body" />
+
+            <body name="right_arm_link3" pos="0 0 0.12">
+              <joint name="right_arm_j4" type="hinge" axis="0 1 0" range="-2.09 2.09" />
+              <geom  type="capsule" size="0.03" fromto="0 0 0  0 0 0.11" material="robot_body" />
+
+              <body name="right_arm_link4" pos="0 0 0.11">
+                <joint name="right_arm_j5" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+                <geom  type="capsule" size="0.025" fromto="0 0 0  0 0 0.10" material="robot_body" />
+
+                <body name="right_arm_link5" pos="0 0 0.10">
+                  <joint name="right_arm_j6" type="hinge" axis="0 1 0" range="-2.09 2.09" />
+                  <geom  type="capsule" size="0.025" fromto="0 0 0  0 0 0.08" material="robot_body" />
+
+                  <body name="right_arm_link6" pos="0 0 0.08">
+                    <joint name="right_arm_j7" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+                    <geom  type="sphere" size="0.04" material="robot_body" />
+
+                    <!-- 右腕相机 -->
+                    <camera name="/observe/vision/right_wrist/fisheye/rgb"
+                            pos="0 0.05 0.02" euler="1.5708 0 0"
+                            fovy="150" />
+
+                    <!-- ── 右手 (21-DOF, SharpaWave) ─────────────── -->
+                    <!-- 5 根手指, 每根 4 个关节 (拇指 5 个关节) -->
+                    <!-- 拇指: 5 DOF -->
+                    <body name="r_thumb_base" pos="0.03 0 0.05">
+                      <joint name="r_thumb_j1" type="hinge" axis="1 0 0" range="-0.5 1.57" />
+                      <geom  type="capsule" size="0.012" fromto="0 0 0  0 0 0.03" material="robot_body" />
+                      <body name="r_thumb_link1" pos="0 0 0.03">
+                        <joint name="r_thumb_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.011" fromto="0 0 0  0 0 0.025" material="robot_body" />
+                        <body name="r_thumb_link2" pos="0 0 0.025">
+                          <joint name="r_thumb_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.022" material="robot_body" />
+                          <body name="r_thumb_link3" pos="0 0 0.022">
+                            <joint name="r_thumb_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.018" material="robot_body" />
+                            <body name="r_thumb_tip" pos="0 0 0.018">
+                              <joint name="r_thumb_j5" type="hinge" axis="0 0 1" range="-0.5 0.5" />
+                              <geom  name="r_thumb_tip_geom" type="sphere" size="0.009" material="finger_tip" />
+                              <!-- 触觉传感器位点 -->
+                              <site name="r_thumb_tac" pos="0 0 0.009" size="0.005" />
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <!-- 食指: 4 DOF -->
+                    <body name="r_index_base" pos="0.02 0 0.06">
+                      <joint name="r_index_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.011" fromto="0 0 0  0 0 0.025" material="robot_body" />
+                      <body name="r_index_link1" pos="0 0 0.025">
+                        <joint name="r_index_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.022" material="robot_body" />
+                        <body name="r_index_link2" pos="0 0 0.022">
+                          <joint name="r_index_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.018" material="robot_body" />
+                          <body name="r_index_tip" pos="0 0 0.018">
+                            <joint name="r_index_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="r_index_tip_geom" type="sphere" size="0.009" material="finger_tip" />
+                            <site name="r_index_tac" pos="0 0 0.009" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <!-- 中指: 4 DOF -->
+                    <body name="r_middle_base" pos="0.00 0 0.065">
+                      <joint name="r_middle_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.011" fromto="0 0 0  0 0 0.026" material="robot_body" />
+                      <body name="r_middle_link1" pos="0 0 0.026">
+                        <joint name="r_middle_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.023" material="robot_body" />
+                        <body name="r_middle_link2" pos="0 0 0.023">
+                          <joint name="r_middle_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.019" material="robot_body" />
+                          <body name="r_middle_tip" pos="0 0 0.019">
+                            <joint name="r_middle_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="r_middle_tip_geom" type="sphere" size="0.009" material="finger_tip" />
+                            <site name="r_middle_tac" pos="0 0 0.009" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <!-- 无名指: 4 DOF -->
+                    <body name="r_ring_base" pos="-0.02 0 0.062">
+                      <joint name="r_ring_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.024" material="robot_body" />
+                      <body name="r_ring_link1" pos="0 0 0.024">
+                        <joint name="r_ring_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.020" material="robot_body" />
+                        <body name="r_ring_link2" pos="0 0 0.020">
+                          <joint name="r_ring_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.008" fromto="0 0 0  0 0 0.017" material="robot_body" />
+                          <body name="r_ring_tip" pos="0 0 0.017">
+                            <joint name="r_ring_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="r_ring_tip_geom" type="sphere" size="0.008" material="finger_tip" />
+                            <site name="r_ring_tac" pos="0 0 0.008" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <!-- 小指: 4 DOF -->
+                    <body name="r_little_base" pos="-0.04 0 0.055">
+                      <joint name="r_little_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.022" material="robot_body" />
+                      <body name="r_little_link1" pos="0 0 0.022">
+                        <joint name="r_little_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.008" fromto="0 0 0  0 0 0.018" material="robot_body" />
+                        <body name="r_little_link2" pos="0 0 0.018">
+                          <joint name="r_little_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.007" fromto="0 0 0  0 0 0.015" material="robot_body" />
+                          <body name="r_little_tip" pos="0 0 0.015">
+                            <joint name="r_little_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="r_little_tip_geom" type="sphere" size="0.007" material="finger_tip" />
+                            <site name="r_little_tac" pos="0 0 0.007" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                  </body><!-- right_arm_link6 -->
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ════════════════════════════════════════════════════════════
+           左臂 (7-DOF, 镜像右臂)
+           ════════════════════════════════════════════════════════════ -->
+      <body name="left_arm_link0" pos="-0.15 0 0.3">
+        <joint name="left_arm_j1" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+        <geom  type="capsule" size="0.04" fromto="0 0 0  0 0 0.15" material="robot_body" />
+
+        <body name="left_arm_link1" pos="0 0 0.15">
+          <joint name="left_arm_j2" type="hinge" axis="0 1 0" range="-1.76 1.76" />
+          <geom  type="capsule" size="0.035" fromto="0 0 0  0 0 0.13" material="robot_body" />
+
+          <body name="left_arm_link2" pos="0 0 0.13">
+            <joint name="left_arm_j3" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+            <geom  type="capsule" size="0.03" fromto="0 0 0  0 0 0.12" material="robot_body" />
+
+            <body name="left_arm_link3" pos="0 0 0.12">
+              <joint name="left_arm_j4" type="hinge" axis="0 1 0" range="-2.09 2.09" />
+              <geom  type="capsule" size="0.03" fromto="0 0 0  0 0 0.11" material="robot_body" />
+
+              <body name="left_arm_link4" pos="0 0 0.11">
+                <joint name="left_arm_j5" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+                <geom  type="capsule" size="0.025" fromto="0 0 0  0 0 0.10" material="robot_body" />
+
+                <body name="left_arm_link5" pos="0 0 0.10">
+                  <joint name="left_arm_j6" type="hinge" axis="0 1 0" range="-2.09 2.09" />
+                  <geom  type="capsule" size="0.025" fromto="0 0 0  0 0 0.08" material="robot_body" />
+
+                  <body name="left_arm_link6" pos="0 0 0.08">
+                    <joint name="left_arm_j7" type="hinge" axis="0 0 1" range="-2.97 2.97" />
+                    <geom  type="sphere" size="0.04" material="robot_body" />
+
+                    <!-- 左腕相机 -->
+                    <camera name="/observe/vision/left_wrist/fisheye/rgb"
+                            pos="0 0.05 0.02" euler="1.5708 0 0"
+                            fovy="150" />
+
+                    <!-- 左手 (21-DOF, 结构同右手, 镜像) -->
+                    <body name="l_thumb_base" pos="-0.03 0 0.05">
+                      <joint name="l_thumb_j1" type="hinge" axis="1 0 0" range="-0.5 1.57" />
+                      <geom  type="capsule" size="0.012" fromto="0 0 0  0 0 0.03" material="robot_body" />
+                      <body name="l_thumb_link1" pos="0 0 0.03">
+                        <joint name="l_thumb_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.011" fromto="0 0 0  0 0 0.025" material="robot_body" />
+                        <body name="l_thumb_link2" pos="0 0 0.025">
+                          <joint name="l_thumb_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.022" material="robot_body" />
+                          <body name="l_thumb_link3" pos="0 0 0.022">
+                            <joint name="l_thumb_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.018" material="robot_body" />
+                            <body name="l_thumb_tip" pos="0 0 0.018">
+                              <joint name="l_thumb_j5" type="hinge" axis="0 0 1" range="-0.5 0.5" />
+                              <geom  name="l_thumb_tip_geom" type="sphere" size="0.009" material="finger_tip" />
+                              <site name="l_thumb_tac" pos="0 0 0.009" size="0.005" />
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <body name="l_index_base" pos="-0.02 0 0.06">
+                      <joint name="l_index_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.011" fromto="0 0 0  0 0 0.025" material="robot_body" />
+                      <body name="l_index_link1" pos="0 0 0.025">
+                        <joint name="l_index_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.022" material="robot_body" />
+                        <body name="l_index_link2" pos="0 0 0.022">
+                          <joint name="l_index_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.018" material="robot_body" />
+                          <body name="l_index_tip" pos="0 0 0.018">
+                            <joint name="l_index_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="l_index_tip_geom" type="sphere" size="0.009" material="finger_tip" />
+                            <site name="l_index_tac" pos="0 0 0.009" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <body name="l_middle_base" pos="0.00 0 0.065">
+                      <joint name="l_middle_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.011" fromto="0 0 0  0 0 0.026" material="robot_body" />
+                      <body name="l_middle_link1" pos="0 0 0.026">
+                        <joint name="l_middle_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.023" material="robot_body" />
+                        <body name="l_middle_link2" pos="0 0 0.023">
+                          <joint name="l_middle_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.019" material="robot_body" />
+                          <body name="l_middle_tip" pos="0 0 0.019">
+                            <joint name="l_middle_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="l_middle_tip_geom" type="sphere" size="0.009" material="finger_tip" />
+                            <site name="l_middle_tac" pos="0 0 0.009" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <body name="l_ring_base" pos="0.02 0 0.062">
+                      <joint name="l_ring_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.010" fromto="0 0 0  0 0 0.024" material="robot_body" />
+                      <body name="l_ring_link1" pos="0 0 0.024">
+                        <joint name="l_ring_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.020" material="robot_body" />
+                        <body name="l_ring_link2" pos="0 0 0.020">
+                          <joint name="l_ring_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.008" fromto="0 0 0  0 0 0.017" material="robot_body" />
+                          <body name="l_ring_tip" pos="0 0 0.017">
+                            <joint name="l_ring_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="l_ring_tip_geom" type="sphere" size="0.008" material="finger_tip" />
+                            <site name="l_ring_tac" pos="0 0 0.008" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                    <body name="l_little_base" pos="0.04 0 0.055">
+                      <joint name="l_little_j1" type="hinge" axis="1 0 0" range="-0.3 0.3" />
+                      <geom  type="capsule" size="0.009" fromto="0 0 0  0 0 0.022" material="robot_body" />
+                      <body name="l_little_link1" pos="0 0 0.022">
+                        <joint name="l_little_j2" type="hinge" axis="0 1 0" range="0 1.57" />
+                        <geom  type="capsule" size="0.008" fromto="0 0 0  0 0 0.018" material="robot_body" />
+                        <body name="l_little_link2" pos="0 0 0.018">
+                          <joint name="l_little_j3" type="hinge" axis="0 1 0" range="0 1.57" />
+                          <geom  type="capsule" size="0.007" fromto="0 0 0  0 0 0.015" material="robot_body" />
+                          <body name="l_little_tip" pos="0 0 0.015">
+                            <joint name="l_little_j4" type="hinge" axis="0 1 0" range="0 1.57" />
+                            <geom  name="l_little_tip_geom" type="sphere" size="0.007" material="finger_tip" />
+                            <site name="l_little_tac" pos="0 0 0.007" size="0.005" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+
+                  </body><!-- left_arm_link6 -->
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body><!-- left_arm_link0 -->
+
+    </body><!-- base -->
+  </worldbody>
+
+  <!-- ── 执行器 (position control) ──────────────────────────────────────── -->
+  <actuator>
+    <!-- 颈部 -->
+    <position name="act_neck_yaw"   joint="neck_yaw"   kp="50" />
+    <position name="act_neck_pitch" joint="neck_pitch" kp="50" />
+
+    <!-- 右臂 -->
+    <position name="act_r_arm_j1" joint="right_arm_j1" kp="200" />
+    <position name="act_r_arm_j2" joint="right_arm_j2" kp="200" />
+    <position name="act_r_arm_j3" joint="right_arm_j3" kp="150" />
+    <position name="act_r_arm_j4" joint="right_arm_j4" kp="150" />
+    <position name="act_r_arm_j5" joint="right_arm_j5" kp="100" />
+    <position name="act_r_arm_j6" joint="right_arm_j6" kp="100" />
+    <position name="act_r_arm_j7" joint="right_arm_j7" kp="80"  />
+
+    <!-- 右手 -->
+    <position name="act_r_thumb_j1"  joint="r_thumb_j1"  kp="20" />
+    <position name="act_r_thumb_j2"  joint="r_thumb_j2"  kp="20" />
+    <position name="act_r_thumb_j3"  joint="r_thumb_j3"  kp="15" />
+    <position name="act_r_thumb_j4"  joint="r_thumb_j4"  kp="15" />
+    <position name="act_r_thumb_j5"  joint="r_thumb_j5"  kp="10" />
+    <position name="act_r_index_j1"  joint="r_index_j1"  kp="20" />
+    <position name="act_r_index_j2"  joint="r_index_j2"  kp="20" />
+    <position name="act_r_index_j3"  joint="r_index_j3"  kp="15" />
+    <position name="act_r_index_j4"  joint="r_index_j4"  kp="15" />
+    <position name="act_r_middle_j1" joint="r_middle_j1" kp="20" />
+    <position name="act_r_middle_j2" joint="r_middle_j2" kp="20" />
+    <position name="act_r_middle_j3" joint="r_middle_j3" kp="15" />
+    <position name="act_r_middle_j4" joint="r_middle_j4" kp="15" />
+    <position name="act_r_ring_j1"   joint="r_ring_j1"   kp="20" />
+    <position name="act_r_ring_j2"   joint="r_ring_j2"   kp="20" />
+    <position name="act_r_ring_j3"   joint="r_ring_j3"   kp="15" />
+    <position name="act_r_ring_j4"   joint="r_ring_j4"   kp="15" />
+    <position name="act_r_little_j1" joint="r_little_j1" kp="20" />
+    <position name="act_r_little_j2" joint="r_little_j2" kp="20" />
+    <position name="act_r_little_j3" joint="r_little_j3" kp="15" />
+
+    <!-- 左臂 -->
+    <position name="act_l_arm_j1" joint="left_arm_j1" kp="200" />
+    <position name="act_l_arm_j2" joint="left_arm_j2" kp="200" />
+    <position name="act_l_arm_j3" joint="left_arm_j3" kp="150" />
+    <position name="act_l_arm_j4" joint="left_arm_j4" kp="150" />
+    <position name="act_l_arm_j5" joint="left_arm_j5" kp="100" />
+    <position name="act_l_arm_j6" joint="left_arm_j6" kp="100" />
+    <position name="act_l_arm_j7" joint="left_arm_j7" kp="80"  />
+
+    <!-- 左手 -->
+    <position name="act_l_thumb_j1"  joint="l_thumb_j1"  kp="20" />
+    <position name="act_l_thumb_j2"  joint="l_thumb_j2"  kp="20" />
+    <position name="act_l_thumb_j3"  joint="l_thumb_j3"  kp="15" />
+    <position name="act_l_thumb_j4"  joint="l_thumb_j4"  kp="15" />
+    <position name="act_l_thumb_j5"  joint="l_thumb_j5"  kp="10" />
+    <position name="act_l_index_j1"  joint="l_index_j1"  kp="20" />
+    <position name="act_l_index_j2"  joint="l_index_j2"  kp="20" />
+    <position name="act_l_index_j3"  joint="l_index_j3"  kp="15" />
+    <position name="act_l_index_j4"  joint="l_index_j4"  kp="15" />
+    <position name="act_l_middle_j1" joint="l_middle_j1" kp="20" />
+    <position name="act_l_middle_j2" joint="l_middle_j2" kp="20" />
+    <position name="act_l_middle_j3" joint="l_middle_j3" kp="15" />
+    <position name="act_l_middle_j4" joint="l_middle_j4" kp="15" />
+    <position name="act_l_ring_j1"   joint="l_ring_j1"   kp="20" />
+    <position name="act_l_ring_j2"   joint="l_ring_j2"   kp="20" />
+    <position name="act_l_ring_j3"   joint="l_ring_j3"   kp="15" />
+    <position name="act_l_ring_j4"   joint="l_ring_j4"   kp="15" />
+    <position name="act_l_little_j1" joint="l_little_j1" kp="20" />
+    <position name="act_l_little_j2" joint="l_little_j2" kp="20" />
+    <position name="act_l_little_j3" joint="l_little_j3" kp="15" />
+  </actuator>
+
+  <!-- ── 触觉传感器 ──────────────────────────────────────────────────────── -->
+  <!-- 每个指尖读取接触力 (force/torque 各3维 → 每指6维, 10根手指 = 60维)  -->
+  <!-- 注: 可按需扩展为 18×120 格式以匹配训练数据                          -->
+  <sensor>
+    <touch name="r_thumb_touch"  site="r_thumb_tac"  />
+    <touch name="r_index_touch"  site="r_index_tac"  />
+    <touch name="r_middle_touch" site="r_middle_tac" />
+    <touch name="r_ring_touch"   site="r_ring_tac"   />
+    <touch name="r_little_touch" site="r_little_tac" />
+
+    <touch name="l_thumb_touch"  site="l_thumb_tac"  />
+    <touch name="l_index_touch"  site="l_index_tac"  />
+    <touch name="l_middle_touch" site="l_middle_tac" />
+    <touch name="l_ring_touch"   site="l_ring_tac"   />
+    <touch name="l_little_touch" site="l_little_tac" />
+
+    <!-- 每根手指完整 force/torque (3+3 = 6维) -->
+    <force  name="r_thumb_force"  site="r_thumb_tac"  />
+    <torque name="r_thumb_torque" site="r_thumb_tac"  />
+    <force  name="r_index_force"  site="r_index_tac"  />
+    <torque name="r_index_torque" site="r_index_tac"  />
+    <force  name="r_middle_force" site="r_middle_tac" />
+    <torque name="r_middle_torque" site="r_middle_tac" />
+    <force  name="r_ring_force"   site="r_ring_tac"   />
+    <torque name="r_ring_torque"  site="r_ring_tac"   />
+    <force  name="r_little_force" site="r_little_tac" />
+    <torque name="r_little_torque" site="r_little_tac" />
+
+    <force  name="l_thumb_force"  site="l_thumb_tac"  />
+    <torque name="l_thumb_torque" site="l_thumb_tac"  />
+    <force  name="l_index_force"  site="l_index_tac"  />
+    <torque name="l_index_torque" site="l_index_tac"  />
+    <force  name="l_middle_force" site="l_middle_tac" />
+    <torque name="l_middle_torque" site="l_middle_tac" />
+    <force  name="l_ring_force"   site="l_ring_tac"   />
+    <torque name="l_ring_torque"  site="l_ring_tac"   />
+    <force  name="l_little_force" site="l_little_tac" />
+    <torque name="l_little_torque" site="l_little_tac" />
+  </sensor>
+
+</mujoco>

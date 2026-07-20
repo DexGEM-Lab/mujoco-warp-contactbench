@@ -1,0 +1,252 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="marvin_021pro_right_hand_floating">
+  <size njmax="300" nconmax="300" />
+  <compiler inertiafromgeom="auto" angle="radian" meshdir="../marvin_021pro_urdf/meshes/" autolimits="true" balanceinertia="true" />
+  <option gravity="0 0 -9.81" iterations="100" solver="Newton" integrator="implicit" timestep="0.001" />
+  <default>
+    <geom friction="3 2 2" solref="0.01 0.9" solimp="0.9 0.999 0.005" />
+  </default>
+  <visual>
+    <headlight diffuse="0.5 0.5 0.5" ambient="0.3 0.3 0.3" specular="0.1 0.1 0.1" />
+  </visual>
+  <asset>
+    <mesh name="RFH1" file="RFH1.STL" />
+    <mesh name="RH0_0" file="RH0_0.STL" />
+    <mesh name="RH0_1" file="RH0_1.STL" />
+    <mesh name="RH0_2" file="RH0_2.STL" />
+    <mesh name="RH0_3" file="RH0_3.STL" />
+    <mesh name="RH1_0" file="RH1_0.STL" />
+    <mesh name="RH1_1" file="RH1_1.STL" />
+    <mesh name="RH1_2" file="RH1_2.STL" />
+    <mesh name="RH1_3" file="RH1_3.STL" />
+    <mesh name="RH2_0" file="RH2_0.STL" />
+    <mesh name="RH2_1" file="RH2_1.STL" />
+    <mesh name="RH2_2" file="RH2_2.STL" />
+    <mesh name="RH2_3" file="RH2_3.STL" />
+    <mesh name="RH3_0" file="RH3_0.STL" />
+    <mesh name="RH3_1" file="RH3_1.STL" />
+    <mesh name="RH3_2" file="RH3_2.STL" />
+    <mesh name="RH3_3" file="RH3_3.STL" />
+    <mesh name="RH4_0" file="RH4_0.STL" />
+    <mesh name="RH4_1" file="RH4_1.STL" />
+    <mesh name="RH4_2" file="RH4_2.STL" />
+    <mesh name="RH4_3" file="RH4_3.STL" />
+    <mesh name="RFH1_collision" file="../meshes_simplified/RFH1.STL" />
+    <mesh name="RH0_0_collision" file="../meshes_simplified/RH0_0.STL" />
+    <mesh name="RH0_1_collision" file="../meshes_simplified/RH0_1.STL" />
+    <mesh name="RH0_2_collision" file="../meshes_simplified/RH0_2.STL" />
+    <mesh name="RH0_3_collision" file="../meshes_simplified/RH0_3.STL" />
+    <mesh name="RH1_0_collision" file="../meshes_simplified/RH1_0.STL" />
+    <mesh name="RH1_1_collision" file="../meshes_simplified/RH1_1.STL" />
+    <mesh name="RH1_2_collision" file="../meshes_simplified/RH1_2.STL" />
+    <mesh name="RH1_3_collision" file="../meshes_simplified/RH1_3.STL" />
+    <mesh name="RH2_0_collision" file="../meshes_simplified/RH2_0.STL" />
+    <mesh name="RH2_1_collision" file="../meshes_simplified/RH2_1.STL" />
+    <mesh name="RH2_2_collision" file="../meshes_simplified/RH2_2.STL" />
+    <mesh name="RH2_3_collision" file="../meshes_simplified/RH2_3.STL" />
+    <mesh name="RH3_0_collision" file="../meshes_simplified/RH3_0.STL" />
+    <mesh name="RH3_1_collision" file="../meshes_simplified/RH3_1.STL" />
+    <mesh name="RH3_2_collision" file="../meshes_simplified/RH3_2.STL" />
+    <mesh name="RH3_3_collision" file="../meshes_simplified/RH3_3.STL" />
+    <mesh name="RH4_0_collision" file="../meshes_simplified/RH4_0.STL" />
+    <mesh name="RH4_1_collision" file="../meshes_simplified/RH4_1.STL" />
+    <mesh name="RH4_2_collision" file="../meshes_simplified/RH4_2.STL" />
+    <mesh name="RH4_3_collision" file="../meshes_simplified/RH4_3.STL" />
+  </asset>
+  <worldbody>
+    <body name="floating_base_link">
+      <inertial pos="0 0 0" mass="0.01" fullinertia="0.01 0.01 0.01 0 0 0" />
+      <body name="floating_stage_1" pos="0 0 0">
+        <inertial pos="0 0 0" mass="0.001" fullinertia="0.001 0.001 0.001 0 0 0" />
+        <joint name="ARTx" type="slide" axis="1 0 0" limited="true" range="-1.0 1.0" damping="20" armature="0.01" frictionloss="0.1" />
+        <body name="floating_stage_2" pos="0 0 0">
+          <inertial pos="0 0 0" mass="0.001" fullinertia="0.001 0.001 0.001 0 0 0" />
+          <joint name="ARTy" type="slide" axis="0 1 0" limited="true" range="-1.0 1.0" damping="20" armature="0.01" frictionloss="0.1" />
+          <body name="floating_stage_3" pos="0 0 0">
+            <inertial pos="0 0 0" mass="0.001" fullinertia="0.001 0.001 0.001 0 0 0" />
+            <joint name="ARTz" type="slide" axis="0 0 1" limited="true" range="-1.0 1.0" damping="20" armature="0.01" frictionloss="0.1" />
+            <body name="floating_stage_4" pos="0 0 0">
+              <inertial pos="0 0 0" mass="0.001" fullinertia="0.001 0.001 0.001 0 0 0" />
+              <joint name="ARRx" type="hinge" axis="1 0 0" limited="true" range="-6.283185307179586 6.283185307179586" damping="20" armature="0.01" frictionloss="0.1" />
+              <body name="floating_stage_5" pos="0 0 0">
+                <inertial pos="0 0 0" mass="0.001" fullinertia="0.001 0.001 0.001 0 0 0" />
+                <joint name="ARRy" type="hinge" axis="0 1 0" limited="true" range="-6.283185307179586 6.283185307179586" damping="20" armature="0.01" frictionloss="0.1" />
+                <body name="right_hand_base" pos="0 0 0">
+                  <joint name="ARRz" type="hinge" axis="0 0 1" limited="true" range="-6.283185307179586 6.283185307179586" damping="20" armature="0.01" frictionloss="0.1" />
+                  <body name="RFH1" pos="0 0 0" quat="0.7071067811865476 0.0 0.7071067811865475 0.0">
+                    <inertial pos="-0.0281358 0.00116684 0.0629761" quat="0.997889 0.000664538 -0.0648663 -0.00322019" mass="0.552446" diaginertia="0.000987241 0.000800455 0.000447942" />
+                    <geom type="mesh" density="0" rgba="0.858824 0.858824 0.858824 1" mesh="RFH1_collision" contype="1" conaffinity="1" group="3" />
+                    <geom type="mesh" rgba="0.858824 0.858824 0.858824 1" mesh="RFH1" contype="0" conaffinity="0" group="1" density="0" />
+                    <body name="RH0_0" pos="0.001 0.0173446 0.0609471" quat="0.669581 0.227292 0.669581 0.227292">
+                      <inertial pos="0.0166 0.00521328 0.000919242" quat="0.454519 0.541675 -0.541675 0.454519" mass="0.0505243" diaginertia="1.30842e-06 1.2533e-06 5.88299e-07" />
+                      <joint name="r_f_jiont_1_1" pos="0 0 0" axis="1 0 0" range="0 2" type="hinge" limited="true" damping="1" />
+                      <geom type="mesh" density="0" rgba="0.929412 0.866667 0.509804 1" mesh="RH0_0_collision" contype="1" conaffinity="1" group="3" />
+                      <geom type="mesh" rgba="0.929412 0.866667 0.509804 1" mesh="RH0_0" contype="0" conaffinity="0" group="1" density="0" />
+                      <body name="RH0_1" pos="0.0166 0.0160248 0.0127768" quat="0.646164 0.28718 0.686215 -0.170612">
+                        <inertial pos="0.00979983 0.0148825 -0.0104531" quat="0.894642 0.446781 -0.000693364 0.00140788" mass="0.0246804" diaginertia="7.69892e-06 7.69009e-06 1.75846e-06" />
+                        <joint name="r_f_jiont_1_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                        <geom type="mesh" density="0" rgba="0.458824 0.529412 0.6 1" mesh="RH0_1_collision" contype="1" conaffinity="1" group="3" />
+                        <geom type="mesh" rgba="0.458824 0.529412 0.6 1" mesh="RH0_1" contype="0" conaffinity="0" group="1" density="0" />
+                        <body name="RH0_2" pos="0.0038 0.0339193 -0.0264287">
+                          <inertial pos="0.00600001 0.011904 -0.00882206" quat="0.634542 0.312107 -0.312073 0.634473" mass="0.0122868" diaginertia="1.81253e-06 1.78096e-06 6.66259e-07" />
+                          <joint name="r_f_jiont_1_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                          <geom type="mesh" density="0" rgba="0.407843 0.407843 0.54902 1" mesh="RH0_2_collision" contype="1" conaffinity="1" group="3" />
+                          <geom type="mesh" rgba="0.407843 0.407843 0.54902 1" mesh="RH0_2" contype="0" conaffinity="0" group="1" density="0" />
+                          <body name="RH0_3" pos="0 0.021456 -0.0167177" quat="0 0 -1 0">
+                            <inertial pos="-0.00601695 0.0109867 0.00765051" quat="0.463072 0.886283 0.00763868 -0.00293413" mass="0.0110115" diaginertia="1.47866e-06 1.44967e-06 5.32426e-07" />
+                            <joint name="r_f_jiont_1_4" pos="0 0 0" axis="1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                            <geom type="mesh" density="0" rgba="0.94902 0.819608 0.54902 1" mesh="RH0_3_collision" contype="1" conaffinity="1" group="3" />
+                            <geom type="mesh" rgba="0.94902 0.819608 0.54902 1" mesh="RH0_3" contype="0" conaffinity="0" group="1" density="0" />
+                            <body name="RH0_tip_visual" pos="-0.007274 0.030211 0.017690">
+                              <geom name="geom_RH0_tip_visual" type="sphere" size="0.002" rgba="1 0 0 1" contype="0" conaffinity="0" group="1" density="0" />
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                    <body name="RH1_0" pos="-0.0108 0.03045 0.12078">
+                      <inertial pos="-0.00723484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07" />
+                      <joint name="r_f_jiont_2_1" pos="0 0 0" axis="-1 0 0" range="-0.1570796327 0.4537856055" type="hinge" limited="true" damping="1" />
+                      <geom type="mesh" density="0" rgba="0.439216 0.619608 1 1" mesh="RH1_0_collision" contype="1" conaffinity="1" group="3" />
+                      <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH1_0" contype="0" conaffinity="0" group="1" density="0" />
+                      <body name="RH1_1" pos="-0.00715 0.0078 0.0116" quat="0.502146 -0.497845 -0.497845 0.502146">
+                        <inertial pos="-0.00757951 -0.0216788 0.000842089" quat="0.516099 0.523162 -0.470182 0.488746" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07" />
+                        <joint name="r_f_jiont_2_2" pos="0 0 0" axis="1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                        <geom type="mesh" density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH1_1_collision" contype="1" conaffinity="1" group="3" />
+                        <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH1_1" contype="0" conaffinity="0" group="1" density="0" />
+                        <body name="RH1_2" pos="0.0015 -0.0429984 0.000369901" quat="0 0 1 0">
+                          <inertial pos="0.0102511 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07" />
+                          <joint name="r_f_jiont_2_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                          <geom type="mesh" density="0" rgba="0.486275 1 0 1" mesh="RH1_2_collision" contype="1" conaffinity="1" group="3" />
+                          <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH1_2" contype="0" conaffinity="0" group="1" density="0" />
+                          <body name="RH1_3" pos="0 -0.0249991 -0.000215058">
+                            <inertial pos="0.00894424 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07" />
+                            <joint name="r_f_jiont_2_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                            <geom type="mesh" density="0" rgba="0.568627 0.427451 0.847059 1" mesh="RH1_3_collision" contype="1" conaffinity="1" group="3" />
+                            <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="RH1_3" contype="0" conaffinity="0" group="1" density="0" />
+                            <body name="RH1_tip_visual" pos="0.009299 -0.034800 -0.000148">
+                              <geom name="geom_RH1_tip_visual" type="sphere" size="0.002" rgba="1 0 0 1" contype="0" conaffinity="0" group="1" density="0" />
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                    <body name="RH2_0" pos="-0.0105 0.01015 0.12578">
+                      <inertial pos="-0.00753484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07" />
+                      <joint name="r_f_jiont_3_1" pos="0 0 0" axis="-1 0 0" range="-0.4537856055 0.4537856055" type="hinge" limited="true" damping="1" />
+                      <geom type="mesh" density="0" rgba="0.439216 0.619608 1 1" mesh="RH2_0_collision" contype="1" conaffinity="1" group="3" />
+                      <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH2_0" contype="0" conaffinity="0" group="1" density="0" />
+                      <body name="RH2_1" pos="-0.00745 0.0081 0.0116" quat="0.502146 -0.497845 -0.497845 0.502146">
+                        <inertial pos="-0.00787951 -0.0216788 0.000842089" quat="0.516099 0.523162 -0.470182 0.488746" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07" />
+                        <joint name="r_f_jiont_3_2" pos="0 0 0" axis="1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                        <geom type="mesh" density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH2_1_collision" contype="1" conaffinity="1" group="3" />
+                        <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH2_1" contype="0" conaffinity="0" group="1" density="0" />
+                        <body name="RH2_2" pos="0.0012 -0.0429984 0.000369901" quat="0 0 1 0">
+                          <inertial pos="0.0102511 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07" />
+                          <joint name="r_f_jiont_3_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                          <geom type="mesh" density="0" rgba="0.486275 1 0 1" mesh="RH2_2_collision" contype="1" conaffinity="1" group="3" />
+                          <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH2_2" contype="0" conaffinity="0" group="1" density="0" />
+                          <body name="RH2_3" pos="0 -0.0249991 -0.000215058">
+                            <inertial pos="0.00894424 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07" />
+                            <joint name="r_f_jiont_3_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                            <geom type="mesh" density="0" rgba="0 0.498039 1 1" mesh="RH2_3_collision" contype="1" conaffinity="1" group="3" />
+                            <geom type="mesh" rgba="0 0.498039 1 1" mesh="RH2_3" contype="0" conaffinity="0" group="1" density="0" />
+                            <body name="RH2_tip_visual" pos="0.009299 -0.034800 -0.000148">
+                              <geom name="geom_RH2_tip_visual" type="sphere" size="0.002" rgba="1 0 0 1" contype="0" conaffinity="0" group="1" density="0" />
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                    <body name="RH3_0" pos="-0.0108 -0.01015 0.12078">
+                      <inertial pos="-0.00723484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07" />
+                      <joint name="r_f_jiont_4_1" pos="0 0 0" axis="-1 0 0" range="-0.4537856055 0.1570796327" type="hinge" limited="true" damping="1" />
+                      <geom type="mesh" density="0" rgba="0.439216 0.619608 1 1" mesh="RH3_0_collision" contype="1" conaffinity="1" group="3" />
+                      <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH3_0" contype="0" conaffinity="0" group="1" density="0" />
+                      <body name="RH3_1" pos="-0.00715 -0.00965 0.0116" quat="0.497845 -0.502146 0.502146 -0.497845">
+                        <inertial pos="-0.00987049 -0.0216788 -0.000842089" quat="0.523162 0.516099 -0.488746 0.470182" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07" />
+                        <joint name="r_f_jiont_4_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                        <geom type="mesh" density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH3_1_collision" contype="1" conaffinity="1" group="3" />
+                        <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH3_1" contype="0" conaffinity="0" group="1" density="0" />
+                        <body name="RH3_2" pos="-0.00325 -0.0429984 -0.000369901">
+                          <inertial pos="-0.00544889 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07" />
+                          <joint name="r_f_jiont_4_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                          <geom type="mesh" density="0" rgba="0.486275 1 0 1" mesh="RH3_2_collision" contype="1" conaffinity="1" group="3" />
+                          <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH3_2" contype="0" conaffinity="0" group="1" density="0" />
+                          <body name="RH3_3" pos="0 -0.0249991 -0.000215058">
+                            <inertial pos="-0.00675576 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07" />
+                            <joint name="r_f_jiont_4_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                            <geom type="mesh" density="0" rgba="0.568627 0.427451 0.847059 1" mesh="RH3_3_collision" contype="1" conaffinity="1" group="3" />
+                            <geom type="mesh" rgba="0.568627 0.427451 0.847059 1" mesh="RH3_3" contype="0" conaffinity="0" group="1" density="0" />
+                            <body name="RH3_tip_visual" pos="-0.006401 -0.034800 -0.000148">
+                              <geom name="geom_RH3_tip_visual" type="sphere" size="0.002" rgba="1 0 0 1" contype="0" conaffinity="0" group="1" density="0" />
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                    <body name="RH4_0" pos="-0.0105 -0.03045 0.11578">
+                      <inertial pos="-0.00753484 6.56576e-05 0.00156068" quat="0.999764 -0.019262 -0.00624849 -0.0078302" mass="0.00384132" diaginertia="1.98177e-07 1.9479e-07 1.29158e-07" />
+                      <joint name="r_f_jiont_5_1" pos="0 0 0" axis="-1 0 0" range="-0.4537856055 0.0872664626" type="hinge" limited="true" damping="1" />
+                      <geom type="mesh" density="0" rgba="0.439216 0.619608 1 1" mesh="RH4_0_collision" contype="1" conaffinity="1" group="3" />
+                      <geom type="mesh" rgba="0.439216 0.619608 1 1" mesh="RH4_0" contype="0" conaffinity="0" group="1" density="0" />
+                      <body name="RH4_1" pos="-0.00745 -0.00965 0.0116" quat="0.497845 -0.502146 0.502146 -0.497845">
+                        <inertial pos="-0.00987049 -0.0216788 -0.000842089" quat="0.523162 0.516099 -0.488746 0.470182" mass="0.0143435" diaginertia="3.19377e-06 3.16294e-06 7.96529e-07" />
+                        <joint name="r_f_jiont_5_2" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                        <geom type="mesh" density="0" rgba="0.517647 0.8 0.976471 1" mesh="RH4_1_collision" contype="1" conaffinity="1" group="3" />
+                        <geom type="mesh" rgba="0.517647 0.8 0.976471 1" mesh="RH4_1" contype="0" conaffinity="0" group="1" density="0" />
+                        <body name="RH4_2" pos="-0.00325 -0.0429984 -0.000369901">
+                          <inertial pos="-0.00544889 -0.0127506 -0.00136023" quat="0.487649 0.471262 -0.521177 0.518156" mass="0.00665208" diaginertia="7.87406e-07 6.98143e-07 4.28426e-07" />
+                          <joint name="r_f_jiont_5_3" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                          <geom type="mesh" density="0" rgba="0.486275 1 0 1" mesh="RH4_2_collision" contype="1" conaffinity="1" group="3" />
+                          <geom type="mesh" rgba="0.486275 1 0 1" mesh="RH4_2" contype="0" conaffinity="0" group="1" density="0" />
+                          <body name="RH4_3" pos="0 -0.0249991 -0.000215058">
+                            <inertial pos="-0.00675576 -0.0126893 -0.00048063" quat="0.405687 0.555859 -0.555566 0.466675" mass="0.00790882" diaginertia="6.43887e-07 6.00668e-07 2.4799e-07" />
+                            <joint name="r_f_jiont_5_4" pos="0 0 0" axis="-1 0 0" range="0 1.57" type="hinge" limited="true" damping="1" />
+                            <geom type="mesh" density="0" rgba="0 0.498039 1 1" mesh="RH4_3_collision" contype="1" conaffinity="1" group="3" />
+                            <geom type="mesh" rgba="0 0.498039 1 1" mesh="RH4_3" contype="0" conaffinity="0" group="1" density="0" />
+                            <body name="RH4_tip_visual" pos="-0.006401 -0.034800 -0.000148">
+                              <geom name="geom_RH4_tip_visual" type="sphere" size="0.002" rgba="1 0 0 1" contype="0" conaffinity="0" group="1" density="0" />
+                            </body>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="act_ARTx" joint="ARTx" kp="10000" kv="500" ctrllimited="true" ctrlrange="-1.0 1.0" forcelimited="true" forcerange="-500 500" />
+    <position name="act_ARTy" joint="ARTy" kp="10000" kv="500" ctrllimited="true" ctrlrange="-1.0 1.0" forcelimited="true" forcerange="-500 500" />
+    <position name="act_ARTz" joint="ARTz" kp="10000" kv="500" ctrllimited="true" ctrlrange="-1.0 1.0" forcelimited="true" forcerange="-500 500" />
+    <position name="act_ARRx" joint="ARRx" kp="10000" kv="500" ctrllimited="true" ctrlrange="-6.283185307179586 6.283185307179586" forcelimited="true" forcerange="-100 100" />
+    <position name="act_ARRy" joint="ARRy" kp="10000" kv="500" ctrllimited="true" ctrlrange="-6.283185307179586 6.283185307179586" forcelimited="true" forcerange="-100 100" />
+    <position name="act_ARRz" joint="ARRz" kp="10000" kv="500" ctrllimited="true" ctrlrange="-6.283185307179586 6.283185307179586" forcelimited="true" forcerange="-100 100" />
+    <position name="act_r_f_jiont_1_1" joint="r_f_jiont_1_1" kp="30" ctrllimited="true" ctrlrange="0 2" />
+    <position name="act_r_f_jiont_1_2" joint="r_f_jiont_1_2" kp="30" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_1_3" joint="r_f_jiont_1_3" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_1_4" joint="r_f_jiont_1_4" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_2_1" joint="r_f_jiont_2_1" kp="30" ctrllimited="true" ctrlrange="-0.1570796327 0.4537856055" />
+    <position name="act_r_f_jiont_2_2" joint="r_f_jiont_2_2" kp="30" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_2_3" joint="r_f_jiont_2_3" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_2_4" joint="r_f_jiont_2_4" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_3_1" joint="r_f_jiont_3_1" kp="30" ctrllimited="true" ctrlrange="-0.4537856055 0.4537856055" />
+    <position name="act_r_f_jiont_3_2" joint="r_f_jiont_3_2" kp="30" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_3_3" joint="r_f_jiont_3_3" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_3_4" joint="r_f_jiont_3_4" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_4_1" joint="r_f_jiont_4_1" kp="30" ctrllimited="true" ctrlrange="-0.4537856055 0.1570796327" />
+    <position name="act_r_f_jiont_4_2" joint="r_f_jiont_4_2" kp="30" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_4_3" joint="r_f_jiont_4_3" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_4_4" joint="r_f_jiont_4_4" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_5_1" joint="r_f_jiont_5_1" kp="30" ctrllimited="true" ctrlrange="-0.4537856055 0.0872664626" />
+    <position name="act_r_f_jiont_5_2" joint="r_f_jiont_5_2" kp="30" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_5_3" joint="r_f_jiont_5_3" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+    <position name="act_r_f_jiont_5_4" joint="r_f_jiont_5_4" kp="20" ctrllimited="true" ctrlrange="0 1.57" />
+  </actuator>
+</mujoco>

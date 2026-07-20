@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-mkdir -p outputs
+: "${OUTPUT_ROOT:=${PWD}/outputs}"
+: "${OUTPUT:=${OUTPUT_ROOT}/mjx_warp_${DEVICE:-gpu}_smoke.lance}"
 : "${DEVICE:=gpu}"
 
 docker_args=(
@@ -24,4 +25,4 @@ fi
 
 docker "${docker_args[@]}" \
   mujoco-warp-contactbench:latest \
-  python sim/smoke_test.py --strict --device "$DEVICE" --output outputs/mjx_warp_${DEVICE}_smoke.lance
+  python sim/smoke_test.py --strict --device "$DEVICE" --output "$OUTPUT"
