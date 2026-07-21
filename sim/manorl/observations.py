@@ -395,20 +395,59 @@ def build_observation(
     contact = extract_contact_features(state.hand_keypoint_contact_forces)
     if len(contact.magnitude) != batch:
         raise ValueError("hand_keypoint_contact_forces batch size must match mano_dof_pos")
-    support = np.asarray(state.object_support_points, dtype=np.float64)
-    if support.ndim != 2 or support.shape[1:] != (3,) or len(support) == 0 or not np.all(np.isfinite(support)):
-        raise ValueError("object_support_points must be a non-empty finite (points, 3) array")
-    support = _reduce_support_points(support, state.table_clearance_support_point_cap)
+    raw_support = state.object_support_points
+    if isinstance(raw_support, (tuple, list)):
+        if len(raw_support) != batch:
+            raise ValueError("per-world object_support_points must match the observation batch")
+        support_rows = [np.asarray(value, dtype=np.float64) for value in raw_support]
+    else:
+        support_array = np.asarray(raw_support, dtype=np.float64)
+        if support_array.ndim == 3 and support_array.shape[0] == batch:
+            support_rows = [support_array[index] for index in range(batch)]
+        else:
+            support_rows = [support_array]
+    for support_row in support_rows:
+        if (
+            support_row.ndim != 2
+            or support_row.shape[1:] != (3,)
+            or len(support_row) == 0
+            or not np.all(np.isfinite(support_row))
+        ):
+            raise ValueError("object_support_points must contain non-empty finite (points, 3) arrays")
+    support_rows = [
+        _reduce_support_points(value, state.table_clearance_support_point_cap)
+        for value in support_rows
+    ]
+    if len(support_rows) == 1:
+        support_rows = support_rows * batch
     support_quat = obj_quat / np.maximum(np.linalg.norm(obj_quat, axis=1, keepdims=True), 1e-9)
     target_support_quat = target_quat / np.maximum(np.linalg.norm(target_quat, axis=1, keepdims=True), 1e-9)
-    object_min_z = (quat_rotate_xyzw(
-        np.broadcast_to(support_quat[:, None, :], (batch, len(support), 4)),
-        np.broadcast_to(support[None, :, :], (batch, len(support), 3)),
-    )[:, :, 2] + obj_pos[:, None, 2]).min(axis=1)
-    target_min_z = (quat_rotate_xyzw(
-        np.broadcast_to(target_support_quat[:, None, :], (batch, len(support), 4)),
-        np.broadcast_to(support[None, :, :], (batch, len(support), 3)),
-    )[:, :, 2] + target_pos[:, None, 2]).min(axis=1)
+    object_min_z = np.asarray(
+        [
+            (
+                quat_rotate_xyzw(
+                    np.broadcast_to(support_quat[index], (len(support_rows[index]), 4)),
+                    support_rows[index],
+                )[:, 2]
+                + obj_pos[index, 2]
+            ).min()
+            for index in range(batch)
+        ],
+        dtype=np.float64,
+    )
+    target_min_z = np.asarray(
+        [
+            (
+                quat_rotate_xyzw(
+                    np.broadcast_to(target_support_quat[index], (len(support_rows[index]), 4)),
+                    support_rows[index],
+                )[:, 2]
+                + target_pos[index, 2]
+            ).min()
+            for index in range(batch)
+        ],
+        dtype=np.float64,
+    )
     if not np.isfinite(state.table_surface_height):
         raise ValueError("table_surface_height must be finite")
     table = float(state.table_surface_height)

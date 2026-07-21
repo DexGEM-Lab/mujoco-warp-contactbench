@@ -484,6 +484,8 @@ def _object_body(
     asset: ET.Element,
     urdf_root: ET.Element,
     runtime: ObjectRuntime,
+    *,
+    gravity_compensated: bool = False,
 ) -> None:
     object_link = urdf_root.find("link")
     if object_link is None or object_link.get("name") != runtime.link_name:
@@ -517,7 +519,15 @@ def _object_body(
         scale=_format(runtime.collision_mesh_scale),
     )
 
-    body = ET.SubElement(worldbody, "body", name=runtime.body_name, gravcomp="0")
+    body = ET.SubElement(
+        worldbody,
+        "body",
+        name=runtime.body_name,
+        # Unified scenes park inactive objects outside the bounded workspace;
+        # they retain native gravity so the active object uses the exact same
+        # generalized dynamics as the homogeneous model.
+        gravcomp="1" if gravity_compensated else "0",
+    )
     ET.SubElement(body, "freejoint", name=runtime.free_joint_name)
     _link_inertial(body, object_link)
     position, quaternion = _origin(collision.find("origin"))
@@ -590,6 +600,96 @@ def build_scene_xml(
         hand_contacts_enabled=servo.hand_contacts_enabled,
     )
     _object_body(worldbody, asset, object_root, runtime)
+
+    actuator = ET.SubElement(root, "actuator")
+    for name, effort, kp, dampratio in zip(
+        JOINT_NAMES, EFFORT, servo.kp, servo.dampratio, strict=True
+    ):
+        ET.SubElement(
+            actuator,
+            "position",
+            name=name,
+            joint=name,
+            kp=f"{kp:.17g}",
+            dampratio=f"{dampratio:.17g}",
+            inheritrange="1",
+            forcelimited="true",
+            forcerange=f"{-effort:.17g} {effort:.17g}",
+        )
+    ET.indent(root, space="  ")
+    return ET.tostring(root, encoding="unicode", xml_declaration=True)
+
+
+def build_unified_scene_xml(
+    servo: ServoConfig = ServoConfig(),
+    *,
+    object_types: Iterable[str],
+) -> str:
+    """Build one fixed-topology scene containing several real object meshes.
+
+    Each world in an MJX data batch selects one object by placing that object's
+    free body in the interaction workspace.  Inactive objects are parked far
+    above the floor and retain their native gravity/contact properties; their
+    trajectories cannot interact with the active workspace during a bounded
+    episode.  No collision geometry is approximated or replaced.
+    """
+
+    names = tuple(dict.fromkeys(object_types))
+    if not names:
+        raise ValueError("unified scene requires at least one object type")
+    runtimes = tuple(object_runtime(name) for name in names)
+    for name in names:
+        validate_asset_manifest(name)
+    hand_root = ET.parse(HAND_URDF).getroot()
+    root = ET.Element("mujoco", model="manorl_unified")
+    ET.SubElement(root, "compiler", angle="radian", autolimits="true")
+    ET.SubElement(
+        root,
+        "option",
+        timestep=str(PHYSICS_TIMESTEP),
+        gravity="0 0 -9.81",
+        integrator="implicitfast",
+    )
+    asset = ET.SubElement(root, "asset")
+    ET.SubElement(
+        asset,
+        "texture",
+        type="skybox",
+        builtin="gradient",
+        rgb1="0.07 0.12 0.18",
+        rgb2="0.35 0.48 0.62",
+        width="512",
+        height="512",
+    )
+    worldbody = ET.SubElement(root, "worldbody")
+    contact = ET.SubElement(root, "contact")
+    _add_hand_self_collision_excludes(contact)
+    ET.SubElement(
+        worldbody,
+        "geom",
+        name="floor",
+        type="plane",
+        pos=f"0 0 {FLOOR_TOP_Z}",
+        size="1 1 0.01",
+        rgba="0.7 0.7 0.7 1",
+        contype="4",
+        conaffinity="1",
+        friction="1 0.01 0.001",
+    )
+    _hand_tree(
+        worldbody,
+        asset,
+        hand_root,
+        hand_contacts_enabled=servo.hand_contacts_enabled,
+    )
+    for runtime in runtimes:
+        object_root = ET.parse(runtime.urdf_path).getroot()
+        _object_body(
+            worldbody,
+            asset,
+            object_root,
+            runtime,
+        )
 
     actuator = ET.SubElement(root, "actuator")
     for name, effort, kp, dampratio in zip(
@@ -723,6 +823,123 @@ def compile_model(
     model = mujoco.MjModel.from_xml_string(build_scene_xml(servo, object_type=object_type))
     validate_compiled_model(mujoco, model, servo, object_type=object_type)
     validate_static_fk(mujoco, model, object_type=object_type)
+    return mujoco, model
+
+
+def validate_unified_compiled_model(
+    mujoco: Any,
+    model: Any,
+    servo: ServoConfig = ServoConfig(),
+    *,
+    object_types: Iterable[str],
+) -> None:
+    """Validate the fixed hand topology and every real object in a superset scene."""
+
+    names = tuple(dict.fromkeys(object_types))
+    if not names:
+        raise ValueError("unified model validation requires at least one object type")
+    runtimes = tuple(object_runtime(name) for name in names)
+    joint_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, model.njnt)
+    expected_joints = JOINT_NAMES + tuple(runtime.free_joint_name for runtime in runtimes)
+    if joint_names != expected_joints:
+        raise ValueError(f"unified joint order mismatch: {joint_names}")
+    actuator_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu)
+    if actuator_names != JOINT_NAMES:
+        raise ValueError(f"unified actuator order mismatch: {actuator_names}")
+    expected_nq = 26 + 7 * len(runtimes)
+    expected_nv = 26 + 6 * len(runtimes)
+    if model.nu != 26 or model.nq != expected_nq or model.nv != expected_nv:
+        raise ValueError(
+            f"unified dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}; "
+            f"expected nq={expected_nq}, nv={expected_nv}, nu=26"
+        )
+    if not np.isclose(model.opt.timestep, PHYSICS_TIMESTEP):
+        raise ValueError(f"unified timestep mismatch: {model.opt.timestep}")
+    for actuator_id, (name, effort, kp, dampratio) in enumerate(
+        zip(JOINT_NAMES, EFFORT, servo.kp, servo.dampratio, strict=True)
+    ):
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        dof_address = int(model.jnt_dofadr[joint_id])
+        if not np.isclose(model.dof_frictionloss[dof_address], JOINT_FRICTIONLOSS):
+            raise ValueError(f"compiled frictionloss mismatch for {name}")
+        if not np.isclose(model.dof_armature[dof_address], JOINT_ARMATURE):
+            raise ValueError(f"compiled armature mismatch for {name}")
+        if int(model.actuator_trnid[actuator_id, 0]) != joint_id:
+            raise ValueError(f"actuator {name} is attached to the wrong joint")
+        if not model.actuator_ctrllimited[actuator_id] or not np.allclose(
+            model.actuator_ctrlrange[actuator_id], model.jnt_range[joint_id]
+        ):
+            raise ValueError(f"compiled actuator control range mismatch for {name}")
+        if not model.actuator_forcelimited[actuator_id] or not np.allclose(
+            model.actuator_forcerange[actuator_id], (-effort, effort)
+        ):
+            raise ValueError(f"compiled actuator effort limit mismatch for {name}")
+        if not np.isclose(model.actuator_gainprm[actuator_id, 0], kp):
+            raise ValueError(f"compiled position gain mismatch for {name}")
+        if not np.isclose(model.actuator_biasprm[actuator_id, 1], -kp):
+            raise ValueError(f"compiled position bias mismatch for {name}")
+        kv = -float(model.actuator_biasprm[actuator_id, 2])
+        if not np.isfinite(kv) or kv <= 0:
+            raise ValueError(f"compiled dampratio did not produce positive damping for {name}")
+    hand_geom_ids = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if model.geom_bodyid[geom_id]
+        not in {
+            0,
+            *(
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name)
+                for runtime in runtimes
+            ),
+        }
+    ]
+    if len(hand_geom_ids) != 16:
+        raise ValueError(f"expected 16 hand collision geoms, got {len(hand_geom_ids)}")
+    expected_hand_bits = (1, 7) if servo.hand_contacts_enabled else (0, 0)
+    if not np.all(model.geom_contype[hand_geom_ids] == expected_hand_bits[0]) or not np.all(
+        model.geom_conaffinity[hand_geom_ids] == expected_hand_bits[1]
+    ):
+        raise ValueError("compiled hand collision masks mismatch servo configuration")
+    for runtime in runtimes:
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name)
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, runtime.free_joint_name)
+        if body_id < 0 or joint_id < 0:
+            raise ValueError(f"compiled unified object is absent: {runtime.object_type}")
+        if model.body_gravcomp[body_id] != 0:
+            raise ValueError(f"unified object {runtime.object_type} must retain native gravity")
+        object_geom_ids = [
+            geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) == body_id
+        ]
+        if len(object_geom_ids) != runtime.collision_geom_count:
+            raise ValueError(
+                f"expected {runtime.collision_geom_count} {runtime.object_type} collision geoms, "
+                f"got {len(object_geom_ids)}"
+            )
+        if not np.all(model.geom_contype[object_geom_ids] == 2) or not np.all(
+            model.geom_conaffinity[object_geom_ids] == 5
+        ):
+            raise ValueError(f"compiled {runtime.object_type} collision masks mismatch")
+    validate_static_fk(mujoco, model, object_type=names[0])
+
+
+def compile_unified_model(
+    servo: ServoConfig = ServoConfig(), *, object_types: Iterable[str]
+) -> tuple[Any, Any]:
+    """Compile one fixed-topology model containing the requested real objects."""
+
+    names = tuple(dict.fromkeys(object_types))
+    if not names:
+        raise ValueError("unified model requires at least one object type")
+    try:
+        import mujoco
+    except ImportError as exc:
+        raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
+    model = mujoco.MjModel.from_xml_string(
+        build_unified_scene_xml(servo, object_types=names)
+    )
+    validate_unified_compiled_model(
+        mujoco, model, servo, object_types=names
+    )
     return mujoco, model
 
 
