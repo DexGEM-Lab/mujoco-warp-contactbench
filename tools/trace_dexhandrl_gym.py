@@ -95,6 +95,38 @@ def _pre_action_observations(preprocessed: Any, rms: Any) -> tuple[np.ndarray, n
     return _as_np(preprocessed[0]), _as_np(rms[0])
 
 
+def _hydra_overrides(args: argparse.Namespace) -> list[str]:
+    """Overrides for the single exact checkpoint trace, independent of Hydra's CLI."""
+    return [
+        "task=Dexhand021proReconstruction",
+        "train.test=true",
+        f"train.checkpoint={args.checkpoint}",
+        "train.reloadInterval=0",
+        "env.numEnvs=1",
+        "env.device=cuda:0",
+        "env.viewer=false",
+        "env.videoRecord=false",
+        "env.videoStream=false",
+        "task.mocap.format=lance",
+        "task.mocap.basePath=/mnt/nas-222-project/mocap/for_retargeting/dexhand021pro/results_all_mano/all/lance_new_all_generated_mano/lance_result_archive_full/dexhand021pro_lance_new_all_generated_mano_retarget_result_archive.lance",
+        "task.mocap.objectType=[cube1]",
+        "task.mocap.actions=[01]",
+        "task.mocap.load_multi_object=false",
+        "task.use_residual=true",
+        "task.pointCloudEncoding.isDynamic=false",
+        "task.contact_force_threshold=1000000000",
+        "train.seed=0",
+    ]
+
+
+def _compose_train_config(args: argparse.Namespace, initialize_config_dir: Callable[..., Any],
+                          compose: Callable[..., Any]) -> Any:
+    """Compose train's config from the checkout, never through an importable package."""
+    config_dir = (args.gym_root / "dexhand_env" / "cfg").resolve()
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        return compose(config_name="config", overrides=_hydra_overrides(args))
+
+
 def _write_trace(output: Path, store: dict[str, list[np.ndarray]], checkpoint: Path, source_head: str,
                  component_slices: dict[str, tuple[int, int]]) -> Path:
     scalar = {"decision_frame": np.int64, "state_frame": np.int64, "reset": np.bool_, "terminated": np.bool_, "truncated": np.bool_}
@@ -124,6 +156,7 @@ def run(args: argparse.Namespace) -> None:
         import isaacgym  # noqa: F401  # Isaac Gym must precede torch/train import
         import torch
         import train
+        from hydra import compose, initialize_config_dir
         from dexhand_env.tasks.dexhand_base import DexHandBase
         from dexhand_env.utils.batch_mocap_loader import BatchMocapLoader
         from dexhand_env.utils.experiment_manager import ExperimentManager
@@ -216,8 +249,11 @@ def run(args: argparse.Namespace) -> None:
             _write_trace(args.output, store, args.checkpoint, before[1], component_slices)
 
         with _patch(BatchMocapLoader, "_discover_minimal_lance_trajectories", discover_exact), _patch(DexHandBase, "pre_physics_step", pre_capture), _patch(DexHandBase, "post_physics_step", post_capture), _patch(DexHandBase, "reset_idx", reset_deferred), _patch(train, "create_experiment_manager", external_manager), _patch(Runner, "run_play", run_play):
-            sys.argv = [str(args.gym_root / "train.py"), "task=Dexhand021proReconstruction", "train.test=true", f"train.checkpoint={args.checkpoint}", "train.reloadInterval=0", "env.numEnvs=1", "env.device=cuda:0", "env.viewer=false", "env.videoRecord=false", "env.videoStream=false", "task.mocap.format=lance", f"task.mocap.basePath={args.gym_root / '../does-not-exist'}" if False else "task.mocap.basePath=/mnt/nas-222-project/mocap/for_retargeting/dexhand021pro/results_all_mano/all/lance_new_all_generated_mano/lance_result_archive_full/dexhand021pro_lance_new_all_generated_mano_retarget_result_archive.lance", "task.mocap.objectType=[cube1]", "task.mocap.actions=[01]", "task.mocap.load_multi_object=false", "task.use_residual=true", "task.pointCloudEncoding.isDynamic=false", "task.contact_force_threshold=1000000000", "train.seed=0", f"hydra.run.dir={runtime / 'hydra'}", "hydra.output_subdir=null", "hydra.job.chdir=false"]
-            train.main()
+            cfg = _compose_train_config(args, initialize_config_dir, compose)
+            train_main = getattr(train.main, "__wrapped__", None)
+            if train_main is None:
+                raise RuntimeError("Gym train.main must expose Hydra's undecorated body via __wrapped__")
+            train_main(cfg)
         if not args.output.exists():
             raise RuntimeError("patched Runner.run_play returned without writing the Gym trace")
     finally:

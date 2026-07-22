@@ -1,4 +1,5 @@
 from __future__ import annotations
+import argparse
 import importlib, json
 from pathlib import Path
 import subprocess
@@ -9,8 +10,9 @@ import pytest
 from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES
 from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, VECTOR_SPECS, validate_trace
 from tools.compare_dexhandrl_traces import compare
-from tools.trace_dexhandrl_gym import (_deterministic_action, _filter_exact_trajectory, _patch,
-                                      _pre_action_observations, _validated_component_slices)
+from tools.trace_dexhandrl_gym import (_compose_train_config, _deterministic_action,
+                                      _filter_exact_trajectory, _patch, _pre_action_observations,
+                                      _validated_component_slices)
 
 def _trace(frames=(61, 62), *, backend="mujoco"):
     arrays = {name: np.zeros((len(frames), width), dtype=np.float32) for name, width in VECTOR_SPECS.items()}
@@ -66,6 +68,40 @@ def test_trace_contract_rejects_wrong_state_dtype_and_filter_metadata():
 def test_trace_contract_rejects_nonfinite_values():
     metadata, arrays = _trace(); arrays["policy_mean"][0, 0] = np.nan
     with pytest.raises(ValueError, match="finite"): validate_trace(metadata, arrays)
+
+def test_gym_trace_composes_absolute_checkout_config_without_package_lookup(tmp_path):
+    calls = []
+
+    class Initialize:
+        def __enter__(self):
+            calls.append("enter")
+        def __exit__(self, *_):
+            calls.append("exit")
+
+    def initialize_config_dir(**kwargs):
+        calls.append(("initialize", kwargs))
+        return Initialize()
+
+    def compose(**kwargs):
+        calls.append(("compose", kwargs))
+        return "configured"
+
+    gym_root = tmp_path / "gym"
+    checkpoint = tmp_path / "checkpoints" / "cube1_01.pth"
+    cfg = _compose_train_config(argparse.Namespace(gym_root=gym_root, checkpoint=checkpoint),
+                                initialize_config_dir, compose)
+    assert cfg == "configured"
+    assert calls[0] == ("initialize", {"config_dir": str((gym_root / "dexhand_env" / "cfg").resolve()), "version_base": None})
+    assert calls[1] == "enter" and calls[-1] == "exit"
+    composed = calls[2][1]
+    assert composed["config_name"] == "config"
+    assert "env.numEnvs=1" in composed["overrides"]
+    assert "task.mocap.objectType=[cube1]" in composed["overrides"]
+    assert "task.mocap.actions=[01]" in composed["overrides"]
+    assert "task.pointCloudEncoding.isDynamic=false" in composed["overrides"]
+    assert f"train.checkpoint={checkpoint}" in composed["overrides"]
+    assert not any(item.startswith("hydra.") for item in composed["overrides"])
+
 
 def test_gym_uuid_filter_fails_closed_and_selects_exact_row():
     exact = {"row_id": 22, "uuid": EXACT_IDENTITY["uuid"], "object_type": "cube1", "action_id": "01"}
