@@ -37,6 +37,12 @@ HAND_URDF = ASSET_ROOT / "hand" / "mano_hand.urdf"
 OBJECT_URDF = ASSET_ROOT / "cube1" / "cube1.urdf"
 ASSET_MANIFEST = ASSET_ROOT / "manifest.json"
 OBJECT_MESH = ASSET_ROOT / "cube1" / "cube1_aligned.stl"
+HAND_VISUAL_MESH_ROOT = (
+    ALL_ASSETS_ROOT / "Assets" / "HAND" / "s02" / "mano" / "Z_upNew" / "meshes"
+)
+OBJECT_VISUAL_MESH_ROOT = ALL_ASSETS_SIM_ROOT / "mano_assets" / "objects"
+VISUAL_GEOM_GROUP = 2
+COLLISION_GEOM_GROUP = 3
 
 
 @dataclass(frozen=True)
@@ -257,6 +263,38 @@ def _origin(element: ET.Element | None) -> tuple[tuple[float, ...], tuple[float,
     return xyz, _rpy_to_wxyz(rpy)
 
 
+def _resolve_mesh_path(
+    urdf_path: Path, filename: str, *, fallback_roots: Iterable[Path] = ()
+) -> Path:
+    """Resolve a URDF mesh, allowing the curated runtime to use external visuals."""
+
+    candidates = [(urdf_path.parent / filename).resolve()]
+    basename = Path(filename).name
+    candidates.extend((root / basename).resolve() for root in fallback_roots)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"URDF mesh is absent: {filename!r}; checked "
+        + ", ".join(str(candidate) for candidate in candidates)
+    )
+
+
+def _visual_rgba(
+    visual: ET.Element,
+    global_materials: dict[str, str],
+    fallback: str,
+) -> str:
+    material = visual.find("material")
+    if material is None:
+        return fallback
+    color = material.find("color")
+    if color is not None and color.get("rgba"):
+        return color.get("rgba", fallback)
+    material_name = material.get("name")
+    return global_materials.get(material_name or "", fallback)
+
+
 def _required_paths(object_type: str | None = None) -> tuple[Path, ...]:
     hand_meshes = tuple((ASSET_ROOT / "hand" / "meshes").glob("*.stl"))
     if len(hand_meshes) != 16:
@@ -349,7 +387,11 @@ def _link_inertial(body: ET.Element, link: ET.Element) -> None:
 
 
 def _link_collision(
-    body: ET.Element, link: ET.Element, *, hand_contacts_enabled: bool
+    body: ET.Element,
+    link: ET.Element,
+    *,
+    hand_contacts_enabled: bool,
+    viewer_visuals: bool,
 ) -> None:
     collisions = link.findall("collision")
     if len(collisions) > 1:
@@ -382,7 +424,43 @@ def _link_collision(
         "condim": "3",
         "friction": "1 0.01 0.001",
     }
+    if viewer_visuals:
+        attributes["group"] = str(COLLISION_GEOM_GROUP)
     ET.SubElement(body, "geom", attributes)
+
+
+def _link_visuals(
+    body: ET.Element,
+    link: ET.Element,
+    *,
+    global_materials: dict[str, str],
+) -> None:
+    visuals = link.findall("visual")
+    for index, visual in enumerate(visuals):
+        geometry = visual.find("geometry")
+        mesh = None if geometry is None else geometry.find("mesh")
+        sphere = None if geometry is None else geometry.find("sphere")
+        position, quaternion = _origin(visual.find("origin"))
+        attributes = {
+            "name": f"{link.get('name')}_visual" + (f"_{index}" if index else ""),
+            "pos": _format(position),
+            "quat": _format(quaternion),
+            "rgba": _visual_rgba(visual, global_materials, "0.88 0.58 0.46 1"),
+            "contype": "0",
+            "conaffinity": "0",
+            "group": str(VISUAL_GEOM_GROUP),
+        }
+        if mesh is not None:
+            filename = Path(mesh.get("filename", "")).name
+            attributes.update(
+                type="mesh",
+                mesh=f"hand_{Path(filename).stem}_visual",
+            )
+        elif sphere is not None:
+            attributes.update(type="sphere", size=sphere.get("radius", ""))
+        else:
+            raise ValueError(f"unsupported hand visual geometry for {link.get('name')}")
+        ET.SubElement(body, "geom", attributes)
 
 
 def _hand_tree(
@@ -391,6 +469,7 @@ def _hand_tree(
     urdf_root: ET.Element,
     *,
     hand_contacts_enabled: bool,
+    visual_meshes: bool = False,
 ) -> None:
     links = {element.get("name", ""): element for element in urdf_root.findall("link")}
     joints = list(urdf_root.findall("joint"))
@@ -431,6 +510,39 @@ def _hand_tree(
             attributes["scale"] = scale
         ET.SubElement(asset, "mesh", attributes)
 
+    global_materials = {}
+    for material in urdf_root.findall("material"):
+        color = material.find("color")
+        if material.get("name") and color is not None and color.get("rgba"):
+            global_materials[material.get("name", "")] = color.get("rgba", "")
+    if visual_meshes:
+        visual_meshes_by_filename: dict[str, ET.Element] = {}
+        for link in links.values():
+            for visual_mesh in link.findall("visual/geometry/mesh"):
+                filename = Path(visual_mesh.get("filename", "")).name
+                if filename in visual_meshes_by_filename:
+                    raise ValueError(
+                        f"authoritative hand URDF repeats visual mesh {filename!r}"
+                    )
+                visual_meshes_by_filename[filename] = visual_mesh
+        if len(visual_meshes_by_filename) != 16:
+            raise ValueError("authoritative hand URDF must reference 16 unique visual meshes")
+        for filename, source_mesh in visual_meshes_by_filename.items():
+            attributes = {
+                "name": f"hand_{Path(filename).stem}_visual",
+                "file": str(
+                    _resolve_mesh_path(
+                        HAND_URDF,
+                        source_mesh.get("filename", ""),
+                        fallback_roots=(HAND_VISUAL_MESH_ROOT,),
+                    )
+                ),
+            }
+            scale = source_mesh.get("scale")
+            if scale is not None:
+                attributes["scale"] = scale
+            ET.SubElement(asset, "mesh", attributes)
+
     def append_link(parent_xml: ET.Element, link_name: str, source_joint: ET.Element | None) -> None:
         attributes = {"name": link_name, "gravcomp": "1"}
         if source_joint is not None:
@@ -458,7 +570,14 @@ def _hand_tree(
                 armature=str(JOINT_ARMATURE),
             )
         _link_inertial(body, links[link_name])
-        _link_collision(body, links[link_name], hand_contacts_enabled=hand_contacts_enabled)
+        _link_collision(
+            body,
+            links[link_name],
+            hand_contacts_enabled=hand_contacts_enabled,
+            viewer_visuals=visual_meshes,
+        )
+        if visual_meshes:
+            _link_visuals(body, links[link_name], global_materials=global_materials)
         for joint in children.get(link_name, []):
             child = joint.find("child")
             assert child is not None
@@ -486,6 +605,7 @@ def _object_body(
     runtime: ObjectRuntime,
     *,
     gravity_compensated: bool = False,
+    visual_meshes: bool = False,
 ) -> None:
     object_link = urdf_root.find("link")
     if object_link is None or object_link.get("name") != runtime.link_name:
@@ -531,7 +651,7 @@ def _object_body(
     ET.SubElement(body, "freejoint", name=runtime.free_joint_name)
     _link_inertial(body, object_link)
     position, quaternion = _origin(collision.find("origin"))
-    ET.SubElement(
+    collision_geom = ET.SubElement(
         body,
         "geom",
         name=f"{runtime.object_type}_collision",
@@ -545,6 +665,48 @@ def _object_body(
         condim="3",
         friction="0.9 0.01 0.001",
     )
+    if visual_meshes:
+        collision_geom.set("group", str(COLLISION_GEOM_GROUP))
+    if visual_meshes:
+        visuals = object_link.findall("visual")
+        if len(visuals) != 1:
+            raise ValueError(f"{runtime.object_type} URDF must contain exactly one visual mesh")
+        visual = visuals[0]
+        visual_mesh = visual.find("geometry/mesh")
+        if visual_mesh is None:
+            raise ValueError(f"{runtime.object_type} URDF visual is not a mesh")
+        visual_filename = Path(visual_mesh.get("filename", "")).name
+        if visual_filename != runtime.source_mesh_filename:
+            raise ValueError(
+                f"{runtime.object_type} URDF visual must reference {runtime.source_mesh_filename}"
+            )
+        visual_path = _resolve_mesh_path(
+            runtime.urdf_path,
+            visual_mesh.get("filename", ""),
+            fallback_roots=(OBJECT_VISUAL_MESH_ROOT / runtime.object_type,),
+        )
+        visual_scale = _numbers(visual_mesh.get("scale"), 3, runtime.source_mesh_scale)
+        ET.SubElement(
+            asset,
+            "mesh",
+            name=f"{runtime.object_type}_visual_mesh",
+            file=str(visual_path),
+            scale=_format(visual_scale),
+        )
+        position, quaternion = _origin(visual.find("origin"))
+        ET.SubElement(
+            body,
+            "geom",
+            name=f"{runtime.object_type}_visual",
+            type="mesh",
+            mesh=f"{runtime.object_type}_visual_mesh",
+            pos=_format(position),
+            quat=_format(quaternion),
+            rgba=_visual_rgba(visual, {}, runtime.rgba),
+            contype="0",
+            conaffinity="0",
+            group=str(VISUAL_GEOM_GROUP),
+        )
 
 
 def _add_scene_visual_assets(asset: ET.Element) -> None:
@@ -583,7 +745,10 @@ def _add_scene_visual_assets(asset: ET.Element) -> None:
 
 
 def build_scene_xml(
-    servo: ServoConfig = ServoConfig(), *, object_type: str = OBJECT_TYPE
+    servo: ServoConfig = ServoConfig(),
+    *,
+    object_type: str = OBJECT_TYPE,
+    visual_meshes: bool = False,
 ) -> str:
     """Build one homogeneous scene from a materialized object runtime."""
 
@@ -622,8 +787,9 @@ def build_scene_xml(
         asset,
         hand_root,
         hand_contacts_enabled=servo.hand_contacts_enabled,
+        visual_meshes=visual_meshes,
     )
-    _object_body(worldbody, asset, object_root, runtime)
+    _object_body(worldbody, asset, object_root, runtime, visual_meshes=visual_meshes)
 
     actuator = ET.SubElement(root, "actuator")
     for name, effort, kp, dampratio in zip(
@@ -648,6 +814,7 @@ def build_unified_scene_xml(
     servo: ServoConfig = ServoConfig(),
     *,
     object_types: Iterable[str],
+    visual_meshes: bool = False,
 ) -> str:
     """Build one fixed-topology scene containing several real object meshes.
 
@@ -696,6 +863,7 @@ def build_unified_scene_xml(
         asset,
         hand_root,
         hand_contacts_enabled=servo.hand_contacts_enabled,
+        visual_meshes=visual_meshes,
     )
     for runtime in runtimes:
         object_root = ET.parse(runtime.urdf_path).getroot()
@@ -704,6 +872,7 @@ def build_unified_scene_xml(
             asset,
             object_root,
             runtime,
+            visual_meshes=visual_meshes,
         )
 
     actuator = ET.SubElement(root, "actuator")
@@ -727,6 +896,11 @@ def build_unified_scene_xml(
 
 def _model_names(mujoco: Any, model: Any, object_type: Any, count: int) -> tuple[str, ...]:
     return tuple(mujoco.mj_id2name(model, object_type, index) or "" for index in range(count))
+
+
+def _is_collision_geom(mujoco: Any, model: Any, geom_id: int) -> bool:
+    name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
+    return name.endswith("_collision")
 
 
 def validate_compiled_model(
@@ -783,7 +957,10 @@ def validate_compiled_model(
     if model.body_gravcomp[object_id] != 0:
         raise ValueError(f"{runtime.object_type} gravity must remain active")
     object_geom_ids = [
-        geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) == object_id
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) == object_id
+        and _is_collision_geom(mujoco, model, geom_id)
     ]
     if len(object_geom_ids) != runtime.collision_geom_count:
         raise ValueError(
@@ -798,6 +975,7 @@ def validate_compiled_model(
         geom_id
         for geom_id in range(model.ngeom)
         if model.geom_bodyid[geom_id] not in (0, object_id)
+        and _is_collision_geom(mujoco, model, geom_id)
     ]
     if len(hand_geom_ids) != 16:
         raise ValueError(f"expected 16 hand collision geoms, got {len(hand_geom_ids)}")
@@ -827,7 +1005,10 @@ def validate_compiled_model(
 
 
 def compile_model(
-    servo: ServoConfig = ServoConfig(), *, object_type: str = OBJECT_TYPE
+    servo: ServoConfig = ServoConfig(),
+    *,
+    object_type: str = OBJECT_TYPE,
+    visual_meshes: bool = False,
 ) -> tuple[Any, Any]:
     """Compile and validate one bounded native-servo scene."""
 
@@ -835,7 +1016,9 @@ def compile_model(
         import mujoco
     except ImportError as exc:
         raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
-    model = mujoco.MjModel.from_xml_string(build_scene_xml(servo, object_type=object_type))
+    model = mujoco.MjModel.from_xml_string(
+        build_scene_xml(servo, object_type=object_type, visual_meshes=visual_meshes)
+    )
     validate_compiled_model(mujoco, model, servo, object_type=object_type)
     validate_static_fk(mujoco, model, object_type=object_type)
     return mujoco, model
@@ -907,6 +1090,7 @@ def validate_unified_compiled_model(
                 for runtime in runtimes
             ),
         }
+        and _is_collision_geom(mujoco, model, geom_id)
     ]
     if len(hand_geom_ids) != 16:
         raise ValueError(f"expected 16 hand collision geoms, got {len(hand_geom_ids)}")
@@ -923,7 +1107,10 @@ def validate_unified_compiled_model(
         if model.body_gravcomp[body_id] != 0:
             raise ValueError(f"unified object {runtime.object_type} must retain native gravity")
         object_geom_ids = [
-            geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) == body_id
+            geom_id
+            for geom_id in range(model.ngeom)
+            if int(model.geom_bodyid[geom_id]) == body_id
+            and _is_collision_geom(mujoco, model, geom_id)
         ]
         if len(object_geom_ids) != runtime.collision_geom_count:
             raise ValueError(
@@ -938,7 +1125,10 @@ def validate_unified_compiled_model(
 
 
 def compile_unified_model(
-    servo: ServoConfig = ServoConfig(), *, object_types: Iterable[str]
+    servo: ServoConfig = ServoConfig(),
+    *,
+    object_types: Iterable[str],
+    visual_meshes: bool = False,
 ) -> tuple[Any, Any]:
     """Compile one fixed-topology model containing the requested real objects."""
 
@@ -950,7 +1140,7 @@ def compile_unified_model(
     except ImportError as exc:
         raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
     model = mujoco.MjModel.from_xml_string(
-        build_unified_scene_xml(servo, object_types=names)
+        build_unified_scene_xml(servo, object_types=names, visual_meshes=visual_meshes)
     )
     validate_unified_compiled_model(
         mujoco, model, servo, object_types=names

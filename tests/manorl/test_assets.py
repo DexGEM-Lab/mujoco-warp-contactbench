@@ -98,6 +98,105 @@ def test_generated_scene_uses_checkerboard_floor_material(unified: bool) -> None
     assert floor.get("friction") == "1 0.01 0.001"
 
 
+def test_visual_scene_uses_urdf_visual_meshes_without_collision_bits() -> None:
+    root = ET.fromstring(build_scene_xml(visual_meshes=True))
+
+    hand_visual_assets = [
+        mesh
+        for mesh in root.findall("./asset/mesh")
+        if mesh.get("name", "").startswith("hand_visual_")
+    ]
+    assert len(hand_visual_assets) == 16
+    palm_asset = root.find("./asset/mesh[@name='hand_visual_palm_visual']")
+    assert palm_asset is not None
+    assert palm_asset.get("file", "").endswith("/visual_palm.stl")
+
+    palm_visual = root.find(".//body[@name='palm']/geom[@name='palm_visual']")
+    assert palm_visual is not None
+    assert palm_visual.get("mesh") == "hand_visual_palm_visual"
+    assert palm_visual.get("rgba") == "0.95 0.75 0.65 1.0"
+    assert palm_visual.get("contype") == "0"
+    assert palm_visual.get("conaffinity") == "0"
+    assert palm_visual.get("group") == "2"
+
+    fingertip_marker = root.find(
+        ".//body[@name='thumb_ip']/geom[@name='thumb_ip_visual_1']"
+    )
+    assert fingertip_marker is not None
+    assert fingertip_marker.get("type") == "sphere"
+    assert fingertip_marker.get("size") == "0.00125"
+
+    object_asset = root.find("./asset/mesh[@name='cube1_visual_mesh']")
+    object_visual = root.find(".//body[@name='cube1']/geom[@name='cube1_visual']")
+    object_collision = root.find(".//body[@name='cube1']/geom[@name='cube1_collision']")
+    assert object_asset is not None
+    assert object_asset.get("file", "").endswith("/objects/cube1/cube1.obj")
+    assert object_asset.get("scale") == "0.001 0.001 0.001"
+    assert object_visual is not None
+    assert (object_visual.get("contype"), object_visual.get("conaffinity")) == ("0", "0")
+    assert object_visual.get("group") == "2"
+    assert object_collision is not None
+    assert (object_collision.get("contype"), object_collision.get("conaffinity")) == ("2", "5")
+    assert object_collision.get("group") == "3"
+
+
+def test_compiled_visual_model_retains_collision_only_physics_selection() -> None:
+    if importlib.util.find_spec("mujoco") is None:
+        pytest.skip("mujoco is not installed in this environment")
+
+    mujoco, collision_model = compile_model()
+    _, visual_model = compile_model(visual_meshes=True)
+    assert collision_model.ngeom == 18
+    assert visual_model.ngeom == 40
+    assert (
+        mujoco.mj_name2id(
+            collision_model,
+            mujoco.mjtObj.mjOBJ_GEOM,
+            "palm_visual",
+        )
+        == -1
+    )
+    assert (
+        mujoco.mj_name2id(
+            collision_model,
+            mujoco.mjtObj.mjOBJ_GEOM,
+            "cube1_visual",
+        )
+        == -1
+    )
+
+    for name in ("palm_visual", "cube1_visual"):
+        geom_id = mujoco.mj_name2id(visual_model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        assert geom_id >= 0
+        assert (visual_model.geom_contype[geom_id], visual_model.geom_conaffinity[geom_id]) == (
+            0,
+            0,
+        )
+    object_collision = mujoco.mj_name2id(
+        visual_model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_collision"
+    )
+    assert (visual_model.geom_contype[object_collision], visual_model.geom_conaffinity[object_collision]) == (
+        2,
+        5,
+    )
+
+
+def test_unified_visual_scene_contains_each_object_visual_mesh() -> None:
+    root = ET.fromstring(
+        build_unified_scene_xml(
+            object_types=("cube1", "cube2"),
+            visual_meshes=True,
+        )
+    )
+    for object_type in ("cube1", "cube2"):
+        visual = root.find(
+            f".//body[@name='{object_type}']/geom[@name='{object_type}_visual']"
+        )
+        assert visual is not None
+        assert visual.get("mesh") == f"{object_type}_visual_mesh"
+        assert (visual.get("contype"), visual.get("conaffinity")) == ("0", "0")
+
+
 def test_s02_object_registry_is_closed_materialized_and_digest_checked() -> None:
     expected = (
         "cube1",

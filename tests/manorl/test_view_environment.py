@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -61,7 +61,8 @@ def _fake_graphics(*, fail_context: bool = False) -> tuple[object, object, dict[
             self.lookat = np.zeros(3)
 
     class Option:
-        pass
+        def __init__(self) -> None:
+            self.geomgroup = np.ones(6, dtype=np.int32)
 
     class Scene:
         def __init__(self, *_: object, **__: object) -> None:
@@ -90,10 +91,13 @@ def _fake_graphics(*, fail_context: bool = False) -> tuple[object, object, dict[
         mjtMouse=SimpleNamespace(
             mjMOUSE_ROTATE_V="rotate", mjMOUSE_MOVE_H="move_h", mjMOUSE_MOVE_V="move_v", mjMOUSE_ZOOM="zoom"
         ),
+        MjData=lambda _: object(),
         mjv_defaultCamera=lambda _: None,
         mjv_defaultOption=lambda _: None,
         mjv_moveCamera=lambda _, action, dx, dy, __, ___: state["moves"].append((action, dx, dy)),
-        mjv_updateScene=lambda *_: state["updates"].append("scene"),
+        mjv_updateScene=lambda model, *_: (
+            state["updates"].append("scene"), state.setdefault("update_models", []).append(model)
+        ),
         mjr_rectangle=lambda *_: None,
         mjr_render=lambda *_: state["renders"].append("render"),
         mjr_overlay=lambda *_: None,
@@ -119,6 +123,22 @@ def _training_environment() -> tuple[object, dict[str, int]]:
     return environment, calls
 
 
+def _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment):
+    visual_model = SimpleNamespace(vis=environment.model.vis)
+    mirror_calls = []
+    monkeypatch.setattr(
+        viewer,
+        "_compile_native_viewer_model",
+        lambda _: (mujoco, visual_model),
+    )
+    monkeypatch.setattr(
+        viewer,
+        "_mirror_native_viewer_data",
+        lambda *args: mirror_calls.append(args),
+    )
+    return visual_model, mirror_calls
+
+
 def test_training_viewer_renders_states_without_stepping_and_preserves_controls(monkeypatch: pytest.MonkeyPatch) -> None:
     import sim.manorl.view_environment as viewer
 
@@ -127,12 +147,20 @@ def test_training_viewer_renders_states_without_stepping_and_preserves_controls(
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, calls = _training_environment()
+    visual_model, mirror_calls = _patch_training_viewer_native_model(
+        monkeypatch, viewer, mujoco, environment
+    )
     training_viewer = viewer.TrainingViewer(environment, tile_envs=2)
 
     training_viewer.render()
     assert calls == {"host": 1}
     assert state["updates"] == ["scene", "scene"]
     assert state["renders"] == ["render", "render"]
+    assert visual_model is not environment.model
+    assert training_viewer._viewer_model is visual_model
+    assert training_viewer._option.geomgroup[3] == 0
+    assert state["update_models"] == [visual_model, visual_model]
+    assert [call[1] for call in mirror_calls] == [visual_model, visual_model]
 
     callbacks = state["callbacks"]
     callbacks["mouse"](None, glfw.MOUSE_BUTTON_LEFT, glfw.PRESS, 0)
@@ -168,6 +196,7 @@ def test_training_viewer_quiet_mode_emits_no_stdout(
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, _ = _training_environment()
+    _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment)
     training_viewer = viewer.TrainingViewer(environment, tile_envs=2, quiet=True)
 
     assert capsys.readouterr().out == ""
@@ -183,6 +212,7 @@ def test_training_viewer_window_failure_terminates_glfw_once(monkeypatch: pytest
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, _ = _training_environment()
+    _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment)
 
     with pytest.raises(RuntimeError, match="could not create GLFW window"):
         viewer.TrainingViewer(environment, tile_envs=2)
@@ -197,10 +227,185 @@ def test_training_viewer_constructor_failure_releases_glfw_once(monkeypatch: pyt
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, _ = _training_environment()
+    _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment)
 
     with pytest.raises(RuntimeError, match="context failed"):
         viewer.TrainingViewer(environment, tile_envs=2)
     assert state["destroy"] == 1 and state["terminate"] == 1
+
+
+def test_native_visual_model_mirrors_collision_only_state_and_hides_collision_geoms() -> None:
+    import mujoco
+
+    from sim.manorl.assets import COLLISION_GEOM_GROUP, compile_model
+    from sim.manorl.contracts import ServoConfig
+    from sim.manorl.view_environment import (
+        _compile_native_viewer_model,
+        _mirror_native_viewer_data,
+        _validate_native_viewer_abi,
+    )
+
+    _, physics_model = compile_model()
+    environment = SimpleNamespace(
+        config=SimpleNamespace(servo=ServoConfig()),
+        is_heterogeneous=False,
+        model=physics_model,
+        object_type="cube1",
+    )
+    mujoco, viewer_model = _compile_native_viewer_model(environment)
+    _validate_native_viewer_abi(mujoco, physics_model, viewer_model)
+
+    physics_data = mujoco.MjData(physics_model)
+    mujoco.mj_resetData(physics_model, physics_data)
+    physics_data.time = 1.25
+    physics_data.qpos[0] = 0.05
+    physics_data.qvel[0] = 0.1
+    physics_data.ctrl[:] = 0.2
+    mujoco.mj_forward(physics_model, physics_data)
+
+    viewer_data = mujoco.MjData(viewer_model)
+    _mirror_native_viewer_data(
+        mujoco,
+        viewer_model,
+        viewer_data,
+        physics_data,
+    )
+    assert viewer_data.time == physics_data.time
+    for name in ("qpos", "qvel", "act", "ctrl", "mocap_pos", "mocap_quat"):
+        np.testing.assert_array_equal(
+            getattr(viewer_data, name), getattr(physics_data, name)
+        )
+    np.testing.assert_allclose(viewer_data.xpos, physics_data.xpos, atol=1e-15, rtol=0)
+
+    option = mujoco.MjvOption()
+    mujoco.mjv_defaultOption(option)
+    option.geomgroup[COLLISION_GEOM_GROUP] = 0
+    camera = mujoco.MjvCamera()
+    mujoco.mjv_defaultCamera(camera)
+    scene = mujoco.MjvScene(viewer_model, maxgeom=1_000)
+    mujoco.mjv_updateScene(
+        viewer_model,
+        viewer_data,
+        option,
+        None,
+        camera,
+        mujoco.mjtCatBit.mjCAT_ALL,
+        scene,
+    )
+    rendered_geom_names = {
+        mujoco.mj_id2name(viewer_model, mujoco.mjtObj.mjOBJ_GEOM, int(geom.objid))
+        for geom in scene.geoms[: scene.ngeom]
+        if int(geom.objtype) == int(mujoco.mjtObj.mjOBJ_GEOM)
+    }
+    assert {"palm_visual", "cube1_visual"} <= rendered_geom_names
+    assert not any(
+        name is not None and name.endswith("_collision")
+        for name in rendered_geom_names
+    )
+
+
+def test_passive_viewer_lock_guards_native_mirror_and_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    events: list[str] = []
+
+    class FakeViewer:
+        def __init__(self) -> None:
+            self.opt = SimpleNamespace(geomgroup=np.ones(6, dtype=np.int32))
+            self._running_calls = 0
+
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, *_args) -> None:
+            events.append("exit")
+
+        def lock(self):
+            class Lock:
+                def __enter__(self_inner):
+                    events.append("lock-enter")
+
+                def __exit__(self_inner, *_args) -> None:
+                    events.append("lock-exit")
+
+            return Lock()
+
+        def sync(self) -> None:
+            events.append("sync")
+
+        def is_running(self) -> bool:
+            self._running_calls += 1
+            return self._running_calls == 1
+
+    fake_mujoco = ModuleType("mujoco")
+    fake_mujoco.__path__ = []
+    fake_mujoco.MjData = lambda _model: object()
+    fake_viewer_module = ModuleType("mujoco.viewer")
+    passive_viewer = FakeViewer()
+
+    def launch_passive(*_args, **_kwargs):
+        events.append("launch")
+        return passive_viewer
+
+    fake_viewer_module.launch_passive = launch_passive
+    fake_mujoco.viewer = fake_viewer_module
+    monkeypatch.setitem(sys.modules, "mujoco", fake_mujoco)
+    monkeypatch.setitem(sys.modules, "mujoco.viewer", fake_viewer_module)
+
+    visual_model = object()
+    monkeypatch.setattr(
+        viewer,
+        "_compile_native_viewer_model",
+        lambda _environment: (fake_mujoco, visual_model),
+    )
+    monkeypatch.setattr(
+        viewer,
+        "_mirror_native_viewer_data",
+        lambda *_args: events.append("mirror"),
+    )
+    monkeypatch.setattr(viewer, "_telemetry", lambda *_args: "telemetry")
+
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=1),
+        progress=np.array([1]),
+        host_data=lambda _env_id: events.append("host") or object(),
+    )
+
+    class Stepper:
+        def step(self):
+            events.append("step")
+            return None, np.zeros(1), np.zeros(1, dtype=bool), None
+
+    viewer._view_single(
+        environment,
+        stepper=Stepper(),
+        render_env=0,
+        speed=1.0,
+        loop=True,
+        print_every=1,
+        recorder=None,
+    )
+
+    assert events == [
+        "host",
+        "mirror",
+        "launch",
+        "enter",
+        "lock-enter",
+        "sync",
+        "lock-exit",
+        "step",
+        "host",
+        "lock-enter",
+        "mirror",
+        "sync",
+        "lock-exit",
+        "exit",
+    ]
+    assert passive_viewer.opt.geomgroup[3] == 0
 
 
 def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
@@ -556,11 +761,13 @@ def test_viewer_dispatches_shared_stepper_to_each_renderer(
     import sim.manorl.view_environment as viewer
 
     dispatched = {}
+    created = {}
     sentinel_stepper = object()
 
     class FakeEnvironment:
         def __init__(self, trajectory, config) -> None:
             self.config = config
+            created["config"] = config
 
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     monkeypatch.setattr(viewer, "load_reference_trajectory", lambda: object())
@@ -595,6 +802,7 @@ def test_viewer_dispatches_shared_stepper_to_each_renderer(
     )
     assert dispatched["renderer"] == ("single" if tile_envs == 1 else "tiled")
     assert dispatched["stepper"] is sentinel_stepper
+    assert not hasattr(created["config"], "visual_meshes")
 
 
 def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytest.MonkeyPatch) -> None:

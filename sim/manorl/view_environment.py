@@ -10,6 +10,7 @@ all remain on the production environment path.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import math
 import os
 from pathlib import Path
@@ -19,6 +20,11 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 
 from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
+from sim.manorl.assets import (
+    COLLISION_GEOM_GROUP,
+    compile_model,
+    compile_unified_model,
+)
 from sim.manorl.cli import parse_cli_bool
 from sim.manorl.contracts import CONTROL_TIMESTEP
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
@@ -236,6 +242,105 @@ def _configure_tiled_visuals(model: object) -> None:
     model.vis.headlight.specular[:] = (0.28, 0.30, 0.34)
 
 
+def _model_names(
+    mujoco: Any, model: Any, kind: Any, count: int
+) -> tuple[str, ...]:
+    return tuple(mujoco.mj_id2name(model, kind, index) or "" for index in range(count))
+
+
+def _validate_native_viewer_abi(
+    mujoco: Any, physics_model: Any, viewer_model: Any
+) -> None:
+    """Require identical dynamic state topology before mirroring into a visual model."""
+
+    count_fields = ("nq", "nv", "nu", "na", "nbody", "njnt", "nmocap")
+    mismatches = [
+        f"{name}={getattr(physics_model, name)}/{getattr(viewer_model, name)}"
+        for name in count_fields
+        if getattr(physics_model, name) != getattr(viewer_model, name)
+    ]
+    name_specs = (
+        (mujoco.mjtObj.mjOBJ_BODY, "nbody"),
+        (mujoco.mjtObj.mjOBJ_JOINT, "njnt"),
+        (mujoco.mjtObj.mjOBJ_ACTUATOR, "nu"),
+    )
+    for kind, count_field in name_specs:
+        count = getattr(physics_model, count_field)
+        if _model_names(mujoco, physics_model, kind, count) != _model_names(
+            mujoco, viewer_model, kind, count
+        ):
+            mismatches.append(f"{count_field} names differ")
+    topology_fields = (
+        "body_parentid",
+        "jnt_bodyid",
+        "jnt_qposadr",
+        "jnt_dofadr",
+        "actuator_trnid",
+    )
+    for name in topology_fields:
+        if not np.array_equal(
+            getattr(physics_model, name), getattr(viewer_model, name)
+        ):
+            mismatches.append(f"{name} differs")
+    if mismatches:
+        raise ValueError(
+            "native viewer model changed the physics-state ABI: " + ", ".join(mismatches)
+        )
+
+
+def _compile_native_viewer_model(
+    environment: MujocoManoEnvironment,
+) -> tuple[Any, Any]:
+    """Compile a visual-only native model without changing the MJX physics model."""
+
+    if environment.is_heterogeneous:
+        raise ValueError(
+            "native visual viewing requires a homogeneous or unified object model"
+        )
+    if getattr(environment, "_unified_object_batch", False):
+        mujoco, model = compile_unified_model(
+            environment.config.servo,
+            object_types=environment._unified_object_types,
+            visual_meshes=True,
+        )
+    else:
+        mujoco, model = compile_model(
+            environment.config.servo,
+            object_type=environment.object_type,
+            visual_meshes=True,
+        )
+    _validate_native_viewer_abi(mujoco, environment.model, model)
+    return mujoco, model
+
+
+def _mirror_native_viewer_data(
+    mujoco: Any,
+    viewer_model: Any,
+    viewer_data: Any,
+    physics_data: Any,
+) -> None:
+    """Copy dynamic coordinates needed for rendering, then derive native transforms."""
+
+    viewer_data.time = physics_data.time
+    for name in ("qpos", "qvel", "act", "ctrl", "mocap_pos", "mocap_quat"):
+        destination = getattr(viewer_data, name)
+        source = getattr(physics_data, name)
+        if destination.shape != source.shape:
+            raise ValueError(
+                f"native viewer data field {name} changed shape: "
+                f"{source.shape} -> {destination.shape}"
+            )
+        destination[:] = source
+    mujoco.mj_forward(viewer_model, viewer_data)
+
+
+def _viewer_lock(viewer: object) -> Any:
+    """Return the passive viewer lock, with a no-op fallback for test doubles."""
+
+    lock = getattr(viewer, "lock", None)
+    return lock() if callable(lock) else nullcontext()
+
+
 def _install_tiled_controls(
     *, glfw: Any, mujoco: Any, window: object, model: object, camera: object, scene: object
 ) -> None:
@@ -297,10 +402,12 @@ class TrainingViewer:
             raise ValueError("stride must be positive")
         _require_graphical_session()
         import glfw
-        import mujoco
+        mujoco, viewer_model = _compile_native_viewer_model(environment)
 
         self._environment, self._tile_envs, self._stride = environment, tile_envs, stride
+        self._viewer_model = viewer_model
         self._glfw, self._mujoco, self._frames, self.close_requested = glfw, mujoco, 0, False
+        self._viewer_data = [mujoco.MjData(viewer_model) for _ in range(tile_envs)]
         self._window: object | None = None
         self._glfw_initialized = False
         self._width, self._height = 1600, 900
@@ -315,18 +422,19 @@ class TrainingViewer:
                 raise RuntimeError("could not create GLFW window for tiled MuJoCo rendering")
             glfw.make_context_current(self._window)
             glfw.swap_interval(1)
-            _configure_tiled_visuals(environment.model)
+            _configure_tiled_visuals(viewer_model)
             self._camera = mujoco.MjvCamera()
             mujoco.mjv_defaultCamera(self._camera)
             self._camera.type = mujoco.mjtCamera.mjCAMERA_FREE
             _reset_tiled_camera(self._camera)
             self._option = mujoco.MjvOption()
             mujoco.mjv_defaultOption(self._option)
-            self._scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
-            self._context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+            self._option.geomgroup[COLLISION_GEOM_GROUP] = 0
+            self._scene = mujoco.MjvScene(viewer_model, maxgeom=10_000)
+            self._context = mujoco.MjrContext(viewer_model, mujoco.mjtFontScale.mjFONTSCALE_150)
             self._viewports = _tile_layout(tile_envs, width=self._width, height=self._height)
             _install_tiled_controls(
-                glfw=glfw, mujoco=mujoco, window=self._window, model=environment.model,
+                glfw=glfw, mujoco=mujoco, window=self._window, model=viewer_model,
                 camera=self._camera, scene=self._scene,
             )
         except BaseException as setup_error:
@@ -356,7 +464,21 @@ class TrainingViewer:
             self._viewports = _tile_layout(self._tile_envs, width=width, height=height)
         mujoco.mjr_rectangle(mujoco.MjrRect(0, 0, width, height), 0.055, 0.085, 0.12, 1.0)
         for env_id, (x, y, tile_width, tile_height) in enumerate(self._viewports):
-            mujoco.mjv_updateScene(self._environment.model, host_data[env_id], self._option, None, self._camera, mujoco.mjtCatBit.mjCAT_ALL, self._scene)
+            _mirror_native_viewer_data(
+                mujoco,
+                self._viewer_model,
+                self._viewer_data[env_id],
+                host_data[env_id],
+            )
+            mujoco.mjv_updateScene(
+                self._viewer_model,
+                self._viewer_data[env_id],
+                self._option,
+                None,
+                self._camera,
+                mujoco.mjtCatBit.mjCAT_ALL,
+                self._scene,
+            )
             viewport = mujoco.MjrRect(x, y, tile_width, tile_height)
             mujoco.mjr_render(viewport, self._scene, self._context)
             mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT, viewport, f"env {env_id}", self._environment.trajectories[env_id].identity.identity, self._context)
@@ -396,7 +518,7 @@ def _view_tiled(
     """Render selected batched worlds in one GLFW/MuJoCo window without altering physics."""
 
     import glfw
-    import mujoco
+    mujoco, viewer_model = _compile_native_viewer_model(environment)
 
     width, height = 1600, 900
     if not glfw.init():
@@ -407,19 +529,26 @@ def _view_tiled(
         raise RuntimeError("could not create GLFW window for tiled MuJoCo rendering")
     glfw.make_context_current(window)
     glfw.swap_interval(1)
-    _configure_tiled_visuals(environment.model)
+    _configure_tiled_visuals(viewer_model)
     camera = mujoco.MjvCamera()
     mujoco.mjv_defaultCamera(camera)
     camera.type = mujoco.mjtCamera.mjCAMERA_FREE
     _reset_tiled_camera(camera)
     option = mujoco.MjvOption()
     mujoco.mjv_defaultOption(option)
-    scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
-    context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+    option.geomgroup[COLLISION_GEOM_GROUP] = 0
+    scene = mujoco.MjvScene(viewer_model, maxgeom=10_000)
+    context = mujoco.MjrContext(viewer_model, mujoco.mjtFontScale.mjFONTSCALE_150)
+    viewer_data = [mujoco.MjData(viewer_model) for _ in range(tile_envs)]
     sleep_seconds = CONTROL_TIMESTEP / speed
     viewports = _tile_layout(tile_envs, width=width, height=height)
     _install_tiled_controls(
-        glfw=glfw, mujoco=mujoco, window=window, model=environment.model, camera=camera, scene=scene
+        glfw=glfw,
+        mujoco=mujoco,
+        window=window,
+        model=viewer_model,
+        camera=camera,
+        scene=scene,
     )
     print("Tiled controls: left-drag rotate | right-drag pan horizontal | middle-drag pan vertical | wheel zoom | R reset | Esc close")
     try:
@@ -435,9 +564,15 @@ def _view_tiled(
                 viewports = _tile_layout(tile_envs, width=width, height=height)
             mujoco.mjr_rectangle(mujoco.MjrRect(0, 0, width, height), 0.055, 0.085, 0.12, 1.0)
             for env_id, (x, y, tile_width, tile_height) in enumerate(viewports):
-                mujoco.mjv_updateScene(
-                    environment.model,
+                _mirror_native_viewer_data(
+                    mujoco,
+                    viewer_model,
+                    viewer_data[env_id],
                     host_data[env_id],
+                )
+                mujoco.mjv_updateScene(
+                    viewer_model,
+                    viewer_data[env_id],
                     option,
                     None,
                     camera,
@@ -485,22 +620,39 @@ def _view_single(
 ) -> None:
     """Render one world while advancing the same action boundary as tiled mode."""
 
-    import mujoco
     import mujoco.viewer
 
-    render_data = environment.host_data(render_env)
+    mujoco, viewer_model = _compile_native_viewer_model(environment)
+    render_data = mujoco.MjData(viewer_model)
+    # This write occurs before launch_passive starts its UI thread, so no viewer
+    # lock is needed yet. All subsequent writes to viewer-owned data are locked.
+    _mirror_native_viewer_data(
+        mujoco,
+        viewer_model,
+        render_data,
+        environment.host_data(render_env),
+    )
     sleep_seconds = CONTROL_TIMESTEP / speed
     with mujoco.viewer.launch_passive(
-        environment.model, render_data, show_left_ui=True, show_right_ui=True
+        viewer_model, render_data, show_left_ui=True, show_right_ui=True
     ) as viewer:
-        viewer.sync()
+        with _viewer_lock(viewer):
+            viewer.opt.geomgroup[COLLISION_GEOM_GROUP] = 0
+            viewer.sync()
         while viewer.is_running():
             started = time.perf_counter()
             _, rewards, resets, _ = stepper.step()
             if recorder is not None:
                 recorder.record_transition()
-            mujoco.mj_copyData(render_data, environment.model, environment.host_data(render_env))
-            viewer.sync()
+            physics_data = environment.host_data(render_env)
+            with _viewer_lock(viewer):
+                _mirror_native_viewer_data(
+                    mujoco,
+                    viewer_model,
+                    render_data,
+                    physics_data,
+                )
+                viewer.sync()
 
             call = int(environment.progress[render_env] - 1)
             if call % print_every == 0 or bool(resets[render_env]):
