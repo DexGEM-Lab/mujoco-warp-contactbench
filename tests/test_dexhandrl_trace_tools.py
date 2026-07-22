@@ -1,5 +1,9 @@
 from __future__ import annotations
 import importlib, json
+from pathlib import Path
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES
@@ -13,9 +17,38 @@ def _trace(frames=(61, 62), *, backend="mujoco"):
     arrays.update({"decision_frame": np.asarray(frames, dtype=np.int64), "state_frame": np.asarray(frames, dtype=np.int64) + 1, "reset": np.asarray([frame == 61 for frame in frames], dtype=np.bool_), "terminated": np.zeros(len(frames), np.bool_), "truncated": np.zeros(len(frames), np.bool_)})
     return {"schema": SCHEMA, "backend": backend, "identity": dict(EXACT_IDENTITY), "post_filters": []}, arrays
 
+def _fresh_python(code: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_gym_trace_import_is_fresh_interpreter_offline_safe():
+    result = _fresh_python(
+        "import sys; import tools.trace_dexhandrl_gym; "
+        "assert 'torch' not in sys.modules; assert 'isaacgym' not in sys.modules"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_public_environment_imports_remain_available_lazily():
+    result = _fresh_python(
+        "import sys; from sim.dexhandrl import DexHandRLMJXEnv, DexHandRLMJXEnvConfig; "
+        "from sim.dexhandrl.skrl_env import DexHandRLMJXEnv as DirectEnv; "
+        "assert DexHandRLMJXEnv is DirectEnv; assert DexHandRLMJXEnvConfig.__name__ == 'DexHandRLMJXEnvConfig'; "
+        "assert 'torch' not in sys.modules"
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_offline_safe_imports_do_not_load_runtime_modules():
-    for module in ("tools.trace_dexhandrl_gym", "tools.trace_dexhandrl_mujoco", "tools.compare_dexhandrl_traces"): importlib.import_module(module)
-    import sys; assert "isaacgym" not in sys.modules and "lance" not in sys.modules
+    for module in ("tools.trace_dexhandrl_gym", "tools.trace_dexhandrl_mujoco", "tools.compare_dexhandrl_traces"):
+        importlib.import_module(module)
+    assert "isaacgym" not in sys.modules and "lance" not in sys.modules
 
 @pytest.mark.parametrize("frames", [(62, 63), (61, 61), (61, 63)])
 def test_trace_contract_rejects_invalid_decision_schedule(frames):
