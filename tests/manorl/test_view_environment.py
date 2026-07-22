@@ -61,7 +61,8 @@ def _fake_graphics(*, fail_context: bool = False) -> tuple[object, object, dict[
             self.lookat = np.zeros(3)
 
     class Option:
-        pass
+        def __init__(self) -> None:
+            self.geomgroup = np.ones(6, dtype=np.int32)
 
     class Scene:
         def __init__(self, *_: object, **__: object) -> None:
@@ -90,10 +91,13 @@ def _fake_graphics(*, fail_context: bool = False) -> tuple[object, object, dict[
         mjtMouse=SimpleNamespace(
             mjMOUSE_ROTATE_V="rotate", mjMOUSE_MOVE_H="move_h", mjMOUSE_MOVE_V="move_v", mjMOUSE_ZOOM="zoom"
         ),
+        MjData=lambda _: object(),
         mjv_defaultCamera=lambda _: None,
         mjv_defaultOption=lambda _: None,
         mjv_moveCamera=lambda _, action, dx, dy, __, ___: state["moves"].append((action, dx, dy)),
-        mjv_updateScene=lambda *_: state["updates"].append("scene"),
+        mjv_updateScene=lambda model, *_: (
+            state["updates"].append("scene"), state.setdefault("update_models", []).append(model)
+        ),
         mjr_rectangle=lambda *_: None,
         mjr_render=lambda *_: state["renders"].append("render"),
         mjr_overlay=lambda *_: None,
@@ -119,6 +123,22 @@ def _training_environment() -> tuple[object, dict[str, int]]:
     return environment, calls
 
 
+def _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment):
+    visual_model = SimpleNamespace(vis=environment.model.vis)
+    mirror_calls = []
+    monkeypatch.setattr(
+        viewer,
+        "_compile_native_viewer_model",
+        lambda _: (mujoco, visual_model),
+    )
+    monkeypatch.setattr(
+        viewer,
+        "_mirror_native_viewer_data",
+        lambda *args: mirror_calls.append(args),
+    )
+    return visual_model, mirror_calls
+
+
 def test_training_viewer_renders_states_without_stepping_and_preserves_controls(monkeypatch: pytest.MonkeyPatch) -> None:
     import sim.manorl.view_environment as viewer
 
@@ -127,12 +147,20 @@ def test_training_viewer_renders_states_without_stepping_and_preserves_controls(
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, calls = _training_environment()
+    visual_model, mirror_calls = _patch_training_viewer_native_model(
+        monkeypatch, viewer, mujoco, environment
+    )
     training_viewer = viewer.TrainingViewer(environment, tile_envs=2)
 
     training_viewer.render()
     assert calls == {"host": 1}
     assert state["updates"] == ["scene", "scene"]
     assert state["renders"] == ["render", "render"]
+    assert visual_model is not environment.model
+    assert training_viewer._viewer_model is visual_model
+    assert training_viewer._option.geomgroup[3] == 0
+    assert state["update_models"] == [visual_model, visual_model]
+    assert [call[1] for call in mirror_calls] == [visual_model, visual_model]
 
     callbacks = state["callbacks"]
     callbacks["mouse"](None, glfw.MOUSE_BUTTON_LEFT, glfw.PRESS, 0)
@@ -168,6 +196,7 @@ def test_training_viewer_quiet_mode_emits_no_stdout(
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, _ = _training_environment()
+    _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment)
     training_viewer = viewer.TrainingViewer(environment, tile_envs=2, quiet=True)
 
     assert capsys.readouterr().out == ""
@@ -183,6 +212,7 @@ def test_training_viewer_window_failure_terminates_glfw_once(monkeypatch: pytest
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, _ = _training_environment()
+    _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment)
 
     with pytest.raises(RuntimeError, match="could not create GLFW window"):
         viewer.TrainingViewer(environment, tile_envs=2)
@@ -197,6 +227,7 @@ def test_training_viewer_constructor_failure_releases_glfw_once(monkeypatch: pyt
     monkeypatch.setitem(sys.modules, "mujoco", mujoco)
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     environment, _ = _training_environment()
+    _patch_training_viewer_native_model(monkeypatch, viewer, mujoco, environment)
 
     with pytest.raises(RuntimeError, match="context failed"):
         viewer.TrainingViewer(environment, tile_envs=2)

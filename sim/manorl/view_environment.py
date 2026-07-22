@@ -394,10 +394,12 @@ class TrainingViewer:
             raise ValueError("stride must be positive")
         _require_graphical_session()
         import glfw
-        import mujoco
+        mujoco, viewer_model = _compile_native_viewer_model(environment)
 
         self._environment, self._tile_envs, self._stride = environment, tile_envs, stride
+        self._viewer_model = viewer_model
         self._glfw, self._mujoco, self._frames, self.close_requested = glfw, mujoco, 0, False
+        self._viewer_data = [mujoco.MjData(viewer_model) for _ in range(tile_envs)]
         self._window: object | None = None
         self._glfw_initialized = False
         self._width, self._height = 1600, 900
@@ -412,18 +414,19 @@ class TrainingViewer:
                 raise RuntimeError("could not create GLFW window for tiled MuJoCo rendering")
             glfw.make_context_current(self._window)
             glfw.swap_interval(1)
-            _configure_tiled_visuals(environment.model)
+            _configure_tiled_visuals(viewer_model)
             self._camera = mujoco.MjvCamera()
             mujoco.mjv_defaultCamera(self._camera)
             self._camera.type = mujoco.mjtCamera.mjCAMERA_FREE
             _reset_tiled_camera(self._camera)
             self._option = mujoco.MjvOption()
             mujoco.mjv_defaultOption(self._option)
-            self._scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
-            self._context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+            self._option.geomgroup[COLLISION_GEOM_GROUP] = 0
+            self._scene = mujoco.MjvScene(viewer_model, maxgeom=10_000)
+            self._context = mujoco.MjrContext(viewer_model, mujoco.mjtFontScale.mjFONTSCALE_150)
             self._viewports = _tile_layout(tile_envs, width=self._width, height=self._height)
             _install_tiled_controls(
-                glfw=glfw, mujoco=mujoco, window=self._window, model=environment.model,
+                glfw=glfw, mujoco=mujoco, window=self._window, model=viewer_model,
                 camera=self._camera, scene=self._scene,
             )
         except BaseException as setup_error:
@@ -453,7 +456,21 @@ class TrainingViewer:
             self._viewports = _tile_layout(self._tile_envs, width=width, height=height)
         mujoco.mjr_rectangle(mujoco.MjrRect(0, 0, width, height), 0.055, 0.085, 0.12, 1.0)
         for env_id, (x, y, tile_width, tile_height) in enumerate(self._viewports):
-            mujoco.mjv_updateScene(self._environment.model, host_data[env_id], self._option, None, self._camera, mujoco.mjtCatBit.mjCAT_ALL, self._scene)
+            _mirror_native_viewer_data(
+                mujoco,
+                self._viewer_model,
+                self._viewer_data[env_id],
+                host_data[env_id],
+            )
+            mujoco.mjv_updateScene(
+                self._viewer_model,
+                self._viewer_data[env_id],
+                self._option,
+                None,
+                self._camera,
+                mujoco.mjtCatBit.mjCAT_ALL,
+                self._scene,
+            )
             viewport = mujoco.MjrRect(x, y, tile_width, tile_height)
             mujoco.mjr_render(viewport, self._scene, self._context)
             mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT, viewport, f"env {env_id}", self._environment.trajectories[env_id].identity.identity, self._context)
