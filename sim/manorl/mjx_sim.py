@@ -14,6 +14,8 @@ from sim.manorl.contracts import (
     FINGER_SERVO_DAMPRATIO,
     FINGER_SERVO_KP,
     JOINT_NAMES,
+    JOINT_DOF,
+    LEGACY_JOINT_NAMES,
     PHYSICS_SUBSTEPS_PER_TARGET,
     PHYSICS_TIMESTEP,
     ServoConfig,
@@ -79,37 +81,87 @@ def command_target(
     current = np.asarray(q_current, dtype=np.float64)
     lower = np.asarray(joint_lower, dtype=np.float64)
     upper = np.asarray(joint_upper, dtype=np.float64)
-    if any(values.shape != (26,) for values in (q_ref, current, lower, upper)):
-        raise ValueError("q reference/current/limits must each have shape (26,)")
+    if q_ref.ndim != 1 or q_ref.shape[0] not in (26, 28, 52, 56):
+        raise ValueError("q reference must have shape (26,), (28,), (52,), or (56,)")
+    if any(values.shape != q_ref.shape for values in (current, lower, upper)):
+        raise ValueError("q reference/current/limits must have matching shapes")
     if not all(np.all(np.isfinite(values)) for values in (q_ref, current, lower, upper)):
         raise ValueError("q reference/current/limits must be finite")
     target = q_ref.copy()
-    delta = (target[3:6] - current[3:6] + np.pi) % (2.0 * np.pi) - np.pi
-    target[3:6] = current[3:6] + delta
+    per_hand = target.shape[0] if target.shape[0] < 52 else target.shape[0] // 2
+    for start in range(0, target.shape[0], per_hand):
+        wrist = slice(start + 3, start + 6)
+        delta = (target[wrist] - current[wrist] + np.pi) % (2.0 * np.pi) - np.pi
+        target[wrist] = current[wrist] + delta
     return np.clip(target, lower, upper)
 
 
-def source_counter_indices(replay_step: int) -> tuple[int, int]:
-    """Map a physical call to source command/post indices from mano_hand.py counters."""
+def source_counter_indices(
+    replay_step: int,
+    *,
+    control_step_count: int = CONTROL_STEP_COUNT,
+) -> tuple[int, int]:
+    """Map a physical call to source command/post indices from mano_hand.py counters.
 
-    if not 0 <= replay_step < CONTROL_STEP_COUNT:
-        raise ValueError(f"replay_step must be in [0, {CONTROL_STEP_COUNT - 1}]")
+    ``CONTROL_STEP_COUNT`` remains the accepted legacy trajectory contract.
+    Modern Lance rows can have a different number of frames, so replay owners
+    pass their resolved ``len(q_ref) - 1`` horizon explicitly.
+    """
+
+    if control_step_count < 1:
+        raise ValueError("control_step_count must be positive")
+    if not 0 <= replay_step < control_step_count:
+        raise ValueError(f"replay_step must be in [0, {control_step_count - 1}]")
     return max(replay_step - 1, 0), replay_step
 
 
-def _validate_action(action: NDArray[np.floating[Any]]) -> None:
+def _expand_legacy_hand_dofs(values: NDArray[object]) -> NDArray[np.float64]:
+    """Embed a legacy 26-wide reference in the pinned 28-wide model order."""
+
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim < 1 or array.shape[-1] not in (len(LEGACY_JOINT_NAMES), JOINT_DOF):
+        raise ValueError(
+            f"hand references must end in {len(LEGACY_JOINT_NAMES)} or {JOINT_DOF} DOFs"
+        )
+    if array.shape[-1] == JOINT_DOF:
+        return array.copy()
+    output = np.zeros((*array.shape[:-1], JOINT_DOF), dtype=np.float64)
+    legacy_index = {name: index for index, name in enumerate(LEGACY_JOINT_NAMES)}
+    for index, name in enumerate(JOINT_NAMES):
+        # The old ``j1_thumb_mcp`` coordinate is the revised MCP flex axis;
+        # the newly explicit CMC twist and MCP abduction start at zero.
+        source_name = "j1_thumb_mcp" if name == "j1_thumb_mcp_flex" else name
+        if source_name in legacy_index:
+            output[..., index] = array[..., legacy_index[source_name]]
+    return output
+
+
+def _validate_action(action: NDArray[np.floating[Any]], *, dof: int) -> None:
     values = np.asarray(action)
-    if values.shape != (26,) or not np.all(np.isfinite(values)):
-        raise ValueError("residual-off action must be finite with shape (26,)")
+    if values.shape != (dof,) or not np.all(np.isfinite(values)):
+        raise ValueError(f"residual-off action must be finite with shape ({dof},)")
 
 
-def _joint_limits(mujoco: Any, model: Any) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+def _joint_limits(
+    mujoco: Any,
+    model: Any,
+    *,
+    hand_sides: tuple[str, ...],
+    per_hand_dof: int,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Read limits in the compiled right-then-left actuator order."""
+
     limits = []
-    for name in JOINT_NAMES:
-        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        if joint_id < 0:
-            raise ValueError(f"compiled joint is absent: {name}")
-        limits.append(model.jnt_range[joint_id].copy())
+    dual = len(hand_sides) > 1
+    model_sides = tuple(side for side in ("right", "left") if side in hand_sides)
+    for side in model_sides:
+        prefix = f"{side}_" if dual else ""
+        for name in JOINT_NAMES[:per_hand_dof]:
+            joint_name = f"{prefix}{name}"
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            if joint_id < 0:
+                raise ValueError(f"compiled joint is absent: {joint_name}")
+            limits.append(model.jnt_range[joint_id].copy())
     array = np.asarray(limits, dtype=np.float64)
     return array[:, 0], array[:, 1]
 
@@ -127,8 +179,50 @@ class _ReplayBase:
             raise ValueError("trajectory identity must be object_action_sequence")
         self.object_type = parts[0]
         runtime = object_runtime(self.object_type)
-        self.mujoco, self.model = compile_model(servo, object_type=self.object_type)
-        self.joint_lower, self.joint_upper = _joint_limits(self.mujoco, self.model)
+        # The pinned runtime URDF is 28-DoF.  A legacy trajectory is expanded
+        # only at this replay boundary so its on-disk/reference ABI remains
+        # 26-wide while native qpos/ctrl and traces are model-shaped.
+        hand_side = (
+            "both"
+            if len(trajectory.hand_sides) == 2
+            else trajectory.hand_sides[0]
+        )
+        self.mujoco, self.model = compile_model(
+            servo, object_type=self.object_type, hand_side=hand_side
+        )
+        self.model_dof = int(self.model.nu)
+        self.per_hand_dof = self.model_dof // len(trajectory.hand_sides)
+        if self.per_hand_dof != JOINT_DOF:
+            raise ValueError(
+                f"compiled replay model has unsupported per-hand actuator width {self.per_hand_dof}"
+            )
+        if self.model_dof != self.per_hand_dof * len(trajectory.hand_sides):
+            raise ValueError("compiled replay actuator width is not divisible by hand count")
+        # Keep ``hand_dof`` as the total native qpos/ctrl width for callers of
+        # the historical replay object; one-hand scenes therefore retain the
+        # old value while bimanual scenes expose all 56 model coordinates.
+        self.hand_dof = self.model_dof
+        self.reference_q = {
+            side: _expand_legacy_hand_dofs(trajectory.q_ref_for(side))[:, : self.per_hand_dof]
+            for side in trajectory.hand_sides
+        }
+        self.reference_q_model = np.concatenate(
+            [self.reference_q[side] for side in ("right", "left") if side in self.reference_q],
+            axis=1,
+        )
+        if self.reference_q_model.shape[1] != self.model_dof:
+            raise ValueError(
+                "trajectory hand references do not match compiled replay actuator width"
+            )
+        model_sides = tuple(side for side in ("right", "left") if side in trajectory.hand_sides)
+        self.joint_lower, self.joint_upper = _joint_limits(
+            self.mujoco,
+            self.model,
+            hand_sides=model_sides,
+            per_hand_dof=self.per_hand_dof,
+        )
+        self.action_dim = trajectory.action_layout.action_dim
+        self.control_step_count = len(trajectory.q_ref) - 1
         object_joint = self.mujoco.mj_name2id(
             self.model, self.mujoco.mjtObj.mjOBJ_JOINT, runtime.free_joint_name
         )
@@ -148,7 +242,11 @@ class _ReplayBase:
             for geom_id in range(self.model.ngeom)
             if int(self.model.geom_bodyid[geom_id]) not in (0, object_body)
         }
-        if len(self.object_geom_ids) != runtime.collision_geom_count or len(self.hand_geom_ids) != 16:
+        expected_hand_geoms = 16 * len(trajectory.hand_sides)
+        if (
+            len(self.object_geom_ids) != runtime.collision_geom_count
+            or len(self.hand_geom_ids) != expected_hand_geoms
+        ):
             raise ValueError("compiled hand/object geom partition is inconsistent")
         self.replay_step = 0
 
@@ -167,7 +265,7 @@ class _ReplayBase:
     def _reset_host_data(self) -> Any:
         data = self.mujoco.MjData(self.model)
         self.mujoco.mj_resetData(self.model, data)
-        data.qpos[:26] = self.trajectory.q_ref[0]
+        data.qpos[: self.hand_dof] = self.reference_q_model[0]
         address = self.object_qpos_address
         data.qpos[address : address + 3] = self.trajectory.object_pos[0]
         data.qpos[address + 3 : address + 7] = xyzw_to_wxyz(
@@ -213,10 +311,10 @@ class _ReplayBase:
             source_reference_index=int(self.trajectory.source_indices[reference_index]),
             sim_time=float(host_data.time),
             q_target=q_target.copy(),
-            hand_qpos=host_data.qpos[:26].copy(),
-            hand_qvel=host_data.qvel[:26].copy(),
+            hand_qpos=host_data.qpos[: self.hand_dof].copy(),
+            hand_qvel=host_data.qvel[: self.hand_dof].copy(),
             actuator_force_substeps=np.stack(actuator_forces),
-            hand_reference=self.trajectory.q_ref[reference_index].copy(),
+            hand_reference=self.reference_q_model[reference_index].copy(),
             object_pos=host_data.qpos[address : address + 3].copy(),
             object_quat_xyzw=object_quat_xyzw,
             object_reference_pos_raw=self.trajectory.object_pos_raw[reference_index].copy(),
@@ -253,14 +351,17 @@ class MujocoCpuReplay(_ReplayBase):
         self.data = self._reset_host_data()
 
     def step(self, action: NDArray[np.floating[Any]]) -> StepTrace:
-        _validate_action(action)
-        if self.replay_step >= CONTROL_STEP_COUNT:
+        _validate_action(action, dof=self.action_dim)
+        if self.replay_step >= self.control_step_count:
             raise StopIteration("source-compatible replay terminated before final slice reference")
-        target_index, reference_index = source_counter_indices(self.replay_step)
+        target_index, reference_index = source_counter_indices(
+            self.replay_step,
+            control_step_count=self.control_step_count,
+        )
         actuator_forces: list[NDArray[np.float64]] = []
         q_target = command_target(
-            self.trajectory.q_ref[target_index],
-            self.data.qpos[:26],
+            self.reference_q_model[target_index],
+            self.data.qpos[: self.hand_dof],
             self.joint_lower,
             self.joint_upper,
         )
@@ -326,14 +427,17 @@ class MjxWarpReplay(_ReplayBase):
         return host_data
 
     def step(self, action: NDArray[np.floating[Any]]) -> StepTrace:
-        _validate_action(action)
-        if self.replay_step >= CONTROL_STEP_COUNT:
+        _validate_action(action, dof=self.action_dim)
+        if self.replay_step >= self.control_step_count:
             raise StopIteration("source-compatible replay terminated before final slice reference")
-        target_index, reference_index = source_counter_indices(self.replay_step)
+        target_index, reference_index = source_counter_indices(
+            self.replay_step,
+            control_step_count=self.control_step_count,
+        )
         actuator_forces: list[NDArray[np.float64]] = []
-        qpos = np.asarray(self.data.qpos[:26], dtype=np.float64)
+        qpos = np.asarray(self.data.qpos[: self.hand_dof], dtype=np.float64)
         q_target = command_target(
-            self.trajectory.q_ref[target_index], qpos, self.joint_lower, self.joint_upper
+            self.reference_q_model[target_index], qpos, self.joint_lower, self.joint_upper
         )
         for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
             self.data = self.data.replace(ctrl=self.jax.numpy.asarray(q_target))
@@ -372,11 +476,14 @@ def run_reference_replay(
 ) -> tuple[ReplayConfig, dict[str, NDArray[Any]]]:
     """Run source counters: command 0, 0, 1, ...; compare reference 0, 1, 2, ...."""
 
-    step_count = CONTROL_STEP_COUNT if max_steps is None else int(max_steps)
-    if not 1 <= step_count <= CONTROL_STEP_COUNT:
-        raise ValueError(f"max_steps must be in [1, {CONTROL_STEP_COUNT}]")
     replay = create_replay(trajectory, backend=backend, device=device, servo=servo)
-    zero_action = np.zeros(26, dtype=np.float64)
+    step_count = replay.control_step_count if max_steps is None else int(max_steps)
+    if not 1 <= step_count <= replay.control_step_count:
+        raise ValueError(f"max_steps must be in [1, {replay.control_step_count}]")
+    # Residual-off replay still validates the caller-facing action ABI (26 for
+    # a legacy reference, 28/56 for revised one-/two-hand references), while
+    # the native model/trace remains expanded to its compiled width.
+    zero_action = np.zeros(replay.action_dim, dtype=np.float64)
     records = [replay.step(zero_action) for _ in range(step_count)]
     trace: dict[str, NDArray[Any]] = {}
     for field in fields(StepTrace):

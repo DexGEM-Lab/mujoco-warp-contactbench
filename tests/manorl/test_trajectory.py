@@ -110,6 +110,11 @@ def test_pair_selector_normalizes_and_preserves_exact_pairs() -> None:
     assert TrajectorySelection("cube1", "1").canonical_selector == "cube1:01"
 
 
+def test_trajectory_selection_defaults_to_100_pre_and_250_post_padding() -> None:
+    selection = TrajectorySelection()
+    assert (selection.pre_padding, selection.post_padding) == (100, 250)
+
+
 @pytest.mark.parametrize(
     "selector, message",
     [

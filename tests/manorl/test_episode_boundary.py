@@ -36,7 +36,7 @@ def test_termination_reason_masks_are_position_only_and_failure_wins() -> None:
 
 
 def test_gym_adapter_marks_success_and_failure_terminated_without_truncation() -> None:
-    from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv, OBSERVATION_DIM
+    from sim.manorl.gymnasium_env import ACTION_DIM, ManoGymnasiumVectorEnv, OBSERVATION_DIM
 
     termination = TerminationResult(
         reset=np.array([True, True]),
@@ -59,7 +59,7 @@ def test_gym_adapter_marks_success_and_failure_terminated_without_truncation() -
     adapter = object.__new__(ManoGymnasiumVectorEnv)
     adapter.num_envs = 2
     adapter.environment = Physical()
-    _, _, terminated, truncated, info = adapter.step(np.zeros((2, 26)))
+    _, _, terminated, truncated, info = adapter.step(np.zeros((2, ACTION_DIM)))
 
     np.testing.assert_array_equal(terminated, [True, True])
     np.testing.assert_array_equal(truncated, [False, False])
@@ -74,7 +74,7 @@ def test_gym_adapter_marks_success_and_failure_terminated_without_truncation() -
 
 
 def test_gym_adapter_consumes_pending_terminal_ids_before_direct_step() -> None:
-    from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv, OBSERVATION_DIM
+    from sim.manorl.gymnasium_env import ACTION_DIM, ManoGymnasiumVectorEnv, OBSERVATION_DIM
 
     class Physical:
         def __init__(self) -> None:
@@ -126,25 +126,25 @@ def test_gym_adapter_consumes_pending_terminal_ids_before_direct_step() -> None:
     adapter._last_seed = None
     adapter._pending_reset = np.zeros(2, dtype=bool)
 
-    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    adapter.step(np.zeros((2, ACTION_DIM), dtype=np.float64))
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [0])
-    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    adapter.step(np.zeros((2, ACTION_DIM), dtype=np.float64))
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [])
     assert physical.events[:3] == [("step", None), ("reset", [0]), ("step", None)]
 
-    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    adapter.step(np.zeros((2, ACTION_DIM), dtype=np.float64))
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [0, 1])
     adapter.reset(options={"env_ids": np.array([0], dtype=np.int64)})
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [1])
-    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    adapter.step(np.zeros((2, ACTION_DIM), dtype=np.float64))
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [])
     assert physical.events[-2:] == [("reset", [1]), ("step", None)]
 
-    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    adapter.step(np.zeros((2, ACTION_DIM), dtype=np.float64))
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [0])
     adapter.reset()
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [])
-    adapter.step(np.zeros((2, 26), dtype=np.float64))
+    adapter.step(np.zeros((2, ACTION_DIM), dtype=np.float64))
     assert physical.events[-2:] == [("reset", None), ("step", None)]
 
 

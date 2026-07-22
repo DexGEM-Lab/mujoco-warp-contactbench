@@ -9,6 +9,7 @@ import pytest
 from sim.manorl.contracts import (
     CONTROL_STEP_COUNT,
     DATASET_PATH,
+    JOINT_DOF,
     REFERENCE_FRAME_COUNT,
     SOURCE_SLICE,
     TRAJECTORY_IDENTITY,
@@ -87,7 +88,10 @@ def test_residual_off_action_invariance_and_target_timing_cpu() -> None:
     assert zero_trace.reference_index == 0
     assert zero_trace.source_reference_index == SOURCE_SLICE[0]
     assert zero_trace.sim_time == pytest.approx(0.005)
-    assert zero_trace.actuator_force_substeps.shape == (2, 26)
+    # Legacy q_ref/action input remains 26-wide, but the pinned runtime model
+    # and replay trace are expanded to the revised 28-DoF actuator ABI.
+    assert zero_trace.actuator_force_substeps.shape == (2, JOINT_DOF)
+    assert zero_trace.hand_qpos.shape == (JOINT_DOF,)
     for field in (
         "q_target",
         "hand_qpos",
@@ -130,7 +134,7 @@ def test_short_cpu_replay_is_finite() -> None:
     assert trace["target_index"].tolist() == [0, 0, 1, 2, 3]
     assert trace["reference_index"].tolist() == [0, 1, 2, 3, 4]
     assert trace["sim_time"][-1] == pytest.approx(0.025)
-    assert trace["actuator_force_substeps"].shape == (5, 2, 26)
+    assert trace["actuator_force_substeps"].shape == (5, 2, JOINT_DOF)
     assert all(
         np.all(np.isfinite(value))
         for value in trace.values()
@@ -154,7 +158,7 @@ def test_short_mjx_warp_cpu_replay_is_finite() -> None:
         assert np.all(np.isfinite(record.hand_qpos))
         assert np.all(np.isfinite(record.object_pos))
         assert np.all(np.isfinite(record.actuator_force_substeps))
-        assert record.actuator_force_substeps.shape == (2, 26)
+        assert record.actuator_force_substeps.shape == (2, JOINT_DOF)
 
 
 def test_nominal_native_servo_free_space_prefix_is_stable() -> None:

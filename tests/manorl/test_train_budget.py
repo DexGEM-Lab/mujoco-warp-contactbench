@@ -26,6 +26,16 @@ def _load_tool():
     return module
 
 
+def test_wandb_run_name_accepts_descriptive_gesture() -> None:
+    tool = _load_tool()
+    budget = tool.TrainingBudget(
+        object_type="banana",
+        gesture="001-Palmar-Pinch",
+        wandb=tool.WandbOptions(),
+    )
+    assert tool._wandb_run_name(Path("run"), budget) == "run-banana-001-Palmar-Pinch"
+
+
 class FakeClock:
     def __init__(self, timestamps: list[float]) -> None:
         self.timestamps = iter(timestamps)
@@ -1112,7 +1122,11 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
         return Runtime(config), config, []
 
     monkeypatch.setattr(tool, "_assert_cuda_runtime", lambda: None)
-    monkeypatch.setattr(tool, "load_assigned_trajectory_batch", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        tool,
+        "load_assigned_trajectory_batch",
+        lambda *args, **kwargs: SimpleNamespace(hand_sides=("right",)),
+    )
     monkeypatch.setattr(tool, "MujocoManoEnvironment", lambda _, config: Physical(config))
     monkeypatch.setattr(tool, "ManoGymnasiumVectorEnv", lambda physical: physical)
     monkeypatch.setattr(tool, "ManoSkrlRuntime", lambda _, config: Runtime(config))
@@ -1171,7 +1185,7 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
             self.jax = SimpleNamespace(default_backend=lambda: "gpu")
 
     def trajectories(_: object, *, num_envs: int) -> SimpleNamespace:
-        return SimpleNamespace(num_envs=num_envs)
+        return SimpleNamespace(num_envs=num_envs, hand_sides=("right",))
 
     def build_physical(_: object, config: object) -> Physical:
         physical = Physical(config)

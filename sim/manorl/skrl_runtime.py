@@ -72,7 +72,9 @@ class ManoPPOConfig:
 
         return cls(rollouts=2, minibatch_size=2, learning_epochs=1)
 
-    def skrl_config(self, *, num_envs: int, device: str) -> dict[str, Any]:
+    def skrl_config(
+        self, *, num_envs: int, device: str, observation_size: int = 476
+    ) -> dict[str, Any]:
         batch_size = self.rollouts * num_envs
         if batch_size % self.minibatch_size:
             raise ValueError(
@@ -88,7 +90,10 @@ class ManoPPOConfig:
             "learning_rate_scheduler": RlGamesAdaptiveLR,
             "learning_rate_scheduler_kwargs": {"kl_threshold": self.kl_threshold},
             "observation_preprocessor": PointCloudAwareRunningStandardScaler,
-            "observation_preprocessor_kwargs": {"size": 476, "device": device},
+            "observation_preprocessor_kwargs": {
+                "size": int(observation_size),
+                "device": device,
+            },
             "value_preprocessor": SourceRunningStandardScaler,
             "value_preprocessor_kwargs": {"size": 1, "epsilon": 1.0e-5, "device": device},
             "grad_norm_clip": self.grad_norm_clip,
@@ -244,12 +249,22 @@ class ManoSkrlRuntime:
             state_space=self.env.state_space,
             action_space=self.env.action_space,
             device=self.device,
-            cfg=config.skrl_config(num_envs=environment.num_envs, device=self.device),
+            cfg=config.skrl_config(
+                num_envs=environment.num_envs,
+                device=self.device,
+                observation_size=environment.observation_dim,
+            ),
         )
         # skrl's PPO_CFG rejects source-only fields. The custom PPO update
         # reads this source contract through the agent config after init.
         self.agent.cfg.bounds_loss_coef = config.bounds_loss_coef
         self.agent.init()
+        # Checkpoint loading receives the skrl agent rather than the physical
+        # environment.  Attach the resolved hand/action signature explicitly
+        # so equal-width right- and left-hand policies cannot be interchanged
+        # silently.  This attribute is runtime-only; checkpoint persistence
+        # remains owned by ``checkpoint_metadata`` below.
+        self.agent.manorl_environment_signature = self._environment_signature()
 
     def conversion_phase_profile(self) -> dict[str, dict[str, float | int]]:
         profile = getattr(self.env, "phase_profile", None)
@@ -274,22 +289,45 @@ class ManoSkrlRuntime:
         updated[row_ids] = reset_observations.to(updated.device)[row_ids]
         return updated
 
+    def _environment_signature(self) -> dict[str, object]:
+        """Return the checkpoint-relevant resolved hand and tensor layout."""
+
+        physical = self.gymnasium_env.environment
+        available_sides = tuple(physical.hand_sides)
+        controlled_sides = tuple(physical.hand_layout.controlled_sides)
+        return {
+            "requested_hand_side": physical.config.hand_side,
+            "resolved_hand_side": (
+                "both" if len(controlled_sides) == 2 else controlled_sides[0]
+            ),
+            "available_hand_sides": list(available_sides),
+            "controlled_hand_sides": list(controlled_sides),
+            "reference_following_hand_sides": list(
+                physical.hand_layout.reference_sides
+            ),
+            "action_dim": int(physical.action_dim),
+            "observation_dim": int(physical.observation_dim),
+            "model_action_dim": int(physical.model_action_dim),
+        }
+
     def checkpoint_metadata(self) -> dict[str, object]:
         ppo_metadata = asdict(self.config)
         ppo_metadata.pop("use_film", None)
+        physical = self.gymnasium_env.environment
         return {
             "reward_contract": REWARD_CONTRACT_ID,
             "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
             "ppo_reward_scale": PPO_REWARD_SCALE,
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
             "environment": {
-                "residual_enabled": self.gymnasium_env.environment.config.residual_enabled,
-                "residual_action": asdict(self.gymnasium_env.environment.config.residual_action),
-                "compatibility": asdict(self.gymnasium_env.environment.config.compatibility),
-                "point_sampling_backend": self.gymnasium_env.environment.config.point_sampling_backend,
+                **self._environment_signature(),
+                "residual_enabled": physical.config.residual_enabled,
+                "residual_action": asdict(physical.config.residual_action),
+                "compatibility": asdict(physical.config.compatibility),
+                "point_sampling_backend": physical.config.point_sampling_backend,
                 "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
-                "reward": asdict(self.gymnasium_env.environment.config.reward_config),
-                "max_deviation_distance": self.gymnasium_env.environment.config.max_deviation_distance,
+                "reward": asdict(physical.config.reward_config),
+                "max_deviation_distance": physical.config.max_deviation_distance,
             },
             "ppo": ppo_metadata,
             "model": {"use_film": self.model.use_film},

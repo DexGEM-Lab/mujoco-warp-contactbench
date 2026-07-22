@@ -40,10 +40,12 @@ def test_exact_identity_and_slice_contract() -> None:
 
 def test_joint_and_keypoint_order_is_explicit_not_sorted() -> None:
     assert JOINT_NAMES[:6] == ("ARTx", "ARTy", "ARTz", "ARRx", "ARRy", "ARRz")
-    assert JOINT_NAMES[6:10] == (
+    assert JOINT_NAMES[6:12] == (
         "j1_thumb_cmc_abd",
         "j1_thumb_cmc_flex",
-        "j1_thumb_mcp",
+        "j1_thumb_cmc_twist",
+        "j1_thumb_mcp_flex",
+        "j1_thumb_mcp_abd",
         "j1_thumb_ip",
     )
     assert JOINT_NAMES[-4:] == (
@@ -74,9 +76,12 @@ def test_joint_and_keypoint_order_is_explicit_not_sorted() -> None:
 
 
 def test_source_and_mujoco_gains_have_distinct_explicit_contracts() -> None:
-    expected_kp = np.array([6.0, 4.0, 3.0, 3.0])
-    expected_kd = np.array([0.6, 0.4, 0.3, 0.3])
-    expected_effort = np.array([3.0, 2.0, 1.2, 1.2])
+    thumb_kp = np.array([6.0, 4.0, 3.0, 3.0, 3.0, 3.0])
+    thumb_kd = np.array([0.6, 0.4, 0.3, 0.3, 0.3, 0.3])
+    thumb_effort = np.array([3.0, 2.0, 1.2, 1.2, 1.2, 1.2])
+    digit_kp = np.array([6.0, 4.0, 3.0, 3.0])
+    digit_kd = np.array([0.6, 0.4, 0.3, 0.3])
+    digit_effort = np.array([3.0, 2.0, 1.2, 1.2])
     np.testing.assert_array_equal(SOURCE_PHYSX_KP[:6], 5000.0)
     np.testing.assert_array_equal(SOURCE_PHYSX_KD[:6], 500.0)
     np.testing.assert_array_equal(EFFORT[:6], 5000.0)
@@ -84,11 +89,15 @@ def test_source_and_mujoco_gains_have_distinct_explicit_contracts() -> None:
     np.testing.assert_array_equal(servo.kp[:6], 100.0)
     np.testing.assert_array_equal(servo.dampratio[:6], 1.4)
     np.testing.assert_array_equal(servo.dampratio[6:], 1.0)
-    for start in range(6, 26, 4):
-        np.testing.assert_array_equal(SOURCE_PHYSX_KP[start : start + 4], expected_kp)
-        np.testing.assert_array_equal(SOURCE_PHYSX_KD[start : start + 4], expected_kd)
-        np.testing.assert_array_equal(servo.kp[start : start + 4], expected_kp)
-        np.testing.assert_array_equal(EFFORT[start : start + 4], expected_effort)
+    np.testing.assert_array_equal(SOURCE_PHYSX_KP[6:12], thumb_kp)
+    np.testing.assert_array_equal(SOURCE_PHYSX_KD[6:12], thumb_kd)
+    np.testing.assert_array_equal(servo.kp[6:12], thumb_kp)
+    np.testing.assert_array_equal(EFFORT[6:12], thumb_effort)
+    for start in range(12, 28, 4):
+        np.testing.assert_array_equal(SOURCE_PHYSX_KP[start : start + 4], digit_kp)
+        np.testing.assert_array_equal(SOURCE_PHYSX_KD[start : start + 4], digit_kd)
+        np.testing.assert_array_equal(servo.kp[start : start + 4], digit_kp)
+        np.testing.assert_array_equal(EFFORT[start : start + 4], digit_effort)
     assert not SOURCE_PHYSX_KP.flags.writeable
     assert not SOURCE_PHYSX_KD.flags.writeable
     assert not EFFORT.flags.writeable

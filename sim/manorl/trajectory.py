@@ -2,32 +2,37 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
 from sim.manorl.contracts import (
+    DEFAULT_HAND_DATASET_PATH,
     DATASET_ROW_INDEX,
     EXPECTED_DATASET_VERSION,
-    JOINT_NAMES,
+    JOINT_DOF,
+    LEGACY_JOINT_NAMES,
+    canonical_hand_sides,
+    normalize_hand_side,
     OBJECT_INDEX,
     OBJECT_TYPE,
-    REFERENCE_FRAME_COUNT,
     SOURCE_DATA_FPS,
     SOURCE_FRAME_COUNT,
     SOURCE_SLICE,
     TRAJECTORY_IDENTITY,
     TrajectoryIdentity,
 )
+from sim.manorl.hand_layout import HandActionLayout
 
 LANCE_COLUMNS = ("index", "trajectory_metadata", "timestamp", "hands", "objects")
 LANCE_DISCOVERY_COLUMNS = ("index", "trajectory_metadata")
 LANCE_DECODE_CHUNK_SIZE = 128
+HAND_DATASET_PATH = Path(DEFAULT_HAND_DATASET_PATH)
 TRAJECTORY_IDENTITY_SCHEMA = "object_action_sequence"
 GENERATED_CUBE1_DATASET_PATH = Path(
     "/mnt/nas-222-project/mocap/dataAugmentation/for_retargeting/new_all_with_keypoints/"
@@ -38,6 +43,8 @@ GENERATED_CUBE1_ROW_INDEX = 507
 GENERATED_CUBE1_UUID = "00f45dd5-6699-5be1-8948-d6f7b623da48"
 GENERATED_CUBE1_MOVEMENT = (267, 541)
 GENERATED_PADDING = 250
+DEFAULT_PRE_PADDING = 100
+DEFAULT_POST_PADDING = 250
 CUBE1_ACTION_01_BATCH_ROWS = (
     (0, "97f4b8a1-19f4-5c1c-a051-162f21fcfc84", "cube1_01_003", 1481, 681, 971),
     (1, "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3", "cube1_01_009", 1373, 690, 982),
@@ -94,13 +101,20 @@ class ReferenceTrajectory:
     object_pos: NDArray[np.float64]
     object_quat_xyzw: NDArray[np.float64]
     object_z_shift: float
+    # ``q_ref`` is the primary/reference hand retained for the historical
+    # single-hand API.  New rows keep every detected side here so action
+    # routing can control one or both without relying on Lance list order.
+    hand_sides: tuple[str, ...] = ("right",)
+    q_ref_by_side: dict[str, NDArray[np.float64]] = field(default_factory=dict)
+    selected_hand_sides: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         expected = int(self.source_indices.shape[0])
         shapes = {
             "source_indices": expected >= 2,
             "timestamps": self.timestamps.shape == (expected,),
-            "q_ref": self.q_ref.shape == (expected, len(JOINT_NAMES)),
+            "q_ref": self.q_ref.ndim == 2 and self.q_ref.shape[0] == expected
+            and self.q_ref.shape[1] in (len(LEGACY_JOINT_NAMES), JOINT_DOF),
             "object_pos_raw": self.object_pos_raw.shape == (expected, 3),
             "object_pos": self.object_pos.shape == (expected, 3),
             "object_quat_xyzw": self.object_quat_xyzw.shape == (expected, 4),
@@ -108,6 +122,27 @@ class ReferenceTrajectory:
         invalid = [name for name, valid in shapes.items() if not valid]
         if invalid:
             raise ValueError(f"invalid reference trajectory shapes: {', '.join(invalid)}")
+        sides = canonical_hand_sides(self.hand_sides)
+        if self.q_ref_by_side:
+            raw_map = dict(self.q_ref_by_side)
+        else:
+            raw_map = {"right": self.q_ref}
+        normalized_map: dict[str, NDArray[np.float64]] = {}
+        for side, values in raw_map.items():
+            normalized = normalize_hand_side(str(side), allow_auto=False, allow_both=False)
+            array = np.asarray(values, dtype=np.float64)
+            if array.shape != self.q_ref.shape or not np.all(np.isfinite(array)):
+                raise ValueError(f"q_ref_by_side[{normalized!r}] must match q_ref and be finite")
+            normalized_map[normalized] = _immutable(array)
+        if set(normalized_map) != set(sides):
+            raise ValueError("hand_sides and q_ref_by_side keys do not match")
+        selected = self.selected_hand_sides or sides
+        selected = canonical_hand_sides(selected)
+        if not set(selected).issubset(set(sides)):
+            raise ValueError("selected hand side is absent from the trajectory")
+        object.__setattr__(self, "hand_sides", sides)
+        object.__setattr__(self, "q_ref_by_side", normalized_map)
+        object.__setattr__(self, "selected_hand_sides", selected)
         for name in (
             "timestamps",
             "q_ref",
@@ -123,6 +158,25 @@ class ReferenceTrajectory:
             raise ValueError("object quaternions must be normalized")
         if np.any(np.diff(self.timestamps) <= 0):
             raise ValueError("timestamps must be strictly increasing")
+
+    @property
+    def dof_dim(self) -> int:
+        return int(self.q_ref.shape[1])
+
+    @property
+    def action_layout(self) -> HandActionLayout:
+        return HandActionLayout(
+            self.hand_sides,
+            self.selected_hand_sides,
+            dof_per_hand=self.dof_dim,
+        )
+
+    def q_ref_for(self, hand_side: str) -> NDArray[np.float64]:
+        side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
+        try:
+            return self.q_ref_by_side[side]
+        except KeyError as exc:
+            raise KeyError(f"trajectory has no {side} hand reference") from exc
 
 
 @dataclass(frozen=True)
@@ -150,6 +204,21 @@ class TrajectoryBatch:
     @property
     def lengths(self) -> NDArray[np.int64]:
         return _immutable(np.asarray([len(trajectory.q_ref) for trajectory in self.trajectories]), dtype=np.int64)
+
+    @property
+    def hand_sides(self) -> tuple[str, ...]:
+        """Union of sides present in the batch, in canonical order."""
+
+        return canonical_hand_sides(
+            tuple(side for trajectory in self.trajectories for side in trajectory.hand_sides)
+        )
+
+    @property
+    def action_dim(self) -> int:
+        dims = {trajectory.action_layout.action_dim for trajectory in self.trajectories}
+        if len(dims) != 1:
+            raise ValueError("trajectory batch contains incompatible hand action layouts")
+        return next(iter(dims))
 
 
 @dataclass(frozen=True, order=True)
@@ -215,25 +284,40 @@ class TrajectorySelection:
     gesture: str = "01"
     selector: str | None = None
     dataset_path: Path = Path(TRAJECTORY_IDENTITY.dataset_path)
-    expected_dataset_version: int = EXPECTED_DATASET_VERSION
-    pre_padding: int = GENERATED_PADDING
-    post_padding: int = GENERATED_PADDING
+    expected_dataset_version: int | None = None
+    pre_padding: int = DEFAULT_PRE_PADDING
+    post_padding: int = DEFAULT_POST_PADDING
+    hand_side: str = "auto"
 
     def __post_init__(self) -> None:
-        ObjectActionPair(self.object_type, self.gesture)
+        object.__setattr__(self, "dataset_path", Path(self.dataset_path))
+        # Modern captures use descriptive labels such as
+        # ``001-Palmar-Pinch``.  The leading numeric token is the stable
+        # source action id; retain the human-readable ``gesture`` field for
+        # callers, but normalize validation/lookup through ``action_id``.
+        action_id = _gesture_action_id(self.gesture)
+        if action_id is None:
+            raise ValueError(
+                f"gesture must start with a source action id in [1, 50], got {self.gesture!r}"
+            )
+        ObjectActionPair(self.object_type, action_id)
         if self.selector is not None:
             parse_trajectory_selector(self.selector)
         if self.pre_padding < 0 or self.post_padding < 0:
             raise ValueError("trajectory padding must be non-negative")
+        normalize_hand_side(self.hand_side)
 
     @property
     def action_id(self) -> str:
-        return ObjectActionPair(self.object_type, self.gesture).action_id
+        action_id = _gesture_action_id(self.gesture)
+        if action_id is None:  # pragma: no cover - guarded by __post_init__
+            raise ValueError(f"gesture does not contain a valid source action id: {self.gesture!r}")
+        return action_id
 
     @property
     def requested_pairs(self) -> tuple[ObjectActionPair, ...] | None:
         if self.selector is None:
-            return (ObjectActionPair(self.object_type, self.gesture),)
+            return (ObjectActionPair(self.object_type, self.action_id),)
         return parse_trajectory_selector(self.selector)
 
     @property
@@ -264,6 +348,108 @@ class EnvTrajectoryAssignment:
         return self.trajectory.identity
 
 
+def detect_hand_sides(row_or_metadata: Mapping[str, Any] | dict[str, Any]) -> tuple[str, ...]:
+    """Detect available hand sides from Lance metadata, independent of list order."""
+
+    if not isinstance(row_or_metadata, Mapping):
+        raise TypeError("row_or_metadata must be a mapping")
+    metadata = row_or_metadata.get("trajectory_metadata", row_or_metadata)
+    if not isinstance(metadata, Mapping):
+        raise ValueError("trajectory metadata is missing")
+    names = metadata.get("hand_names")
+    if names is None:
+        # Legacy generated rows omitted side metadata and were right-hand
+        # captures by contract.
+        return ("right",)
+    if isinstance(names, (str, bytes)) or names is None:
+        raise ValueError("trajectory_metadata.hand_names must be a non-empty sequence")
+    try:
+        names = list(names)
+    except TypeError as exc:
+        raise ValueError("trajectory_metadata.hand_names must be a non-empty sequence") from exc
+    if not names:
+        raise ValueError("trajectory_metadata.hand_names must be a non-empty list")
+    try:
+        sides = canonical_hand_sides(tuple(str(value) for value in names))
+    except (TypeError, ValueError) as exc:
+        # Preserve the normalization reason (especially an unsupported label)
+        # in the public decoder error while retaining row context.
+        raise ValueError(f"invalid trajectory hand_names: {names!r}: {exc}") from exc
+    if len(sides) != len(names):
+        raise ValueError("trajectory_metadata.hand_names contains duplicate sides")
+    return sides
+
+
+def resolve_hand_selection(
+    available_sides: object,
+    hand_side: str = "auto",
+) -> tuple[str, ...]:
+    """Resolve ``auto``/``both``/explicit control selection for a dataset."""
+
+    available = canonical_hand_sides(available_sides)
+    selection = normalize_hand_side(hand_side)
+    if selection == "auto":
+        return available
+    if selection == "both":
+        if set(available) != {"left", "right"}:
+            raise ValueError(f"requested both hands; dataset has {available}")
+        return available
+    if selection not in available:
+        raise ValueError(f"requested {selection} hand is absent; dataset has {available}")
+    return (selection,)
+
+
+def _hand_rows_by_side(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    sides = detect_hand_sides(row)
+    hands = row.get("hands")
+    if not isinstance(hands, list) or len(hands) != len(sides):
+        raise ValueError(f"dataset contains {len(hands) if isinstance(hands, list) else 'invalid'} hands for {sides}")
+    # Metadata names are the only authoritative association.  We construct a
+    # map once, then use canonical side names everywhere else.
+    raw_names = row["trajectory_metadata"].get("hand_names")
+    if raw_names is None:
+        ordered_sides = ["right"]
+    else:
+        ordered_sides = [
+            normalize_hand_side(str(value), allow_auto=False, allow_both=False)
+            for value in raw_names
+        ]
+    mapping = {side: hand for side, hand in zip(ordered_sides, hands, strict=True)}
+    if set(mapping) != set(sides):
+        raise ValueError("hand_names contains duplicate or unsupported side labels")
+    return mapping
+
+
+def _safe_row_identity(row: dict[str, Any], row_index: int = 0) -> str:
+    """Derive a stable identity for both old source and new capture rows."""
+
+    index = row.get("index", {})
+    source_path = index.get("source_path") if isinstance(index, dict) else None
+    if isinstance(source_path, str) and source_path:
+        candidate = Path(source_path).parent.name
+        if candidate.count("_") == 2:
+            return candidate
+    scene = str(index.get("scene", "object")) if isinstance(index, dict) else "object"
+    gesture = str(index.get("gesture", "01")) if isinstance(index, dict) else "01"
+    # Keep environment's object_action_sequence convention even when the new
+    # capture uses a descriptive gesture string.
+    leading_action = re.match(r"0*(\d+)", gesture)
+    if leading_action is not None and 1 <= int(leading_action.group(1)) <= 50:
+        gesture_slug = f"{int(leading_action.group(1)):02d}"
+    else:
+        gesture_slug = re.sub(r"[^A-Za-z0-9]+", "", gesture) or "01"
+    # New capture rows do not carry source_path and often reuse a capture
+    # session id for every row.  The Lance row index is therefore the stable
+    # sequence discriminator; row zero intentionally becomes ``..._001``.
+    sequence = int(row_index) + 1
+    metadata = row.get("trajectory_metadata", {})
+    if isinstance(metadata, dict):
+        raw_id = metadata.get("raw_data_info", {}).get("id") if isinstance(metadata.get("raw_data_info"), dict) else None
+        if isinstance(source_path, str) and source_path and isinstance(raw_id, (int, np.integer)):
+            sequence = int(raw_id)
+    return f"{scene}_{gesture_slug}_{sequence:03d}"
+
+
 def _derive_identity(row: dict[str, Any]) -> str:
     source_path = row["index"].get("source_path")
     if not isinstance(source_path, str) or not source_path:
@@ -272,6 +458,37 @@ def _derive_identity(row: dict[str, Any]) -> str:
     if identity.count("_") != 2:
         raise ValueError(f"source_path does not encode an object_action_sequence: {source_path!r}")
     return identity
+
+
+def _gesture_action_id(value: object) -> str | None:
+    """Extract a canonical source action id from numeric/descriptive labels."""
+
+    match = re.match(r"0*(\d+)", str(value).strip())
+    if match is None:
+        return None
+    number = int(match.group(1))
+    return f"{number:02d}" if 1 <= number <= 50 else None
+
+
+def _modern_row_pair_identity(
+    row: dict[str, Any], *, row_index: int
+) -> tuple[ObjectActionPair, str] | None:
+    """Resolve scene/gesture identity for rows without source_path metadata."""
+
+    index = row.get("index")
+    metadata = row.get("trajectory_metadata")
+    if not isinstance(index, dict) or not isinstance(metadata, dict):
+        return None
+    object_type = str(index.get("scene", "")).strip()
+    action_id = _gesture_action_id(index.get("gesture", ""))
+    if not object_type or action_id is None:
+        return None
+    try:
+        pair = ObjectActionPair(object_type, action_id)
+    except ValueError:
+        return None
+    identity = _safe_row_identity(row, row_index)
+    return pair, identity
 
 
 def _validate_row(row: dict[str, Any]) -> None:
@@ -313,16 +530,172 @@ def _initial_support_shift(
     initial_quaternion_xyzw: NDArray[np.float64],
     object_type: str = OBJECT_TYPE,
 ) -> float:
-    from sim.manorl.assets import object_collision_vertices
+    try:
+        from sim.manorl.assets import object_collision_vertices
 
-    rotated = Rotation.from_quat(initial_quaternion_xyzw).apply(
-        object_collision_vertices(object_type).copy()
-    )
+        rotated = Rotation.from_quat(initial_quaternion_xyzw).apply(
+            object_collision_vertices(object_type).copy()
+        )
+    except (FileNotFoundError, ValueError):
+        # Dataset discovery is useful before an object runtime is installed.
+        # Keep the raw capture pose in that case and let environment creation
+        # report the explicit unsupported-object error later.
+        return 0.0
     return -float(np.min(rotated[:, 2] + initial_position[2]))
 
 
-def trajectory_from_row(row: dict[str, Any], dataset_version: int) -> ReferenceTrajectory:
+def trajectory_from_lance_row(
+    row: dict[str, Any],
+    dataset_version: int,
+    *,
+    row_index: int = 0,
+    hand_side: str = "auto",
+    pre_padding: int = 0,
+    post_padding: int = 0,
+) -> ReferenceTrajectory:
+    """Decode a modern Lance row with one, left/right, or both hands.
+
+    The row's ``hand_names`` metadata defines side association; the physical
+    order of ``hands`` is never interpreted as right-first.  ``hand_side``
+    controls which slots receive actions, while all side references remain in
+    ``q_ref_by_side`` for reference following.
+    """
+
+    if not isinstance(row, dict):
+        raise TypeError("row must be a decoded Lance mapping")
+    metadata = row.get("trajectory_metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("row lacks trajectory_metadata")
+    sides = detect_hand_sides(row)
+    selected = resolve_hand_selection(sides, hand_side)
+    hand_rows = _hand_rows_by_side(row)
+    source_count = int(metadata.get("total_frames", 0))
+    timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
+    if source_count <= 0:
+        source_count = len(timestamps)
+    if timestamps.shape != (source_count,) or not np.all(np.isfinite(timestamps)):
+        raise ValueError(f"timestamp shape {timestamps.shape} does not match total_frames={source_count}")
+    if np.any(np.diff(timestamps) <= 0):
+        raise ValueError("source timestamps are not strictly increasing")
+
+    object_names = metadata.get("object_names")
+    if not isinstance(object_names, list):
+        object_names = [str(row.get("index", {}).get("scene", OBJECT_TYPE))]
+    objects = row.get("objects")
+    if not isinstance(objects, list) or not objects:
+        raise ValueError("row must contain at least one object state")
+    object_type = str(row.get("index", {}).get("scene", object_names[0]))
+    object_index = object_names.index(object_type) if object_type in object_names else 0
+    if object_index >= len(objects):
+        raise ValueError("selected object state is absent")
+    object_state = objects[object_index]
+    object_pos_all = np.asarray(object_state.get("pos", ()), dtype=np.float64)
+    object_rotvec_all = np.asarray(object_state.get("rot_aa", ()), dtype=np.float64)
+    if object_pos_all.shape != (source_count, 3) or object_rotvec_all.shape != (source_count, 3):
+        raise ValueError("object pose arrays do not match total_frames")
+    if not np.all(np.isfinite(object_pos_all)) or not np.all(np.isfinite(object_rotvec_all)):
+        raise ValueError("object pose arrays contain non-finite values")
+
+    movement = metadata.get("trajectory_info", {}).get("object_move", [])
+    movement_entry = next(
+        (entry for entry in movement if entry.get("object_name") == object_type), None
+    ) if isinstance(movement, list) else None
+    if movement_entry is None:
+        movement_start, movement_end = 0, source_count - 1
+    else:
+        movement_start = int(movement_entry.get("start_frame", 0))
+        movement_end = int(movement_entry.get("end_frame", source_count - 1))
+    if not 0 <= movement_start <= movement_end < source_count:
+        raise ValueError(
+            "object movement range must be an inclusive interval within total_frames"
+        )
+    start = max(0, movement_start - int(pre_padding))
+    # Lance movement metadata names an inclusive ``end_frame``.  Convert it
+    # once at the Python slice boundary so zero-padding selections retain the
+    # final movement frame.
+    stop = min(source_count, movement_end + 1 + int(post_padding))
+    if stop - start < 2:
+        raise ValueError("selected row window must contain at least two frames")
+
+    q_by_side: dict[str, NDArray[np.float64]] = {}
+    dof_dim: int | None = None
+    for side in sides:
+        q_all = np.asarray(hand_rows[side].get("urdf_dof", ()), dtype=np.float64)
+        if q_all.ndim != 2 or q_all.shape[0] != source_count or q_all.shape[1] not in (26, JOINT_DOF):
+            raise ValueError(f"{side} urdf_dof must have shape ({source_count}, 26 or {JOINT_DOF})")
+        if dof_dim is None:
+            dof_dim = int(q_all.shape[1])
+        if q_all.shape[1] != dof_dim or not np.all(np.isfinite(q_all)):
+            raise ValueError("all hand references must share one finite DOF width")
+        values = q_all[start:stop].copy()
+        values[:, 3:6] = np.unwrap(values[:, 3:6], axis=0, period=2.0 * np.pi)
+        q_by_side[side] = _immutable(values)
+    assert dof_dim is not None
+    object_pos_raw = object_pos_all[start:stop].copy()
+    object_quat_xyzw = rotvec_to_xyzw(object_rotvec_all[start:stop])
+    z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0], object_type)
+    object_pos = object_pos_raw.copy()
+    object_pos[:, 2] += z_shift
+    primary = "right" if "right" in selected else selected[0]
+    index = row.get("index", {})
+    identity = _safe_row_identity(row, row_index)
+    trajectory_identity = TrajectoryIdentity(
+        dataset_path=str(row.get("dataset_path", "")),
+        dataset_version=int(dataset_version),
+        row_index=int(row_index),
+        object_index=int(object_index),
+        uuid=str(index.get("uuid", "")),
+        file_uuid=str(index.get("file_uuid", "")),
+        identity=identity,
+        source_start=int(start),
+        source_stop=int(stop),
+        movement_start_raw=int(movement_start),
+        movement_end_raw=int(movement_end),
+    )
+    return ReferenceTrajectory(
+        identity=trajectory_identity,
+        dataset_version=int(dataset_version),
+        source_indices=_immutable(np.arange(start, stop), dtype=np.int64),
+        timestamps=_immutable(timestamps[start:stop]),
+        q_ref=q_by_side[primary],
+        object_pos_raw=_immutable(object_pos_raw),
+        object_pos=_immutable(object_pos),
+        object_quat_xyzw=_immutable(object_quat_xyzw),
+        object_z_shift=z_shift,
+        hand_sides=sides,
+        q_ref_by_side=q_by_side,
+        selected_hand_sides=selected,
+    )
+
+
+def trajectory_from_row(
+    row: dict[str, Any],
+    dataset_version: int,
+    *,
+    hand_side: str = "auto",
+) -> ReferenceTrajectory:
     """Validate one decoded Lance row and construct the immutable accepted slice."""
+
+    # Modern capture rows carry descriptive indices, 28-wide DOFs, or more
+    # than one side.  Route them through the metadata-driven decoder before
+    # applying the historical source identity contract.
+    metadata = row.get("trajectory_metadata", {}) if isinstance(row, dict) else {}
+    index = row.get("index", {}) if isinstance(row, dict) else {}
+    hands = row.get("hands", []) if isinstance(row, dict) else []
+    modern = (
+        not isinstance(index, dict)
+        or not isinstance(index.get("source_path"), str)
+        or not index.get("source_path")
+        or (
+            isinstance(metadata, dict)
+            and metadata.get("hand_names") not in (None, ["right"])
+        )
+    )
+    if not modern and isinstance(hands, list) and hands:
+        first_q = np.asarray(hands[0].get("urdf_dof", ())) if isinstance(hands[0], dict) else np.asarray(())
+        modern = first_q.ndim == 2 and first_q.shape[-1] == JOINT_DOF
+    if modern:
+        return trajectory_from_lance_row(row, dataset_version, hand_side=hand_side)
 
     _validate_row(row)
     source_count = int(row["trajectory_metadata"]["total_frames"])
@@ -332,7 +705,7 @@ def trajectory_from_row(row: dict[str, Any], dataset_version: int) -> ReferenceT
     object_rotvec_all = np.asarray(row["objects"][OBJECT_INDEX]["rot_aa"], dtype=np.float64)
     expected_shapes = {
         "timestamp": (source_count,),
-        "urdf_dof": (source_count, len(JOINT_NAMES)),
+        "urdf_dof": (source_count, len(LEGACY_JOINT_NAMES)),
         "object position": (source_count, 3),
         "object axis-angle": (source_count, 3),
     }
@@ -369,6 +742,9 @@ def trajectory_from_row(row: dict[str, Any], dataset_version: int) -> ReferenceT
         source_indices=_immutable(np.arange(start, stop), dtype=np.int64),
         timestamps=_immutable(timestamps_all[start:stop]),
         q_ref=_immutable(q_ref),
+        hand_sides=("right",),
+        q_ref_by_side={"right": _immutable(q_ref)},
+        selected_hand_sides=("right",),
         object_pos_raw=_immutable(object_pos_raw),
         object_pos=_immutable(object_pos),
         object_quat_xyzw=_immutable(object_quat_xyzw),
@@ -379,9 +755,11 @@ def trajectory_from_row(row: dict[str, Any], dataset_version: int) -> ReferenceT
 def load_reference_trajectory(
     dataset_path: str | Path = TRAJECTORY_IDENTITY.dataset_path,
     *,
-    expected_dataset_version: int = EXPECTED_DATASET_VERSION,
+    expected_dataset_version: int | None = EXPECTED_DATASET_VERSION,
+    hand_side: str = "auto",
+    row_index: int = DATASET_ROW_INDEX,
 ) -> ReferenceTrajectory:
-    """Load exactly row 1 and only the five required top-level Lance columns."""
+    """Load one reference row, auto-detecting modern hand-side metadata."""
 
     path = Path(dataset_path)
     if not path.exists():
@@ -396,15 +774,64 @@ def load_reference_trajectory(
     if version_value is None:
         raise ValueError("Lance dataset did not expose a version; identity cannot be fixed")
     dataset_version = int(version_value)
-    if dataset_version != expected_dataset_version:
+    if expected_dataset_version is not None and dataset_version != expected_dataset_version:
         raise ValueError(
             f"dataset version {dataset_version} != accepted version {expected_dataset_version}"
         )
-    table = dataset.take([DATASET_ROW_INDEX], columns=list(LANCE_COLUMNS))
+    table = dataset.take([int(row_index)], columns=list(LANCE_COLUMNS))
     rows = table.to_pylist()
     if len(rows) != 1:
         raise ValueError(f"dataset.take returned {len(rows)} rows, expected exactly one")
-    return trajectory_from_row(rows[0], dataset_version)
+    row = dict(rows[0])
+    row["dataset_path"] = str(path)
+    if path.resolve() == HAND_DATASET_PATH.resolve() or detect_hand_sides(row) != ("right",):
+        return trajectory_from_lance_row(
+            row,
+            dataset_version,
+            row_index=int(row_index),
+            hand_side=hand_side,
+        )
+    return trajectory_from_row(row, dataset_version, hand_side=hand_side)
+
+
+def load_hand_reference_trajectory(
+    dataset_path: str | Path = HAND_DATASET_PATH,
+    *,
+    row_index: int = 0,
+    hand_side: str = "auto",
+    expected_dataset_version: int | None = None,
+    pre_padding: int = 0,
+    post_padding: int = 0,
+) -> ReferenceTrajectory:
+    """Load a modern left/right/bimanual Lance row with data-driven sides."""
+
+    path = Path(dataset_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Lance dataset is absent: {path}")
+    try:
+        import lance
+    except ImportError as exc:
+        raise RuntimeError("pylance is required to read the hand trajectory") from exc
+    dataset = lance.dataset(str(path))
+    version_value = getattr(dataset, "version", None)
+    if version_value is None:
+        raise ValueError("Lance dataset did not expose a version")
+    version = int(version_value)
+    if expected_dataset_version is not None and version != int(expected_dataset_version):
+        raise ValueError(f"dataset version {version} != requested {expected_dataset_version}")
+    rows = dataset.take([int(row_index)], columns=list(LANCE_COLUMNS)).to_pylist()
+    if len(rows) != 1:
+        raise ValueError(f"dataset.take returned {len(rows)} rows, expected exactly one")
+    row = dict(rows[0])
+    row["dataset_path"] = str(path)
+    return trajectory_from_lance_row(
+        row,
+        version,
+        row_index=int(row_index),
+        hand_side=hand_side,
+        pre_padding=pre_padding,
+        post_padding=post_padding,
+    )
 
 
 def generated_cube1_row_507_from_row(row: dict[str, Any], dataset_version: int) -> ReferenceTrajectory:
@@ -445,7 +872,7 @@ def generated_cube1_row_507_from_row(row: dict[str, Any], dataset_version: int) 
     object_rotvec_all = np.asarray(row["objects"][0]["rot_aa"], dtype=np.float64)
     expected_shapes = {
         "timestamp": (source_count,),
-        "urdf_dof": (source_count, len(JOINT_NAMES)),
+        "urdf_dof": (source_count, len(LEGACY_JOINT_NAMES)),
         "object position": (source_count, 3),
         "object axis-angle": (source_count, 3),
     }
@@ -568,7 +995,7 @@ def _cube1_action_01_trajectory_from_row(
     }
     expected_shapes = {
         "timestamp": (source_count,),
-        "urdf_dof": (source_count, len(JOINT_NAMES)),
+        "urdf_dof": (source_count, len(LEGACY_JOINT_NAMES)),
         "object position": (source_count, 3),
         "object axis-angle": (source_count, 3),
     }
@@ -687,9 +1114,16 @@ def _candidate_from_metadata_row(
     # only generated-row marker accepted by the contract.
     if index.get("is_generated", False) is not False:
         return None
-    try:
-        identity = _derive_identity(row)
-    except (KeyError, ValueError):
+    source_path = index.get("source_path")
+    modern_identity = _modern_row_pair_identity(row, row_index=row_index)
+    if isinstance(source_path, str) and source_path:
+        try:
+            identity = _derive_identity(row)
+        except (KeyError, ValueError):
+            return None
+    elif modern_identity is not None:
+        _, identity = modern_identity
+    else:
         return None
     fields = identity.split("_")
     if len(fields) != 3 or not fields[2].isdigit():
@@ -697,20 +1131,21 @@ def _candidate_from_metadata_row(
     object_type, action_raw, sequence_raw = fields
     try:
         pair = ObjectActionPair(object_type, action_raw)
-        index_pair = ObjectActionPair(str(index.get("scene", "")), str(index.get("gesture", "")))
     except ValueError:
         return None
-    if pair != index_pair or action_raw != pair.action_id:
+    index_action = _gesture_action_id(index.get("gesture", ""))
+    if str(index.get("scene", "")) != object_type or index_action != pair.action_id:
         return None
-    source_path = str(index.get("source_path", ""))
-    if Path(source_path).parent.name != identity:
+    if isinstance(source_path, str) and source_path and Path(source_path).parent.name != identity:
         return None
     object_names = metadata.get("object_names")
-    if (
-        not isinstance(object_names, list)
-        or object_type not in object_names
-        or metadata.get("hand_names") != ["right"]
-    ):
+    if isinstance(object_names, list) and object_type not in object_names:
+        return None
+    try:
+        sides = detect_hand_sides(row)
+        if not sides:
+            return None
+    except (TypeError, ValueError):
         return None
     try:
         source_count = int(metadata["total_frames"])
@@ -724,7 +1159,14 @@ def _candidate_from_metadata_row(
         return None
     requested_start = start_raw - selection.pre_padding
     requested_stop = end_raw + selection.post_padding
-    if selection.require_full_padding and (
+    if not source_path:
+        # Modern capture metadata uses an inclusive movement end.  Historical
+        # source-path datasets retain their established exclusive-stop ABI.
+        requested_stop += 1
+    # Modern captures are allowed to clip at dataset boundaries even when a
+    # historical selection requests 250-frame source padding.
+    require_full_padding = selection.require_full_padding and bool(source_path)
+    if require_full_padding and (
         requested_start < 0 or requested_stop > source_count
     ):
         return None
@@ -792,6 +1234,31 @@ def _selected_trajectory_from_row(
 
     index = row["index"]
     metadata = row["trajectory_metadata"]
+    # Modern capture rows identify themselves through ``scene``/``gesture``
+    # and hand metadata, without the legacy source_path/object_names contract.
+    # Reuse the authoritative side-aware decoder so metadata order never maps
+    # a left hand into the right slot.
+    modern = (
+        not isinstance(index.get("source_path"), str)
+        or metadata.get("hand_names") not in (None, ["right"])
+    )
+    if not modern and isinstance(row.get("hands"), list) and row["hands"]:
+        first_q = np.asarray(row["hands"][0].get("urdf_dof", ()))
+        modern = first_q.ndim == 2 and first_q.shape[-1] == JOINT_DOF
+    if modern:
+        resolved = _modern_row_pair_identity(row, row_index=row_index)
+        if resolved is None or resolved[0] != expected_pair:
+            raise ValueError(f"row {row_index} is not {expected_pair.canonical}")
+        modern_row = dict(row)
+        modern_row["dataset_path"] = str(selection.dataset_path)
+        return trajectory_from_lance_row(
+            modern_row,
+            dataset_version,
+            row_index=row_index,
+            hand_side=selection.hand_side,
+            pre_padding=selection.pre_padding,
+            post_padding=selection.post_padding,
+        )
     identity = _derive_identity(row)
     object_type, action_id, _ = identity.split("_")
     if ObjectActionPair(object_type, action_id) != expected_pair:
@@ -830,7 +1297,7 @@ def _selected_trajectory_from_row(
     object_rotvec_all = np.asarray(row["objects"][object_index]["rot_aa"], dtype=np.float64)
     expected_shapes = {
         "timestamp": (source_count,),
-        "urdf_dof": (source_count, len(JOINT_NAMES)),
+        "urdf_dof": (source_count, len(LEGACY_JOINT_NAMES)),
         "object position": (source_count, 3),
         "object axis-angle": (source_count, 3),
     }
@@ -965,7 +1432,7 @@ def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: 
         raise RuntimeError("pylance is required to assign ManoRL trajectories") from exc
     dataset = lance.dataset(str(selection.dataset_path))
     version = int(getattr(dataset, "version", -1))
-    if version != selection.expected_dataset_version:
+    if selection.expected_dataset_version is not None and version != selection.expected_dataset_version:
         raise ValueError(f"dataset version {version} != requested {selection.expected_dataset_version}")
     resolved_pairs, candidates_by_pair = _discover_trajectory_candidates(dataset, selection)
     pair_count = len(resolved_pairs)

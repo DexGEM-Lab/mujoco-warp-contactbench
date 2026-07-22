@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from sim.manorl.observations import OBSERVATION_SLICES
+from sim.manorl.observations import observation_layout_for_dimension
 
 
 class PointCloudAwareRunningStandardScaler(nn.Module):
@@ -18,9 +18,10 @@ class PointCloudAwareRunningStandardScaler(nn.Module):
 
     def __init__(self, *, size: int = 476, epsilon: float = 1e-5, clip_threshold: float = 5.0, device: str = "cpu"):
         super().__init__()
-        pc_slice = OBSERVATION_SLICES["object_point_cloud_raw"]
-        if size != 476 or (pc_slice.stop - pc_slice.start) != 64 * 3:
-            raise ValueError("the source PointNet scaler requires the 476D / 64x3 ABI")
+        layout = observation_layout_for_dimension(int(size))
+        pc_slice = layout.slices["object_point_cloud_raw"]
+        if (pc_slice.stop - pc_slice.start) != 64 * 3:
+            raise ValueError("the ManoRL point-cloud slice must contain 64 XYZ points")
         self.size = size
         self.pc_start = pc_slice.start
         self.pc_end = pc_slice.stop

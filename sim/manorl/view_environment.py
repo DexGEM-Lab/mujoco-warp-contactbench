@@ -26,8 +26,12 @@ from sim.manorl.assets import (
     compile_unified_model,
 )
 from sim.manorl.cli import parse_cli_bool
-from sim.manorl.contracts import CONTROL_TIMESTEP
-from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
+from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_DOF
+from sim.manorl.environment import (
+    EnvironmentConfig,
+    MujocoManoEnvironment,
+    recommended_warp_contact_capacity,
+)
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.trajectory import (
     TrajectoryBatch,
@@ -53,7 +57,8 @@ class _ZeroActionStepper:
 
     def __init__(self, environment: MujocoManoEnvironment) -> None:
         self._environment = environment
-        self._actions = np.zeros((environment.config.num_envs, 26), dtype=np.float64)
+        action_dim = int(getattr(environment, "action_dim", JOINT_DOF))
+        self._actions = np.zeros((environment.config.num_envs, action_dim), dtype=np.float64)
         self._pending_done = np.zeros(environment.config.num_envs, dtype=bool)
 
     def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]:
@@ -297,17 +302,24 @@ def _compile_native_viewer_model(
         raise ValueError(
             "native visual viewing requires a homogeneous or unified object model"
         )
+    # The viewer must mirror the exact hand topology used by the physics
+    # model.  In particular, a left-only or bimanual environment cannot fall
+    # back to the historical right-hand scene just because its visuals are
+    # native-only.
+    hand_side = getattr(environment, "model_hand_side", "right")
     if getattr(environment, "_unified_object_batch", False):
         mujoco, model = compile_unified_model(
             environment.config.servo,
             object_types=environment._unified_object_types,
             visual_meshes=True,
+            hand_side=hand_side,
         )
     else:
         mujoco, model = compile_model(
             environment.config.servo,
             object_type=environment.object_type,
             visual_meshes=True,
+            hand_side=hand_side,
         )
     _validate_native_viewer_abi(mujoco, environment.model, model)
     return mujoco, model
@@ -620,7 +632,7 @@ def _view_single(
 ) -> None:
     """Render one world while advancing the same action boundary as tiled mode."""
 
-    import mujoco.viewer
+    from mujoco import viewer as mujoco_viewer
 
     mujoco, viewer_model = _compile_native_viewer_model(environment)
     render_data = mujoco.MjData(viewer_model)
@@ -633,7 +645,7 @@ def _view_single(
         environment.host_data(render_env),
     )
     sleep_seconds = CONTROL_TIMESTEP / speed
-    with mujoco.viewer.launch_passive(
+    with mujoco_viewer.launch_passive(
         viewer_model, render_data, show_left_ui=True, show_right_ui=True
     ) as viewer:
         with _viewer_lock(viewer):
@@ -690,6 +702,8 @@ def view_environment(
     rerun_output: Path | None,
     use_residual: bool,
     checkpoint: Path | None,
+    dataset_path: Path | None = None,
+    hand_side: str = "auto",
 ) -> None:
     """Run a batched production environment and render its first world."""
 
@@ -719,11 +733,19 @@ def view_environment(
 
     if (object_type is None) != (gesture is None):
         raise ValueError("--object and --gesture must be supplied together")
-    if object_type is not None:
+    if dataset_path is not None or object_type is not None:
+        selected_object = object_type or "banana"
+        selected_gesture = gesture or "01"
         trajectory = load_assigned_trajectory_batch(
-            TrajectorySelection(object_type=object_type, gesture=gesture), num_envs=num_envs
+            TrajectorySelection(
+                object_type=selected_object,
+                gesture=selected_gesture,
+                dataset_path=(dataset_path if dataset_path is not None else TrajectorySelection().dataset_path),
+                hand_side=hand_side,
+            ),
+            num_envs=num_envs,
         )
-        trajectory_label = f"object={object_type}, gesture={gesture.zfill(2)}"
+        trajectory_label = f"object={selected_object}, gesture={selected_gesture}, hand_side={hand_side}"
     elif trajectory_name == "accepted":
         trajectory = load_reference_trajectory()
         trajectory_label = trajectory_name
@@ -740,7 +762,9 @@ def view_environment(
             f"{trajectory_name} requires --num-envs {trajectory.num_envs}, got {num_envs}"
         )
     max_deviation_distance = TARGET_MAX_DEVIATION_DISTANCE if terminal else 1_000_000.0
-    contact_capacity = max(128, 31 * num_envs + 64)
+    contact_capacity = recommended_warp_contact_capacity(
+        num_envs, getattr(trajectory, "hand_sides", ("right",))
+    )
     environment = MujocoManoEnvironment(
         trajectory,
         EnvironmentConfig(
@@ -749,13 +773,14 @@ def view_environment(
             residual_enabled=use_residual,
             max_deviation_distance=max_deviation_distance,
             contact_capacity=contact_capacity,
+            hand_side=hand_side,
         ),
     )
     recorder = None if rerun_output is None else ManoRerunRecorder(environment, rerun_output, env_id=0)
     stepper: ViewerStepper
     if checkpoint is None:
         stepper = _ZeroActionStepper(environment)
-        action_source = "zero 26D action"
+        action_source = f"zero {getattr(environment, 'action_dim', JOINT_DOF)}D action"
     else:
         stepper = _build_checkpoint_stepper(environment, checkpoint)
         action_source = f"checkpoint deterministic policy ({checkpoint})"
@@ -813,6 +838,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--object", dest="object_type", help="Lance object selector; requires --gesture")
     parser.add_argument("--gesture", help="Lance two-digit action selector; requires --object")
+    parser.add_argument("--dataset-path", type=Path, help="optional Lance dataset for modern hand-side rows")
+    parser.add_argument(
+        "--hand-side",
+        choices=("auto", "both", "right", "left"),
+        default="auto",
+        help="hands to control; explicit side makes the other hand follow reference",
+    )
     parser.add_argument(
         "--checkpoint",
         type=Path,
@@ -836,7 +868,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=parse_cli_bool,
         default=True,
         metavar="{true,false}",
-        help="enable 26D residual action processing (default: true)",
+        help="enable residual action processing (default: true)",
     )
     parser.add_argument(
         "--terminal",
@@ -860,7 +892,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--print-every",
         type=int,
         default=10,
-        help="Print the applied 26D source command every N control calls.",
+        help="Print the applied source command every N control calls.",
     )
     return parser.parse_args(argv)
 
@@ -879,6 +911,8 @@ def main(argv: list[str] | None = None) -> int:
         tile_envs=args.tile_envs,
         object_type=args.object_type,
         gesture=args.gesture,
+        dataset_path=args.dataset_path,
+        hand_side=args.hand_side,
         rerun_output=args.rerun_output,
         use_residual=args.use_residual,
         checkpoint=args.checkpoint,

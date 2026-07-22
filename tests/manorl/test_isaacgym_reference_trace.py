@@ -122,9 +122,28 @@ def resolved_task_config() -> dict[str, object]:
 
 
 def test_module_import_does_not_import_runtime_dependencies() -> None:
-    assert "isaacgym" not in sys.modules
-    assert "torch" not in sys.modules
-    assert "hydra" not in sys.modules
+    script = """
+import importlib.util
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("isolated_isaacgym_reference_trace", path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+unexpected = [name for name in ("isaacgym", "torch", "hydra") if name in sys.modules]
+if unexpected:
+    raise AssertionError(f"runtime dependencies imported at module load: {unexpected}")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(MODULE_PATH)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_resolved_config_requires_the_preflighted_gpu_scene_parameters() -> None:

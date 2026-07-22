@@ -156,6 +156,93 @@ else:
     assert result.returncode == 0, result.stderr
 
 
+def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
+    import copy
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+    import torch
+
+    from sim.manorl.checkpoint import (
+        CheckpointFormatError,
+        load_skrl_checkpoint,
+        load_skrl_checkpoint_for_inference,
+        save_skrl_checkpoint,
+    )
+
+    class Agent:
+        device = "cpu"
+
+        def __init__(self) -> None:
+            self.loaded: str | None = None
+            self.policy = SimpleNamespace(
+                action_dim=28,
+                observation_dim=480,
+                use_film=True,
+            )
+
+        def save(self, path: str) -> None:
+            torch.save(
+                {
+                    "policy": {},
+                    "value": {},
+                    "optimizer": {},
+                    "observation_preprocessor": {},
+                    "value_preprocessor": {},
+                },
+                path,
+            )
+
+        def load(self, path: str) -> None:
+            self.loaded = path
+
+    signature = {
+        "resolved_hand_side": "right",
+        "available_hand_sides": ["right", "left"],
+        "controlled_hand_sides": ["right"],
+        "reference_following_hand_sides": ["left"],
+        "action_dim": 28,
+        "observation_dim": 480,
+        "model_action_dim": 56,
+    }
+    agent = Agent()
+    agent.manorl_environment_signature = signature.copy()
+    checkpoint = save_skrl_checkpoint(
+        agent,
+        tmp_path / "right.pt",
+        runtime_config={"model": {"use_film": True}, "environment": signature},
+    )
+    sidecar = checkpoint.with_suffix(checkpoint.suffix + ".json")
+    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+
+    load_skrl_checkpoint(agent, checkpoint)
+    assert agent.loaded == str(checkpoint)
+
+    mismatched = copy.deepcopy(metadata)
+    mismatched["runtime_config"]["environment"]["controlled_hand_sides"] = [
+        "left"
+    ]
+    sidecar.write_text(json.dumps(mismatched), encoding="utf-8")
+    agent.loaded = None
+    with pytest.raises(CheckpointFormatError, match="controlled_hand_sides"):
+        load_skrl_checkpoint(agent, checkpoint)
+    assert agent.loaded is None
+    with pytest.raises(CheckpointFormatError, match="controlled_hand_sides"):
+        load_skrl_checkpoint_for_inference(agent, checkpoint)
+    assert agent.loaded is None
+
+    # The current runtime no longer accepts pre-28-DoF sidecars without a hand
+    # signature, even if their tensor shapes happen to load.
+    legacy = copy.deepcopy(metadata)
+    legacy["runtime_config"]["environment"] = {}
+    sidecar.write_text(json.dumps(legacy), encoding="utf-8")
+    agent.loaded = None
+    with pytest.raises(CheckpointFormatError, match="missing current MuJoCo hand signature"):
+        load_skrl_checkpoint(agent, checkpoint)
+    assert agent.loaded is None
+
+
 def test_native_checkpoint_restores_all_required_modules_into_evaluator_and_training_agents(tmp_path) -> None:
     import torch
 

@@ -23,40 +23,32 @@ The migration has two concrete purposes:
 The aligned contract is now the only production and training default. New
 scratch training and checkpoint resume must use the current environment,
 reward, PPO, model, and normalizer contracts; checkpoints from the previous
-MuJoCo contract are rejected. The validated Gym reference completes 790/790
-steps. The converted policy executes through the same source-aligned MuJoCo
-runtime used by new training. Exact Gym and MuJoCo returns remain non-comparable
-because their physics-derived contacts and rigid-body state are not numerically
-identical.
+MuJoCo contract are rejected. Historical source traces remain useful as
+read-only semantic evidence, but they are not loadable policy/checkpoint
+formats.
 
 ## Implementation summary
 
 | Code path | Key classes/functions | Concrete migration change | Why it matters |
 | --- | --- | --- | --- |
-| `sim/manorl/abi.py` | `ResidualActionConfig`, `process_residual_actions`, `early_phase_mask`, `check_termination` | Makes the Gym action mapping the only default: XYZ action scale is `0.005 m`, accumulated XYZ cap is `0.05 m`, XYZ/joint gamma is `0.9`, and early phase is 50. The 20 joint scales/caps include full thumb authority (`0.10/0.12` scale and `1.0/1.2` cap for the first two thumb joints). Processing clips normalized actions, zeros inactive fingers and early-phase actions, accumulates residuals, applies limits, and adds the result to the mocap target. Deviation reset remains strictly above `0.10 m`. | A normalized policy action now produces the same command authority and temporal accumulation as Gym. |
-| `sim/manorl/observations.py` | `OBSERVATION_SLICES`, `SOURCE_ALIGNED_COMPATIBILITY`, `build_observation` | Preserves the exact 476D field order and slice boundaries, `[-5, 5]` policy clipping, hand-relative 64x3 point-cloud block, 50-step early phase, and movement pre-padding 250. | Matching the total dimension is insufficient; the checkpoint requires the same internal feature meanings and trajectory frame alignment. |
+| `sim/manorl/abi.py` | `ResidualActionConfig`, `process_residual_actions`, `early_phase_mask`, `check_termination` | Uses the current 28-DoF MuJoCo action mapping: XYZ action scale is `0.002 m`, accumulated XYZ cap is `0.02 m`, XYZ/joint gamma is `0.9`, and early phase is 30. The 22 joint scales/caps follow the six-joint thumb plus four-joint index-through-pinky order. Processing clips normalized actions, zeros inactive fingers and early-phase actions, accumulates residuals, applies limits, and adds the result to the mocap target. Deviation reset remains strictly above `0.10 m`. | A normalized policy action has one authoritative native command mapping. |
+| `sim/manorl/observations.py` | `ObservationLayout`, `SOURCE_ALIGNED_COMPATIBILITY`, `build_observation` | Preserves the named field order with shape-derived 28-DoF layouts, `[-5, 5]` policy clipping, a hand-relative 64x3 point-cloud block, 30-step early phase, and movement pre-padding 100. One controlled hand produces 480 observations; two controlled hands produce 505. | Matching the total dimension is insufficient; the checkpoint requires the same internal feature meanings and trajectory frame alignment. |
 | `sim/manorl/environment.py` | `EnvironmentConfig`, `_torch_global_surface_templates`, `_set_dynamic_templates`, `_reward_state`, `step` | Makes dynamic point templates the default. GPU sampling uses surface-area CDF face selection followed by square-root barycentric sampling with the global CUDA Torch RNG; construction/reset ordering preserves the source RNG sequence. CPU uses a deterministic fallback on the same MJX-Warp environment path. The environment passes the aligned residual and reward configs through the real physics step, observation, reward, and termination path. | PointNet receives the same sampling distribution as Gym, while viewer, evaluation, and training all execute one physical environment implementation. |
-| `sim/manorl/model.py` | `PointNetEncoder`, `FiLMLayer`, `FiLMBlock`, `ManoActorCritic` | Uses the source FiLM actor by default. PointNet maps 64x3 points through `3 -> 64 -> 128 -> 256`, max-pools, then emits 64 features. The 62D action/object condition is encoded to 32D. The default actor path is `286 -> 512 (FiLM) -> 512 -> 256 -> 128 -> 26`; the critic consumes `286 + 32 = 318` features. An explicit `use_film=False` model remains available for isolated diagnostics, but is not the production contract. CUDA construction order and source initialization behavior are preserved before converted weights load. | The converted checkpoint uses the unambiguous FiLM architecture; the non-FiLM diagnostic path cannot be selected accidentally by the default trainer. |
-| `sim/manorl/normalization.py` | `PointCloudAwareRunningStandardScaler`, `SourceRunningStandardScaler` | Uses source-compatible float64 observation moments, shared 3D XYZ statistics across all 64 points, epsilon `1e-5`, and the rl-games value-normalizer state layout. Converted inference restores these buffers instead of recomputing statistics in MuJoCo. | Identical raw observations can otherwise produce different actor inputs even when model weights match exactly. |
-| `sim/manorl/rewards.py`, `sim/manorl/skrl_runtime.py`, `sim/manorl/rl_games_ppo.py` | `RewardConfig`, `compute_rewards`, `source_aligned_reward_shaper`, `ManoPPOConfig`, `RlGamesPPO` | Keeps the verified pair-filtered MuJoCo hand-object force calculation, aligns observation and reward contact gates at strict `0.2 N`, keeps direct contact scale at 1x and maximum contact quality at `0.4`, and applies the source 0.5 PPO reward shaper. PPO retains 48-step rollouts, `gamma=0.99`, GAE `0.95`, three epochs, clipping `0.2`, and the source-aligned FiLM model. The continuous policy stores old mean/std, computes the rl-games exact Gaussian KL, schedules LR after every minibatch, and does not apply skrl's approximate-KL early stop. | Native reward, PPO, and observation environment contracts are versioned for the 0.2 N production boundary; converted IsaacGym sidecars retain their historical external 2 N declaration. |
-| `sim/manorl/gym_checkpoint.py`, `tools/convert_gym_checkpoint.py` | `_map_model`, `_map_normalizer`, `convert_gym_checkpoint` | Converts the validated rl-games payload without modifying it: all 41 policy/value tensors, fixed `log_std`, observation normalizer, point-cloud normalizer, and value normalizer are mapped into native skrl modules. The output sidecar records source path/SHA256, model layout, point sampling, timing, action, reward, and deterministic inference contracts. Existing output files are never overwritten. | The MuJoCo runtime is now executing the Gym policy state rather than a separately trained native policy with a similar filename. |
-| `sim/manorl/checkpoint.py` | `checkpoint_runtime_metadata`, `_validate_conversion_metadata`, `load_skrl_checkpoint_for_inference`, `load_skrl_checkpoint` | Rejects raw rl-games files at the native loader, validates required modules, finite tensor state, sidecar schema, and converted provenance. Actual model key/shape compatibility is checked strictly against the runtime model during load. Native training resume additionally requires the current reward/PPO/environment contract IDs. Recorded Gym-v1 PointNet, action, timing, sampling, and evaluator values are not permanent global loader constants. | Current checkpoints fail closed on structural corruption while future versioned architectures and environment defaults can evolve without bypassing historical Gym-v1 equality checks. |
-| `sim/manorl/view_environment.py`, `tools/train_manorl_cube1.py` | `_build_checkpoint_stepper`, `view_environment`, `run`, `_wandb_config` | Removes compatibility-profile CLI selection. Viewer and training construct the current default `EnvironmentConfig` and FiLM runtime. Training metadata derives the complete residual config from code instead of hard-coded legacy values; checkpoint sidecars, W&B, and Rerun record the active contracts. | Evaluation and training share the current default, while future defaults remain versionable rather than frozen by the Gym-v1 converter. |
-| `tests/manorl/` | ABI, environment, model, normalizer, checkpoint, viewer, and training-contract tests | Verifies exact action steps/caps, dynamic sampler RNG behavior, 41-tensor conversion, independent source-key actor/critic parity, normalizer state, strict checkpoint rejection, reward scaling, old-contract rejection, metadata, and CPU/GPU execution. | Contract and fixed-input parity are tested without treating cross-physics return equality as a requirement. |
+| `sim/manorl/model.py` | `PointNetEncoder`, `FiLMLayer`, `FiLMBlock`, `ManoActorCritic` | Uses the source FiLM actor by default. PointNet maps 64x3 points through `3 -> 64 -> 128 -> 256`, max-pools, then emits 64 features. Action, observation, and conditioning widths derive from the resolved one- or two-hand layout, producing 28 or 56 policy actions. An explicit `use_film=False` model remains available for isolated diagnostics. | One model implementation follows the selected 28-DoF hand layout without hard-coded legacy widths. |
+| `sim/manorl/normalization.py` | `PointCloudAwareRunningStandardScaler`, `SourceRunningStandardScaler` | Uses float64 observation moments, shared 3D XYZ statistics across all 64 points, epsilon `1e-5`, and the native value-normalizer state layout. Native checkpoints restore these buffers instead of recomputing statistics during evaluation. | Identical raw observations can otherwise produce different actor inputs even when model weights match exactly. |
+| `sim/manorl/rewards.py`, `sim/manorl/skrl_runtime.py`, `sim/manorl/rl_games_ppo.py` | `RewardConfig`, `compute_rewards`, `source_aligned_reward_shaper`, `ManoPPOConfig`, `RlGamesPPO` | Keeps the verified pair-filtered MuJoCo hand-object force calculation, aligns observation and reward contact gates at strict `0.2 N`, keeps direct contact scale at 1x and maximum contact quality at `0.4`, and applies the 0.5 PPO reward shaper. PPO retains 48-step rollouts, `gamma=0.99`, GAE `0.95`, three epochs, clipping `0.2`, and the FiLM model. | Native reward, PPO, and observation environment contracts are versioned for the 0.2 N production boundary. |
+| `sim/manorl/checkpoint.py` | `checkpoint_runtime_metadata`, `load_skrl_checkpoint_for_inference`, `load_skrl_checkpoint` | Accepts only native MuJoCo skrl files, validates required modules, finite tensor state, sidecar schema, current reward/PPO/environment contracts, and the resolved hand/action signature. Isaac Gym/rl-games checkpoints are rejected without a conversion path. | A 26-DoF or wrong-hand checkpoint cannot silently enter the current 28/56-wide runtime. |
+| `sim/manorl/view_environment.py`, `tools/train_manorl_cube1.py` | `_build_checkpoint_stepper`, `view_environment`, `run`, `_wandb_config` | Viewer and training construct the current default `EnvironmentConfig` and FiLM runtime. Training metadata derives the complete residual config from code; checkpoint sidecars, W&B, and Rerun record the active hand/action contracts. | Evaluation and training share the same current MuJoCo defaults. |
+| `tests/manorl/` | ABI, environment, model, normalizer, checkpoint, viewer, and training-contract tests | Verifies exact 28-DoF action steps/caps, dynamic sampler behavior, normalizer state, native checkpoint rejection, hand-side signatures, reward scaling, metadata, and CPU/GPU execution. | Current MuJoCo contracts are tested without retaining an Isaac Gym checkpoint migration surface. |
 
 ## Authority and scope
 
 Source authority is the local read-only sibling at
 `/home/jay/dexrobot/FromSSH/manohand_reconstruction/IsaacGymEnvs/isaacgymenvs`.
-The checkpoint sidecar confirms the same 476D layout but is a recorded training
-configuration, not the exact evaluation invocation or current executable task
-configuration. It records `earlyPhaseMocapSteps: 50`,
-`movementFramePrePadding: 200`, and dynamic point templates. The validated Gym
-evaluation kept early phase 50 and dynamic templates but inherited the current
-task's movement pre-padding 250; that actual 790-step contract is represented by
-`GYM_EVAL_ALIGNED_COMPATIBILITY`. This validated 50/dynamic/250 contract is now
-the only target production and training contract. Checkpoints from the prior
-MuJoCo contract are rejected.
+It is historical semantic evidence only. The executable production contract is
+MuJoCo-native: 28 DoF per controlled hand, early phase 30, movement pre-padding
+100, and reset-local dynamic point templates. Prior checkpoint-sidecar profiles
+are no longer exported or loadable.
 The accepted `cube1_01_009` replay is a residual-off, deviation-disabled
 diagnostic mode and must remain distinct from this training ABI.
 
@@ -125,22 +117,25 @@ contact-force equivalence or policy/normalizer compatibility.
 
 ## Residual action ABI
 
-The action ordering is wrist XYZ, wrist roll/pitch/yaw, then thumb, index,
-middle, ring, pinky four-joint groups: `0:3`, `3:6`, `6:26`. Raw actions are
+Each controlled-hand action block is wrist XYZ, wrist roll/pitch/yaw, six
+thumb joints, then four-joint index, middle, ring, and pinky groups: `0:3`,
+`3:6`, `6:12`, `12:16`, `16:20`, `20:24`, `24:28`. Bimanual actions concatenate
+right then left blocks. Raw actions are
 clipped before `ActionProcessor` (`vec_task.py:374-376`;
 `action_processor.py:157-232, 358-386`). The processor:
 
 1. zeros inactive finger actions and their stored offsets from the expected
    contact mask (`finger_mask_manager.py:68-158`);
 2. zeros all actions in `[early_phase_start, early_phase_start + N)`;
-3. applies XYZ scales `(0.005, 0.005, 0.005)`, rotation scale
+3. applies XYZ scales `(0.002, 0.002, 0.002)`, rotation scale
    `0.025 * 0.01`, and the configured per-joint scales;
 4. zeros all cumulative offsets on reset, in early phase, on the first step
    after early phase, or in non-residual mode; the first post-early step then
    immediately accumulates its scaled action from zero history, while later
    steps apply gamma `0.9`;
-5. clips XYZ offsets to `[-0.05, 0.05]` from `baseMaxOffset`; the separate
-   `maxOffsetScale=2.0` applies only to the per-joint limits; and
+5. clips XYZ offsets to `[-0.02, 0.02]` from `baseMaxOffset`; the
+   `maxOffsetScale=1.0` per-joint limits are materialized in the 22-entry cap
+   vector; and
 6. adds `[cum_xyz, immediate_rotation, cum_joints]` to the mocap target,
    then clamps to physical DOF limits.
 
@@ -152,12 +147,13 @@ the deterministic portion is implemented in this 5B slice. Source
 `actionsMovingAverage=1` makes its moving-average assignment an identity for
 the configured ABI. The target must not reuse the acceptance replay's
 `RESIDUAL_ENABLED=False` as its training default. The listed
-`(0.005, 0.005, 0.005)` and `[-0.05, 0.05]` values are shared by checkpoint
+`(0.002, 0.002, 0.002)` and `[-0.02, 0.02]` values are shared by checkpoint
 evaluation and new target training.
 
-The production mapping includes all 20 joint scales and accumulated-offset
-limits. In particular, the first two thumb scales/caps are `0.10/0.12` and
-`1.0/1.2`.
+The production mapping includes all 22 joint scales and accumulated-offset
+limits. The six thumb scales are `(0.02, 0.02, 0.02, 0.02, 0.01, 0.005)` and
+caps are `(0.2, 0.2, 0.2, 0.2, 0.1, 0.05)`; each other finger uses scales
+`(0.01, 0.01, 0.015, 0.005)` and caps `(0.1, 0.1, 0.15, 0.1)`.
 
 ## Episode and reset ABI
 
@@ -300,18 +296,11 @@ evaluation choice as clipped normalized actor mean. That is a target contract,
 not an inferred rl-games player behavior.
 
 Target checkpoint I/O saves and reloads native skrl policy/value, optimizer,
-and normalizer state with a configuration sidecar. Native training resume
-requires the current reward, PPO, and environment contract IDs, so an older
-objective cannot silently continue training. Inference validates checkpoint
-structure, finite state, provenance schema, and the runtime model's strict
-key/shape boundary; it does not permanently equate future runtime settings with
-Gym-v1 constants. Raw rl-games top-level `model`/`env_state` checkpoints remain
-rejected at the native boundary, but the validated FiLM/PointNet source family
-has an explicit converter at `tools/convert_gym_checkpoint.py`. The converter
-maps all 41 model tensors and both normalizers, records the source and target
-dtypes, and stores the Gym-v1 point/action/timing/reward configuration as
-versioned provenance. Fixed-observation deterministic mu/value parity is the
-conversion acceptance gate.
+and normalizer state with a configuration sidecar. Resume and inference both
+require the current reward, PPO, environment, model-shape, and resolved
+hand/action contracts. Raw rl-games top-level `model`/`env_state` checkpoints
+are rejected and no converter is maintained; all new checkpoints originate
+from the 28-DoF-per-hand MuJoCo runtime.
 
 The aligned dynamic point-cloud sampler uses PyTorch's global CUDA RNG on GPU,
 as the source does. It samples triangle faces from the surface-area CDF and then
@@ -332,14 +321,14 @@ default is absent.
 | Raw 476D composition and slice order | Yes | `sim/manorl/observations.py` | Deterministic resolved-state fixtures now check every named slice and concatenated 476D layout. A source-versus-MuJoCo state fixture remains required once physical extractors exist. |
 | Hand/object kinematics, point cloud, geometry, table clearance | Implemented for accepted cube1 MJX-Warp state production | `sim/manorl/environment.py` | Fixed-state Isaac-versus-MuJoCo component fixtures remain needed for cross-simulator parity. |
 | Contact force aggregation and expected-mask lookup | Implemented for accepted cube1 MJX-Warp state production | `sim/manorl/environment.py` | Native sign/frame fixture and MJX buffer tests pass; Isaac force equivalence remains needed for parity. |
-| 26D residual transform, active-joint masking, early phase | Yes | `sim/manorl/abi.py` | Deterministic tensor cases for clipping, masking, transition step, accumulation, and limits. |
+| 28D residual transform, active-joint masking, early phase | Yes | `sim/manorl/abi.py` | Deterministic tensor cases cover all 22 finger offsets, clipping, masking, transition step, accumulation, and limits. |
 | Target application and MuJoCo batched stepping | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/environment.py` | Focused source-counter test and two-world CPU smoke cover action/target/two-substep ordering. |
 | Reset, progress, completion, deviation penalty | Yes for the bounded cube1 MJX-Warp scene | `sim/manorl/abi.py`, `environment.py` | PPO records terminal observations, then explicitly resets completed rows before the next action. The physical environment retains its compatibility delayed-reset path; focused boundary fixtures and the 791-call CPU episode smoke cover both. |
 | Rewards and contact-window timing | Aligned strict 0.2 N observation/reward, contact-1x production contract | `sim/manorl/environment.py`, `observations.py`, `rewards.py` | Source raw movement `[690,982]` maps to inclusive sliced window `[250,542]`; strict pair-filtered forces, weighted fractions, exact 0.2 N exclusion, observation-direction gating, and broad-contact isolation are tested. Cross-simulator return equality remains non-comparable because physics-derived forces differ. |
 | Privileged/state inputs | Yes: absent in this configuration | `sim/manorl/environment.py` | Assert no `states` output until a source config declares `numStates > 0`. |
 | Network, PointNet/FiLM preprocessing, and normalization | Yes | `sim/manorl/model.py`, `normalization.py` | Source module namespace/shape and shared-XYZ statistics are tested; frozen-normalizer and deterministic-mu equivalence on a captured source batch remain required. |
 | Inference action selection and skrl adapter | No local Mano source defines the downstream rl-games player choice | `sim/manorl/gymnasium_env.py`, `skrl_runtime.py` | Target policy mode is explicitly clipped normalized mean; deterministic CPU/CUDA physics rollouts and a stochastic PPO update smoke pass. No rl-games evaluation equivalence is claimed. |
-| Checkpoint and optimizer migration | Explicit Gym rl-games to native skrl conversion is implemented for the validated FiLM/PointNet checkpoint family | `sim/manorl/gym_checkpoint.py`, `sim/manorl/checkpoint.py` | `tools/convert_gym_checkpoint.py` maps model, observation normalizer, value normalizer, and a versioned provenance sidecar. Raw rl-games inputs remain rejected; model key/shape and fixed-observation parity provide compatibility evidence without freezing Gym-v1 environment values as global loader rules. |
+| Native checkpoint and optimizer persistence | Yes, for current MuJoCo 28/56-wide layouts only | `sim/manorl/checkpoint.py` | Native modules, current contracts, model shape, and resolved right/left hand signature are required. Isaac Gym/rl-games inputs and unsigned pre-28-DoF sidecars fail closed. |
 | Current-source versus checkpoint-sidecar training settings | Yes: historical sidecar metadata differs from the successful invocation | `sim/manorl/observations.py`, `sim/manorl/view_environment.py` | Historical sidecar 50/dynamic/200 remains recorded evidence; successful 50/dynamic/250 evaluation is the only production runtime contract. |
 
 ## Gate disposition

@@ -23,7 +23,7 @@ from sim.manorl.contracts import EFFORT, JOINT_NAMES, ServoConfig
 def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None:
     manifest = validate_asset_manifest()
     assert manifest["source_repository"] == "sibling:manohand_reconstruction/model/all_assets"
-    assert manifest["source_commit"] == "ead79126589d1abf2362ea30b9d674d9e675a2f9"
+    assert manifest["source_commit"] == "033b358b73c57e5f437f6582b6a9b0d4add7f9ee"
     assert len(manifest["files"]) == 21
     assert all(
         entry["curated_path"].startswith(("hand/", "cube1/"))
@@ -38,7 +38,7 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     positions = root.findall("./actuator/position")
     actuator_order = tuple(actuator.get("name", "") for actuator in positions)
     assert actuator_order == JOINT_NAMES
-    assert len(positions) == 26
+    assert len(positions) == len(JOINT_NAMES) == 28
     assert all(actuator.get("inheritrange") == "1" for actuator in positions)
     assert all(actuator.get("dampratio") == "1.3999999999999999" for actuator in positions[:6])
     assert all(actuator.get("dampratio") == "1" for actuator in positions[6:])
@@ -124,7 +124,7 @@ def test_visual_scene_uses_urdf_visual_meshes_without_collision_bits() -> None:
     )
     assert fingertip_marker is not None
     assert fingertip_marker.get("type") == "sphere"
-    assert fingertip_marker.get("size") == "0.00125"
+    assert fingertip_marker.get("size") == "0.0025"
 
     object_asset = root.find("./asset/mesh[@name='cube1_visual_mesh']")
     object_visual = root.find(".//body[@name='cube1']/geom[@name='cube1_visual']")
@@ -199,6 +199,7 @@ def test_unified_visual_scene_contains_each_object_visual_mesh() -> None:
 
 def test_s02_object_registry_is_closed_materialized_and_digest_checked() -> None:
     expected = (
+        "banana",
         "cube1",
         "cube2",
         "cuboid1",
@@ -220,7 +221,7 @@ def test_s02_object_registry_is_closed_materialized_and_digest_checked() -> None
     for object_type in expected:
         runtime = object_runtime(object_type)
         assert runtime.urdf_path.is_file()
-        assert runtime.collision_mesh_path.is_file()
+        assert all(path.is_file() for path in runtime.collision_mesh_paths)
         assert runtime.grasp_mapping_path.is_file()
         vertices = object_collision_vertices(object_type)
         dimensions = np.ptp(vertices, axis=0)
@@ -242,10 +243,15 @@ def test_all_s02_object_models_compile_with_object_specific_mass_and_geometry() 
         mujoco, model = compile_model(object_type=object_type)
         runtime = object_runtime(object_type)
         body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name)
-        geom_id = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_GEOM, f"{object_type}_collision"
-        )
-        assert body_id >= 0 and geom_id >= 0
+        geom_ids = [
+            geom_id
+            for geom_id in range(model.ngeom)
+            if int(model.geom_bodyid[geom_id]) == body_id
+            and (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id) or "").endswith(
+                "_collision"
+            )
+        ]
+        assert body_id >= 0 and len(geom_ids) == runtime.collision_geom_count
         assert float(model.body_mass[body_id]) > 0.0
         signatures[object_type] = (
             round(float(model.body_mass[body_id]), 6),
@@ -257,7 +263,8 @@ def test_all_s02_object_models_compile_with_object_specific_mass_and_geometry() 
 
 def test_independent_zero_fk_contains_fixed_palm_rotation() -> None:
     transforms = urdf_zero_fk()
-    assert len(transforms) == 28
+    # 28 actuated joints plus the fixed palm joint produce 30 link frames.
+    assert len(transforms) == len(JOINT_NAMES) + 2
     palm = transforms["palm"]
     assert not np.allclose(palm[:3, :3], np.eye(3))
     np.testing.assert_allclose(palm[:3, 3], 0.0, atol=0.0)
@@ -268,9 +275,9 @@ def test_compiled_native_position_actuator_semantics_and_static_fk() -> None:
         pytest.skip("mujoco is not installed in this environment")
     mujoco, model = compile_model()
     servo = ServoConfig()
-    assert model.nq == 33
-    assert model.nv == 32
-    assert model.nu == 26
+    assert model.nq == 35
+    assert model.nv == 34
+    assert model.nu == len(JOINT_NAMES) == 28
     for actuator_id, (name, kp, effort) in enumerate(
         zip(JOINT_NAMES, servo.kp, EFFORT, strict=True)
     ):

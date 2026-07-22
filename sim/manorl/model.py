@@ -13,7 +13,7 @@ from torch import nn
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 
 from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
-from sim.manorl.observations import OBSERVATION_SLICES
+from sim.manorl.observations import ObservationLayout, observation_layout_for_dimension
 
 POINT_COUNT = 64
 POINT_FEATURE_DIM = 64
@@ -22,6 +22,12 @@ CONDITION_EMBED_DIM = 32
 BASE_FEATURE_DIM = 286
 HIDDEN_UNITS = (512, 512, 256, 128)
 LOG_STD_LIMITS = (-10.0, 2.0)
+
+
+def _layout_for_observation_dim(observation_dim: int) -> ObservationLayout:
+    """Resolve a live Gym space to the shared observation layout contract."""
+
+    return observation_layout_for_dimension(int(observation_dim))
 
 
 class PointNetEncoder(nn.Module):
@@ -94,8 +100,27 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         use_film: bool = True,
     ) -> None:
         Model.__init__(self, observation_space=observation_space, state_space=state_space, action_space=action_space, device=device)
-        if self.num_observations != OBSERVATION_DIM or self.num_actions != ACTION_DIM:
-            raise ValueError("ManoActorCritic requires the fixed 476D / 26D ABI")
+        self.observation_dim = int(self.num_observations)
+        self.action_dim = int(self.num_actions)
+        self.observation_layout = _layout_for_observation_dim(self.observation_dim)
+        expected_action_dim = (
+            self.observation_layout.dof_dim * self.observation_layout.hand_count
+        )
+        if self.action_dim != expected_action_dim:
+            raise ValueError(
+                "ManoRL action and observation layouts do not match: "
+                f"observation width {self.observation_dim} requires "
+                f"{expected_action_dim} actions, got {self.action_dim}"
+            )
+        self.base_feature_dim = (
+            self.observation_layout.slices["object_point_cloud_raw"].start
+            + POINT_FEATURE_DIM
+            + 48
+            + 16
+            + 48
+            + 16
+            + self.observation_layout.cumulative_joint_dim
+        )
         GaussianMixin.__init__(
             self, clip_actions=False, clip_mean_actions=False, clip_log_std=True,
             min_log_std=LOG_STD_LIMITS[0], max_log_std=LOG_STD_LIMITS[1], reduction="sum", role="policy",
@@ -109,7 +134,7 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         if self.use_film:
             self.actor_backbone = nn.ModuleList(
                 [
-                    FiLMBlock(BASE_FEATURE_DIM, HIDDEN_UNITS[0], device),
+                    FiLMBlock(self.base_feature_dim, HIDDEN_UNITS[0], device),
                     nn.Linear(HIDDEN_UNITS[0], HIDDEN_UNITS[1]).to(device),
                     nn.ELU(),
                     nn.Linear(HIDDEN_UNITS[1], HIDDEN_UNITS[2]).to(device),
@@ -118,12 +143,12 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
                     nn.ELU(),
                 ]
             )
-            actor_input_dim = BASE_FEATURE_DIM
+            actor_input_dim = self.base_feature_dim
         else:
             # Single-task mode keeps the source condition features as ordinary
             # inputs while removing FiLM modulation. This preserves action and
             # geometry information for an eventual multi-task run.
-            actor_input_dim = BASE_FEATURE_DIM + CONDITION_EMBED_DIM
+            actor_input_dim = self.base_feature_dim + CONDITION_EMBED_DIM
             self.actor_backbone = nn.ModuleList(
                 [
                     nn.Linear(actor_input_dim, HIDDEN_UNITS[0]).to(device),
@@ -136,10 +161,10 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
                     nn.ELU(),
                 ]
             )
-        critic_input_dim = BASE_FEATURE_DIM + CONDITION_EMBED_DIM
-        self.actor_head = nn.Linear(HIDDEN_UNITS[-1], ACTION_DIM).to(device)
+        critic_input_dim = self.base_feature_dim + CONDITION_EMBED_DIM
+        self.actor_head = nn.Linear(HIDDEN_UNITS[-1], self.action_dim).to(device)
         self.log_std = nn.Parameter(
-            torch.full((ACTION_DIM,), -0.99, dtype=torch.float32, device=device)
+            torch.full((self.action_dim,), -0.99, dtype=torch.float32, device=device)
         )
         self.critic = nn.Sequential(
             nn.Linear(critic_input_dim, HIDDEN_UNITS[0]), nn.ELU(),
@@ -151,9 +176,8 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
         self.critic = self.critic.to(device)
         self._initialize_source_weights()
 
-    @staticmethod
-    def _slice(observations: torch.Tensor, name: str) -> torch.Tensor:
-        section = OBSERVATION_SLICES[name]
+    def _slice(self, observations: torch.Tensor, name: str) -> torch.Tensor:
+        section = self.observation_layout.slices[name]
         return observations[:, section]
 
     def _initialize_source_weights(self) -> None:
@@ -170,8 +194,10 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
                     nn.init.zeros_(module.bias)
 
     def _features(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        if observations.ndim != 2 or observations.shape[1:] != (OBSERVATION_DIM,):
-            raise ValueError("ManoActorCritic requires (batch, 476) observations")
+        if observations.ndim != 2 or observations.shape[1:] != (self.observation_dim,):
+            raise ValueError(
+                f"ManoActorCritic requires (batch, {self.observation_dim}) observations"
+            )
         point_cloud = self._slice(observations, "object_point_cloud_raw").reshape(-1, POINT_COUNT, 3)
         point_features = self.pointnet(point_cloud)
         hand = torch.cat([
@@ -181,7 +207,7 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
             self._slice(observations, "expected_contact_mask"),
         ], dim=-1)
         base = torch.cat([
-            observations[:, :OBSERVATION_SLICES["object_point_cloud_raw"].start],
+            observations[:, : self.observation_layout.slices["object_point_cloud_raw"].start],
             point_features,
             hand,
             self._slice(observations, "cumulative_joint_offset"),
@@ -190,8 +216,10 @@ class ManoActorCritic(GaussianMixin, DeterministicMixin, Model):
             self._slice(observations, "action_types"), self._slice(observations, "object_geometry")
         ], dim=-1)
         condition = self.condition_encoder(condition_input)
-        if base.shape[1] != BASE_FEATURE_DIM:
-            raise RuntimeError(f"source feature split changed: expected {BASE_FEATURE_DIM}, got {base.shape[1]}")
+        if base.shape[1] != self.base_feature_dim:
+            raise RuntimeError(
+                f"source feature split changed: expected {self.base_feature_dim}, got {base.shape[1]}"
+            )
         return base, condition
 
     def compute(self, inputs: Mapping[str, torch.Tensor], role: str = "") -> tuple[torch.Tensor, dict[str, torch.Tensor]]:

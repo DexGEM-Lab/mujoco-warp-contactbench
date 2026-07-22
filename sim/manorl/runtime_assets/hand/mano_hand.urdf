@@ -4,7 +4,7 @@
     <color rgba="0.95 0.75 0.65 1.0"/>
   </material>
   <material name="tip_marker_red">
-    <color rgba="0.95 0.75 0.65 0.1"/>
+    <color rgba="1.0 0.0 0.0 1.0"/>
   </material>
   <link name="base_link">
     <inertial>
@@ -142,10 +142,24 @@
   </link>
   <joint name="j1_thumb_cmc_flex" type="revolute">
     <parent link="thumb_cmc_abd"/>
-    <child link="thumb_cmc"/>
+    <child link="thumb_cmc_flex"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="0.983308 -0.16371468 0.07939028"/>
     <limit lower="-2.0" upper="1.97" effort="100.0" velocity="100.0"/>
+  </joint>
+  <link name="thumb_cmc_flex">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+  </link>
+  <joint name="j1_thumb_cmc_twist" type="revolute">
+    <parent link="thumb_cmc_flex"/>
+    <child link="thumb_cmc"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0.11813027 0.24257056 -0.9629147"/>
+    <limit lower="-1.5708" upper="1.5708" effort="100.0" velocity="100.0"/>
   </joint>
   <link name="thumb_cmc">
     <inertial>
@@ -165,12 +179,26 @@
       </geometry>
     </collision>
   </link>
-  <joint name="j1_thumb_mcp" type="revolute">
+  <joint name="j1_thumb_mcp_flex" type="revolute">
     <parent link="thumb_cmc"/>
-    <child link="thumb_mcp"/>
+    <child link="thumb_mcp_flex"/>
     <origin xyz="-0.019956063 0.0012230668 0.024574943" rpy="0 0 0"/>
-    <axis xyz="0.3696764866888756 -0.8790409917024126 0.3010419075414728"/>
+    <axis xyz="0.3696764866888757 -0.8790409917024125 0.3010419075414728"/>
     <limit lower="0.0" upper="1.745" effort="100.0" velocity="100.0"/>
+  </joint>
+  <link name="thumb_mcp_flex">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+  </link>
+  <joint name="j1_thumb_mcp_abd" type="revolute">
+    <parent link="thumb_mcp_flex"/>
+    <child link="thumb_mcp"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="-0.5716182768686316 -0.4705844355444832 -0.6721628036220215"/>
+    <limit lower="-0.7" upper="0.7" effort="100.0" velocity="100.0"/>
   </joint>
   <link name="thumb_mcp">
     <inertial>
@@ -194,7 +222,7 @@
     <parent link="thumb_mcp"/>
     <child link="thumb_ip"/>
     <origin xyz="-0.022728203 -0.005675003 0.014841277" rpy="0 0 0"/>
-    <axis xyz="0.3696764866888756 -0.8790409917024126 0.3010419075414728"/>
+    <axis xyz="0.3696764866888757 -0.8790409917024125 0.3010419075414728"/>
     <limit lower="0.0" upper="1.745" effort="100.0" velocity="100.0"/>
   </joint>
   <link name="thumb_ip">
@@ -212,7 +240,7 @@
     <visual>
       <origin xyz="-0.0266503338 -0.00300316885 0.0244902819" rpy="0 0 0"/>
       <geometry>
-        <sphere radius="0.00125"/>
+        <sphere radius="0.0025"/>
       </geometry>
       <material name="tip_marker_red"/>
     </visual>
@@ -240,7 +268,7 @@
     <parent link="index_mcp_abd"/>
     <child link="index_mcp"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
-    <axis xyz="-0.007558282177929704 -0.0004672015231318582 0.9999713266355468"/>
+    <axis xyz="-0.007558282177929706 -0.0004672015231318583 0.999971326635547"/>
     <limit lower="-0.175" upper="1.571" effort="100.0" velocity="100.0"/>
   </joint>
   <link name="index_mcp">
@@ -265,7 +293,7 @@
     <parent link="index_mcp"/>
     <child link="index_pip"/>
     <origin xyz="-0.033410024 0.0039509973 0.0023879595" rpy="0 0 0"/>
-    <axis xyz="-0.007558282177929704 -0.0004672015231318582 0.9999713266355468"/>
+    <axis xyz="-0.007558282177929706 -0.0004672015231318583 0.999971326635547"/>
     <limit lower="0.0" upper="1.745" effort="100.0" velocity="100.0"/>
   </joint>
   <link name="index_pip">
@@ -290,7 +318,7 @@
     <parent link="index_pip"/>
     <child link="index_dip"/>
     <origin xyz="-0.022654545 -0.0014003497 -0.00017188862" rpy="0 0 0"/>
-    <axis xyz="-0.007558282177929704 -0.0004672015231318582 0.9999713266355468"/>
+    <axis xyz="-0.007558282177929706 -0.0004672015231318583 0.999971326635547"/>
     <limit lower="0.0" upper="1.745" effort="100.0" velocity="100.0"/>
   </joint>
   <link name="index_dip">
@@ -308,7 +336,7 @@
     <visual>
       <origin xyz="-0.0260560066 0.000962143298 -0.000523932278" rpy="0 0 0"/>
       <geometry>
-        <sphere radius="0.00125"/>
+        <sphere radius="0.0025"/>
       </geometry>
       <material name="tip_marker_red"/>
     </visual>
@@ -404,7 +432,7 @@
     <visual>
       <origin xyz="-0.0262673758 0.00392891001 -0.00421216805" rpy="0 0 0"/>
       <geometry>
-        <sphere radius="0.00125"/>
+        <sphere radius="0.0025"/>
       </geometry>
       <material name="tip_marker_red"/>
     </visual>
@@ -500,7 +528,7 @@
     <visual>
       <origin xyz="-0.0250933915 0.00388110499 -0.00751078501" rpy="0 0 0"/>
       <geometry>
-        <sphere radius="0.00125"/>
+        <sphere radius="0.0025"/>
       </geometry>
       <material name="tip_marker_red"/>
     </visual>
@@ -596,7 +624,7 @@
     <visual>
       <origin xyz="-0.0176626015 0.0015621488 -0.0103372559" rpy="0 0 0"/>
       <geometry>
-        <sphere radius="0.00125"/>
+        <sphere radius="0.0025"/>
       </geometry>
       <material name="tip_marker_red"/>
     </visual>

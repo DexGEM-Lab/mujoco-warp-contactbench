@@ -56,10 +56,6 @@ class RewardConfig:
 SOURCE_ALIGNED_REWARD_CONFIG: Final = RewardConfig()
 # Converted IsaacGym checkpoints keep their external source-side 2 N declaration.
 # Production ManoRL environments use ``SOURCE_ALIGNED_REWARD_CONFIG`` above.
-CHECKPOINT_SIDECAR_REWARD_CONFIG: Final = RewardConfig(contact_force_threshold=2.0)
-CHECKPOINT_SIDECAR_PPO_REWARD_SCALE: Final[float] = PPO_REWARD_SCALE
-
-
 @dataclass(frozen=True)
 class RewardState:
     object_position: NDArray[np.float64]
@@ -137,8 +133,24 @@ def compute_rewards(
     target_position = _finite_batch("target_object_position", state.target_object_position, 3)
     object_orientation = _finite_batch("object_orientation_xyzw", state.object_orientation_xyzw, 4)
     target_orientation = _finite_batch("target_object_orientation_xyzw", state.target_object_orientation_xyzw, 4)
-    cumulative_offset = _finite_batch("cumulative_offset", state.cumulative_offset, 3)
-    cumulative_joint = _finite_batch("cumulative_joint_offset", state.cumulative_joint_offset, 20)
+    cumulative_offset_values = np.asarray(state.cumulative_offset, dtype=np.float64)
+    if (
+        cumulative_offset_values.ndim != 2
+        or cumulative_offset_values.shape[0] != batch
+        or cumulative_offset_values.shape[1] not in (3, 6)
+    ):
+        raise ValueError("cumulative_offset must contain one or two XYZ hand blocks")
+    cumulative_offset = _finite_batch(
+        "cumulative_offset",
+        cumulative_offset_values,
+        int(cumulative_offset_values.shape[1]),
+    )
+    cumulative_values = np.asarray(state.cumulative_joint_offset, dtype=np.float64)
+    if cumulative_values.ndim != 2 or cumulative_values.shape[0] != batch:
+        raise ValueError("cumulative_joint_offset must be a finite batch matrix")
+    cumulative_joint = _finite_batch(
+        "cumulative_joint_offset", cumulative_values, int(cumulative_values.shape[1])
+    )
     hand_object_forces = _finite_tensor(
         "hand_object_force_on_object_world_N", state.hand_object_force_on_object_world_N, (16, 3), batch
     )
@@ -147,8 +159,18 @@ def compute_rewards(
     object_velocity = _finite_batch("object_linear_velocity", state.object_linear_velocity, 3)
     active = np.asarray(state.active_joint_mask, dtype=bool)
     rotation_disabled = np.asarray(state.rotation_disabled_mask, dtype=bool)
-    if active.shape != (batch, 20) or rotation_disabled.shape != (batch,):
+    if active.shape != cumulative_joint.shape or rotation_disabled.shape != (batch,):
         raise ValueError("active_joint_mask and rotation_disabled_mask have invalid shape")
+    position_hand_count = cumulative_offset.shape[1] // 3
+    joint_hand_count = (
+        1
+        if cumulative_joint.shape[1] in (20, 22)
+        else 2
+        if cumulative_joint.shape[1] in (40, 44)
+        else 0
+    )
+    if position_hand_count != joint_hand_count:
+        raise ValueError("position and joint cumulative state hand counts differ")
     for name, values in (
         ("target_object_position", target_position), ("object_orientation_xyzw", object_orientation),
         ("target_object_orientation_xyzw", target_orientation), ("cumulative_offset", cumulative_offset),
@@ -192,7 +214,18 @@ def compute_rewards(
         np.where(rotation_deg <= config.rotation_segment_2_threshold_deg, segment_2, config.rotation_segment_3_value),
     )
     rotation = np.where(rotation_disabled, 0.0, config.rotation_scale * rotation_value + config.rotation_base_penalty)
-    position_base = np.sum(np.abs(cumulative_offset * config.position_penalty_scale), axis=1)
+    # Keep the single-hand reward scale when both hands are controlled by
+    # averaging their per-hand XYZ residual magnitudes.
+    position_base = np.mean(
+        np.sum(
+            np.abs(
+                cumulative_offset.reshape(batch, position_hand_count, 3)
+                * config.position_penalty_scale
+            ),
+            axis=2,
+        ),
+        axis=1,
+    )
     joint_base = np.sum(np.where(active, np.abs(cumulative_joint * config.joint_penalty_scale), 0.0), axis=1)
     joint_base = joint_base / np.maximum(active.sum(axis=1), 1.0) * config.reference_joint_count
     position_penalty = -config.action_penalty_scale * config.position_penalty_weight * position_base

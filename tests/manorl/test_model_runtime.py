@@ -31,23 +31,24 @@ def _model(adapter: ManoGymnasiumVectorEnv) -> ManoActorCritic:
 def test_model_defaults_to_source_pointnet_film(adapter: ManoGymnasiumVectorEnv) -> None:
     import torch
 
-    from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
+    action_dim = adapter.action_dim
+    observation_dim = adapter.observation_dim
 
-    assert adapter.single_action_space.shape == (ACTION_DIM,)
-    np.testing.assert_array_equal(adapter.single_action_space.low, np.full(ACTION_DIM, -1.0, dtype=np.float32))
-    np.testing.assert_array_equal(adapter.single_action_space.high, np.full(ACTION_DIM, 1.0, dtype=np.float32))
+    assert adapter.single_action_space.shape == (action_dim,)
+    np.testing.assert_array_equal(adapter.single_action_space.low, np.full(action_dim, -1.0, dtype=np.float32))
+    np.testing.assert_array_equal(adapter.single_action_space.high, np.full(action_dim, 1.0, dtype=np.float32))
     model = _model(adapter)
     keys = set(model.state_dict())
     assert model.use_film is True
     assert "actor_backbone.0.film.film_generator.weight" in keys
-    assert model.actor_backbone[0].linear.in_features == 286
+    assert model.actor_backbone[0].linear.in_features == model.base_feature_dim
 
-    observations = torch.zeros((2, OBSERVATION_DIM), dtype=torch.float32)
+    observations = torch.zeros((2, observation_dim), dtype=torch.float32)
     observations[:, 266] = 1.0
     policy, policy_outputs = model.compute({"observations": observations}, role="policy")
     value, value_outputs = model.compute({"observations": observations}, role="value")
-    assert policy.shape == (2, ACTION_DIM)
-    assert policy_outputs["log_std"].shape == (2, ACTION_DIM)
+    assert policy.shape == (2, action_dim)
+    assert policy_outputs["log_std"].shape == (2, action_dim)
     assert value.shape == (2, 1)
     assert value_outputs == {}
 
@@ -57,7 +58,6 @@ def test_policy_keeps_raw_samples_and_environment_clips_at_boundary(
 ) -> None:
     import torch
 
-    from sim.manorl.gymnasium_env import OBSERVATION_DIM
     from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 
     runtime = ManoSkrlRuntime(adapter, ManoPPOConfig.optimizer_smoke())
@@ -71,7 +71,7 @@ def test_policy_keeps_raw_samples_and_environment_clips_at_boundary(
         raw_actions, _ = runtime.agent.act(
             observations, None, timestep=0, timesteps=runtime.config.rollouts
         )
-    assert raw_actions.shape == (adapter.num_envs, 26)
+    assert raw_actions.shape == (adapter.num_envs, adapter.action_dim)
     assert torch.any(torch.abs(raw_actions) > 1.0)
 
     captured: list[np.ndarray] = []
@@ -104,7 +104,7 @@ def test_policy_keeps_raw_samples_and_environment_clips_at_boundary(
     np.testing.assert_allclose(
         captured[0], torch.clamp(raw_actions, -1.0, 1.0).cpu().numpy()
     )
-    assert next_observations.shape == (adapter.num_envs, OBSERVATION_DIM)
+    assert next_observations.shape == (adapter.num_envs, adapter.observation_dim)
 
 
 def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
@@ -112,12 +112,16 @@ def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
 
     from sim.manorl.gymnasium_env import OBSERVATION_DIM
     from sim.manorl.normalization import PointCloudAwareRunningStandardScaler
+    from sim.manorl.observations import observation_layout_for_dimension
 
-    scaler = PointCloudAwareRunningStandardScaler()
+    scaler = PointCloudAwareRunningStandardScaler(size=OBSERVATION_DIM)
+    point_slice = observation_layout_for_dimension(
+        OBSERVATION_DIM
+    ).slices["object_point_cloud_raw"]
     observations = torch.zeros((2, OBSERVATION_DIM), dtype=torch.float32)
     points = torch.arange(64 * 3, dtype=torch.float32).reshape(64, 3)
-    observations[0, 74:266] = points.flatten()
-    observations[1, 74:266] = (points + 100.0).flatten()
+    observations[0, point_slice] = points.flatten()
+    observations[1, point_slice] = (points + 100.0).flatten()
     output = scaler(observations, train=True)
 
     assert set(scaler.state_dict()) == {
@@ -126,7 +130,7 @@ def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
     assert scaler.count.item() == 3.0
     assert scaler.pc_count.item() == 129.0
     np.testing.assert_allclose(
-        scaler.running_mean[74:266].reshape(64, 3).detach().cpu().numpy(),
+        scaler.running_mean[point_slice].reshape(64, 3).detach().cpu().numpy(),
         np.broadcast_to(scaler.pc_running_mean.detach().cpu().numpy(), (64, 3)),
     )
     assert output.shape == observations.shape
@@ -136,11 +140,10 @@ def test_normalizer_uses_source_named_shared_xyz_statistics() -> None:
 def test_adapter_and_skrl_wrapper_preserve_vector_tensor_boundary(adapter: ManoGymnasiumVectorEnv) -> None:
     import torch
 
-    from sim.manorl.gymnasium_env import ACTION_DIM, OBSERVATION_DIM
     from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 
     observations, info = adapter.reset(seed=17)
-    assert observations.shape == (1, OBSERVATION_DIM)
+    assert observations.shape == (1, adapter.observation_dim)
     assert info["time_outs"].shape == (1,)
     assert adapter.metadata["autoreset_mode"].value == "NextStep"
 
@@ -148,7 +151,7 @@ def test_adapter_and_skrl_wrapper_preserve_vector_tensor_boundary(adapter: ManoG
     assert runtime.agent.cfg.rewards_shaper is not None
     wrapped_observations, _ = runtime.env.reset()
     actions = runtime.deterministic_actions(wrapped_observations)
-    assert actions.shape == (1, ACTION_DIM)
+    assert actions.shape == (1, adapter.action_dim)
     assert torch.all(actions >= -1.0) and torch.all(actions <= 1.0)
 
 
@@ -157,7 +160,9 @@ def test_trajectory_completion_is_terminated_not_truncated(adapter: ManoGymnasiu
     physical.reset()
     physical.progress[:] = 790
     physical.trajectory_steps[:] = 789
-    _, _, terminated, truncated, info = adapter.step(np.zeros((1, 26), dtype=np.float64))
+    _, _, terminated, truncated, info = adapter.step(
+        np.zeros((1, adapter.action_dim), dtype=np.float64)
+    )
     np.testing.assert_array_equal(terminated, [True])
     np.testing.assert_array_equal(truncated, [False])
     np.testing.assert_array_equal(info["time_outs"], [False])
@@ -184,9 +189,23 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
         == CONTACT_FORCE_THRESHOLD
         == 0.2
     )
-    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.005, 0.005, 0.005)
-    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.05, 0.05, 0.05)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.002, 0.002, 0.002)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.02, 0.02, 0.02)
     assert runtime.checkpoint_metadata()["environment"]["max_deviation_distance"] == 1_000_000.0
+    hand_metadata = runtime.checkpoint_metadata()["environment"]
+    expected_hand_metadata = {
+        "requested_hand_side": "auto",
+        "resolved_hand_side": "right",
+        "available_hand_sides": ["right"],
+        "controlled_hand_sides": ["right"],
+        "reference_following_hand_sides": [],
+        "action_dim": 28,
+        "observation_dim": 480,
+        "model_action_dim": 28,
+    }
+    assert {
+        key: hand_metadata[key] for key in expected_hand_metadata
+    } == expected_hand_metadata
     assert "use_film" not in runtime.checkpoint_metadata()["ppo"]
     assert runtime.checkpoint_metadata()["model"]["use_film"] is True
     rollout = runtime.deterministic_rollout(steps=2)
