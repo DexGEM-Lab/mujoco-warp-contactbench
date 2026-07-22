@@ -203,6 +203,76 @@ def test_training_viewer_constructor_failure_releases_glfw_once(monkeypatch: pyt
     assert state["destroy"] == 1 and state["terminate"] == 1
 
 
+def test_native_visual_model_mirrors_collision_only_state_and_hides_collision_geoms() -> None:
+    import mujoco
+
+    from sim.manorl.assets import COLLISION_GEOM_GROUP, compile_model
+    from sim.manorl.contracts import ServoConfig
+    from sim.manorl.view_environment import (
+        _compile_native_viewer_model,
+        _mirror_native_viewer_data,
+        _validate_native_viewer_abi,
+    )
+
+    _, physics_model = compile_model()
+    environment = SimpleNamespace(
+        config=SimpleNamespace(servo=ServoConfig()),
+        is_heterogeneous=False,
+        model=physics_model,
+        object_type="cube1",
+    )
+    mujoco, viewer_model = _compile_native_viewer_model(environment)
+    _validate_native_viewer_abi(mujoco, physics_model, viewer_model)
+
+    physics_data = mujoco.MjData(physics_model)
+    mujoco.mj_resetData(physics_model, physics_data)
+    physics_data.time = 1.25
+    physics_data.qpos[0] = 0.05
+    physics_data.qvel[0] = 0.1
+    physics_data.ctrl[:] = 0.2
+    mujoco.mj_forward(physics_model, physics_data)
+
+    viewer_data = mujoco.MjData(viewer_model)
+    _mirror_native_viewer_data(
+        mujoco,
+        viewer_model,
+        viewer_data,
+        physics_data,
+    )
+    assert viewer_data.time == physics_data.time
+    for name in ("qpos", "qvel", "act", "ctrl", "mocap_pos", "mocap_quat"):
+        np.testing.assert_array_equal(
+            getattr(viewer_data, name), getattr(physics_data, name)
+        )
+    np.testing.assert_allclose(viewer_data.xpos, physics_data.xpos, atol=1e-15, rtol=0)
+
+    option = mujoco.MjvOption()
+    mujoco.mjv_defaultOption(option)
+    option.geomgroup[COLLISION_GEOM_GROUP] = 0
+    camera = mujoco.MjvCamera()
+    mujoco.mjv_defaultCamera(camera)
+    scene = mujoco.MjvScene(viewer_model, maxgeom=1_000)
+    mujoco.mjv_updateScene(
+        viewer_model,
+        viewer_data,
+        option,
+        None,
+        camera,
+        mujoco.mjtCatBit.mjCAT_ALL,
+        scene,
+    )
+    rendered_geom_names = {
+        mujoco.mj_id2name(viewer_model, mujoco.mjtObj.mjOBJ_GEOM, int(geom.objid))
+        for geom in scene.geoms[: scene.ngeom]
+        if int(geom.objtype) == int(mujoco.mjtObj.mjOBJ_GEOM)
+    }
+    assert {"palm_visual", "cube1_visual"} <= rendered_geom_names
+    assert not any(
+        name is not None and name.endswith("_collision")
+        for name in rendered_geom_names
+    )
+
+
 def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:
     args = parse_args([])
     assert args.device == "cpu"
@@ -556,11 +626,13 @@ def test_viewer_dispatches_shared_stepper_to_each_renderer(
     import sim.manorl.view_environment as viewer
 
     dispatched = {}
+    created = {}
     sentinel_stepper = object()
 
     class FakeEnvironment:
         def __init__(self, trajectory, config) -> None:
             self.config = config
+            created["config"] = config
 
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
     monkeypatch.setattr(viewer, "load_reference_trajectory", lambda: object())
@@ -595,6 +667,7 @@ def test_viewer_dispatches_shared_stepper_to_each_renderer(
     )
     assert dispatched["renderer"] == ("single" if tile_envs == 1 else "tiled")
     assert dispatched["stepper"] is sentinel_stepper
+    assert not hasattr(created["config"], "visual_meshes")
 
 
 def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytest.MonkeyPatch) -> None:
