@@ -80,6 +80,42 @@ as explicit smoke or diagnostic overrides; they are not convergence claims.
 The Warp broadphase capacity is derived from the active world count (at least
 31 contacts per world plus the configured margin).
 
+### Server2 banana right-hand CUDA OOM
+
+For the server2 banana right-hand run, `CUDA_VISIBLE_DEVICES=1` selected
+physical GPU 1. JAX and Warp then reported the only process-visible device as
+`cuda:0`; this is normal CUDA device renumbering, not selection of physical GPU
+0. Physical GPU 1 has 24 GiB, of which unrelated processes already used about
+2.6 GiB and reduced the available headroom.
+
+The failures occurred after model initialization, when contact and reset
+activity reached MJX-Warp's convex-contact GJK/EPA path and
+`wp_alloc_device_async` could not satisfy temporary allocations. Banana uses
+three CoACD convex pieces. A right-only policy has 28 action dimensions, but the
+other hand is still simulated while it follows the reference, so its simulation
+cost remains present.
+
+Observed limits were:
+
+- 2,048 environments failed even after evaluation was reduced from 128 worlds
+  to 1.
+- 1,024 environments failed around update 3.
+- 512 environments failed around update 4.
+
+`XLA_PYTHON_CLIENT_ALLOCATOR=platform` did not move this failure boundary.
+Disabling the Warp memory pool is not a valid workaround because MJX-Warp CUDA
+graph capture requires it.
+
+The verified configuration is 256 environments, 64,000 updates,
+`--checkpoint-interval-updates 1600`, and one evaluation environment. It ran
+beyond update 30 while physical GPU 1 usage remained steady at about 6.99 GiB
+total, including the pre-existing baseline. This preserves both budgets:
+`2048 * 8000 == 256 * 64000` keeps total transitions unchanged, and
+`2048 * 200 == 256 * 1600` keeps the checkpoint transition cadence unchanged.
+Initialization or one successful update is therefore not sufficient validation
+for a convex-contact run; monitor through at least update 30 with contacts and
+resets active.
+
 The fast protocol uses the source model initialization: source-compatible
 orthogonal actor/critic MLP initialization, untouched PointNet/condition/FiLM
 initialization, and trainable `log_std=-0.99`. It does not inject a target-only
