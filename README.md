@@ -589,3 +589,12 @@ bash scripts/import_isaac_assets.sh
 - `outputs/` is intentionally ignored and contains local generated artifacts.
 - Default runtime artifacts are written to `outputs/`; set `DEXHANDRL_OUTPUT_ROOT`
   or `OUTPUT_ROOT` when you intentionally want a separate runtime directory.
+
+## Gym checkpoint boundary trace
+
+`tools/trace_dexhandrl_gym.py` invokes the sibling DexHandRL Hydra entrypoint in
+runtime-only mode. It pins the exact `cube1` / `01` Lance UUID and row before
+environment allocation, captures the checkpoint player's deterministic policy
+boundary and action-rule stages, and writes a schema-v2 NPZ. Run it with the
+DexHandRL interpreter and `PYTHONDONTWRITEBYTECODE=1`; its Hydra and experiment
+outputs are placed beside the requested trace rather than in the Gym checkout.

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, VECTOR_SPECS, validate_trace
 from tools.compare_dexhandrl_traces import compare
+from tools.trace_dexhandrl_gym import _deterministic_action, _filter_exact_trajectory, _patch
 
 def _trace(frames=(61, 62), *, backend="mujoco"):
     arrays = {name: np.zeros((len(frames), width), dtype=np.float32) for name, width in VECTOR_SPECS.items()}
@@ -30,6 +31,28 @@ def test_trace_contract_rejects_wrong_state_dtype_and_filter_metadata():
 def test_trace_contract_rejects_nonfinite_values():
     metadata, arrays = _trace(); arrays["policy_mean"][0, 0] = np.nan
     with pytest.raises(ValueError, match="finite"): validate_trace(metadata, arrays)
+
+def test_gym_uuid_filter_fails_closed_and_selects_exact_row():
+    exact = {"row_id": 22, "uuid": EXACT_IDENTITY["uuid"], "object_type": "cube1", "action_id": "01"}
+    assert _filter_exact_trajectory({("cube1", "01"): [{**exact, "row_id": 16}, exact]}) == {("cube1", "01"): [exact]}
+    with pytest.raises(RuntimeError, match="expected one row 22"):
+        _filter_exact_trajectory({("cube1", "01"): [{**exact, "uuid": "wrong"}]})
+
+
+def test_gym_deterministic_action_clamps_and_rescales():
+    torch = pytest.importorskip("torch")
+    mu = torch.tensor([[-2.0, 0.25, 3.0]])
+    action = _deterministic_action(mu, torch.tensor([-4.0, 2.0, 10.0]), torch.tensor([2.0, 6.0, 14.0]), True)
+    assert torch.equal(action, torch.tensor([[-4.0, 4.5, 14.0]]))
+    assert _deterministic_action(mu, None, None, False) is mu
+
+
+def test_runtime_patch_restores_original_attribute():
+    class Holder: value = "original"
+    with _patch(Holder, "value", "replacement"):
+        assert Holder.value == "replacement"
+    assert Holder.value == "original"
+
 
 def test_comparator_reports_both_observation_slices_and_control_contract(tmp_path):
     meta, left = _trace(backend="gym"); _, right = _trace()

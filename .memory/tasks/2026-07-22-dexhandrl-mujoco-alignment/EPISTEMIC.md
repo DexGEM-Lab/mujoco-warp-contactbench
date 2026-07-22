@@ -11,3 +11,5 @@ Gym imports and help are now operational through `/home/jay/anaconda3/envs/dexha
 ## Open discriminating question
 
 Can a public, read-only Gym one-environment player construction path be supplied so the wrapper can attach its runtime-only hooks and emit the matching trace? Once available, the comparator will identify the first strict-tolerance stage before the physics boundary.
+
+Gym tracing now has an executable source-read-only construction path: patch Runner.run_play after normal player restore, rather than seeking a factory. The key isolation mechanism is filtering Minimal Lance discovery before allocation, since one-env allocation otherwise chooses row 16. The wrapper preserves the sibling checkout's pre-existing dirty state by comparing the complete porcelain snapshot and commit before/after.
