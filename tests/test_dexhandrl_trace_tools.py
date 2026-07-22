@@ -12,7 +12,8 @@ from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, VECTOR_SPECS, v
 from tools.compare_dexhandrl_traces import compare
 from tools.trace_dexhandrl_gym import (_compose_train_config, _deterministic_action,
                                       _filter_exact_trajectory, _patch, _pre_action_observations,
-                                      _preserve_bounded_run_play, _validated_component_slices)
+                                      _preserve_bounded_run_play, _restore_mapped_checkpoint,
+                                      _validated_component_slices)
 
 def _trace(frames=(61, 62), *, backend="mujoco"):
     arrays = {name: np.zeros((len(frames), width), dtype=np.float32) for name, width in VECTOR_SPECS.items()}
@@ -144,6 +145,49 @@ def test_gym_deterministic_action_clamps_and_rescales():
     action = _deterministic_action(mu, torch.tensor([-4.0, 2.0, 10.0]), torch.tensor([2.0, 6.0, 14.0]), True)
     assert torch.equal(action, torch.tensor([[-4.0, 4.5, 14.0]]))
     assert _deterministic_action(mu, None, None, False) is mu
+
+
+def test_mapped_checkpoint_restore_uses_player_device_and_player_restore_state_rules():
+    calls = []
+
+    class Loader:
+        def load(self, path, **kwargs):
+            calls.append((path, kwargs))
+            return {"model": {"weight": 1, "running_mean_std.running_mean": 2},
+                    "running_mean_std": {"mean": 3}, "env_state": {"episode": 4}}
+
+    class Model:
+        def load_state_dict(self, state, strict=True): calls.append(("model", state, strict))
+        class running_mean_std:
+            @staticmethod
+            def load_state_dict(state): calls.append(("rms", state))
+
+    class Env:
+        @staticmethod
+        def set_env_state(state): calls.append(("env", state))
+
+    player = type("Player", (), {"device": "cuda:0", "model": Model(), "normalize_input": True, "env": Env()})()
+    _restore_mapped_checkpoint(player, "cuda1_checkpoint.pth", Loader())
+    assert calls == [("cuda1_checkpoint.pth", {"map_location": "cuda:0", "weights_only": False}),
+                     ("model", {"weight": 1, "running_mean_std.running_mean": 2}, True),
+                     ("rms", {"mean": 3}), ("env", {"episode": 4})]
+
+
+def test_mapped_checkpoint_restore_rejects_malformed_checkpoint_and_handles_old_torch():
+    class OldTorch:
+        def __init__(self, payload): self.payload, self.calls = payload, []
+        def load(self, _path, **kwargs):
+            self.calls.append(kwargs)
+            if "weights_only" in kwargs: raise TypeError("load() got an unexpected keyword argument 'weights_only'")
+            return self.payload
+
+    player = type("Player", (), {"device": "cuda:0", "model": object(), "normalize_input": False, "env": None})()
+    old = OldTorch({})
+    with pytest.raises(RuntimeError, match="missing required 'model'"):
+        _restore_mapped_checkpoint(player, "checkpoint.pth", old)
+    assert old.calls == [{"map_location": "cuda:0", "weights_only": False}, {"map_location": "cuda:0"}]
+    with pytest.raises(RuntimeError, match="requires a checkpoint path"):
+        _restore_mapped_checkpoint(player, None, old)
 
 
 def test_runtime_patch_restores_original_attribute():

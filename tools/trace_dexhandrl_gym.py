@@ -110,6 +110,29 @@ def _pre_action_observations(preprocessed: Any, rms: Any) -> tuple[np.ndarray, n
     return _as_np(preprocessed[0]), _as_np(rms[0])
 
 
+def _restore_mapped_checkpoint(player: Any, checkpoint_path: Any, torch_module: Any) -> None:
+    """Restore a player checkpoint onto its configured device without rl_games retries."""
+    if not checkpoint_path:
+        raise RuntimeError("Gym trace requires a checkpoint path")
+    try:
+        checkpoint = torch_module.load(checkpoint_path, map_location=player.device, weights_only=False)
+    except TypeError as exc:
+        # PyTorch before weights_only support: retry the same mapped load explicitly.
+        if "weights_only" not in str(exc):
+            raise
+        checkpoint = torch_module.load(checkpoint_path, map_location=player.device)
+    if not isinstance(checkpoint, dict):
+        raise RuntimeError("Gym trace checkpoint must be a mapping containing 'model'")
+    if "model" not in checkpoint:
+        raise RuntimeError("Gym trace checkpoint is missing required 'model' state")
+    player.model.load_state_dict(checkpoint["model"], strict=True)
+    if getattr(player, "normalize_input", False) and "running_mean_std" in checkpoint:
+        player.model.running_mean_std.load_state_dict(checkpoint["running_mean_std"])
+    env_state = checkpoint.get("env_state", None)
+    if player.env is not None and env_state is not None:
+        player.env.set_env_state(env_state)
+
+
 def _hydra_overrides(args: argparse.Namespace) -> list[str]:
     """Overrides for the single exact checkpoint trace, independent of Hydra's CLI."""
     return [
@@ -175,7 +198,7 @@ def run(args: argparse.Namespace) -> None:
         from dexhand_env.tasks.dexhand_base import DexHandBase
         from dexhand_env.utils.batch_mocap_loader import BatchMocapLoader
         from dexhand_env.utils.experiment_manager import ExperimentManager
-        from rl_games.torch_runner import Runner, _restore, _override_sigma
+        from rl_games.torch_runner import Runner, _override_sigma
 
         original_discover = BatchMocapLoader._discover_minimal_lance_trajectories
         def discover_exact(loader, ds):
@@ -215,7 +238,7 @@ def run(args: argparse.Namespace) -> None:
             player = runner.create_player()
             # Gym's patch exposes this for its reload machinery; preserve that compatibility.
             runner.player = player
-            _restore(player, play_args); _override_sigma(player, play_args)
+            _restore_mapped_checkpoint(player, play_args.get("checkpoint"), torch); _override_sigma(player, play_args)
             env = _actual_env(player)
             if env.num_envs != 1:
                 raise RuntimeError(f"trace requires one Gym env, got {env.num_envs}")
