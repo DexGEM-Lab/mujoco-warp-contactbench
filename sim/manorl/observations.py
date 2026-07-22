@@ -394,7 +394,9 @@ def object_category(object_name: str) -> str:
     return "irregular"
 
 
-def _reduce_support_points(points: NDArray[np.float64], cap: int) -> NDArray[np.float64]:
+def reduce_support_points(points: NDArray[np.float64], cap: int = 256) -> NDArray[np.float64]:
+    """Deterministically cap static support points used for table clearance."""
+
     if cap < 0:
         raise ValueError("table_clearance_support_point_cap must be non-negative")
     if cap == 0 or len(points) <= cap:
@@ -526,40 +528,38 @@ def build_observation(
             or not np.all(np.isfinite(support_row))
         ):
             raise ValueError("object_support_points must contain non-empty finite (points, 3) arrays")
-    support_rows = [
-        _reduce_support_points(value, state.table_clearance_support_point_cap)
-        for value in support_rows
-    ]
+    support_rows = [reduce_support_points(value, state.table_clearance_support_point_cap) for value in support_rows]
     if len(support_rows) == 1:
         support_rows = support_rows * batch
+    max_support_points = max(len(value) for value in support_rows)
+    support_batch = np.stack(
+        [
+            np.concatenate(
+                (
+                    value,
+                    np.repeat(value[-1:], max_support_points - len(value), axis=0),
+                ),
+                axis=0,
+            )
+            for value in support_rows
+        ],
+        axis=0,
+    )
     support_quat = obj_quat / np.maximum(np.linalg.norm(obj_quat, axis=1, keepdims=True), 1e-9)
     target_support_quat = target_quat / np.maximum(np.linalg.norm(target_quat, axis=1, keepdims=True), 1e-9)
-    object_min_z = np.asarray(
-        [
-            (
-                quat_rotate_xyzw(
-                    np.broadcast_to(support_quat[index], (len(support_rows[index]), 4)),
-                    support_rows[index],
-                )[:, 2]
-                + obj_pos[index, 2]
-            ).min()
-            for index in range(batch)
-        ],
-        dtype=np.float64,
+    support_quat_batch = np.broadcast_to(
+        support_quat[:, None, :], (batch, max_support_points, 4)
     )
-    target_min_z = np.asarray(
-        [
-            (
-                quat_rotate_xyzw(
-                    np.broadcast_to(target_support_quat[index], (len(support_rows[index]), 4)),
-                    support_rows[index],
-                )[:, 2]
-                + target_pos[index, 2]
-            ).min()
-            for index in range(batch)
-        ],
-        dtype=np.float64,
+    target_support_quat_batch = np.broadcast_to(
+        target_support_quat[:, None, :], (batch, max_support_points, 4)
     )
+    object_min_z = (
+        quat_rotate_xyzw(support_quat_batch, support_batch)[..., 2] + obj_pos[:, None, 2]
+    ).min(axis=1)
+    target_min_z = (
+        quat_rotate_xyzw(target_support_quat_batch, support_batch)[..., 2]
+        + target_pos[:, None, 2]
+    ).min(axis=1)
     if not np.isfinite(state.table_surface_height):
         raise ValueError("table_surface_height must be finite")
     table = float(state.table_surface_height)

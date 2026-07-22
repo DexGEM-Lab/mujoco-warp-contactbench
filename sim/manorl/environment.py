@@ -57,6 +57,7 @@ from sim.manorl.observations import (
     geometry_encoding,
     quat_rotate_xyzw,
     observation_layout,
+    reduce_support_points,
 )
 from sim.manorl.rewards import RewardConfig, RewardDiagnostics, RewardState, compute_rewards
 from sim.manorl.trajectory import (
@@ -1430,7 +1431,9 @@ class MujocoManoEnvironment:
             geometry_type=object_runtime(self.object_type).geometry_type,
             dimensions=np.ptp(object_collision_vertices(self.object_type), axis=0),
         )
-        self.object_support_points = object_collision_vertices(self.object_type).copy()
+        self.object_support_points = reduce_support_points(
+            object_collision_vertices(self.object_type)
+        ).copy()
         self.object_gravity_world_force = (
             np.asarray(self.model.opt.gravity, dtype=np.float64)
             * float(self.model.body_subtreemass[self.producer.object_body_id])
@@ -1604,7 +1607,8 @@ class MujocoManoEnvironment:
             ]
         )
         self.object_support_points = tuple(
-            object_collision_vertices(object_type).copy() for object_type in self.object_types
+            reduce_support_points(object_collision_vertices(object_type)).copy()
+            for object_type in self.object_types
         )
         self.object_gravity_world_force = np.stack(
             [
@@ -1622,6 +1626,12 @@ class MujocoManoEnvironment:
             _source_surface_template(42, object_type) for object_type in self.object_types
         )
         self._static_template = self._static_templates[0]
+        self._unified_static_point_template = PointCloudTemplate(
+            np.stack([template.local_points for template in self._static_templates]),
+            mode="static_seed_42",
+            normalized=True,
+            scale=np.stack([template.scale for template in self._static_templates]),
+        )
         self._dynamic_templates = None
         self._point_rngs = [
             np.random.default_rng(config.point_seed + index) for index in range(config.num_envs)
@@ -1737,7 +1747,8 @@ class MujocoManoEnvironment:
             config.num_envs,
         )
         self.object_support_points = tuple(
-            object_collision_vertices(object_type).copy() for object_type in self.object_types
+            reduce_support_points(object_collision_vertices(object_type)).copy()
+            for object_type in self.object_types
         )
         self.object_gravity_world_force = _scatter_routed_value(
             [
@@ -2066,15 +2077,15 @@ class MujocoManoEnvironment:
     def _point_template(self) -> PointCloudTemplate:
         if self.config.compatibility.point_template_mode == "static_seed_42":
             if getattr(self, "_unified_object_batch", False):
-                templates = [
-                    self._static_templates[int(index)]
-                    for index in self._unified_object_indices
-                ]
                 return PointCloudTemplate(
-                    np.stack([template.local_points for template in templates]),
+                    self._unified_static_point_template.local_points[
+                        self._unified_object_indices
+                    ],
                     mode="static_seed_42",
                     normalized=True,
-                    scale=np.stack([template.scale for template in templates]),
+                    scale=self._unified_static_point_template.scale[
+                        self._unified_object_indices
+                    ],
                 )
             return self._static_template
         if self._dynamic_templates is None:
