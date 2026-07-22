@@ -2,9 +2,11 @@ from __future__ import annotations
 import importlib, json
 import numpy as np
 import pytest
+from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES
 from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, VECTOR_SPECS, validate_trace
 from tools.compare_dexhandrl_traces import compare
-from tools.trace_dexhandrl_gym import _deterministic_action, _filter_exact_trajectory, _patch
+from tools.trace_dexhandrl_gym import (_deterministic_action, _filter_exact_trajectory, _patch,
+                                      _pre_action_observations, _validated_component_slices)
 
 def _trace(frames=(61, 62), *, backend="mujoco"):
     arrays = {name: np.zeros((len(frames), width), dtype=np.float32) for name, width in VECTOR_SPECS.items()}
@@ -37,6 +39,34 @@ def test_gym_uuid_filter_fails_closed_and_selects_exact_row():
     assert _filter_exact_trajectory({("cube1", "01"): [{**exact, "row_id": 16}, exact]}) == {("cube1", "01"): [exact]}
     with pytest.raises(RuntimeError, match="expected one row 22"):
         _filter_exact_trajectory({("cube1", "01"): [{**exact, "uuid": "wrong"}]})
+
+
+def test_gym_pre_action_observations_are_copied_before_post_step_mutation():
+    class Tensor:
+        def __init__(self, value): self.value = np.asarray(value, dtype=np.float32)
+        def __getitem__(self, index): return Tensor(self.value[index])
+        def detach(self): return self
+        def cpu(self): return self
+        def numpy(self): return self.value
+
+    preprocessed = Tensor([[1.0] * 461])
+    rms = Tensor([[2.0] * 461])
+    processed_observation, rms_observation = _pre_action_observations(preprocessed, rms)
+    preprocessed.value.fill(9.0)  # Simulates env_step overwriting the next observation buffer.
+    assert processed_observation.shape == (461,)
+    assert np.all(processed_observation == 1.0)
+    assert np.all(rms_observation == 2.0)
+
+
+def test_gym_runtime_component_slices_must_match_policy_contract_exactly():
+    runtime = {name: list(bounds) for name, bounds in OBS_COMPONENT_SLICES.items()}
+    assert _validated_component_slices(runtime, list(OBS_COMPONENT_SLICES)) == OBS_COMPONENT_SLICES
+    runtime["active_finger_dof_pos"] = [62, 77]
+    with pytest.raises(RuntimeError, match="differ"):
+        _validated_component_slices(runtime, list(OBS_COMPONENT_SLICES))
+    with pytest.raises(RuntimeError, match="differ"):
+        _validated_component_slices({name: list(bounds) for name, bounds in OBS_COMPONENT_SLICES.items()},
+                                    list(reversed(OBS_COMPONENT_SLICES)))
 
 
 def test_gym_deterministic_action_clamps_and_rescales():

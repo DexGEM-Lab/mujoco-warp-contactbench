@@ -74,16 +74,34 @@ def _actual_env(player: Any) -> Any:
     # rl_games' registered IVecEnv holds the DexHandBase under `.env`.
     while hasattr(env, "env"):
         env = env.env
-    _require(env, "obs_buf", "action_processor", "pre_physics_step", "post_physics_step", "dof_pos", "dof_vel")
+    _require(env, "obs_buf", "observation_encoder", "action_processor", "pre_physics_step", "post_physics_step", "dof_pos", "dof_vel")
     return env
 
 
-def _write_trace(output: Path, store: dict[str, list[np.ndarray]], checkpoint: Path, source_head: str) -> Path:
+def _validated_component_slices(runtime_slices: Any, policy_observation_keys: Any) -> dict[str, tuple[int, int]]:
+    """Fail closed unless Gym's live policy layout exactly matches our contract."""
+    try:
+        actual = {str(key): tuple(runtime_slices[key]) for key in policy_observation_keys}
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("Gym observation encoder did not expose policy component slices") from exc
+    expected = {name: tuple(bounds) for name, bounds in OBS_COMPONENT_SLICES.items()}
+    if tuple(actual.items()) != tuple(expected.items()):
+        raise RuntimeError(f"Gym policy observation slices differ from OBS_COMPONENT_SLICES: {actual!r}")
+    return actual
+
+
+def _pre_action_observations(preprocessed: Any, rms: Any) -> tuple[np.ndarray, np.ndarray]:
+    """Copy the checkpoint input before env_step can overwrite its backing buffer."""
+    return _as_np(preprocessed[0]), _as_np(rms[0])
+
+
+def _write_trace(output: Path, store: dict[str, list[np.ndarray]], checkpoint: Path, source_head: str,
+                 component_slices: dict[str, tuple[int, int]]) -> Path:
     scalar = {"decision_frame": np.int64, "state_frame": np.int64, "reset": np.bool_, "terminated": np.bool_, "truncated": np.bool_}
     arrays = {name: np.asarray(values, dtype=scalar.get(name, np.float32)) for name, values in store.items()}
     metadata = {"schema": SCHEMA, "backend": "gym", "identity": dict(EXACT_IDENTITY),
                 "post_filters": ["velocity_clamp", "position_clamp"], "checkpoint": str(checkpoint),
-                "gym_source_head": source_head, "observation_component_slices": {k: list(v) for k, v in OBS_COMPONENT_SLICES.items()}}
+                "gym_source_head": source_head, "observation_component_slices": {k: list(v) for k, v in component_slices.items()}}
     validate_trace(metadata, arrays)
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output, metadata=np.asarray(json.dumps(metadata)), **arrays)
@@ -163,13 +181,15 @@ def run(args: argparse.Namespace) -> None:
             obs = player.env_reset(player.env)
             if tuple(obs.shape[-1:]) != (461,) or int(env.obs_buf.shape[-1]) != 461:
                 raise RuntimeError(f"Gym observation width is not 461: player={tuple(obs.shape)}, env={tuple(env.obs_buf.shape)}")
-            component_slices = {name: tuple(bounds) for name, bounds in OBS_COMPONENT_SLICES.items()}
-            if sum(end - start for start, end in component_slices.values()) != 461:
-                raise RuntimeError("OBS_COMPONENT_SLICES is not the exact 461D table")
+            component_slices = _validated_component_slices(
+                env.observation_encoder.component_slice_indices,
+                env.observation_encoder.observation_keys,
+            )
             for step in range(args.steps):
                 decision = 61 + step
                 preprocessed = player._preproc_obs(obs)
                 rms = player.model.norm_obs(preprocessed)
+                processed_observation, rms_observation = _pre_action_observations(preprocessed, rms)
                 input_dict = {"is_train": False, "prev_actions": None, "obs": preprocessed, "rnn_states": player.states}
                 with torch.no_grad():
                     model_result = player.model(input_dict)
@@ -186,14 +206,14 @@ def run(args: argparse.Namespace) -> None:
                 rb = env.rigid_body_states[0, env.task.object_local_rigid_body_index]
                 _ = done  # termination is recorded below from reset_buf after post physics.
                 values = dict(decision_frame=np.asarray(decision), state_frame=np.asarray(state), reset=np.asarray(step == 0),
-                    terminated=np.asarray(bool(env.reset_buf[0].item())), truncated=np.asarray(False), processed_observation=_as_np(env.obs_buf[0]), rms_observation=_as_np(rms[0]), policy_mean=_as_np(mus[0]), final_action=_as_np(action[0]),
+                    terminated=np.asarray(bool(env.reset_buf[0].item())), truncated=np.asarray(False), processed_observation=processed_observation, rms_observation=rms_observation, policy_mean=_as_np(mus[0]), final_action=_as_np(action[0]),
                     base_offset_after=_as_np(env.task.task_states["base_position_offset"][0]), joint_offset_after=_as_np(env.task.task_states["joint_offset"][0]), hand_qpos=_as_np(env.dof_pos[0]), hand_qvel=_as_np(env.dof_vel[0]),
                     object_position=_as_np(rb[:3]), object_quaternion_xyzw=_as_np(rb[3:7]), object_linear_velocity=_as_np(rb[7:10]),
                     target_object_position=_as_np(env.obs_dict["target_object_position"][0]), target_object_quaternion_xyzw=_as_np(env.obs_dict["target_object_orientation"][0]))
                 values.update(captured)
                 for name, value in values.items(): store[name].append(value)
                 obs = next_obs
-            _write_trace(args.output, store, args.checkpoint, before[1])
+            _write_trace(args.output, store, args.checkpoint, before[1], component_slices)
 
         with _patch(BatchMocapLoader, "_discover_minimal_lance_trajectories", discover_exact), _patch(DexHandBase, "pre_physics_step", pre_capture), _patch(DexHandBase, "post_physics_step", post_capture), _patch(DexHandBase, "reset_idx", reset_deferred), _patch(train, "create_experiment_manager", external_manager), _patch(Runner, "run_play", run_play):
             sys.argv = [str(args.gym_root / "train.py"), "task=Dexhand021proReconstruction", "train.test=true", f"train.checkpoint={args.checkpoint}", "train.reloadInterval=0", "env.numEnvs=1", "env.device=cuda:0", "env.viewer=false", "env.videoRecord=false", "env.videoStream=false", "task.mocap.format=lance", f"task.mocap.basePath={args.gym_root / '../does-not-exist'}" if False else "task.mocap.basePath=/mnt/nas-222-project/mocap/for_retargeting/dexhand021pro/results_all_mano/all/lance_new_all_generated_mano/lance_result_archive_full/dexhand021pro_lance_new_all_generated_mano_retarget_result_archive.lance", "task.mocap.objectType=[cube1]", "task.mocap.actions=[01]", "task.mocap.load_multi_object=false", "task.use_residual=true", "task.pointCloudEncoding.isDynamic=false", "task.contact_force_threshold=1000000000", "train.seed=0", f"hydra.run.dir={runtime / 'hydra'}", "hydra.output_subdir=null", "hydra.job.chdir=false"]
