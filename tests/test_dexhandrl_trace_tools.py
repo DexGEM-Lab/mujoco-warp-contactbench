@@ -12,7 +12,7 @@ from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, VECTOR_SPECS, v
 from tools.compare_dexhandrl_traces import compare
 from tools.trace_dexhandrl_gym import (_compose_train_config, _deterministic_action,
                                       _filter_exact_trajectory, _patch, _pre_action_observations,
-                                      _validated_component_slices)
+                                      _preserve_bounded_run_play, _validated_component_slices)
 
 def _trace(frames=(61, 62), *, backend="mujoco"):
     arrays = {name: np.zeros((len(frames), width), dtype=np.float32) for name, width in VECTOR_SPECS.items()}
@@ -151,6 +151,55 @@ def test_runtime_patch_restores_original_attribute():
     with _patch(Holder, "value", "replacement"):
         assert Holder.value == "replacement"
     assert Holder.value == "original"
+
+
+def test_gym_apply_patch_reinstalls_bounded_run_play_and_restores_after_error():
+    calls = []
+
+    class FakeRunner:
+        def run_play(self, _args):
+            calls.append("original")
+
+        def run(self):
+            return self.run_play({})  # Gym's patched Runner.run dispatches dynamically.
+
+    original_run_play = FakeRunner.run_play
+
+    def upstream_run_play(self, _args):
+        calls.append("upstream-player-run")
+
+    def upstream_apply():
+        calls.append("upstream-apply")
+        FakeRunner.run_play = upstream_run_play
+
+    class FakeTrain:
+        apply_rl_games_patches = staticmethod(upstream_apply)
+
+    original_apply = FakeTrain.apply_rl_games_patches
+
+    def bounded_run_play(self, _args):
+        calls.append("bounded-three-step-loop")
+
+    with _patch(FakeRunner, "run_play", bounded_run_play), _preserve_bounded_run_play(FakeTrain, FakeRunner, bounded_run_play):
+        FakeTrain.apply_rl_games_patches()
+        assert FakeRunner.run_play is bounded_run_play
+        FakeRunner().run()
+        assert calls == ["upstream-apply", "bounded-three-step-loop"]
+
+    assert FakeTrain.apply_rl_games_patches is original_apply
+    assert FakeRunner.run_play is original_run_play
+
+    def failing_upstream_apply():
+        FakeRunner.run_play = upstream_run_play
+        raise RuntimeError("upstream failure")
+
+    FakeTrain.apply_rl_games_patches = staticmethod(failing_upstream_apply)
+    failing_apply = FakeTrain.apply_rl_games_patches
+    with pytest.raises(RuntimeError, match="upstream failure"):
+        with _patch(FakeRunner, "run_play", bounded_run_play), _preserve_bounded_run_play(FakeTrain, FakeRunner, bounded_run_play):
+            FakeTrain.apply_rl_games_patches()
+    assert FakeTrain.apply_rl_games_patches is failing_apply
+    assert FakeRunner.run_play is original_run_play
 
 
 def test_comparator_reports_both_observation_slices_and_control_contract(tmp_path):

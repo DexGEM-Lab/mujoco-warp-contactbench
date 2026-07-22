@@ -46,6 +46,21 @@ def _patch(owner: Any, name: str, replacement: Any) -> Iterator[None]:
         setattr(owner, name, original)
 
 
+@contextmanager
+def _preserve_bounded_run_play(train: Any, runner_type: Any, bounded_run_play: Callable[..., Any]) -> Iterator[None]:
+    """Reinstall the trace hook after Gym replaces ``Runner.run_play`` at startup."""
+    original_apply = train.apply_rl_games_patches
+
+    def apply_patches_then_restore_trace_hook(*patch_args: Any, **patch_kwargs: Any) -> Any:
+        result = original_apply(*patch_args, **patch_kwargs)
+        runner_type.run_play = bounded_run_play
+        print("[trace-hook] reinstalled bounded Runner.run_play after Gym patches")
+        return result
+
+    with _patch(train, "apply_rl_games_patches", apply_patches_then_restore_trace_hook):
+        yield
+
+
 def _filter_exact_trajectory(result: dict[tuple[str, str], list[dict]]) -> dict[tuple[str, str], list[dict]]:
     """Fail closed: retain the one Lance row used by the checkpoint trace."""
     selected = [item for items in result.values() for item in items if
@@ -198,6 +213,8 @@ def run(args: argparse.Namespace) -> None:
 
         def run_play(runner, play_args):
             player = runner.create_player()
+            # Gym's patch exposes this for its reload machinery; preserve that compatibility.
+            runner.player = player
             _restore(player, play_args); _override_sigma(player, play_args)
             env = _actual_env(player)
             if env.num_envs != 1:
@@ -248,7 +265,7 @@ def run(args: argparse.Namespace) -> None:
                 obs = next_obs
             _write_trace(args.output, store, args.checkpoint, before[1], component_slices)
 
-        with _patch(BatchMocapLoader, "_discover_minimal_lance_trajectories", discover_exact), _patch(DexHandBase, "pre_physics_step", pre_capture), _patch(DexHandBase, "post_physics_step", post_capture), _patch(DexHandBase, "reset_idx", reset_deferred), _patch(train, "create_experiment_manager", external_manager), _patch(Runner, "run_play", run_play):
+        with _patch(BatchMocapLoader, "_discover_minimal_lance_trajectories", discover_exact), _patch(DexHandBase, "pre_physics_step", pre_capture), _patch(DexHandBase, "post_physics_step", post_capture), _patch(DexHandBase, "reset_idx", reset_deferred), _patch(train, "create_experiment_manager", external_manager), _patch(Runner, "run_play", run_play), _preserve_bounded_run_play(train, Runner, run_play):
             cfg = _compose_train_config(args, initialize_config_dir, compose)
             train_main = getattr(train.main, "__wrapped__", None)
             if train_main is None:
