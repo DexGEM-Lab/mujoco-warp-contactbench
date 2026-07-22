@@ -24,3 +24,11 @@ that chain.
 Which first boundary diverges for `cube1`/`01` once the exact reference dataset
 and checkpoint are available: trajectory selection, raw observation, normalizer,
 policy action, control mapping, or physics rollout?
+
+## Established availability
+
+The local vendored DexHand assets, default Lance archive, and an IsaacGym source
+checkout with candidate `.pth` checkpoints are accessible. Execution is blocked
+before any imported-code boundary because this worktree lacks `.venv/bin/python`.
+The executable baseline therefore needs an environment satisfying this repo's
+Python 3.11 lock before it can identify the first parity divergence.
