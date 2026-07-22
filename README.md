@@ -511,6 +511,34 @@ diagnostics, run IsaacGym with `task.pointCloudEncoding.isDynamic=false`; the
 MuJoCo irregular-mesh sampler mirrors IsaacGym's 10x surface oversampling,
 seed-42 canonical sample, and farthest-point downsampling.
 
+### Exact Gym↔MuJoCo first-divergence traces
+
+The trace tools localize the first differing boundary for the fixed Lance row 22
+(`cube1`/`01`, sequence 1, UUID `c21d4fa5-185a-5ea7-aa22-e1d34beae42f`). They
+produce validated compressed NPZ files containing 461D processed and RMS
+observations, deterministic policy mean/clipped actions, residual-target stages,
+26D targets/state, object state, and reset/termination flags.
+
+```bash
+MUJOCO_PYTHON=/home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python
+GYM_PYTHON=/home/jay/anaconda3/envs/dexhand_rl/bin/python
+CHECKPOINT=/home/jay/dexrobot/FromSSH/dexhand_reconstruction/dexrobot_isaac/last_Dexhand021proReconstruction_ep_20000_rew_101.06729.pth
+
+$MUJOCO_PYTHON tools/trace_dexhandrl_mujoco.py \
+  --checkpoint "$CHECKPOINT" --steps 3 --output outputs/dexhandrl_trace/mujoco.npz
+# Gym wrapper is source-read-only and requires no bytecode writes.
+PYTHONDONTWRITEBYTECODE=1 $GYM_PYTHON tools/trace_dexhandrl_gym.py \
+  --checkpoint "$CHECKPOINT" --steps 3 --output outputs/dexhandrl_trace/gym.npz
+$MUJOCO_PYTHON tools/compare_dexhandrl_traces.py \
+  --gym outputs/dexhandrl_trace/gym.npz --mujoco outputs/dexhandrl_trace/mujoco.npz \
+  --output outputs/dexhandrl_trace/first_divergence.json
+```
+
+The comparator fails on identity/frame/schema mismatch, reports every named
+`obs_layout.py` slice, and separates shared-input boundaries from post-physics
+state. MuJoCo traces explicitly label `filtered_active_target` as unfiltered
+because Gym's ActionRules post-filters are not applied there.
+
 Current seq1 acceptance status:
 
 - Reference PD (`use_residual=false`) is at the same object-position-error

@@ -2,33 +2,12 @@
 
 ## Current model
 
-The migration branch is a historical fork from `8ab80fc`, whereas current `dev`
-contains the complete MANO reference migration and 171 subsequent commits. Its
-first DexHandRL commit adds an independent `sim/dexhandrl` implementation,
-assets, scripts, tests, and optional runtime dependencies. Applying its changes
-onto current `dev` must preserve both surfaces; conflicts from historical files
-are integration conflicts, not evidence that current MANO behavior should be
-removed.
+Exact checkpoint alignment is a sequence of observable transformations rather than a single rollout metric. The new trace contract fixes the Lance identity to row 22 / `cube1` / `01` / sequence 1 / UUID `c21d4fa5-185a-5ea7-aa22-e1d34beae42f` and compares the 461D observation (including every canonical slice), checkpoint RMS transform, deterministic action, residual offsets/targets, and only then post-physics state. This separates shared-input divergence from simulator physics divergence.
 
-Direct rl-games checkpoint reuse is the milestone's causal target. A successful
-`cube1`/`01` result requires a common trajectory selection and the same ordered
-boundary transformations: reference state -> raw policy observation -> running
-normalization -> model action -> simulator control target -> rollout state.
-Passing imports can establish that code is wired; it cannot establish parity.
-The focused inventory will determine whether the dataset, IsaacGym source
-checkout, checkpoint, and compatible Python runtime are available to execute
-that chain.
+The MuJoCo producer has run against the supplied environment, Lance archive, and epoch-20000 checkpoint for three exact steps and generated a contract-valid trace (OPS 2026-07-22T21:34:00Z). It records MuJoCo's lack of Gym ActionRules post-filters explicitly: `filtered_active_target` is the unfiltered corrected target, never presented as a matched Gym filter result. The existing task-level distal routing remains untouched.
+
+Gym imports and help are now operational through `/home/jay/anaconda3/envs/dexhand_rl/bin/python`; the obsolete claim that no Python runtime exists is false. The live source-read-only wrapper verifies its expected task/action hook surface after importing Isaac Gym before Torch and snapshots source Git state. It stops because the sibling checkout lacks a stable public factory that creates the exact one-env player without reimplementing Hydra/player internals. Required live capture boundary: `DexHandBase.pre_physics_step/post_physics_step`, `task.obs_dict`, and `action_processor` targets. This is the present discriminating runtime boundary, not an inferred parity failure.
 
 ## Open discriminating question
 
-Which first boundary diverges for `cube1`/`01` once the exact reference dataset
-and checkpoint are available: trajectory selection, raw observation, normalizer,
-policy action, control mapping, or physics rollout?
-
-## Established availability
-
-The local vendored DexHand assets, default Lance archive, and an IsaacGym source
-checkout with candidate `.pth` checkpoints are accessible. Execution is blocked
-before any imported-code boundary because this worktree lacks `.venv/bin/python`.
-The executable baseline therefore needs an environment satisfying this repo's
-Python 3.11 lock before it can identify the first parity divergence.
+Can a public, read-only Gym one-environment player construction path be supplied so the wrapper can attach its runtime-only hooks and emit the matching trace? Once available, the comparator will identify the first strict-tolerance stage before the physics boundary.
