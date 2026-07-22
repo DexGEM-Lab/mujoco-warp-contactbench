@@ -9,6 +9,7 @@ import pytest
 from sim.manorl.assets import (
     HAND_SELF_COLLISION_GROUPS,
     build_scene_xml,
+    build_unified_scene_xml,
     compile_model,
     object_collision_vertices,
     object_runtime,
@@ -55,6 +56,46 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     np.testing.assert_allclose(palm_quat, expected, atol=5e-10)
     palm_mesh = root.find("./asset/mesh[@name='hand_palm']")
     assert palm_mesh is not None and palm_mesh.get("scale") == "0.7 0.7 0.7"
+
+
+@pytest.mark.parametrize("unified", (False, True))
+def test_generated_scene_uses_checkerboard_floor_material(unified: bool) -> None:
+    xml = (
+        build_unified_scene_xml(object_types=("cube1",))
+        if unified
+        else build_scene_xml()
+    )
+    root = ET.fromstring(xml)
+    texture = root.find("./asset/texture[@name='floor_checker']")
+    material = root.find("./asset/material[@name='floor_checker']")
+    floor = root.find("./worldbody/geom[@name='floor']")
+
+    assert texture is not None
+    assert texture.attrib == {
+        "name": "floor_checker",
+        "type": "2d",
+        "builtin": "checker",
+        "rgb1": "0.18 0.20 0.22",
+        "rgb2": "0.72 0.74 0.76",
+        "width": "512",
+        "height": "512",
+    }
+    assert material is not None
+    assert material.attrib == {
+        "name": "floor_checker",
+        "texture": "floor_checker",
+        "texrepeat": "8 8",
+        "texuniform": "true",
+        "reflectance": "0.08",
+    }
+    assert floor is not None
+    assert floor.get("material") == "floor_checker"
+    assert floor.get("rgba") is None
+    assert floor.get("pos") == "0 0 -0.001"
+    assert floor.get("size") == "1 1 0.01"
+    assert floor.get("contype") == "4"
+    assert floor.get("conaffinity") == "1"
+    assert floor.get("friction") == "1 0.01 0.001"
 
 
 def test_s02_object_registry_is_closed_materialized_and_digest_checked() -> None:
