@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -302,6 +302,110 @@ def test_native_visual_model_mirrors_collision_only_state_and_hides_collision_ge
         name is not None and name.endswith("_collision")
         for name in rendered_geom_names
     )
+
+
+def test_passive_viewer_lock_guards_native_mirror_and_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    events: list[str] = []
+
+    class FakeViewer:
+        def __init__(self) -> None:
+            self.opt = SimpleNamespace(geomgroup=np.ones(6, dtype=np.int32))
+            self._running_calls = 0
+
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, *_args) -> None:
+            events.append("exit")
+
+        def lock(self):
+            class Lock:
+                def __enter__(self_inner):
+                    events.append("lock-enter")
+
+                def __exit__(self_inner, *_args) -> None:
+                    events.append("lock-exit")
+
+            return Lock()
+
+        def sync(self) -> None:
+            events.append("sync")
+
+        def is_running(self) -> bool:
+            self._running_calls += 1
+            return self._running_calls == 1
+
+    fake_mujoco = ModuleType("mujoco")
+    fake_mujoco.__path__ = []
+    fake_mujoco.MjData = lambda _model: object()
+    fake_viewer_module = ModuleType("mujoco.viewer")
+    passive_viewer = FakeViewer()
+
+    def launch_passive(*_args, **_kwargs):
+        events.append("launch")
+        return passive_viewer
+
+    fake_viewer_module.launch_passive = launch_passive
+    fake_mujoco.viewer = fake_viewer_module
+    monkeypatch.setitem(sys.modules, "mujoco", fake_mujoco)
+    monkeypatch.setitem(sys.modules, "mujoco.viewer", fake_viewer_module)
+
+    visual_model = object()
+    monkeypatch.setattr(
+        viewer,
+        "_compile_native_viewer_model",
+        lambda _environment: (fake_mujoco, visual_model),
+    )
+    monkeypatch.setattr(
+        viewer,
+        "_mirror_native_viewer_data",
+        lambda *_args: events.append("mirror"),
+    )
+    monkeypatch.setattr(viewer, "_telemetry", lambda *_args: "telemetry")
+
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=1),
+        progress=np.array([1]),
+        host_data=lambda _env_id: events.append("host") or object(),
+    )
+
+    class Stepper:
+        def step(self):
+            events.append("step")
+            return None, np.zeros(1), np.zeros(1, dtype=bool), None
+
+    viewer._view_single(
+        environment,
+        stepper=Stepper(),
+        render_env=0,
+        speed=1.0,
+        loop=True,
+        print_every=1,
+        recorder=None,
+    )
+
+    assert events == [
+        "host",
+        "mirror",
+        "launch",
+        "enter",
+        "lock-enter",
+        "sync",
+        "lock-exit",
+        "step",
+        "host",
+        "lock-enter",
+        "mirror",
+        "sync",
+        "lock-exit",
+        "exit",
+    ]
+    assert passive_viewer.opt.geomgroup[3] == 0
 
 
 def test_viewer_cli_defaults_to_residual_and_terminal_modes() -> None:

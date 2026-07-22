@@ -10,6 +10,7 @@ all remain on the production environment path.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import math
 import os
 from pathlib import Path
@@ -333,6 +334,13 @@ def _mirror_native_viewer_data(
     mujoco.mj_forward(viewer_model, viewer_data)
 
 
+def _viewer_lock(viewer: object) -> Any:
+    """Return the passive viewer lock, with a no-op fallback for test doubles."""
+
+    lock = getattr(viewer, "lock", None)
+    return lock() if callable(lock) else nullcontext()
+
+
 def _install_tiled_controls(
     *, glfw: Any, mujoco: Any, window: object, model: object, camera: object, scene: object
 ) -> None:
@@ -616,6 +624,8 @@ def _view_single(
 
     mujoco, viewer_model = _compile_native_viewer_model(environment)
     render_data = mujoco.MjData(viewer_model)
+    # This write occurs before launch_passive starts its UI thread, so no viewer
+    # lock is needed yet. All subsequent writes to viewer-owned data are locked.
     _mirror_native_viewer_data(
         mujoco,
         viewer_model,
@@ -626,20 +636,23 @@ def _view_single(
     with mujoco.viewer.launch_passive(
         viewer_model, render_data, show_left_ui=True, show_right_ui=True
     ) as viewer:
-        viewer.opt.geomgroup[COLLISION_GEOM_GROUP] = 0
-        viewer.sync()
+        with _viewer_lock(viewer):
+            viewer.opt.geomgroup[COLLISION_GEOM_GROUP] = 0
+            viewer.sync()
         while viewer.is_running():
             started = time.perf_counter()
             _, rewards, resets, _ = stepper.step()
             if recorder is not None:
                 recorder.record_transition()
-            _mirror_native_viewer_data(
-                mujoco,
-                viewer_model,
-                render_data,
-                environment.host_data(render_env),
-            )
-            viewer.sync()
+            physics_data = environment.host_data(render_env)
+            with _viewer_lock(viewer):
+                _mirror_native_viewer_data(
+                    mujoco,
+                    viewer_model,
+                    render_data,
+                    physics_data,
+                )
+                viewer.sync()
 
             call = int(environment.progress[render_env] - 1)
             if call % print_every == 0 or bool(resets[render_env]):
