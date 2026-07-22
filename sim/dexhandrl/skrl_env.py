@@ -654,6 +654,8 @@ class DexHandRLMJXEnv:
         self.base_position_offset = np.zeros(3, dtype=np.float32)
         self.joint_offset = np.zeros(16, dtype=np.float32)
         self._last_full_targets: np.ndarray | None = None
+        # Trace-only diagnostic: captures the exact control decision before coupling.
+        self._last_action_trace: dict[str, np.ndarray | int] | None = None
         self._last_obs = np.zeros((self.num_observations,), dtype=np.float32)
         self._last_info: dict[str, Any] = {}
 
@@ -754,6 +756,7 @@ class DexHandRLMJXEnv:
         self._done = False
         self.base_position_offset[:] = 0.0
         self.joint_offset[:] = 0.0
+        self._last_action_trace = None
         self._set_initial_state()
         obs, info = self._build_observation(target_frame=self._current_frame)
         self._last_obs = obs
@@ -761,16 +764,24 @@ class DexHandRLMJXEnv:
         return obs, info
 
     def _apply_residual_action(self, action: np.ndarray, target_frame: int, current_full: np.ndarray | None) -> np.ndarray:
+        # Lance hand_dof is the authoritative 22D active-space reference, before
+        # any active→full coupling. Keep this diagnostic separate from control.
+        raw_hand_dof = getattr(self.trajectory, "hand_dof", None)
+        # Minimal unit-test doubles do not carry Lance payloads; real environments
+        # always do, and the producer requires that authoritative value.
+        reference_active = (np.asarray(raw_hand_dof[target_frame], dtype=np.float32).copy()
+                            if raw_hand_dof is not None else np.zeros(self.num_actions, dtype=np.float32))
         if not self.cfg.use_residual:
             self.base_position_offset[:] = 0.0
             self.joint_offset[:] = 0.0
-            return _reference_full_targets(
-                self.trajectory,
-                frame=target_frame,
-                source=self.cfg.reference_joint_source,
-                current_full=current_full,
-                route_joint_upper_limits=self.route_joint_upper_limits,
+            full_targets = _reference_full_targets(
+                self.trajectory, frame=target_frame, source=self.cfg.reference_joint_source,
+                current_full=current_full, route_joint_upper_limits=self.route_joint_upper_limits,
             )
+            self._last_action_trace = {"decision_frame": target_frame, "reference_active_target": reference_active,
+                                       "corrected_active_target": full_to_active_dof(full_targets).astype(np.float32),
+                                       "full_target": full_targets.copy()}
+            return full_targets
 
         in_early_phase = (target_frame - self.start_frame) < self.cfg.early_phase_frames
         if in_early_phase:
@@ -779,13 +790,13 @@ class DexHandRLMJXEnv:
         action = np.asarray(action, dtype=np.float32).reshape(self.num_actions)
         action = np.clip(action, -1.0, 1.0)
         if in_early_phase:
-            return _reference_full_targets(
-                self.trajectory,
-                frame=target_frame,
-                source=self.cfg.reference_joint_source,
-                current_full=current_full,
-                route_joint_upper_limits=self.route_joint_upper_limits,
+            full_targets = _reference_full_targets(
+                self.trajectory, frame=target_frame, source=self.cfg.reference_joint_source,
+                current_full=current_full, route_joint_upper_limits=self.route_joint_upper_limits,
             )
+            self._last_action_trace = {"decision_frame": target_frame, "reference_active_target": reference_active,
+                                       "corrected_active_target": reference_active.copy(), "full_target": full_targets.copy()}
+            return full_targets
 
         after_last_contact = target_frame > self.last_contact_frame
         base_decay = np.asarray(
@@ -858,11 +869,14 @@ class DexHandRLMJXEnv:
         corrected_active = full_to_active_dof(reference_full)
         corrected_active[0:3] += self.base_position_offset
         corrected_active[6:] += self.joint_offset
-        return active_to_full_dof(
+        full_targets = active_to_full_dof(
             corrected_active,
             current_full=current_full if current_full is not None else reference_full,
             route_joint_upper_limits=self.route_joint_upper_limits,
         )
+        self._last_action_trace = {"decision_frame": target_frame, "reference_active_target": reference_active,
+                                   "corrected_active_target": corrected_active.copy(), "full_target": full_targets.copy()}
+        return full_targets
 
     def _collect_contacts(self) -> dict[str, Any]:
         dx = self._dx

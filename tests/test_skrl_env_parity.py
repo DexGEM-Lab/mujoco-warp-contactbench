@@ -54,7 +54,8 @@ def test_residual_action_masks_inactive_finger_joints(monkeypatch) -> None:
     task.base_position_offset = np.zeros(3, dtype=np.float32)
     task.joint_offset = np.zeros(16, dtype=np.float32)
     task.active_joint_mask = np.asarray([1.0, 0.0] + [1.0] * 14, dtype=np.float32)
-    task.trajectory = object()
+    raw_reference = np.linspace(-0.2, 0.2, 22, dtype=np.float32)
+    task.trajectory = SimpleNamespace(hand_dof=np.stack([raw_reference, raw_reference]))
     task.route_joint_upper_limits = {}
     monkeypatch.setattr(
         skrl_env_module,
@@ -72,6 +73,11 @@ def test_residual_action_masks_inactive_finger_joints(monkeypatch) -> None:
     assert task.joint_offset[1] == 0.0
     assert corrected[6] > 0.0
     assert corrected[7] == 0.0
+    assert task._last_action_trace is not None
+    assert task._last_action_trace["decision_frame"] == 1
+    np.testing.assert_array_equal(task._last_action_trace["reference_active_target"], raw_reference)
+    assert task._last_action_trace["corrected_active_target"].shape == (22,)
+    np.testing.assert_array_equal(task._last_action_trace["full_target"], corrected)
 
 
 def test_residual_action_uses_active_to_full_joint_mapping(monkeypatch) -> None:

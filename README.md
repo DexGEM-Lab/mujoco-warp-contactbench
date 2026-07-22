@@ -534,10 +534,13 @@ $MUJOCO_PYTHON tools/compare_dexhandrl_traces.py \
   --output outputs/dexhandrl_trace/first_divergence.json
 ```
 
-The comparator fails on identity/frame/schema mismatch, reports every named
-`obs_layout.py` slice, and separates shared-input boundaries from post-physics
-state. MuJoCo traces explicitly label `filtered_active_target` as unfiltered
-because Gym's ActionRules post-filters are not applied there.
+The v2 comparator fails on identity, decision-frame, state-frame, or schema
+mismatch; reports every named `obs_layout.py` slice for both processed and RMS
+observations; and separates decision-time inputs from post-physics state.
+Each row names its action boundary with `decision_frame` and its resulting state
+with `state_frame = decision_frame + 1`. MuJoCo records the authoritative raw
+Lance reference and pre-coupling corrected target, then declares
+`applied_active_target == corrected_active_target` with `post_filters: []`.
 
 Current seq1 acceptance status:
 

@@ -2,7 +2,7 @@
 
 ## Current model
 
-Exact checkpoint alignment is a sequence of observable transformations rather than a single rollout metric. The new trace contract fixes the Lance identity to row 22 / `cube1` / `01` / sequence 1 / UUID `c21d4fa5-185a-5ea7-aa22-e1d34beae42f` and compares the 461D observation (including every canonical slice), checkpoint RMS transform, deterministic action, residual offsets/targets, and only then post-physics state. This separates shared-input divergence from simulator physics divergence.
+Exact checkpoint alignment is a sequence of observable transformations rather than a single rollout metric. Trace schema v2 fixes the Lance identity to row 22 / `cube1` / `01` / sequence 1 / UUID `c21d4fa5-185a-5ea7-aa22-e1d34beae42f`; every row separates the action boundary `decision_frame` from its post-step `state_frame`. It compares processed/RMS 461D observations by every canonical slice, deterministic action, residual offsets/targets, and only then post-physics state. This separates shared-input divergence from simulator physics divergence. MuJoCo's diagnostic captures raw Lance active reference and the actual pre-coupling corrected active target inside `_apply_residual_action`; its applied target equals corrected with explicit `post_filters=[]`.
 
 The MuJoCo producer has run against the supplied environment, Lance archive, and epoch-20000 checkpoint for three exact steps and generated a contract-valid trace (OPS 2026-07-22T21:34:00Z). It records MuJoCo's lack of Gym ActionRules post-filters explicitly: `filtered_active_target` is the unfiltered corrected target, never presented as a matched Gym filter result. The existing task-level distal routing remains untouched.
 
