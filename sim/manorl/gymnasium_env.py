@@ -9,10 +9,12 @@ import numpy as np
 from gymnasium.vector.utils import batch_space
 from numpy.typing import NDArray
 
+from sim.manorl.contracts import JOINT_DOF
 from sim.manorl.environment import MujocoManoEnvironment
+from sim.manorl.observations import OBSERVATION_DIM_28
 
-OBSERVATION_DIM = 476
-ACTION_DIM = 26
+OBSERVATION_DIM = OBSERVATION_DIM_28
+ACTION_DIM = JOINT_DOF
 
 
 class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
@@ -35,11 +37,17 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
             raise TypeError("environment must be a MujocoManoEnvironment")
         self.environment = environment
         self.num_envs = environment.config.num_envs
+        # Real environments expose resolved 28/56-wide layouts. The fallbacks
+        # keep lightweight adapter test doubles on the single-hand MuJoCo ABI.
+        self.observation_dim = int(
+            getattr(environment, "observation_dim", OBSERVATION_DIM)
+        )
+        self.action_dim = int(getattr(environment, "action_dim", ACTION_DIM))
         self.single_observation_space = gym.spaces.Box(
-            low=-5.0, high=5.0, shape=(OBSERVATION_DIM,), dtype=np.float32
+            low=-5.0, high=5.0, shape=(self.observation_dim,), dtype=np.float32
         )
         self.single_action_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(ACTION_DIM,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(self.action_dim,), dtype=np.float32
         )
         self.observation_space = batch_space(self.single_observation_space, self.num_envs)
         self.action_space = batch_space(self.single_action_space, self.num_envs)
@@ -108,7 +116,8 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
         env_ids = None if raw_env_ids is None else self._normalize_reset_ids(raw_env_ids)
         output = self.environment.reset(env_ids=env_ids)
         observation = np.asarray(output["obs"], dtype=np.float32)
-        if observation.shape != (self.num_envs, OBSERVATION_DIM):
+        observation_dim = int(getattr(self, "observation_dim", OBSERVATION_DIM))
+        if observation.shape != (self.num_envs, observation_dim):
             raise RuntimeError("physical environment returned an invalid observation batch")
         pending = self._pending_reset_mask()
         if env_ids is None:
@@ -138,8 +147,11 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
         self, actions: NDArray[object]
     ) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.bool_], NDArray[np.bool_], dict[str, Any]]:
         actions_array = np.asarray(actions, dtype=np.float64)
-        if actions_array.shape != (self.num_envs, ACTION_DIM) or not np.all(np.isfinite(actions_array)):
-            raise ValueError(f"actions must be finite ({self.num_envs}, {ACTION_DIM})")
+        expected_dim = int(getattr(self, "action_dim", ACTION_DIM))
+        if actions_array.shape != (self.num_envs, expected_dim) or not np.all(
+            np.isfinite(actions_array)
+        ):
+            raise ValueError(f"actions must be finite ({self.num_envs}, {expected_dim})")
         self._consume_pending_resets()
         # Match IsaacGym VecTask: PPO keeps raw samples, while the environment
         # clips the normalized action at its boundary before physical processing.
@@ -149,7 +161,12 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
         reward = np.asarray(rewards, dtype=np.float32)
         done = np.asarray(reset, dtype=bool)
         time_outs = np.asarray(extras["time_outs"], dtype=bool)
-        if observation.shape != (self.num_envs, OBSERVATION_DIM) or reward.shape != (self.num_envs,):
+        expected_observation_dim = getattr(
+            self,
+            "observation_dim",
+            OBSERVATION_DIM,
+        )
+        if observation.shape != (self.num_envs, expected_observation_dim) or reward.shape != (self.num_envs,):
             raise RuntimeError("physical environment returned an invalid Gymnasium batch")
         if time_outs.shape != (self.num_envs,) or np.any(time_outs & ~done):
             raise RuntimeError("time_outs must be a subset of reset signals")

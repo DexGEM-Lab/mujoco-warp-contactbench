@@ -1,14 +1,8 @@
-"""Native skrl checkpoint boundary for the ManoRL target runtime.
-
-Raw Isaac rl-games checkpoints are rejected at this boundary. They must first
-pass through the Gym checkpoint converter, which emits an auditable native
-checkpoint and source-compatible sidecar.
-"""
+"""Native skrl checkpoint boundary for the MuJoCo ManoRL runtime."""
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,11 +16,23 @@ if TYPE_CHECKING:
 
 
 CHECKPOINT_FORMAT = "manorl.skrl.ppo.v2"
-GYM_SOURCE_FORMAT = "isaacgym.rl-games.mano_hand.v1"
-GYM_REWARD_CONTRACT = "isaacgym_mano_reward_contact_1x_threshold_2n_v1"
-GYM_PPO_REWARD_CONTRACT = "isaacgym_mano_reward_contact_1x_threshold_2n_shaper_0p5_v1"
-GYM_CONVERTED_ENVIRONMENT_CONTRACT = "isaacgym_mano_film_dynamic_residual_eval_v1"
 _REQUIRED_MODULES = frozenset({"policy", "value", "optimizer", "observation_preprocessor", "value_preprocessor"})
+_ENVIRONMENT_SIGNATURE_FIELDS = (
+    "resolved_hand_side",
+    "available_hand_sides",
+    "controlled_hand_sides",
+    "reference_following_hand_sides",
+    "action_dim",
+    "observation_dim",
+    "model_action_dim",
+)
+_ENVIRONMENT_SIDE_SEQUENCE_FIELDS = frozenset(
+    {
+        "available_hand_sides",
+        "controlled_hand_sides",
+        "reference_following_hand_sides",
+    }
+)
 
 
 class CheckpointFormatError(ValueError):
@@ -60,7 +66,7 @@ def _load_modules(path: Path, *, device: str | torch.device) -> dict[str, Any]:
         raise CheckpointFormatError("native skrl checkpoint must be a module mapping")
     if "model" in modules or "env_state" in modules:
         raise CheckpointFormatError(
-            "raw rl-games checkpoint input is unsupported: convert it with tools/convert_gym_checkpoint.py first"
+            "Isaac Gym/rl-games checkpoints are unsupported; use a native 28-DoF MuJoCo checkpoint"
         )
     missing = _REQUIRED_MODULES - modules.keys()
     if missing:
@@ -108,14 +114,10 @@ def _load_metadata(checkpoint: Path) -> dict[str, Any]:
     return metadata
 
 
-def _validate_environment_contract(
-    metadata: dict[str, Any], *, allow_converted: bool = False
-) -> None:
+def _validate_environment_contract(metadata: dict[str, Any]) -> None:
     environment_contract = metadata.get("environment_contract")
     if not isinstance(environment_contract, str) or not environment_contract:
         raise CheckpointFormatError("checkpoint environment contract is missing")
-    if allow_converted and metadata.get("source") is not None:
-        return
     if environment_contract != ENVIRONMENT_CONTRACT_ID:
         raise CheckpointFormatError(
             f"checkpoint environment contract {environment_contract!r} != required {ENVIRONMENT_CONTRACT_ID!r}"
@@ -129,8 +131,7 @@ def checkpoint_runtime_metadata(path: str | Path) -> dict[str, Any]:
     if not checkpoint.is_file():
         raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
     metadata = _load_metadata(checkpoint)
-    _validate_conversion_metadata(metadata)
-    _validate_environment_contract(metadata, allow_converted=True)
+    _validate_environment_contract(metadata)
     return metadata
 
 
@@ -150,49 +151,87 @@ def _validate_model_compatibility(metadata: dict[str, Any], agent: "PPO") -> Non
         )
 
 
-def _validate_conversion_metadata(metadata: dict[str, Any]) -> None:
-    """Validate provenance shape without freezing one migration's runtime values."""
+def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> None:
+    """Reject side/layout mismatches when a checkpoint records the new fields.
 
-    source = metadata.get("source")
-    if source is None:
+    New sidecars must match every field the target runtime can resolve. Policy
+    tensor dimensions provide a fallback for callers which construct an agent
+    outside ``ManoSkrlRuntime``; the attached runtime signature additionally
+    distinguishes left from right when both policies are 28-wide.
+    """
+
+    runtime_config = metadata.get("runtime_config")
+    if not isinstance(runtime_config, dict):
         return
-    if not isinstance(source, dict):
-        raise CheckpointFormatError("converted checkpoint source provenance must be a mapping")
-    if "format" in source and (
-        not isinstance(source["format"], str) or not source["format"]
-    ):
-        raise CheckpointFormatError("converted checkpoint source format is invalid")
-    if "path" in source and (
-        not isinstance(source["path"], str) or not source["path"]
-    ):
-        raise CheckpointFormatError("converted checkpoint source path is invalid")
-    if "sha256" in source and (
-        not isinstance(source["sha256"], str)
-        or re.fullmatch(r"[0-9a-f]{64}", source["sha256"]) is None
-    ):
-        raise CheckpointFormatError("converted checkpoint source SHA256 is invalid")
-    for field in ("checkpoint_epoch", "checkpoint_frame"):
-        if field in source and type(source[field]) is not int:
-            raise CheckpointFormatError(f"converted checkpoint {field} provenance is invalid")
-    if not source:
-        raise CheckpointFormatError("converted checkpoint source provenance is empty")
-    if not isinstance(metadata.get("conversion"), dict):
-        raise CheckpointFormatError("converted checkpoint conversion metadata is missing")
-    if not isinstance(metadata.get("runtime_config"), dict):
-        raise CheckpointFormatError("converted checkpoint runtime configuration is missing")
+    checkpoint_environment = runtime_config.get("environment")
+    if not isinstance(checkpoint_environment, dict):
+        return
+
+    target = getattr(agent, "manorl_environment_signature", None)
+    if isinstance(target, dict):
+        target_environment = target
+        missing = [
+            field
+            for field in _ENVIRONMENT_SIGNATURE_FIELDS
+            if field not in checkpoint_environment
+        ]
+        if missing:
+            raise CheckpointFormatError(
+                "checkpoint environment is missing current MuJoCo hand signature "
+                f"fields: {missing}"
+            )
+    else:
+        policy = getattr(agent, "policy", None)
+        target_environment = {
+            "action_dim": getattr(policy, "action_dim", None),
+            "observation_dim": getattr(policy, "observation_dim", None),
+        }
+
+    for field in _ENVIRONMENT_SIGNATURE_FIELDS:
+        if field not in checkpoint_environment:
+            continue
+        target_value = target_environment.get(field)
+        if target_value is None:
+            continue
+        checkpoint_value = checkpoint_environment[field]
+        if field in _ENVIRONMENT_SIDE_SEQUENCE_FIELDS:
+            if not isinstance(checkpoint_value, (list, tuple)) or not isinstance(
+                target_value, (list, tuple)
+            ):
+                raise CheckpointFormatError(
+                    f"checkpoint environment {field} is not a hand-side sequence"
+                )
+            checkpoint_value = tuple(checkpoint_value)
+            target_value = tuple(target_value)
+        if checkpoint_value != target_value:
+            raise CheckpointFormatError(
+                f"checkpoint environment {field}={checkpoint_value!r} does not match "
+                f"target runtime {target_value!r}"
+            )
 
 
 def load_skrl_checkpoint_for_inference(agent: "PPO", path: str | Path) -> Path:
-    """Load a native checkpoint for visualization under the current environment contract."""
+    """Load a current native checkpoint for visualization."""
 
     checkpoint = Path(path)
     if not checkpoint.is_file():
         raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
     _load_modules(checkpoint, device=agent.device)
     metadata = _load_metadata(checkpoint)
-    _validate_conversion_metadata(metadata)
-    _validate_environment_contract(metadata, allow_converted=True)
+    reward_contract = metadata["reward_contract"]
+    if reward_contract != REWARD_CONTRACT_ID:
+        raise CheckpointFormatError(
+            f"checkpoint reward contract {reward_contract!r} != required {REWARD_CONTRACT_ID!r}"
+        )
+    ppo_reward_contract = metadata["ppo_reward_contract"]
+    if ppo_reward_contract != PPO_REWARD_CONTRACT_ID:
+        raise CheckpointFormatError(
+            "checkpoint PPO reward contract "
+            f"{ppo_reward_contract!r} != required {PPO_REWARD_CONTRACT_ID!r}"
+        )
+    _validate_environment_contract(metadata)
     _validate_model_compatibility(metadata, agent)
+    _validate_environment_signature(metadata, agent)
     agent.load(str(checkpoint))
     return checkpoint
 
@@ -205,7 +244,6 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
         raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
     _load_modules(checkpoint, device=agent.device)
     metadata = _load_metadata(checkpoint)
-    _validate_conversion_metadata(metadata)
     reward_contract = metadata["reward_contract"]
     if reward_contract != REWARD_CONTRACT_ID:
         raise CheckpointFormatError(
@@ -218,5 +256,6 @@ def load_skrl_checkpoint(agent: "PPO", path: str | Path) -> Path:
         )
     _validate_environment_contract(metadata)
     _validate_model_compatibility(metadata, agent)
+    _validate_environment_signature(metadata, agent)
     agent.load(str(checkpoint))
     return checkpoint

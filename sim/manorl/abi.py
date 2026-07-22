@@ -14,18 +14,24 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+# 28-DoF finger order is thumb(6) followed by four four-axis fingers.  This is
+# the MANO actionScaling order: CMC abd/flex/twist, MCP flex/abd, IP, then MCP
+# abd/flex, PIP, DIP for index through pinky.
 SOURCE_ALIGNED_JOINT_SCALE: Final = tuple(
-    [0.10, 0.12, 0.044, 0.01] + [0.024, 0.04, 0.06, 0.01] * 4
+    [0.02, 0.02, 0.02, 0.02, 0.01, 0.005]
+    + [0.01, 0.01, 0.015, 0.005] * 4
 )
 SOURCE_ALIGNED_JOINT_CAP: Final = tuple(
-    [1.0, 1.2, 0.44, 0.1] + [0.24, 0.4, 0.6, 0.1] * 4
+    [0.2, 0.2, 0.2, 0.2, 0.1, 0.05]
+    + [0.1, 0.1, 0.15, 0.1] * 4
 )
+DEFAULT_EARLY_PHASE_STEPS: Final[int] = 30
 
 # This binds the source-aligned production observation/control mapping and
 # terminal reset separately from reward contracts.
 ENVIRONMENT_CONTRACT_ID: Final = (
-    "source_aligned_film_dynamic_residual_gym_authority_early50_pre250_"
-    "observation_contact_0p2n_deviation_0p10_v2"
+    "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
+    "action2mm_max20mm_observation_contact_0p2n_deviation_0p10_v4"
 )
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
@@ -44,16 +50,15 @@ class ResidualActionConfig:
     gamma_xy: float = 0.9
     gamma_z: float = 0.9
     gamma_joints: float = 0.9
-    position_scale: tuple[float, float, float] = (0.005, 0.005, 0.005)
+    position_scale: tuple[float, float, float] = (0.002, 0.002, 0.002)
     rotation_scale: float = 0.01
-    max_position_offset: tuple[float, float, float] = (0.05, 0.05, 0.05)
+    max_position_offset: tuple[float, float, float] = (0.02, 0.02, 0.02)
     joint_scale: tuple[float, ...] = SOURCE_ALIGNED_JOINT_SCALE
     max_joint_offset: tuple[float, ...] = SOURCE_ALIGNED_JOINT_CAP
-    early_phase_steps: int = 50
+    early_phase_steps: int = DEFAULT_EARLY_PHASE_STEPS
 
 
 SOURCE_ALIGNED_RESIDUAL_ACTION: Final = ResidualActionConfig()
-CHECKPOINT_SIDECAR_RESIDUAL_ACTION: Final = SOURCE_ALIGNED_RESIDUAL_ACTION
 
 
 @dataclass(frozen=True)
@@ -149,7 +154,7 @@ def early_phase_mask(
     trajectory_steps: NDArray[object],
     *,
     starts: NDArray[object] | None = None,
-    steps: int = 50,
+    steps: int = DEFAULT_EARLY_PHASE_STEPS,
 ) -> NDArray[np.bool_]:
     """Return the source half-open early pure-mocap interval."""
 
@@ -179,14 +184,32 @@ def process_residual_actions(
     early_phase_starts: NDArray[object] | None = None,
     config: ResidualActionConfig = ResidualActionConfig(),
 ) -> ResidualActionResult:
-    """Apply the source 26D action transformation without mutating inputs."""
+    """Apply the residual transformation for a 28-DoF MuJoCo hand.
 
-    actions = _as_batch("raw_actions", raw_actions, 26)
+    The 26-DoF branch remains read-only fixture support for historical source
+    traces. Live environment and Gymnasium action boundaries accept only the
+    current 28/56-wide MuJoCo layout.
+    """
+
+    actions_array = np.asarray(raw_actions, dtype=np.float64)
+    if actions_array.ndim != 2 or actions_array.shape[1] not in (26, 28):
+        raise ValueError("raw_actions must be a finite (batch, 26) or (batch, 28) array")
+    dof_dim = int(actions_array.shape[1])
+    actions = _as_batch("raw_actions", actions_array, dof_dim)
+    finger_dim = dof_dim - 6
     batch = actions.shape[0]
     steps = _as_vector("trajectory_steps", trajectory_steps, batch)
     position_offset = _as_batch("cumulative_offset", cumulative_offset, 3)
-    joint_offset = _as_batch("cumulative_joint_offset", cumulative_joint_offset, 20)
-    targets = _as_batch("mocap_targets", mocap_targets, 26)
+    joint_values = np.asarray(cumulative_joint_offset, dtype=np.float64)
+    if joint_values.ndim != 2 or joint_values.shape[0] != batch or joint_values.shape[1] not in (20, 22):
+        raise ValueError("cumulative_joint_offset must have shape (batch, 20) or (batch, 22)")
+    cumulative_dim = int(joint_values.shape[1])
+    if cumulative_dim != finger_dim:
+        raise ValueError(
+            "cumulative_joint_offset must match the action finger width"
+        )
+    joint_offset = _as_batch("cumulative_joint_offset", joint_values, cumulative_dim)
+    targets = _as_batch("mocap_targets", mocap_targets, dof_dim)
     for name, values in (
         ("cumulative_offset", position_offset),
         ("cumulative_joint_offset", joint_offset),
@@ -196,11 +219,11 @@ def process_residual_actions(
             raise ValueError(f"{name} batch size must match raw_actions")
     lower = np.asarray(joint_lower, dtype=np.float64)
     upper = np.asarray(joint_upper, dtype=np.float64)
-    if lower.shape != (26,) or upper.shape != (26,) or not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)) or np.any(lower > upper):
-        raise ValueError("joint limits must be finite ordered (26,) arrays")
+    if lower.shape != (dof_dim,) or upper.shape != (dof_dim,) or not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)) or np.any(lower > upper):
+        raise ValueError(f"joint limits must be finite ordered ({dof_dim},) arrays")
     active = np.asarray(active_joint_mask, dtype=bool)
-    if active.shape != (batch, 20):
-        raise ValueError("active_joint_mask must have shape (batch, 20)")
+    if active.shape != (batch, cumulative_dim):
+        raise ValueError(f"active_joint_mask must have shape (batch, {cumulative_dim})")
     if use_residual is None:
         residual = np.ones(batch, dtype=bool)
     else:
@@ -210,7 +233,9 @@ def process_residual_actions(
         residual = residual_values > 0.5
 
     processed = np.clip(actions, -1.0, 1.0).copy()
-    processed[:, 6:26] = np.where(active, processed[:, 6:26], 0.0)
+    processed[:, 6 : 6 + cumulative_dim] = np.where(
+        active, processed[:, 6 : 6 + cumulative_dim], 0.0
+    )
     old_joint_offset = np.where(active, joint_offset, 0.0)
     early = early_phase_mask(
         steps, starts=early_phase_starts, steps=config.early_phase_steps
@@ -228,12 +253,29 @@ def process_residual_actions(
     position_scale = np.asarray(config.position_scale, dtype=np.float64)
     joint_scale = np.asarray(config.joint_scale, dtype=np.float64)
     joint_limit = np.asarray(config.max_joint_offset, dtype=np.float64)
-    if position_scale.shape != (3,) or joint_scale.shape != (20,) or joint_limit.shape != (20,):
-        raise ValueError("residual action scales and limits must have 3D position and 20D joint shapes")
+    if len(config.joint_scale) == 22 and cumulative_dim == 20:
+        # A 28-DoF default config may be used by a legacy 26-DoF replay;
+        # drop CMC twist and MCP abduction while retaining the named legacy
+        # CMC-abduction, CMC-flexion, MCP-flexion, thumb-IP ordering.
+        joint_scale = np.asarray(
+            (joint_scale[0], joint_scale[1], joint_scale[3], joint_scale[5])
+            + tuple(joint_scale[6:]),
+            dtype=np.float64,
+        )
+        joint_limit = np.asarray(
+            (joint_limit[0], joint_limit[1], joint_limit[3], joint_limit[5])
+            + tuple(joint_limit[6:]),
+            dtype=np.float64,
+        )
+    effective_joint_dim = cumulative_dim
+    if position_scale.shape != (3,) or joint_scale.shape != (effective_joint_dim,) or joint_limit.shape != (effective_joint_dim,):
+        raise ValueError("residual action scales and limits must be finite vectors")
+    if len(joint_scale) < cumulative_dim or len(joint_limit) < cumulative_dim:
+        raise ValueError("residual action scales and limits are shorter than cumulative state")
     if not np.all(np.isfinite(position_scale)) or not np.all(np.isfinite(joint_scale)) or not np.all(np.isfinite(joint_limit)):
         raise ValueError("residual action scales and limits must be finite")
     scaled_position = processed[:, 0:3] * position_scale
-    scaled_joints = processed[:, 6:26] * joint_scale
+    scaled_joints = processed[:, 6 : 6 + cumulative_dim] * joint_scale[:cumulative_dim]
     next_position = position_offset.copy()
     next_joint = old_joint_offset.copy()
     next_position[zero_offset] = 0.0
@@ -251,12 +293,12 @@ def process_residual_actions(
     )
     position_limit = np.asarray(config.max_position_offset, dtype=np.float64)
     next_position = np.clip(next_position, -position_limit, position_limit)
-    next_joint = np.clip(next_joint, -joint_limit, joint_limit)
+    next_joint = np.clip(next_joint, -joint_limit[:cumulative_dim], joint_limit[:cumulative_dim])
 
     residual_targets = np.zeros_like(targets)
     residual_targets[:, 0:3] = next_position
     residual_targets[:, 3:6] = 0.025 * processed[:, 3:6] * config.rotation_scale
-    residual_targets[:, 6:26] = next_joint
+    residual_targets[:, 6 : 6 + cumulative_dim] = next_joint
     final_targets = np.clip(
         targets + residual[:, None] * residual_targets, lower, upper
     )

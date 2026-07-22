@@ -10,10 +10,11 @@ from sim.manorl.assets import (
     compile_unified_model,
     object_runtime,
 )
-from sim.manorl.contracts import TRAJECTORY_IDENTITY
+from sim.manorl.contracts import JOINT_DOF, TRAJECTORY_IDENTITY
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
 from sim.manorl.observations import CURRENT_SOURCE_COMPATIBILITY
 from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch
+from sim.manorl.unified_batch import UnifiedBatchConfig
 
 
 def _require_materialized_objects() -> None:
@@ -43,6 +44,18 @@ def _trajectory(object_type: str) -> ReferenceTrajectory:
     )
 
 
+@pytest.mark.parametrize(("alias", "expected"), [("r", "right"), ("lhand", "left"), ("bimanual", "both")])
+def test_unified_batch_config_canonicalizes_hand_side_aliases(
+    alias: str, expected: str
+) -> None:
+    config = UnifiedBatchConfig(
+        object_types=("cube1",),
+        active_object_indices=(0,),
+        hand_side=alias,
+    )
+    assert config.hand_side == expected
+
+
 def test_unified_scene_preserves_real_meshes_and_fixed_hand_contract() -> None:
     _require_materialized_objects()
     xml = build_unified_scene_xml(object_types=("cube1", "cube2"))
@@ -50,7 +63,9 @@ def test_unified_scene_preserves_real_meshes_and_fixed_hand_contract() -> None:
     assert xml.count('name="cube1_collision"') == 1
     assert xml.count('name="cube2_collision"') == 1
     mujoco, model = compile_unified_model(object_types=("cube1", "cube2"))
-    assert (model.nq, model.nv, model.nu) == (40, 38, 26)
+    # Two free object joints add 14 qpos / 12 qvel coordinates to the revised
+    # 28-DoF hand model.
+    assert (model.nq, model.nv, model.nu) == (42, 40, JOINT_DOF)
     for object_type in ("cube1", "cube2"):
         body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, object_type)
         geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{object_type}_collision")
@@ -78,10 +93,10 @@ def test_unified_mixed_environment_matches_route_and_indexed_reset() -> None:
         batch, EnvironmentConfig(**common, unified_object_batch=True)
     )
     assert unified._object_routes == {}
-    assert unified.model.nq == 40
-    assert unified.data.qpos.shape == (2, 40)
+    assert unified.model.nq == 42
+    assert unified.data.qpos.shape == (2, 42)
 
-    actions = np.zeros((2, 26), dtype=np.float64)
+    actions = np.zeros((2, JOINT_DOF), dtype=np.float64)
     routed_output = routed.step(actions)
     unified_output = unified.step(actions)
     np.testing.assert_allclose(routed_output[0]["obs"], unified_output[0]["obs"], rtol=0, atol=1e-5)
@@ -96,5 +111,5 @@ def test_unified_mixed_environment_matches_route_and_indexed_reset() -> None:
     )
 
     reset_output = unified.reset(np.asarray([1], dtype=np.int64))
-    assert reset_output["obs"].shape == (2, 476)
+    assert reset_output["obs"].shape == (2, 480)
     np.testing.assert_array_equal(unified.progress, (1, 0))

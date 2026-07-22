@@ -12,7 +12,13 @@ import numpy as np
 
 from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.cli import parse_cli_bool
-from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
+from sim.manorl.contracts import JOINT_DOF
+from sim.manorl.environment import (
+    EnvironmentConfig,
+    MujocoManoEnvironment,
+    recommended_warp_contact_capacity,
+)
+from sim.manorl.observations import observation_layout
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
 from sim.manorl.view_environment import (
@@ -74,16 +80,29 @@ class _StochasticCheckpointStepper:
 
 
 def _assignment_payload(trajectory_batch) -> list[dict[str, object]]:
-    return [
-        {
+    payload: list[dict[str, object]] = []
+    for env_id, trajectory in enumerate(trajectory_batch.trajectories):
+        controlled_count = len(trajectory.action_layout.controlled_sides)
+        live_cumulative_dim = controlled_count * (JOINT_DOF - 6)
+        payload.append({
             "env_id": env_id,
             "identity": trajectory.identity.identity,
             "row_index": trajectory.identity.row_index,
             "uuid": trajectory.identity.uuid,
             "source_slice": [trajectory.identity.source_start, trajectory.identity.source_stop],
-        }
-        for env_id, trajectory in enumerate(trajectory_batch.trajectories)
-    ]
+            "available_hand_sides": list(trajectory.hand_sides),
+            "controlled_hand_sides": list(trajectory.action_layout.controlled_sides),
+            "reference_following_hand_sides": list(
+                trajectory.action_layout.reference_sides
+            ),
+            "reference_dof_dim": trajectory.dof_dim,
+            "action_dim": controlled_count * JOINT_DOF,
+            "observation_dim": observation_layout(
+                JOINT_DOF,
+                cumulative_joint_dim=live_cumulative_dim,
+            ).dimension,
+        })
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--object", dest="object_type", default="cube1")
     parser.add_argument("--gesture", default="01")
+    parser.add_argument("--dataset-path", type=Path)
+    parser.add_argument(
+        "--hand-side",
+        choices=("auto", "both", "right", "left"),
+        default="auto",
+    )
     parser.add_argument("--steps", type=int, default=160)
     parser.add_argument("--env-id", type=int, default=0)
     parser.add_argument("--num-envs", type=int, default=1)
@@ -124,7 +149,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.stochastic_policy and args.checkpoint is None:
         parser.error("stochastic-policy requires --checkpoint")
     checkpoint = None if args.checkpoint is None else _validate_checkpoint_path(args.checkpoint)
-    selection = TrajectorySelection(object_type=args.object_type, gesture=args.gesture)
+    selection_kwargs = {
+        "object_type": args.object_type,
+        "gesture": args.gesture,
+        "hand_side": args.hand_side,
+    }
+    if args.dataset_path is not None:
+        selection_kwargs["dataset_path"] = args.dataset_path
+    selection = TrajectorySelection(**selection_kwargs)
     trajectories = load_assigned_trajectory_batch(selection, num_envs=args.num_envs)
     print(
         json.dumps(
@@ -142,7 +174,10 @@ def main(argv: list[str] | None = None) -> int:
             num_envs=args.num_envs,
             residual_enabled=args.use_residual,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if args.terminal else 1_000_000.0,
-            contact_capacity=max(128, 31 * args.num_envs + 64),
+            contact_capacity=recommended_warp_contact_capacity(
+                args.num_envs, getattr(trajectories, "hand_sides", ("right",))
+            ),
+            hand_side=args.hand_side,
         ),
     )
     recorder_kwargs: dict[str, object] = {"env_id": args.env_id}
@@ -153,7 +188,10 @@ def main(argv: list[str] | None = None) -> int:
             archive_following=args.archive_following,
         )
     recorder = ManoRerunRecorder(environment, args.output, **recorder_kwargs)
-    actions = np.zeros((args.num_envs, 26), dtype=np.float64)
+    actions = np.zeros(
+        (args.num_envs, int(getattr(environment, "action_dim", JOINT_DOF))),
+        dtype=np.float64,
+    )
     pending_done = np.zeros(args.num_envs, dtype=bool)
     if checkpoint is None:
         stepper = None

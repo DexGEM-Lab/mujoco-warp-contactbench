@@ -585,7 +585,7 @@ def test_zero_stepper_preserves_zero_batch_actions() -> None:
     environment = FakeEnvironment()
     stepper = _ZeroActionStepper(environment)
     stepper.step()
-    assert environment.actions.shape == (3, 26)
+    assert environment.actions.shape == (3, 28)
     assert environment.actions.dtype == np.float64
     assert not np.any(environment.actions)
 

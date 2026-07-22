@@ -29,10 +29,15 @@ from sim.manorl.abi import (
 )
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.cli import parse_cli_bool
-from sim.manorl.contracts import DATASET_PATH
-from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
-from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
-from sim.manorl.observations import CONTACT_FORCE_THRESHOLD
+from sim.manorl.contracts import DATASET_PATH, JOINT_DOF
+from sim.manorl.environment import (
+    EnvironmentConfig,
+    MujocoManoEnvironment,
+    recommended_warp_contact_capacity,
+)
+from sim.manorl.gymnasium_env import ACTION_DIM, ManoGymnasiumVectorEnv
+from sim.manorl.hand_layout import HandActionLayout
+from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, observation_layout
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.rewards import (
     PPO_REWARD_CONTRACT_ID,
@@ -47,9 +52,6 @@ from sim.manorl.trajectory import (
     load_assigned_trajectory_batch,
 )
 
-WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
-UNIFIED_WARP_CONTACTS_PER_WORLD = 64
-WARP_CONTACT_CAPACITY_MARGIN = 64
 DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
 REWARD_UPDATE_COMPONENTS = (
     "total",
@@ -187,6 +189,7 @@ class TrainingBudget:
     gesture: str = "01"
     trajectory_selector: str | None = None
     dataset_path: str = DATASET_PATH
+    hand_side: str = "auto"
     residual_enabled: bool = True
     use_film: bool = True
     terminal: bool = True
@@ -494,8 +497,14 @@ def _wandb_run_name(output: Path, budget: TrainingBudget) -> str:
         return budget.wandb.name
     selector = budget.trajectory_selector
     if selector is None:
-        selector = f"{budget.object_type}-{int(budget.gesture):02d}"
-    selector_label = selector.replace(":", "-").replace(",", "_")
+        # Modern CMA2Lance rows use descriptive gestures such as
+        # ``001-Palmar-Pinch``; keep the label intact instead of assuming an
+        # integer action ID.  Numeric legacy gestures retain their old name.
+        selector = f"{budget.object_type}-{str(budget.gesture).strip()}"
+    selector_label = "".join(
+        character if character.isalnum() or character in "-_." else "-"
+        for character in selector.replace(":", "-").replace(",", "_")
+    ).strip("-_") or "trajectory"
     return f"{output.name}-{selector_label}"
 
 
@@ -546,7 +555,6 @@ def _wandb_config(
             "contact_force_threshold_N": REWARD_HAND_OBJECT_THRESHOLD_N,
             "ppo_contract": PPO_REWARD_CONTRACT_ID,
             "ppo_scale": PPO_REWARD_SCALE,
-            "isaacgym_ppo_scale": 0.5,
         },
         "environment": {
             "contract": ENVIRONMENT_CONTRACT_ID,
@@ -994,7 +1002,10 @@ def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trai
     max_calls = int(trajectory_lengths.max()) + 1
     for call in range(max_calls):
         if mode == "zero":
-            actions = torch.zeros((num_envs, 26), device=runtime.device)
+            actions = torch.zeros(
+                (num_envs, int(getattr(environment, "action_dim", ACTION_DIM))),
+                device=runtime.device,
+            )
         else:
             actions = runtime.deterministic_actions(observations)
         observations, rewards, terminated, truncated, info = runtime.env.step(actions)
@@ -1589,8 +1600,14 @@ def _evaluation_ppo_config(training_config: ManoPPOConfig, *, num_envs: int) -> 
 
 
 def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
-    return [
-        {
+    assignments: list[dict[str, object]] = []
+    for env_id, item in enumerate(trajectories.trajectories):
+        live_layout = HandActionLayout(
+            item.hand_sides,
+            item.selected_hand_sides,
+            dof_per_hand=JOINT_DOF,
+        )
+        assignments.append({
             "env_id": env_id,
             "identity": item.identity.identity,
             "object": item.identity.identity.split("_")[0],
@@ -1598,9 +1615,17 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
             "row_index": item.identity.row_index,
             "uuid": item.identity.uuid,
             "source_slice": [item.identity.source_start, item.identity.source_stop],
-        }
-        for env_id, item in enumerate(trajectories.trajectories)
-    ]
+            "available_hand_sides": list(item.hand_sides),
+            "controlled_hand_sides": list(item.action_layout.controlled_sides),
+            "reference_following_hand_sides": list(item.action_layout.reference_sides),
+            "reference_dof_dim": item.dof_dim,
+            "action_dim": live_layout.action_dim,
+            "observation_dim": observation_layout(
+                JOINT_DOF,
+                cumulative_joint_dim=live_layout.cumulative_dim,
+            ).dimension,
+        })
+    return assignments
 
 
 def _trajectory_selection_metadata(
@@ -1610,6 +1635,11 @@ def _trajectory_selection_metadata(
     assignments: list[dict[str, object]],
     evaluation_assignments: list[dict[str, object]],
 ) -> dict[str, object]:
+    hand_layout = HandActionLayout.from_dataset(
+        trajectories.hand_sides,
+        hand_side=selection.hand_side,
+        dof_per_hand=JOINT_DOF,
+    )
     resolved_pairs = [
         {"object": pair.object_type, "action": pair.action_id}
         for pair in getattr(trajectories, "resolved_pairs", ())
@@ -1632,6 +1662,17 @@ def _trajectory_selection_metadata(
         "padding_policy": "full" if selection.require_full_padding else "clip_to_source",
         "dataset_path": str(selection.dataset_path),
         "dataset_version": selection.expected_dataset_version,
+        "requested_hand_side": selection.hand_side,
+        "resolved_hand_side": (
+            "both" if len(hand_layout.controlled_sides) == 2 else hand_layout.controlled_sides[0]
+        ),
+        "available_hand_sides": list(hand_layout.available_sides),
+        "controlled_hand_sides": list(hand_layout.controlled_sides),
+        "action_dim": hand_layout.action_dim,
+        "observation_dim": observation_layout(
+            JOINT_DOF,
+            cumulative_joint_dim=hand_layout.cumulative_dim,
+        ).dimension,
         "resolved_pairs": resolved_pairs,
         "assignments": assignments,
         "evaluation_assignments": evaluation_assignments,
@@ -1665,11 +1706,6 @@ def _build_evaluation_runtime(
     if not 1 <= num_envs <= maximum:
         raise ValueError(f"evaluation num_envs must be within 1..{maximum}")
     trajectories = load_assigned_trajectory_batch(selection, num_envs=num_envs)
-    contacts_per_world = (
-        UNIFIED_WARP_CONTACTS_PER_WORLD
-        if budget.unified_object_batch
-        else WARP_BROADPHASE_CONTACTS_PER_WORLD
-    )
     physical = MujocoManoEnvironment(
         trajectories,
         EnvironmentConfig(
@@ -1677,8 +1713,11 @@ def _build_evaluation_runtime(
             device="gpu",
             residual_enabled=budget.residual_enabled,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
-            contact_capacity=max(128, contacts_per_world * num_envs + WARP_CONTACT_CAPACITY_MARGIN),
+            contact_capacity=recommended_warp_contact_capacity(
+                num_envs, trajectories.hand_sides
+            ),
             unified_object_batch=budget.unified_object_batch,
+            hand_side=budget.hand_side,
         ),
     )
     ppo_config = _evaluation_ppo_config(training_config, num_envs=num_envs)
@@ -1844,22 +1883,17 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     np.random.seed(budget.seed)
     torch.cuda.manual_seed_all(budget.seed)
 
-    contacts_per_world = (
-        UNIFIED_WARP_CONTACTS_PER_WORLD
-        if budget.unified_object_batch
-        else WARP_BROADPHASE_CONTACTS_PER_WORLD
-    )
-    contact_capacity = max(
-        128,
-        contacts_per_world * budget.num_envs + WARP_CONTACT_CAPACITY_MARGIN,
-    )
     selection = TrajectorySelection(
         object_type=budget.object_type,
         gesture=budget.gesture,
         selector=budget.trajectory_selector,
         dataset_path=Path(budget.dataset_path),
+        hand_side=budget.hand_side,
     )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
+    contact_capacity = recommended_warp_contact_capacity(
+        budget.num_envs, trajectories.hand_sides
+    )
     evaluation_num_envs = _full_coverage_evaluation_num_envs(budget, trajectories)
     assigned_object_types = {
         item.identity.identity.split("_")[0]
@@ -1887,6 +1921,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             capture_transition_diagnostics=budget.resolved_capture_transition_diagnostics,
             profile_phases=budget.profile_phases,
             unified_object_batch=budget.unified_object_batch,
+            hand_side=budget.hand_side,
         ),
     )
     ppo_config = ManoPPOConfig(
@@ -1953,10 +1988,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         observer: TrainingObserver | None = None
         published_rerun: Path | None = None
         periodic_checkpoints: list[Path] = []
+        runtime_holder: list[ManoSkrlRuntime] = [runtime]
 
         def on_update(update: dict[str, Any]) -> None:
             periodic_checkpoint = _maybe_save_periodic_checkpoint(
-                runtime,
+                runtime_holder[0],
                 output,
                 budget.checkpoint_interval_updates,
                 update,
@@ -2050,6 +2086,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         # evaluator constructed for the initial comparison.
         observer = None
         recorder = None
+        runtime_holder.clear()
         del runtime
         del physical
         gc.collect()
@@ -2073,7 +2110,6 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         result = {
             "schema": "manorl.cube1_fast_training.v1",
             "trajectory_selection": trajectory_selection,
-            "checkpoint_conversion": "tools/convert_gym_checkpoint.py",
             "initialization": {
                 "actor_mean": "source_default",
                 "initial_log_std": -0.99,
@@ -2084,7 +2120,6 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "contact_force_threshold_N": REWARD_HAND_OBJECT_THRESHOLD_N,
                 "ppo_contract": PPO_REWARD_CONTRACT_ID,
                 "ppo_scale": PPO_REWARD_SCALE,
-                "isaacgym_ppo_scale": 0.5,
             },
             "environment": environment_result,
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
@@ -2169,6 +2204,12 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=Path(DATASET_PATH),
         help="pinned Lance dataset path (default: repository contract path)",
+    )
+    parser.add_argument(
+        "--hand-side",
+        choices=("auto", "both", "right", "left"),
+        default="auto",
+        help="hands to control; auto follows dataset sides, explicit side makes the other follow reference",
     )
     parser.add_argument(
         "--minibatch-size",
@@ -2282,6 +2323,7 @@ def main(argv: list[str] | None = None) -> int:
             gesture=gesture,
             selector=selector,
             dataset_path=args.dataset_path,
+            hand_side=args.hand_side,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -2343,6 +2385,7 @@ def main(argv: list[str] | None = None) -> int:
                 None if selector is None else parsed_selection.canonical_selector
             ),
             dataset_path=str(args.dataset_path.resolve()),
+            hand_side=args.hand_side,
             residual_enabled=args.use_residual,
             use_film=args.film,
             terminal=args.terminal,

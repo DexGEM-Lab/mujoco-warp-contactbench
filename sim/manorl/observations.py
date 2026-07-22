@@ -67,8 +67,111 @@ CONTACT_FORCE_THRESHOLD: Final[float] = 0.2
 
 
 @dataclass(frozen=True)
+class ObservationLayout:
+    """Resolved observation slices for one hand-DOF/cumulative-state ABI."""
+
+    dof_dim: int
+    cumulative_joint_dim: int
+    slices: dict[str, slice]
+    dimension: int
+
+    @property
+    def hand_count(self) -> int:
+        """Number of per-hand cumulative blocks represented by this layout."""
+
+        return self.cumulative_joint_dim // (self.dof_dim - 6)
+
+
+_OBSERVATION_WIDTHS: Final[dict[str, int | None]] = {
+    "wrist_pos": 6,
+    "finger_pos": None,
+    "hand_orientation": 4,
+    "object_position": 3,
+    "object_orientation": 4,
+    "hand_position": 3,
+    "finger_tip_position": 15,
+    "target_object_position": 3,
+    "target_object_orientation": 4,
+    "cumulative_offset": None,
+    "target_object_pos_next_5": 3,
+    "table_clearance": 6,
+    "object_point_cloud_raw": 192,
+    "action_types": 50,
+    "object_geometry": 12,
+    "hand_keypoints": 48,
+    "contact_forces": 16,
+    "cumulative_joint_offset": None,
+    "contact_force_directions": 48,
+    "expected_contact_mask": 16,
+}
+
+
+def observation_layout(
+    dof_dim: int = 26,
+    *,
+    cumulative_joint_dim: int | None = None,
+) -> ObservationLayout:
+    """Build a stable layout for legacy, 28D, or bimanual cumulative state."""
+
+    if dof_dim not in (26, 28):
+        raise ValueError("observation hand DOF width must be 26 or 28")
+    cumulative_dim = dof_dim - 6 if cumulative_joint_dim is None else int(cumulative_joint_dim)
+    if cumulative_dim <= 0 or cumulative_dim % (dof_dim - 6) != 0:
+        raise ValueError("cumulative joint width must contain whole per-hand finger blocks")
+    hand_count = cumulative_dim // (dof_dim - 6)
+    if hand_count not in (1, 2):
+        raise ValueError("cumulative state must contain one or two complete hand blocks")
+    start = 0
+    slices: dict[str, slice] = {}
+    for key in OBSERVATION_KEYS:
+        width = _OBSERVATION_WIDTHS[key]
+        if key == "finger_pos":
+            width = dof_dim - 6
+        elif key == "cumulative_offset":
+            width = 3 * hand_count
+        elif key == "cumulative_joint_offset":
+            width = cumulative_dim
+        assert width is not None
+        slices[key] = slice(start, start + width)
+        start += width
+    return ObservationLayout(dof_dim, cumulative_dim, slices, start)
+
+
+def observation_layout_for_dimension(dimension: int) -> ObservationLayout:
+    """Resolve a live observation width to its explicit hand/DOF layout.
+
+    The fixed-size fields retain their source order; per-hand position and
+    finger cumulative residual blocks vary with the controlled hand count. Keep
+    the mapping centralized so Gym, model, and normalizer boundaries cannot
+    silently drift apart when a one-hand or bimanual space is selected.
+    """
+
+    candidates = [
+        observation_layout(dof, cumulative_joint_dim=(dof - 6) * hand_count)
+        for dof in (26, 28)
+        for hand_count in (1, 2)
+    ]
+    matches = [layout for layout in candidates if layout.dimension == int(dimension)]
+    if len(matches) != 1:
+        supported = ", ".join(str(layout.dimension) for layout in candidates)
+        raise ValueError(
+            f"unsupported ManoRL observation width {dimension}; expected one of {supported}"
+        )
+    return matches[0]
+
+
+LEGACY_OBSERVATION_LAYOUT: Final = observation_layout(26, cumulative_joint_dim=20)
+OBSERVATION_LAYOUT_28: Final = observation_layout(28, cumulative_joint_dim=22)
+OBSERVATION_DIM_28: Final[int] = OBSERVATION_LAYOUT_28.dimension
+LEGACY_BIMANUAL_OBSERVATION_LAYOUT: Final = observation_layout(26, cumulative_joint_dim=40)
+OBSERVATION_LAYOUT_28_BIMANUAL: Final = observation_layout(28, cumulative_joint_dim=44)
+LEGACY_BIMANUAL_OBSERVATION_DIM: Final[int] = LEGACY_BIMANUAL_OBSERVATION_LAYOUT.dimension
+OBSERVATION_DIM_28_BIMANUAL: Final[int] = OBSERVATION_LAYOUT_28_BIMANUAL.dimension
+
+
+@dataclass(frozen=True)
 class ObservationCompatibility:
-    """A selected current-source or checkpoint-sidecar environment contract."""
+    """An explicit observation timing and point-sampling contract."""
 
     name: str
     early_phase_steps: int
@@ -86,15 +189,10 @@ CURRENT_SOURCE_COMPATIBILITY: Final = ObservationCompatibility(
     name="current_source", early_phase_steps=100, movement_pre_padding=250,
     point_template_mode="static_seed_42",
 )
-CHECKPOINT_SIDECAR_COMPATIBILITY: Final = ObservationCompatibility(
-    name="checkpoint_sidecar", early_phase_steps=50, movement_pre_padding=200,
+SOURCE_ALIGNED_COMPATIBILITY: Final = ObservationCompatibility(
+    name="mujoco_28dof", early_phase_steps=30, movement_pre_padding=100,
     point_template_mode="dynamic_reset",
 )
-GYM_EVAL_ALIGNED_COMPATIBILITY: Final = ObservationCompatibility(
-    name="gym_eval_aligned", early_phase_steps=50, movement_pre_padding=250,
-    point_template_mode="dynamic_reset",
-)
-SOURCE_ALIGNED_COMPATIBILITY: Final = GYM_EVAL_ALIGNED_COMPATIBILITY
 
 
 @dataclass(frozen=True)
@@ -296,7 +394,9 @@ def object_category(object_name: str) -> str:
     return "irregular"
 
 
-def _reduce_support_points(points: NDArray[np.float64], cap: int) -> NDArray[np.float64]:
+def reduce_support_points(points: NDArray[np.float64], cap: int = 256) -> NDArray[np.float64]:
+    """Deterministically cap static support points used for table clearance."""
+
     if cap < 0:
         raise ValueError("table_clearance_support_point_cap must be non-negative")
     if cap == 0 or len(points) <= cap:
@@ -362,12 +462,16 @@ def build_observation(
         raise TypeError("state must be an ObservationState")
     if not isinstance(compatibility, ObservationCompatibility):
         raise TypeError("compatibility must be an explicit ObservationCompatibility")
-    mano = _finite_batch("mano_dof_pos", state.mano_dof_pos, 26)
+    mano_values = np.asarray(state.mano_dof_pos, dtype=np.float64)
+    if mano_values.ndim != 2 or mano_values.shape[1] not in (26, 28):
+        raise ValueError("mano_dof_pos must be a finite (batch, 26) or (batch, 28) array")
+    mano = _finite_batch("mano_dof_pos", mano_values, int(mano_values.shape[1]))
+    dof_dim = int(mano.shape[1])
     batch = len(mano)
     lower = np.asarray(state.mano_dof_lower, dtype=np.float64)
     upper = np.asarray(state.mano_dof_upper, dtype=np.float64)
-    if lower.shape != (26,) or upper.shape != (26,) or not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)) or np.any(upper <= lower):
-        raise ValueError("mano DOF limits must be finite ordered (26,) arrays")
+    if lower.shape != (dof_dim,) or upper.shape != (dof_dim,) or not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)) or np.any(upper <= lower):
+        raise ValueError(f"mano DOF limits must be finite ordered ({dof_dim},) arrays")
     hand_pos = _finite_batch("hand_position", state.hand_position, 3)
     hand_quat = _finite_batch("hand_orientation_xyzw", state.hand_orientation_xyzw, 4)
     obj_pos = _finite_batch("object_position", state.object_position, 3)
@@ -375,8 +479,18 @@ def build_observation(
     target_pos = _finite_batch("target_object_position", state.target_object_position, 3)
     target_quat = _finite_batch("target_object_orientation_xyzw", state.target_object_orientation_xyzw, 4)
     target_next = _finite_batch("target_object_pos_next_5", state.target_object_pos_next_5, 3)
-    cumulative_offset = _finite_batch("cumulative_offset", state.cumulative_offset, 3)
-    cumulative_joint = _finite_batch("cumulative_joint_offset", state.cumulative_joint_offset, 20)
+    cumulative_values = np.asarray(state.cumulative_joint_offset, dtype=np.float64)
+    if cumulative_values.ndim != 2 or cumulative_values.shape[0] != batch:
+        raise ValueError("cumulative_joint_offset must be a finite batch matrix")
+    layout = observation_layout(
+        dof_dim, cumulative_joint_dim=int(cumulative_values.shape[1])
+    )
+    cumulative_offset = _finite_batch(
+        "cumulative_offset", state.cumulative_offset, 3 * layout.hand_count
+    )
+    cumulative_joint = _finite_batch(
+        "cumulative_joint_offset", cumulative_values, layout.cumulative_joint_dim
+    )
     geometry = _finite_batch("object_geometry", state.object_geometry, 12)
     keypoints = _finite_tensor("hand_keypoint_positions", state.hand_keypoint_positions, (16, 3), batch)
     fingertips = _finite_tensor("fingertip_positions", state.fingertip_positions, (5, 3), batch)
@@ -414,40 +528,38 @@ def build_observation(
             or not np.all(np.isfinite(support_row))
         ):
             raise ValueError("object_support_points must contain non-empty finite (points, 3) arrays")
-    support_rows = [
-        _reduce_support_points(value, state.table_clearance_support_point_cap)
-        for value in support_rows
-    ]
+    support_rows = [reduce_support_points(value, state.table_clearance_support_point_cap) for value in support_rows]
     if len(support_rows) == 1:
         support_rows = support_rows * batch
+    max_support_points = max(len(value) for value in support_rows)
+    support_batch = np.stack(
+        [
+            np.concatenate(
+                (
+                    value,
+                    np.repeat(value[-1:], max_support_points - len(value), axis=0),
+                ),
+                axis=0,
+            )
+            for value in support_rows
+        ],
+        axis=0,
+    )
     support_quat = obj_quat / np.maximum(np.linalg.norm(obj_quat, axis=1, keepdims=True), 1e-9)
     target_support_quat = target_quat / np.maximum(np.linalg.norm(target_quat, axis=1, keepdims=True), 1e-9)
-    object_min_z = np.asarray(
-        [
-            (
-                quat_rotate_xyzw(
-                    np.broadcast_to(support_quat[index], (len(support_rows[index]), 4)),
-                    support_rows[index],
-                )[:, 2]
-                + obj_pos[index, 2]
-            ).min()
-            for index in range(batch)
-        ],
-        dtype=np.float64,
+    support_quat_batch = np.broadcast_to(
+        support_quat[:, None, :], (batch, max_support_points, 4)
     )
-    target_min_z = np.asarray(
-        [
-            (
-                quat_rotate_xyzw(
-                    np.broadcast_to(target_support_quat[index], (len(support_rows[index]), 4)),
-                    support_rows[index],
-                )[:, 2]
-                + target_pos[index, 2]
-            ).min()
-            for index in range(batch)
-        ],
-        dtype=np.float64,
+    target_support_quat_batch = np.broadcast_to(
+        target_support_quat[:, None, :], (batch, max_support_points, 4)
     )
+    object_min_z = (
+        quat_rotate_xyzw(support_quat_batch, support_batch)[..., 2] + obj_pos[:, None, 2]
+    ).min(axis=1)
+    target_min_z = (
+        quat_rotate_xyzw(target_support_quat_batch, support_batch)[..., 2]
+        + target_pos[:, None, 2]
+    ).min(axis=1)
     if not np.isfinite(state.table_surface_height):
         raise ValueError("table_surface_height must be finite")
     table = float(state.table_surface_height)
@@ -459,29 +571,30 @@ def build_observation(
         target_min_z - table,
         target_pos[:, 2] - table,
     ), axis=1)
-    observation = np.empty((batch, RAW_OBSERVATION_DIM), dtype=np.float64)
-    observation[:, OBSERVATION_SLICES["wrist_pos"]] = mano[:, :6]
-    observation[:, OBSERVATION_SLICES["finger_pos"]] = 2.0 * (mano[:, 6:] - lower[6:]) / (upper[6:] - lower[6:]) - 1.0
-    observation[:, OBSERVATION_SLICES["hand_orientation"]] = hand_quat
-    observation[:, OBSERVATION_SLICES["object_position"]] = obj_pos
-    observation[:, OBSERVATION_SLICES["object_orientation"]] = obj_quat
-    observation[:, OBSERVATION_SLICES["hand_position"]] = hand_pos
-    observation[:, OBSERVATION_SLICES["finger_tip_position"]] = (fingertips - obj_pos[:, None, :]).reshape(batch, -1)
-    observation[:, OBSERVATION_SLICES["target_object_position"]] = target_pos
-    observation[:, OBSERVATION_SLICES["target_object_orientation"]] = target_quat
-    observation[:, OBSERVATION_SLICES["cumulative_offset"]] = cumulative_offset
-    observation[:, OBSERVATION_SLICES["target_object_pos_next_5"]] = target_next
-    observation[:, OBSERVATION_SLICES["table_clearance"]] = clearance
-    observation[:, OBSERVATION_SLICES["object_point_cloud_raw"]] = _point_cloud_observation(
+    slices = layout.slices
+    observation = np.empty((batch, layout.dimension), dtype=np.float64)
+    observation[:, slices["wrist_pos"]] = mano[:, :6]
+    observation[:, slices["finger_pos"]] = 2.0 * (mano[:, 6:] - lower[6:]) / (upper[6:] - lower[6:]) - 1.0
+    observation[:, slices["hand_orientation"]] = hand_quat
+    observation[:, slices["object_position"]] = obj_pos
+    observation[:, slices["object_orientation"]] = obj_quat
+    observation[:, slices["hand_position"]] = hand_pos
+    observation[:, slices["finger_tip_position"]] = (fingertips - obj_pos[:, None, :]).reshape(batch, -1)
+    observation[:, slices["target_object_position"]] = target_pos
+    observation[:, slices["target_object_orientation"]] = target_quat
+    observation[:, slices["cumulative_offset"]] = cumulative_offset
+    observation[:, slices["target_object_pos_next_5"]] = target_next
+    observation[:, slices["table_clearance"]] = clearance
+    observation[:, slices["object_point_cloud_raw"]] = _point_cloud_observation(
         state.point_cloud, obj_pos, obj_quat, hand_pos, compatibility
     )
-    observation[:, OBSERVATION_SLICES["action_types"]] = action_type_one_hot(state.action_ids, batch)
-    observation[:, OBSERVATION_SLICES["object_geometry"]] = geometry
-    observation[:, OBSERVATION_SLICES["hand_keypoints"]] = (keypoints - obj_pos[:, None, :]).reshape(batch, -1)
-    observation[:, OBSERVATION_SLICES["contact_forces"]] = contact.normalized_magnitude
-    observation[:, OBSERVATION_SLICES["cumulative_joint_offset"]] = cumulative_joint
-    observation[:, OBSERVATION_SLICES["contact_force_directions"]] = contact.direction.reshape(batch, -1)
-    observation[:, OBSERVATION_SLICES["expected_contact_mask"]] = mask
+    observation[:, slices["action_types"]] = action_type_one_hot(state.action_ids, batch)
+    observation[:, slices["object_geometry"]] = geometry
+    observation[:, slices["hand_keypoints"]] = (keypoints - obj_pos[:, None, :]).reshape(batch, -1)
+    observation[:, slices["contact_forces"]] = contact.normalized_magnitude
+    observation[:, slices["cumulative_joint_offset"]] = cumulative_joint
+    observation[:, slices["contact_force_directions"]] = contact.direction.reshape(batch, -1)
+    observation[:, slices["expected_contact_mask"]] = mask
     if not np.all(np.isfinite(observation)):
         raise ValueError("assembled raw observation is non-finite")
     return ObservationResult(

@@ -18,8 +18,12 @@ from sim.manorl.abi import (
     TERMINATION_REASON_SUCCESS,
 )
 from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_NAMES, KEYPOINT_NAMES, PHYSICS_SUBSTEPS_PER_TARGET
-from sim.manorl.environment import MujocoManoEnvironment, TransitionSnapshot
-from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, OBSERVATION_SLICES, quat_rotate_xyzw
+from sim.manorl.environment import (
+    MujocoManoEnvironment,
+    TransitionSnapshot,
+    recommended_warp_contact_capacity,
+)
+from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, quat_rotate_xyzw
 from sim.manorl.rewards import (
     PPO_REWARD_CONTRACT_ID,
     PPO_REWARD_SCALE,
@@ -96,7 +100,7 @@ class ManoRerunRecorder:
                 int(environment.config.episode_length),
             ) + 2
             self._replay_action_history = np.zeros(
-                (batch_size, max_episode_steps, 26), dtype=np.float64
+                (batch_size, max_episode_steps, environment.action_dim), dtype=np.float64
             )
             self._replay_episode_steps = np.zeros(batch_size, dtype=np.int64)
             self._replay_episode_numbers = np.zeros(batch_size, dtype=np.int64)
@@ -316,7 +320,9 @@ class ManoRerunRecorder:
                 replay_config = replace(
                     base_config,
                     num_envs=1,
-                    contact_capacity=max(128, 31),
+                    contact_capacity=recommended_warp_contact_capacity(
+                        1, self.environment.hand_sides
+                    ),
                     device_resident_controls=False,
                     capture_transition_diagnostics=True,
                 )
@@ -330,7 +336,9 @@ class ManoRerunRecorder:
                 replay_recorder = ManoRerunRecorder(replay_environment, output, env_id=0)
                 try:
                     for action in actions:
-                        replay_environment.step(action.reshape(1, 26))
+                        replay_environment.step(
+                            action.reshape(1, replay_environment.action_dim)
+                        )
                         replay_recorder.record_transition()
                 finally:
                     artifact = replay_recorder.close()
@@ -461,6 +469,19 @@ class ManoRerunRecorder:
             "trajectory_uuid": trajectory.identity.uuid,
             "trajectory_source_slice": [int(trajectory.source_indices[0]), int(trajectory.source_indices[-1]) + 1],
             "trajectory_length": int(environment.trajectory_lengths[self.env_id]),
+            "requested_hand_side": environment.config.hand_side,
+            "resolved_hand_side": (
+                "both"
+                if len(environment.hand_layout.controlled_sides) == 2
+                else environment.hand_layout.controlled_sides[0]
+            ),
+            "available_hand_sides": list(environment.hand_sides),
+            "controlled_hand_sides": list(environment.hand_layout.controlled_sides),
+            "reference_following_hand_sides": list(
+                environment.hand_layout.reference_sides
+            ),
+            "action_dim": environment.action_dim,
+            "observation_dim": environment.observation_dim,
             "joint_names": list(JOINT_NAMES),
             "keypoint_names": list(KEYPOINT_NAMES),
             "hand_meshes": [
@@ -684,28 +705,41 @@ class ManoRerunRecorder:
             _OBJECT_GRAVITY_MAGNITUDE_PATH,
             self.rr.Scalars(float(np.linalg.norm(gravity))),
         )
-        self.recording.log(
-            "state/arrays",
-            self.rr.AnyValues(
-                object_orientation_xyzw=physical.object_orientation_xyzw[env_id],
-                hand_orientation_xyzw=physical.hand_orientation_xyzw[env_id],
-                mano_dof_pos=physical.mano_dof_pos[env_id],
-                target_object_orientation_xyzw=target_orientation,
-                target_object_position_t_plus_5=self.environment.reference_object_pos[env_id, target_next],
+        layout_slices = self.environment.observation_layout.slices
+        array_values = {
+                "object_orientation_xyzw": physical.object_orientation_xyzw[env_id],
+                "hand_orientation_xyzw": physical.hand_orientation_xyzw[env_id],
+                "mano_dof_pos": physical.mano_dof_pos[env_id],
+                "target_object_orientation_xyzw": target_orientation,
+                "target_object_position_t_plus_5": self.environment.reference_object_pos[env_id, target_next],
+                "raw_action": snapshot.raw_actions[env_id],
+                "processed_target": snapshot.processed_targets[env_id],
+                "controller_target": snapshot.controller_targets[env_id],
+                "command_target": snapshot.command_targets[env_id],
+                "cumulative_position_offset": snapshot.observation.raw[env_id, layout_slices["cumulative_offset"]],
+                "cumulative_joint_offset": snapshot.observation.raw[env_id, layout_slices["cumulative_joint_offset"]],
+                "keypoint_force_components_48": keypoint_forces.reshape(-1),
+                "keypoint_force_magnitude": force_magnitudes,
+                "hand_object_force_on_object_world_N_components_48": hand_object_forces.reshape(-1),
+                "hand_object_force_on_object_magnitude_N": hand_object_force_magnitudes,
+                "object_force_xyz": physical.object_contact_force[env_id],
+                "expected_contact_mask": self.environment.expected_contact_mask[env_id],
+                "raw_observation": snapshot.observation.raw[env_id],
+        }
+        # Preserve historical Rerun field names for legacy recordings while
+        # making new 28/56-action traces self-describing.
+        if snapshot.raw_actions.shape[1] == 26:
+            array_values.update(
                 raw_action_26=snapshot.raw_actions[env_id],
                 processed_target_26=snapshot.processed_targets[env_id],
                 controller_target_26=snapshot.controller_targets[env_id],
                 command_target_26=snapshot.command_targets[env_id],
-                cumulative_position_offset=snapshot.observation.raw[env_id, OBSERVATION_SLICES["cumulative_offset"]],
-                cumulative_joint_offset=snapshot.observation.raw[env_id, OBSERVATION_SLICES["cumulative_joint_offset"]],
-                keypoint_force_components_48=keypoint_forces.reshape(-1),
-                keypoint_force_magnitude=force_magnitudes,
-                hand_object_force_on_object_world_N_components_48=hand_object_forces.reshape(-1),
-                hand_object_force_on_object_magnitude_N=hand_object_force_magnitudes,
-                object_force_xyz=physical.object_contact_force[env_id],
-                expected_contact_mask=self.environment.expected_contact_mask[env_id],
-                raw_observation_476=snapshot.observation.raw[env_id],
-            ),
+            )
+        if snapshot.observation.raw.shape[1] == 476:
+            array_values["raw_observation_476"] = snapshot.observation.raw[env_id]
+        self.recording.log(
+            "state/arrays",
+            self.rr.AnyValues(**array_values),
         )
 
     def close(self) -> Path | None:

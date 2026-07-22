@@ -1,20 +1,30 @@
 {
   "schema": "manorl.curated-assets.v1",
   "source_repository": "sibling:manohand_reconstruction/model/all_assets",
-  "source_commit": "ead79126589d1abf2362ea30b9d674d9e675a2f9",
-  "policy": "Only explicitly registered object runtimes are accepted. Curated collision meshes preserve the source 0.001 mesh scale; each runtime requires digest-checked URDF, collision, and grasp assets and compiles its own static MJX model.",
+  "source_commit": "033b358b73c57e5f437f6582b6a9b0d4add7f9ee",
+  "policy": "Only explicitly registered object runtimes are accepted. Collision meshes preserve their authoritative per-mesh scale, including all convex pieces for decomposed irregular objects; each runtime requires digest-checked URDF, collision, visual, and grasp assets and compiles its own static MJX model.",
+  "hand_bundles": {
+    "right": {
+      "curated_root": "hand",
+      "sha256": "a7b5ad22f2804f7dd178b4984e17004f66c66d6ee6ac57c40c7aaf76badbba54"
+    },
+    "left": {
+      "curated_root": "hand_left",
+      "sha256": "8cacc88472aa709e7ac588924eb7a55cd1aa4903a952a4d2ab642c9b47d0f817"
+    }
+  },
   "files": [
     {
       "source_path": "Assets/HAND/s02/mano/Z_upNew/mano_hand.urdf",
-      "source_sha256": "136d32b72ba811f20f7ba3162af5bf7fc00e7c845edcd80b535871492daf5f87",
+      "source_sha256": "c28b7530281742fd20de699d5953e9fc44b39d9c4fffd13a822aa981708d850b",
       "curated_path": "hand/mano_hand.urdf",
-      "curated_sha256": "136d32b72ba811f20f7ba3162af5bf7fc00e7c845edcd80b535871492daf5f87"
+      "curated_sha256": "c28b7530281742fd20de699d5953e9fc44b39d9c4fffd13a822aa981708d850b"
     },
     {
       "source_path": "Assets/HAND/s02/mano/Z_upNew/metadata.json",
-      "source_sha256": "9cc9aa4084572cf22054e15dc662e9f16fbbba11005f07f61965abca3bd54b5d",
+      "source_sha256": "ce2e67e13f07108c36c279a93b8647df5e952feeb1204b224621ee7a3b26f897",
       "curated_path": "hand/metadata.json",
-      "curated_sha256": "9cc9aa4084572cf22054e15dc662e9f16fbbba11005f07f61965abca3bd54b5d"
+      "curated_sha256": "ce2e67e13f07108c36c279a93b8647df5e952feeb1204b224621ee7a3b26f897"
     },
     {
       "source_path": "Assets/HAND/s02/mano/Z_upNew/meshes/index1.stl",

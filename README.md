@@ -88,9 +88,9 @@ trajectory without `lance_manager`, builds a MuJoCo model from curated source
 URDF/collision assets, and runs residual-off reference control. The current
 ManoRL path implements observations, target rewards, native SKRL PPO training,
 and native checkpoint round trips. Raw Isaac rl-games checkpoints are still
-rejected by the native loader; for the validated source format, run the
-explicit `tools/convert_gym_checkpoint.py` converter to produce a native skrl
-checkpoint and provenance sidecar before loading it.
+rejected by the native loader and are no longer convertible. Training, resume,
+and visualization accept only current native 28-DoF-per-hand MuJoCo
+checkpoints with their sidecars.
 
 Copying the PhysX drive values into an external MuJoCo torque law was falsified
 in free space: the explicit damping kick drove the maximum DOF velocity to about
@@ -133,8 +133,9 @@ From a desktop terminal with an X11/Wayland graphical session, open the
 interactive MuJoCo viewer for the actual `MujocoManoEnvironment` test path. It
 uses the fixed cube1 row `cube1_01_009`, source command schedule
 `0,0,1,...,789`, and `residual_enabled=True` by default. The viewer supplies a
-zero 26D action, so its controller target still follows the source mocap
-reference. The MuJoCo right-side actuator pane shows the current `ctrl` target;
+zero 28D action to the current MuJoCo hand, so its controller target still
+follows the source mocap reference. The MuJoCo right-side actuator pane shows
+the current `ctrl` target;
 the terminal prints the complete command vector and source/reference indices.
 
 ```bash
@@ -163,15 +164,14 @@ single 791-call replay. Both runtime controls default to `true`: use
 for formal source-horizon termination only.
 
 To render a deterministic mean policy, keep its `.pt.json` sidecar beside the
-checkpoint. The sidecar records the checkpoint's versioned runtime and migration
-provenance; model key/shape compatibility is checked against the current runtime
-when the checkpoint loads. Native resume separately requires current training
-contract IDs.
+checkpoint. The sidecar records the checkpoint's versioned runtime and resolved
+hand/action layout; model key/shape compatibility and current reward, PPO, and
+environment contracts are checked when the checkpoint loads.
 
 ```bash
 JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
   --device gpu \
-  --checkpoint outputs/gym_checkpoint_alignment_20260717/MANOHand_film_dynamic_residual_true_v7.pt \
+  --checkpoint outputs/manorl/banana_right_28dof.checkpoint.pt \
   --object cube1 --gesture 01 --num-envs 1 --render-env 0 --no-loop
 ```
 

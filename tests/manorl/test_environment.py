@@ -7,20 +7,21 @@ import numpy as np
 import pytest
 
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, check_termination
-from sim.manorl.assets import OBJECT_MESH
-from sim.manorl.contracts import KEYPOINT_NAMES
+from sim.manorl.assets import OBJECT_MESH, compile_model
+from sim.manorl.contracts import JOINT_DOF, KEYPOINT_NAMES
 from sim.manorl.environment import (
     EnvironmentConfig,
+    MjxWarpPhysicalProducer,
     MujocoManoEnvironment,
     PhysicalSnapshot,
+    _model_hand_side_order,
     _aggregate_geometry_contact_forces,
     _decode_contact_forces,
 )
 from sim.manorl.mjx_sim import MujocoCpuReplay
 from sim.manorl.observations import (
-    CHECKPOINT_SIDECAR_COMPATIBILITY,
     CURRENT_SOURCE_COMPATIBILITY,
-    OBSERVATION_SLICES,
+    SOURCE_ALIGNED_COMPATIBILITY,
     quat_rotate_xyzw,
 )
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID, REWARD_HAND_OBJECT_THRESHOLD_N, compute_rewards
@@ -47,6 +48,35 @@ def _environment(trajectory, *, num_envs: int = 1, residual_enabled: bool = Fals
             max_deviation_distance=1_000_000.0,
         ),
     )
+
+
+def test_bimanual_reference_tables_use_compiled_right_left_order() -> None:
+    """Metadata lookup may be left/right, but model qpos/ctrl slots are right/left."""
+
+    assert _model_hand_side_order(("left", "right")) == ("right", "left")
+    q_ref = {
+        "left": np.full((1, 28), -1.0),
+        "right": np.full((1, 28), 1.0),
+    }
+    model_reference = np.concatenate(
+        [q_ref[side] for side in _model_hand_side_order(q_ref)], axis=-1
+    )
+    np.testing.assert_array_equal(model_reference[:, :28], 1.0)
+    np.testing.assert_array_equal(model_reference[:, 28:], -1.0)
+
+
+def test_visual_model_physical_producer_selects_only_collision_geometry() -> None:
+    mujoco, model = compile_model(visual_meshes=True)
+    producer = MjxWarpPhysicalProducer(mujoco, model)
+
+    collision_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_collision"
+    )
+    visual_id = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_visual"
+    )
+    assert producer.object_geom_ids == {collision_id}
+    assert visual_id not in producer.object_geom_ids
 
 
 def test_native_contact_frame_and_geom_sign_match_body_external_force(trajectory) -> None:
@@ -341,7 +371,7 @@ def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> N
     expected_tip = snapshot.hand_keypoint_positions[0, fingertip_keypoint_ids] + quat_rotate_xyzw(quaternions_xyzw, offsets)
     np.testing.assert_allclose(snapshot.fingertip_positions[0], expected_tip, rtol=0, atol=1e-8)
     np.testing.assert_array_equal(np.flatnonzero(env.expected_contact_mask[0]), [3, 15])
-    np.testing.assert_array_equal(env.active_joint_mask[0], [True] * 8 + [False] * 12)
+    np.testing.assert_array_equal(env.active_joint_mask[0], [True] * 10 + [False] * 12)
 
     trimesh = pytest.importorskip("trimesh")
     source_mesh = trimesh.load(OBJECT_MESH, force="mesh")
@@ -354,7 +384,9 @@ def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> N
 
 def test_mjx_contact_producer_feeds_source_order_observation_and_reward(trajectory) -> None:
     env = _environment(trajectory)
-    observation, reward, reset, _ = env.step(np.zeros((1, 26), dtype=np.float64))
+    observation, reward, reset, _ = env.step(
+        np.zeros((1, env.action_dim), dtype=np.float64)
+    )
     assert env.last_physical is not None
     assert env.last_observation is not None
     assert env.last_reward is not None
@@ -365,16 +397,19 @@ def test_mjx_contact_producer_feeds_source_order_observation_and_reward(trajecto
         env.last_observation.contacts.force_xyz, snapshot.hand_keypoint_contact_forces
     )
     np.testing.assert_allclose(
-        env.last_observation.raw[:, OBSERVATION_SLICES["expected_contact_mask"]], env.expected_contact_mask
+        env.last_observation.raw[
+            :, env.observation_layout.slices["expected_contact_mask"]
+        ],
+        env.expected_contact_mask,
     )
-    assert observation["obs"].shape == (1, 476)
+    assert observation["obs"].shape == (1, env.observation_dim) == (1, 480)
     assert reward.shape == reset.shape == (1,)
     assert np.all(np.isfinite(reward))
 
 
 def test_mjx_geometry_force_snapshot_matches_private_rows_and_legacy_aggregates(trajectory) -> None:
     env = _environment(trajectory, num_envs=2)
-    env.step(np.zeros((2, 26), dtype=np.float64))
+    env.step(np.zeros((2, env.action_dim), dtype=np.float64))
     assert env.last_physical is not None
     physical = env.last_physical
     impl = env.data._impl
@@ -431,8 +466,12 @@ def test_mjx_geometry_force_snapshot_matches_private_rows_and_legacy_aggregates(
 
 def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajectory) -> None:
     env = _environment(trajectory)
-    zero = np.zeros((1, 26), dtype=np.float64)
-    clipped_reference = np.clip(trajectory.q_ref, env.joint_lower, env.joint_upper)
+    zero = np.zeros((1, env.action_dim), dtype=np.float64)
+    clipped_reference = np.clip(
+        env.reference_q_model,
+        env.joint_lower,
+        env.joint_upper,
+    )[0]
     env.step(zero)
     np.testing.assert_allclose(env.last_controller_targets[0], clipped_reference[0])
     np.testing.assert_array_equal(env.progress, [1])
@@ -441,7 +480,10 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     np.testing.assert_allclose(env.last_controller_targets[0], clipped_reference[0])
     np.testing.assert_array_equal(env.trajectory_steps, [1])
     np.testing.assert_allclose(
-        env.last_observation.raw[0, OBSERVATION_SLICES["target_object_position"]], trajectory.object_pos[1]
+        env.last_observation.raw[
+            0, env.observation_layout.slices["target_object_position"]
+        ],
+        trajectory.object_pos[1],
     )
     env.step(zero)
     np.testing.assert_allclose(env.last_controller_targets[0], clipped_reference[1])
@@ -461,7 +503,10 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     np.testing.assert_array_equal(env.progress, [791])
     np.testing.assert_array_equal(env.trajectory_steps, [790])
     np.testing.assert_allclose(
-        terminal_obs["obs"][0, OBSERVATION_SLICES["target_object_position"]], trajectory.object_pos[790]
+        terminal_obs["obs"][
+            0, env.observation_layout.slices["target_object_position"]
+        ],
+        trajectory.object_pos[790],
     )
     _, _, next_done, _ = env.step(zero)
     np.testing.assert_array_equal(next_done, [False])
@@ -497,7 +542,7 @@ def test_compiled_floor_uses_checkerboard_material(trajectory) -> None:
 
 def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajectory) -> None:
     env = _environment(trajectory)
-    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
     assert env.last_physical is not None
     world_cloud = env.object_point_cloud_world()
     template = env._point_template()
@@ -510,7 +555,9 @@ def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajector
     ) + env.last_physical.object_position[:, None, :]
     np.testing.assert_allclose(world_cloud, expected, rtol=0.0, atol=1e-12)
     assert env.last_observation is not None
-    normalized_hand_relative = env.last_observation.raw[:, OBSERVATION_SLICES["object_point_cloud_raw"]].reshape(1, 64, 3)
+    normalized_hand_relative = env.last_observation.raw[
+        :, env.observation_layout.slices["object_point_cloud_raw"]
+    ].reshape(1, 64, 3)
     recovered_world = normalized_hand_relative + env.last_physical.hand_position[:, None, :]
     if template.normalized:
         assert not np.allclose(world_cloud, recovered_world)
@@ -522,15 +569,15 @@ def test_transition_snapshot_preserves_action_reference_and_partial_rerun_close(
     from sim.manorl.rerun_recorder import ManoRerunRecorder
 
     env = _environment(trajectory)
-    action = np.zeros((1, 26), dtype=np.float64)
+    action = np.zeros((1, env.action_dim), dtype=np.float64)
     action[0, 1] = 0.25
     env.step(action)
     snapshot = env.last_transition
     assert snapshot is not None
     assert snapshot.control_call == 0
-    np.testing.assert_allclose(snapshot.raw_actions, action)
+    np.testing.assert_allclose(snapshot.raw_actions, env.normalize_actions(action))
     np.testing.assert_array_equal(snapshot.command_reference_indices, [0])
-    np.testing.assert_allclose(snapshot.command_targets, trajectory.q_ref[[0]])
+    np.testing.assert_allclose(snapshot.command_targets, env.reference_q_model[:, [0]][:, 0])
     np.testing.assert_allclose(snapshot.controller_targets, env.last_controller_targets)
     recorder = ManoRerunRecorder(env, tmp_path / "env0.rrd")
     recorder.record_transition()
@@ -557,8 +604,8 @@ def test_rerun_blueprint_and_transition_context_default_to_step(trajectory) -> N
             self.logs.append((entity_path, self.time_context.copy()))
 
     env = _environment(trajectory)
-    env.step(np.zeros((1, 26), dtype=np.float64))
-    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
     snapshot = env.last_transition
     assert snapshot is not None
 
@@ -604,7 +651,7 @@ def test_rerun_logs_urdf_resolved_mano_meshes_and_dynamic_link_transforms(trajec
             self.logs.append((entity_path, args, kwargs))
 
     env = _environment(trajectory)
-    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
     assert env.last_transition is not None
     recorder = object.__new__(ManoRerunRecorder)
     recorder.rr = rr
@@ -731,7 +778,7 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     expected_hand_object_magnitudes = []
     expected_episode_returns = []
     for _ in range(2):
-        env.step(np.zeros((1, 26), dtype=np.float64))
+        env.step(np.zeros((1, env.action_dim), dtype=np.float64))
         assert env.last_transition is not None
         assert env.last_physical is not None
         expected_hand_object_magnitudes.append(
@@ -770,8 +817,8 @@ def test_rerun_geometry_force_series_metadata_and_continuity(trajectory) -> None
     assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
     assert metadata["ppo_reward_scale"] == 0.5
     assert metadata["environment_contract"] == ENVIRONMENT_CONTRACT_ID
-    assert metadata["residual_action"]["position_scale"] == [0.005, 0.005, 0.005]
-    assert metadata["residual_action"]["max_position_offset"] == [0.05, 0.05, 0.05]
+    assert metadata["residual_action"]["position_scale"] == [0.002, 0.002, 0.002]
+    assert metadata["residual_action"]["max_position_offset"] == [0.02, 0.02, 0.02]
     assert (
         metadata["thresholds"]["observation_contact_threshold_N"]
         == metadata["thresholds"]["reward_hand_object_threshold_N"]
@@ -850,7 +897,7 @@ def test_rerun_partial_close_preserves_existing_stable_artifact(trajectory, tmp_
     output.write_bytes(sentinel)
     env = _environment(trajectory)
     recorder = ManoRerunRecorder(env, output)
-    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
     recorder.record_transition()
 
     assert recorder.close() is None
@@ -868,9 +915,9 @@ def test_rerun_existing_stable_artifact_is_replaced_after_complete_episode(traje
     env.progress[:] = len(trajectory.q_ref) - 2
     env.trajectory_steps[:] = len(trajectory.q_ref) - 3
 
-    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
     recorder.record_transition()
-    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
     recorder.record_transition()
 
     assert output.read_bytes() != b"previous recording"
@@ -930,7 +977,7 @@ def test_rerun_finalizes_terminal_episode_without_reset_tick(trajectory, tmp_pat
     recorder = ManoRerunRecorder(env, tmp_path / "episodes.rrd")
     env.progress[:] = len(trajectory.q_ref) - 2
     env.trajectory_steps[:] = len(trajectory.q_ref) - 3
-    env.step(np.zeros((1, 26), dtype=np.float64))
+    env.step(np.zeros((1, env.action_dim), dtype=np.float64))
     assert env.last_transition is not None
     assert bool(env.last_transition.termination.reset[0])
     recorder.record_transition()
@@ -949,22 +996,38 @@ def test_residual_core_masks_inactive_fingers_in_live_environment(trajectory) ->
     env = _environment(trajectory, residual_enabled=True)
     env.progress[:] = 101
     env.trajectory_steps[:] = 100
-    env.step(np.ones((1, 26), dtype=np.float64))
-    assert np.all(np.abs(env.cumulative_joint_offset[0, :8]) > 0.0)
-    np.testing.assert_allclose(env.cumulative_joint_offset[0, 8:], 0.0)
-    assert np.all(np.abs(env.last_controller_targets[0, :3] - trajectory.q_ref[100, :3]) > 0.0)
+    env.step(np.ones((1, JOINT_DOF), dtype=np.float64))
+    assert np.all(np.abs(env.cumulative_joint_offset[0, :10]) > 0.0)
+    np.testing.assert_allclose(env.cumulative_joint_offset[0, 10:], 0.0)
+    assert np.all(
+        np.abs(
+            env.last_controller_targets[0, :3]
+            - env.reference_q_by_side["right"][0, 100, :3]
+        )
+        > 0.0
+    )
 
 
 def test_two_world_cpu_vector_smoke_has_independent_equal_worlds(trajectory) -> None:
     env = _environment(trajectory, num_envs=2)
-    zero = np.zeros((2, 26), dtype=np.float64)
+    zero = np.zeros((2, env.action_dim), dtype=np.float64)
     for _ in range(3):
         observation, reward, reset, extras = env.step(zero)
-        assert observation["obs"].shape == (2, 476)
+        assert observation["obs"].shape == (2, env.observation_dim) == (2, 480)
         assert reward.shape == reset.shape == extras["time_outs"].shape == (2,)
-        point_slice = slice(74, 266)
-        np.testing.assert_allclose(observation["obs"][0, :74], observation["obs"][1, :74], rtol=0, atol=1e-10)
-        np.testing.assert_allclose(observation["obs"][0, 266:], observation["obs"][1, 266:], rtol=0, atol=1e-10)
+        point_slice = env.observation_layout.slices["object_point_cloud_raw"]
+        np.testing.assert_allclose(
+            observation["obs"][0, : point_slice.start],
+            observation["obs"][1, : point_slice.start],
+            rtol=0,
+            atol=1e-10,
+        )
+        np.testing.assert_allclose(
+            observation["obs"][0, point_slice.stop :],
+            observation["obs"][1, point_slice.stop :],
+            rtol=0,
+            atol=1e-10,
+        )
         assert not np.array_equal(observation["obs"][0, point_slice], observation["obs"][1, point_slice])
         np.testing.assert_allclose(reward[0], reward[1], rtol=0, atol=1e-10)
     assert env.last_physical is not None
@@ -1003,16 +1066,31 @@ def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(tr
     assert env.object_geometry.shape == (3, 12)
     assert not np.array_equal(env.object_geometry[0], env.object_geometry[1])
 
-    observation, reward, reset, extras = env.step(np.zeros((3, 26), dtype=np.float64))
-    assert observation["obs"].shape == (3, 476)
+    observation, reward, reset, extras = env.step(
+        np.zeros((3, env.action_dim), dtype=np.float64)
+    )
+    assert observation["obs"].shape == (3, env.observation_dim) == (3, 480)
     assert reward.shape == reset.shape == extras["time_outs"].shape == (3,)
     np.testing.assert_array_equal(env.progress, (1, 1, 1))
-    np.testing.assert_allclose(observation["obs"][0, :74], observation["obs"][2, :74], rtol=0, atol=1e-10)
-    np.testing.assert_allclose(observation["obs"][0, 266:], observation["obs"][2, 266:], rtol=0, atol=1e-10)
-    assert not np.array_equal(observation["obs"][0, 74:266], observation["obs"][2, 74:266])
+    point_slice = env.observation_layout.slices["object_point_cloud_raw"]
+    np.testing.assert_allclose(
+        observation["obs"][0, : point_slice.start],
+        observation["obs"][2, : point_slice.start],
+        rtol=0,
+        atol=1e-10,
+    )
+    np.testing.assert_allclose(
+        observation["obs"][0, point_slice.stop :],
+        observation["obs"][2, point_slice.stop :],
+        rtol=0,
+        atol=1e-10,
+    )
+    assert not np.array_equal(
+        observation["obs"][0, point_slice], observation["obs"][2, point_slice]
+    )
 
     reset_observation = env.reset(np.asarray([1], dtype=np.int64))
-    assert reset_observation["obs"].shape == (3, 476)
+    assert reset_observation["obs"].shape == (3, env.observation_dim) == (3, 480)
     np.testing.assert_array_equal(env.progress, (1, 0, 1))
     assert env.last_physical is not None
     assert env.last_physical.object_position.shape == (3, 3)
@@ -1022,7 +1100,7 @@ def test_dynamic_template_variant_preserves_raw_surface_coordinates(trajectory) 
     env = MujocoManoEnvironment(
         trajectory,
         EnvironmentConfig(
-            compatibility=CHECKPOINT_SIDECAR_COMPATIBILITY,
+            compatibility=SOURCE_ALIGNED_COMPATIBILITY,
             residual_enabled=False,
             max_deviation_distance=1_000_000.0,
         ),

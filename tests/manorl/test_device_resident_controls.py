@@ -91,7 +91,9 @@ def test_runtime_vectorized_decoder_matches_reference_decoder(
 ) -> None:
     vectorized = _environment(device_resident_controls=False)
     reference = _environment(device_resident_controls=False)
-    action = np.linspace(-0.65, 0.65, 26, dtype=np.float64).reshape(1, 26)
+    action = np.linspace(
+        -0.65, 0.65, vectorized.action_dim, dtype=np.float64
+    ).reshape(1, vectorized.action_dim)
 
     def assert_step_equal(
         vectorized_result: tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, dict[str, np.ndarray]],
@@ -136,8 +138,10 @@ def test_runtime_vectorized_decoder_matches_reference_decoder(
 
 
 def test_phase_profile_is_opt_in_and_records_rollout_boundaries() -> None:
-    action = np.linspace(-0.4, 0.4, 26, dtype=np.float64).reshape(1, 26)
     default = _environment(device_resident_controls=False)
+    action = np.linspace(
+        -0.4, 0.4, default.action_dim, dtype=np.float64
+    ).reshape(1, default.action_dim)
     assert default.phase_profile() == {}
 
     profiled = MujocoManoEnvironment(
@@ -182,9 +186,11 @@ def test_phase_profile_is_opt_in_and_records_rollout_boundaries() -> None:
 
 
 def test_profile_false_never_calls_explicit_sync_and_preserves_step_semantics() -> None:
-    action = np.linspace(-0.4, 0.4, 26, dtype=np.float64).reshape(1, 26)
     default = _environment(device_resident_controls=False)
     comparison = _environment(device_resident_controls=False)
+    action = np.linspace(
+        -0.4, 0.4, default.action_dim, dtype=np.float64
+    ).reshape(1, default.action_dim)
 
     def unexpected_sync() -> None:
         raise AssertionError("profile=false must not invoke the profiling synchronizer")
@@ -203,7 +209,13 @@ def test_profiled_skrl_wrapper_splits_action_and_response_conversions() -> None:
     environment = _environment(device_resident_controls=False)
     wrapper = ProfiledGymnasiumWrapper(ManoGymnasiumVectorEnv(environment))
     observations, _ = wrapper.reset()
-    wrapper.step(torch.zeros((1, 26), dtype=torch.float32, device=observations.device))
+    wrapper.step(
+        torch.zeros(
+            (1, environment.action_dim),
+            dtype=torch.float32,
+            device=observations.device,
+        )
+    )
     assert wrapper.phase_profile()["skrl_cuda_action_to_numpy"]["calls"] == 1
     assert wrapper.phase_profile()["skrl_numpy_response_to_cuda"]["calls"] == 1
 
@@ -213,7 +225,9 @@ def test_device_resident_controls_match_legacy_outputs_and_delayed_reset() -> No
 
     legacy = _environment(device_resident_controls=False)
     accelerated = _environment(device_resident_controls=True)
-    action = np.linspace(-0.9, 0.9, 26, dtype=np.float64).reshape(1, 26)
+    action = np.linspace(
+        -0.9, 0.9, legacy.action_dim, dtype=np.float64
+    ).reshape(1, legacy.action_dim)
 
     for environment in (legacy, accelerated):
         environment.progress[:] = 790

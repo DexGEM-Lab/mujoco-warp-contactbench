@@ -209,10 +209,17 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["reward"]["contact_force_threshold_N"] == 0.2
     assert config["environment"]["contract"] == tool.ENVIRONMENT_CONTRACT_ID
     assert config["environment"]["observation_contact_threshold_N"] == 0.2
-    assert config["environment"]["residual_action"]["position_scale"] == [0.005, 0.005, 0.005]
-    assert config["environment"]["residual_action"]["max_position_offset"] == [0.05, 0.05, 0.05]
-    assert config["environment"]["residual_action"]["joint_scale"][:4] == [0.1, 0.12, 0.044, 0.01]
-    assert config["environment"]["residual_action"]["early_phase_steps"] == 50
+    assert config["environment"]["residual_action"]["position_scale"] == [0.002, 0.002, 0.002]
+    assert config["environment"]["residual_action"]["max_position_offset"] == [0.02, 0.02, 0.02]
+    assert config["environment"]["residual_action"]["joint_scale"][:6] == [
+        0.02,
+        0.02,
+        0.02,
+        0.02,
+        0.01,
+        0.005,
+    ]
+    assert config["environment"]["residual_action"]["early_phase_steps"] == 30
     assert config["environment"]["max_deviation_distance"] == 0.10
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
     assert config["evaluation"]["num_envs"] == 1

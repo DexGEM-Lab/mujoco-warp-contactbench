@@ -10,14 +10,17 @@ collision masks, or contact solver semantics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
 from sim.manorl.assets import compile_unified_model, object_runtime
-from sim.manorl.contracts import ServoConfig
-from sim.manorl.environment import UnifiedMjxWarpPhysicalProducer
+from sim.manorl.contracts import JOINT_DOF, ServoConfig, normalize_hand_side
+from sim.manorl.environment import (
+    UnifiedMjxWarpPhysicalProducer,
+    minimum_warp_contact_capacity,
+)
 
 
 INACTIVE_OBJECT_ORIGIN = 1000.0
@@ -33,6 +36,7 @@ class UnifiedBatchConfig:
     impl: str = "warp"
     contact_capacity: int = 128
     constraint_capacity: int = 512
+    hand_side: str = "right"
 
     def __post_init__(self) -> None:
         if not self.object_types:
@@ -49,6 +53,11 @@ class UnifiedBatchConfig:
             raise ValueError("unified batch requires the pinned MJX-Warp implementation")
         if self.contact_capacity < 2 or self.constraint_capacity < 2:
             raise ValueError("unified batch capacities must be at least two")
+        object.__setattr__(
+            self,
+            "hand_side",
+            normalize_hand_side(self.hand_side, allow_auto=False),
+        )
 
 
 class UnifiedBatchPhysics:
@@ -78,10 +87,36 @@ class UnifiedBatchPhysics:
         self.active_object_indices = np.asarray(config.active_object_indices, dtype=np.int64)
         self.num_envs = len(self.active_object_indices)
         self.mujoco, self.model = compile_unified_model(
-            servo, object_types=self.object_types
+            servo,
+            object_types=self.object_types,
+            hand_side=self.config.hand_side,
         )
+        self.action_dim = int(self.model.nu)
+        if self.action_dim not in (JOINT_DOF, 2 * JOINT_DOF):
+            raise ValueError(
+                f"compiled unified model has unsupported actuator width {self.action_dim}"
+            )
+        self.hand_side = self.config.hand_side
+        model_sides = (
+            ("right",)
+            if self.hand_side == "right"
+            else (("left",) if self.hand_side == "left" else ("right", "left"))
+        )
+        minimum_contact_capacity = minimum_warp_contact_capacity(
+            self.num_envs, model_sides
+        )
+        if self.config.contact_capacity < minimum_contact_capacity:
+            raise ValueError(
+                f"contact_capacity {self.config.contact_capacity} is below "
+                f"{minimum_contact_capacity} required for {self.num_envs} "
+                f"unified worlds with {len(model_sides)} hand(s)"
+            )
         self.producer = UnifiedMjxWarpPhysicalProducer(
-            self.mujoco, self.model, object_types=self.object_types
+            self.mujoco,
+            self.model,
+            object_types=self.object_types,
+            hand_sides=model_sides,
+            primary_hand_side="right" if "right" in model_sides else "left",
         )
         self.producer.set_active_objects(self.active_object_indices)
         self.mjx_model = mjx.put_model(
@@ -158,7 +193,9 @@ class UnifiedBatchPhysics:
         return data.replace(
             qpos=self.jax.device_put(self.jp.asarray(self._reset_qpos), self.device),
             qvel=self.jax.device_put(self.jp.zeros((self.num_envs, self.model.nv)), self.device),
-            ctrl=self.jax.device_put(self.jp.zeros((self.num_envs, 26)), self.device),
+            ctrl=self.jax.device_put(
+                self.jp.zeros((self.num_envs, self.action_dim)), self.device
+            ),
             qfrc_applied=self.jax.device_put(
                 self.jp.zeros((self.num_envs, self.model.nv)), self.device
             ),
@@ -169,8 +206,10 @@ class UnifiedBatchPhysics:
 
     def step(self, controls: NDArray[np.floating[Any]]) -> Any:
         values = np.asarray(controls, dtype=np.float64)
-        if values.shape != (self.num_envs, 26) or not np.all(np.isfinite(values)):
-            raise ValueError(f"controls must be finite with shape ({self.num_envs}, 26)")
+        if values.shape != (self.num_envs, self.action_dim) or not np.all(np.isfinite(values)):
+            raise ValueError(
+                f"controls must be finite with shape ({self.num_envs}, {self.action_dim})"
+            )
         self.data = self.data.replace(
             ctrl=self.jax.device_put(self.jp.asarray(values), self.device),
             qfrc_applied=self.jax.device_put(

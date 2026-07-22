@@ -10,6 +10,7 @@ array retains capacity-padding entries after the solved records.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass, replace
+import inspect
 import time
 from typing import Any, Sequence
 
@@ -31,12 +32,19 @@ from sim.manorl.assets import (
     object_runtime,
 )
 from sim.manorl.contracts import (
+    ACTION_SIDE_ORDER,
+    JOINT_DOF,
+    LEGACY_JOINT_NAMES,
+    JOINT_NAMES,
     FLOOR_TOP_Z,
     KEYPOINT_NAMES,
     OBJECT_TYPE,
     PHYSICS_SUBSTEPS_PER_TARGET,
     ServoConfig,
+    canonical_hand_sides,
+    normalize_hand_side,
 )
+from sim.manorl.hand_layout import HandActionLayout
 from sim.manorl.mjx_sim import CONTACT_CAPACITY, CONSTRAINT_CAPACITY, command_target
 from sim.manorl.observations import (
     SOURCE_ALIGNED_COMPATIBILITY,
@@ -46,18 +54,26 @@ from sim.manorl.observations import (
     ObservationState,
     PointCloudTemplate,
     build_observation,
-    expected_contact_mask_from_keypoint_ids,
     geometry_encoding,
     quat_rotate_xyzw,
+    observation_layout,
+    reduce_support_points,
 )
 from sim.manorl.rewards import RewardConfig, RewardDiagnostics, RewardState, compute_rewards
-from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch, wxyz_to_xyzw, xyzw_to_wxyz
+from sim.manorl.trajectory import (
+    ReferenceTrajectory,
+    TrajectoryBatch,
+    resolve_hand_selection,
+    wxyz_to_xyzw,
+    xyzw_to_wxyz,
+)
 
 _FINGERTIP_NAMES = ("thumb_ip", "index_dip", "middle_dip", "ring_dip", "pinky_dip")
 POINT_SAMPLING_NUMPY_PER_ENV = "numpy_per_env"
 POINT_SAMPLING_TORCH_CUDA_GLOBAL = "torch_cuda_global"
 POINT_SAMPLING_AUTO = "auto"
-UNIFIED_WARP_CONTACTS_PER_WORLD = 64
+WARP_CONTACTS_PER_HAND_PER_WORLD = 64
+WARP_CONTACT_CAPACITY_MARGIN = 64
 _FINGERTIP_LOCAL_OFFSETS = np.asarray(
     (
         (-0.028633, -0.004191, 0.023667),
@@ -78,6 +94,31 @@ _CUBE1_GRASP_ALIASES = {
     "10": ("thumb3", "thumb2", "index3", "index2", "middle3", "middle2", "ring3", "ring2"),
     "18": ("thumb3", "index3"),
 }
+
+
+def minimum_warp_contact_capacity(num_envs: int, hand_sides: object) -> int:
+    """Return the conservative batch contact floor for the compiled hands.
+
+    Capacity belongs to the full MJX-Warp batch, not one world.  The revised
+    left hand can produce more contacts than the historical 31-contact right
+    hand bound, and a forced policy side does not remove the reference-following
+    hand from physics.  Scale from every available/compiled hand accordingly.
+    """
+
+    if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
+        raise ValueError("num_envs must be a positive integer")
+    hand_count = len(canonical_hand_sides(hand_sides))
+    return WARP_CONTACTS_PER_HAND_PER_WORLD * hand_count * num_envs
+
+
+def recommended_warp_contact_capacity(num_envs: int, hand_sides: object) -> int:
+    """Add allocation headroom to the per-hand contact capacity floor."""
+
+    return max(
+        CONTACT_CAPACITY,
+        minimum_warp_contact_capacity(num_envs, hand_sides)
+        + WARP_CONTACT_CAPACITY_MARGIN,
+    )
 
 
 @dataclass(frozen=True)
@@ -102,6 +143,7 @@ class EnvironmentConfig:
     capture_transition_diagnostics: bool = True
     profile_phases: bool = False
     unified_object_batch: bool = False
+    hand_side: str = "auto"
 
     def __post_init__(self) -> None:
         if self.num_envs < 1:
@@ -148,6 +190,7 @@ class EnvironmentConfig:
             raise TypeError("profile_phases must be bool")
         if not isinstance(self.unified_object_batch, bool):
             raise TypeError("unified_object_batch must be bool")
+        normalize_hand_side(self.hand_side)
 
 
 @dataclass
@@ -419,11 +462,14 @@ def _decode_contact_forces(
         raise ValueError("contact decoder requires disjoint hand and object collision geoms")
     if active_object_geom_ids is not None:
         active_object_geom_ids = np.asarray(active_object_geom_ids, dtype=np.int64)
-        if active_object_geom_ids.shape != (batch,):
-            raise ValueError("active object geom ids must have one entry per MJX world")
-        if np.any(active_object_geom_ids < 0) or np.any(active_object_geom_ids >= ngeom):
+        if active_object_geom_ids.ndim not in (1, 2) or active_object_geom_ids.shape[0] != batch:
+            raise ValueError(
+                "active object geom ids must have one entry or a padded set of entries per MJX world"
+            )
+        valid_active = active_object_geom_ids[active_object_geom_ids >= 0]
+        if np.any(valid_active >= ngeom):
             raise ValueError("active object geom ids contain an invalid MuJoCo geom")
-        if not np.all(np.isin(active_object_geom_ids, np.asarray(sorted(object_geom_ids), dtype=np.int64))):
+        if not np.all(np.isin(valid_active, np.asarray(sorted(object_geom_ids), dtype=np.int64))):
             raise ValueError("active object geom ids must belong to the unified object geom set")
 
     if np.asarray(geom).ndim != 2 or np.asarray(geom).shape[0] < count or np.asarray(geom).shape[1] != 2:
@@ -491,8 +537,19 @@ def _decode_contact_forces(
             second_object = np.isin(active_geom[:, 0], object_geom_array)
         else:
             world_object_geom = active_object_geom_ids[active_world]
-            first_object = active_geom[:, 1] == world_object_geom
-            second_object = active_geom[:, 0] == world_object_geom
+            if world_object_geom.ndim == 1:
+                first_object = active_geom[:, 1] == world_object_geom
+                second_object = active_geom[:, 0] == world_object_geom
+            else:
+                valid_object_geom = world_object_geom >= 0
+                first_object = np.any(
+                    (active_geom[:, 1, None] == world_object_geom) & valid_object_geom,
+                    axis=1,
+                )
+                second_object = np.any(
+                    (active_geom[:, 0, None] == world_object_geom) & valid_object_geom,
+                    axis=1,
+                )
         first_hand = (first_keypoint >= 0) & (second_keypoint < 0) & first_object
         second_hand = (second_keypoint >= 0) & (first_keypoint < 0) & second_object
         np.add.at(
@@ -631,23 +688,66 @@ def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64
     return np.asarray([KEYPOINT_NAMES.index(name) for name in names], dtype=np.int64)
 
 
-def _active_joint_mask(expected_mask: NDArray[np.float64]) -> NDArray[np.bool_]:
+def _expand_legacy_hand_dofs(values: NDArray[object]) -> NDArray[np.float64]:
+    """Embed legacy 26D references in the revised 28D joint order."""
+
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim < 1 or array.shape[-1] not in (26, JOINT_DOF):
+        raise ValueError("hand references must end in 26 or 28 DOFs")
+    if array.shape[-1] == JOINT_DOF:
+        return array.copy()
+    output = np.zeros((*array.shape[:-1], JOINT_DOF), dtype=np.float64)
+    legacy_index = {name: index for index, name in enumerate(LEGACY_JOINT_NAMES)}
+    for index, name in enumerate(JOINT_NAMES):
+        source_name = "j1_thumb_mcp" if name == "j1_thumb_mcp_flex" else name
+        if source_name in legacy_index:
+            output[..., index] = array[..., legacy_index[source_name]]
+    return output
+
+
+def _active_joint_mask(
+    expected_mask: NDArray[np.float64], *, finger_dof: int = JOINT_DOF - 6
+) -> NDArray[np.bool_]:
     """Mirror FingerMaskManager: only fingers with expected keypoints are active."""
 
-    finger_ranges = {
-        "thumb": slice(0, 4),
-        "index": slice(4, 8),
-        "middle": slice(8, 12),
-        "ring": slice(12, 16),
-        "pinky": slice(16, 20),
-    }
+    if finger_dof == 22:
+        finger_ranges = {
+            "thumb": slice(0, 6),
+            "index": slice(6, 10),
+            "middle": slice(10, 14),
+            "ring": slice(14, 18),
+            "pinky": slice(18, 22),
+        }
+    elif finger_dof == 20:
+        finger_ranges = {
+            "thumb": slice(0, 4),
+            "index": slice(4, 8),
+            "middle": slice(8, 12),
+            "ring": slice(12, 16),
+            "pinky": slice(16, 20),
+        }
+    else:
+        raise ValueError("finger_dof must be 20 or 22")
     batch = len(expected_mask)
-    active = np.zeros((batch, 20), dtype=bool)
+    active = np.zeros((batch, finger_dof), dtype=bool)
     for keypoint_index, keypoint_name in enumerate(KEYPOINT_NAMES):
         finger = keypoint_name.split("_", maxsplit=1)[0]
         if finger in finger_ranges:
             active[expected_mask[:, keypoint_index] > 0.5, finger_ranges[finger]] = True
     return active
+
+
+def _model_hand_side_order(hand_sides: Sequence[str]) -> tuple[str, ...]:
+    """Return hand sides in the compiled model/action slot order.
+
+    Dataset metadata is canonicalized independently (left before right), while
+    the MJCF builder and action ABI deliberately use right-before-left.  Keep
+    this conversion at the environment boundary so every qpos/ctrl/reference
+    table uses the same order without relying on Lance list order.
+    """
+
+    available = set(canonical_hand_sides(hand_sides))
+    return tuple(side for side in ACTION_SIDE_ORDER if side in available)
 
 
 class MjxWarpPhysicalProducer:
@@ -661,10 +761,35 @@ class MjxWarpPhysicalProducer:
     """
 
     def __init__(
-        self, mujoco: Any, model: Any, *, object_type: str = OBJECT_TYPE
+        self,
+        mujoco: Any,
+        model: Any,
+        *,
+        object_type: str = OBJECT_TYPE,
+        hand_sides: Sequence[str] = ("right",),
+        primary_hand_side: str = "right",
     ) -> None:
         self.mujoco = mujoco
         self.model = model
+        self.hand_sides = canonical_hand_sides(hand_sides)
+        self.primary_hand_side = normalize_hand_side(
+            primary_hand_side, allow_auto=False, allow_both=False
+        )
+        if self.primary_hand_side not in self.hand_sides:
+            raise ValueError("primary hand side is absent from compiled model")
+        self.per_hand_dof = int(model.nu) // len(self.hand_sides)
+        if (
+            self.per_hand_dof != JOINT_DOF
+            or model.nu != self.per_hand_dof * len(self.hand_sides)
+        ):
+            raise ValueError("compiled MANO actuator width does not match hand sides")
+        self.hand_dof = self.per_hand_dof
+        self.hand_qpos_slices = {
+            side: slice(index * self.per_hand_dof, (index + 1) * self.per_hand_dof)
+            for index, side in enumerate(
+                tuple(side for side in ("right", "left") if side in self.hand_sides)
+            )
+        }
         runtime = object_runtime(object_type)
         self.object_body_id = mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name
@@ -676,30 +801,52 @@ class MjxWarpPhysicalProducer:
             raise ValueError(f"compiled {object_type} body/free joint is absent")
         self.object_qpos_address = int(model.jnt_qposadr[object_joint_id])
         self.object_qvel_address = int(model.jnt_dofadr[object_joint_id])
-        self.keypoint_geom_ids: list[int] = []
-        self.keypoint_body_ids: list[int] = []
+        dual = len(self.hand_sides) > 1
+        self.keypoint_geom_ids_by_side: dict[str, list[int]] = {}
+        self.keypoint_body_ids_by_side: dict[str, list[int]] = {}
         self.geom_to_keypoint: dict[int, int] = {}
-        for keypoint_index, keypoint_name in enumerate(KEYPOINT_NAMES):
-            geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{keypoint_name}_collision")
-            if geom_id < 0:
-                raise ValueError(f"compiled source keypoint geom is absent: {keypoint_name}")
-            self.keypoint_geom_ids.append(geom_id)
-            body_id = int(model.geom_bodyid[geom_id])
-            self.keypoint_body_ids.append(body_id)
-            self.geom_to_keypoint[geom_id] = keypoint_index
-        if len(set(self.keypoint_geom_ids)) != len(KEYPOINT_NAMES):
+        for side in self.hand_sides:
+            prefix = f"{side}_" if dual else ""
+            geom_ids: list[int] = []
+            body_ids: list[int] = []
+            for keypoint_index, keypoint_name in enumerate(KEYPOINT_NAMES):
+                geom_id = mujoco.mj_name2id(
+                    model,
+                    mujoco.mjtObj.mjOBJ_GEOM,
+                    f"{prefix}{keypoint_name}_collision",
+                )
+                if geom_id < 0:
+                    raise ValueError(
+                        f"compiled {side} source keypoint geom is absent: {keypoint_name}"
+                    )
+                geom_ids.append(geom_id)
+                body_ids.append(int(model.geom_bodyid[geom_id]))
+                self.geom_to_keypoint[geom_id] = keypoint_index
+            self.keypoint_geom_ids_by_side[side] = geom_ids
+            self.keypoint_body_ids_by_side[side] = body_ids
+        all_hand_geom_ids = [
+            geom_id for values in self.keypoint_geom_ids_by_side.values() for geom_id in values
+        ]
+        if len(set(all_hand_geom_ids)) != len(KEYPOINT_NAMES) * len(self.hand_sides):
             raise ValueError("source keypoint geom mapping is not one-to-one")
+        self.keypoint_geom_ids = self.keypoint_geom_ids_by_side[self.primary_hand_side]
+        self.keypoint_body_ids = self.keypoint_body_ids_by_side[self.primary_hand_side]
         self.fingertip_body_ids = np.asarray(
             [self.keypoint_body_ids[KEYPOINT_NAMES.index(name)] for name in _FINGERTIP_NAMES], dtype=np.int64
         )
         self.object_geom_ids = {
-            geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) == self.object_body_id
+            geom_id
+            for geom_id in range(model.ngeom)
+            if int(model.geom_bodyid[geom_id]) == self.object_body_id
+            and (
+                mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
+            ).endswith("_collision")
         }
         if len(self.object_geom_ids) != runtime.collision_geom_count:
             raise ValueError(
                 f"the {object_type} runtime requires {runtime.collision_geom_count} object collision geoms"
             )
-        if self.object_geom_ids & set(self.keypoint_geom_ids):
+        if self.object_geom_ids & set(all_hand_geom_ids):
             raise ValueError("source hand and object collision geoms must be disjoint")
         # Unified superset scenes replace these scalar fields with one active
         # entry per world.  The default homogeneous path remains unchanged.
@@ -851,30 +998,50 @@ class MjxWarpPhysicalProducer:
         keypoints = xpos[:, keypoint_bodies].copy()
         keypoint_quats = _normalized_xyzw(xquat[:, keypoint_bodies])
         fingertip_indices = np.asarray([KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES], dtype=np.int64)
+        offsets = _FINGERTIP_LOCAL_OFFSETS.copy()
+        if self.primary_hand_side == "left":
+            offsets[:, 0] *= -1.0
         fingertips = keypoints[:, fingertip_indices] + quat_rotate_xyzw(
             np.broadcast_to(keypoint_quats[:, fingertip_indices], (batch, len(_FINGERTIP_NAMES), 4)),
-            np.broadcast_to(_FINGERTIP_LOCAL_OFFSETS, (batch, len(_FINGERTIP_NAMES), 3)),
+            np.broadcast_to(offsets, (batch, len(_FINGERTIP_NAMES), 3)),
         )
         return MaterializedState(qpos, qvel, xpos, xquat, keypoints, keypoint_quats, fingertips)
 
     def decode_contact_buffers(
         self, buffers: MaterializedContactBuffers
     ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
-        return _decode_contact_forces(
-            count=buffers.count,
-            geom=buffers.geom,
-            world=buffers.world,
-            dimension=buffers.dimension,
-            addresses=buffers.addresses,
-            nefc=buffers.nefc,
-            friction=buffers.friction,
-            frame=buffers.frame,
-            constraint_force=buffers.constraint_force,
-            ngeom=self.model.ngeom,
-            keypoint_geom_ids=self.keypoint_geom_ids,
-            object_geom_ids=self.object_geom_ids,
-            active_object_geom_ids=self.active_object_geom_ids,
-        )
+        decoder = _decode_contact_forces
+        decoder_parameters: set[str] | None
+        try:
+            decoder_parameters = set(inspect.signature(decoder).parameters)
+        except (TypeError, ValueError):  # pragma: no cover - opaque test/backend callable
+            decoder_parameters = None
+        decoded = [
+            decoder(
+                count=buffers.count,
+                geom=buffers.geom,
+                world=buffers.world,
+                dimension=buffers.dimension,
+                addresses=buffers.addresses,
+                nefc=buffers.nefc,
+                friction=buffers.friction,
+                frame=buffers.frame,
+                constraint_force=buffers.constraint_force,
+                ngeom=self.model.ngeom,
+                keypoint_geom_ids=self.keypoint_geom_ids_by_side[side],
+                object_geom_ids=self.object_geom_ids,
+                **(
+                    {"active_object_geom_ids": self.active_object_geom_ids}
+                    if decoder_parameters is None
+                    or "active_object_geom_ids" in decoder_parameters
+                    else {}
+                ),
+            )
+            for side in self.hand_sides
+        ]
+        geometry_forces = decoded[0][0]
+        hand_forces = np.sum([item[1] for item in decoded], axis=0)
+        return geometry_forces, hand_forces, decoded[0][2]
 
     def extract(
         self,
@@ -898,7 +1065,11 @@ class MjxWarpPhysicalProducer:
             timings.stop("contact_buffer_materialization", contact_started, synchronize)
         decode_started = timings.start("python_contact_decode", synchronize) if timings is not None else None
         geometry_forces, hand_object_forces, per_world_count = self.decode_contact_buffers(buffers)
-        forces = geometry_forces[:, self.keypoint_geom_ids].copy()
+        # Keypoint contact observations retain the primary-hand ABI.  The
+        # hand-object force field above is deliberately aggregated across all
+        # hands for reward computation, but summing same-index geoms from both
+        # hands here would silently double/mis-map the observation channels.
+        forces = geometry_forces[:, self.keypoint_geom_ids]
         if self.active_object_geom_ids is None:
             object_force = geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
             object_position = state.xpos[:, self.object_body_id]
@@ -906,7 +1077,18 @@ class MjxWarpPhysicalProducer:
             object_linear_velocity = state.qvel[:, self.object_qvel_address : self.object_qvel_address + 3]
         else:
             world_ids = np.arange(len(state.qpos), dtype=np.int64)
-            object_force = geometry_forces[world_ids, self.active_object_geom_ids]
+            active_geom_ids = np.asarray(self.active_object_geom_ids, dtype=np.int64)
+            if active_geom_ids.ndim == 1:
+                object_force = geometry_forces[world_ids, active_geom_ids]
+            elif active_geom_ids.ndim == 2:
+                object_force = np.zeros((len(world_ids), 3), dtype=np.float64)
+                for piece_index in range(active_geom_ids.shape[1]):
+                    piece_ids = active_geom_ids[:, piece_index]
+                    valid = piece_ids >= 0
+                    if np.any(valid):
+                        object_force[valid] += geometry_forces[world_ids[valid], piece_ids[valid]]
+            else:  # pragma: no cover - guarded by setter/decoder validation
+                raise RuntimeError("unified active object geom ids have an invalid rank")
             if self.active_object_body_ids is None or self.active_object_qvel_addresses is None:
                 raise RuntimeError("unified producer active object state is incomplete")
             object_position = state.xpos[world_ids, self.active_object_body_ids]
@@ -920,7 +1102,7 @@ class MjxWarpPhysicalProducer:
         if timings is not None:
             timings.stop("python_contact_decode", decode_started, synchronize)
         return PhysicalSnapshot(
-            mano_dof_pos=state.qpos[:, :26].copy(),
+            mano_dof_pos=state.qpos[:, self.hand_qpos_slices[self.primary_hand_side]].copy(),
             hand_position=state.xpos[:, self.keypoint_body_ids[0]].copy(),
             hand_orientation_xyzw=_normalized_xyzw(state.xquat[:, self.keypoint_body_ids[0]]),
             hand_keypoint_orientations_xyzw=state.keypoint_quats,
@@ -941,12 +1123,24 @@ class UnifiedMjxWarpPhysicalProducer(MjxWarpPhysicalProducer):
     """Extract source fields for one active object per unified MJX world."""
 
     def __init__(
-        self, mujoco: Any, model: Any, *, object_types: Sequence[str]
+        self,
+        mujoco: Any,
+        model: Any,
+        *,
+        object_types: Sequence[str],
+        hand_sides: Sequence[str] = ("right",),
+        primary_hand_side: str = "right",
     ) -> None:
         names = tuple(dict.fromkeys(object_types))
         if not names:
             raise ValueError("unified producer requires at least one object type")
-        super().__init__(mujoco, model, object_type=names[0])
+        super().__init__(
+            mujoco,
+            model,
+            object_type=names[0],
+            hand_sides=hand_sides,
+            primary_hand_side=primary_hand_side,
+        )
         self.object_types = names
         self.object_body_ids_by_type = np.asarray(
             [
@@ -972,22 +1166,41 @@ class UnifiedMjxWarpPhysicalProducer(MjxWarpPhysicalProducer):
             ],
             dtype=np.int64,
         )
-        self.object_geom_ids_by_type = np.asarray(
-            [
-                next(
-                    geom_id
-                    for geom_id in range(model.ngeom)
-                    if int(model.geom_bodyid[geom_id]) == int(body_id)
+        piece_rows: list[tuple[int, ...]] = []
+        for object_type, body_id in zip(names, self.object_body_ids_by_type, strict=True):
+            runtime = object_runtime(object_type)
+            pieces = tuple(
+                geom_id
+                for geom_id in range(model.ngeom)
+                if int(model.geom_bodyid[geom_id]) == int(body_id)
+                and (
+                    self.mujoco.mj_id2name(
+                        model, self.mujoco.mjtObj.mjOBJ_GEOM, geom_id
+                    )
+                    or ""
+                ).endswith("_collision")
+            )
+            if len(pieces) != runtime.collision_geom_count:
+                raise ValueError(
+                    f"unified {object_type} requires {runtime.collision_geom_count} collision geoms, "
+                    f"found {len(pieces)}"
                 )
-                for body_id in self.object_body_ids_by_type
-            ],
-            dtype=np.int64,
+            piece_rows.append(pieces)
+        max_pieces = max(len(row) for row in piece_rows)
+        self.object_geom_ids_by_type = np.full(
+            (len(piece_rows), max_pieces), -1, dtype=np.int64
         )
+        for row_index, pieces in enumerate(piece_rows):
+            self.object_geom_ids_by_type[row_index, : len(pieces)] = pieces
         if np.any(self.object_body_ids_by_type < 0) or np.any(
             self.object_qvel_addresses_by_type < 0
         ):
             raise ValueError("unified object body or free-joint mapping is incomplete")
-        self.object_geom_ids = set(int(value) for value in self.object_geom_ids_by_type)
+        self.object_geom_ids = {
+            int(value)
+            for value in self.object_geom_ids_by_type.reshape(-1)
+            if int(value) >= 0
+        }
 
     def set_active_objects(self, object_indices: NDArray[np.int64]) -> None:
         indices = np.asarray(object_indices, dtype=np.int64)
@@ -1076,6 +1289,42 @@ class MujocoManoEnvironment:
         # diagnostics. Production gathers below always use the per-env tables.
         self.trajectory = trajectories[0]
         self.trajectories = tuple(trajectories)
+        side_sets = {tuple(item.hand_sides) for item in self.trajectories}
+        dof_dims = {item.dof_dim for item in self.trajectories}
+        if len(side_sets) != 1 or len(dof_dims) != 1:
+            raise ValueError("all vector trajectories must share hand sides and DOF width")
+        self.hand_sides = _model_hand_side_order(next(iter(side_sets)))
+        # Lance metadata order is not a control-order contract.  MuJoCo XML
+        # and policy/model controls always use right then left.
+        self.model_hand_sides = tuple(
+            side for side in ACTION_SIDE_ORDER if side in self.hand_sides
+        )
+        if config.hand_side == "auto":
+            selected_sets = {tuple(item.selected_hand_sides) for item in self.trajectories}
+            if len(selected_sets) != 1:
+                raise ValueError("all vector trajectories must share one hand selection")
+            controlled_sides = next(iter(selected_sets))
+        else:
+            controlled_sides = resolve_hand_selection(self.hand_sides, config.hand_side)
+        self.hand_layout = HandActionLayout(
+            self.hand_sides,
+            controlled_sides,
+            dof_per_hand=JOINT_DOF,
+        )
+        self.action_dim = self.hand_layout.action_dim
+        self.hand_dof = JOINT_DOF
+        self.finger_dof = self.hand_dof - 6
+        self.primary_hand_side = (
+            "right" if "right" in self.hand_layout.controlled_sides
+            else self.hand_layout.controlled_sides[0]
+        )
+        self.model_hand_side = "both" if len(self.hand_sides) == 2 else self.hand_sides[0]
+        self.model_action_dim = len(self.hand_sides) * self.hand_dof
+        self.observation_layout = observation_layout(
+            self.hand_dof,
+            cumulative_joint_dim=self.hand_layout.cumulative_dim,
+        )
+        self.observation_dim = self.observation_layout.dimension
         identity_parts = [item.identity.identity.split("_") for item in self.trajectories]
         if any(len(parts) != 3 or not parts[1].isdigit() for parts in identity_parts):
             raise ValueError("each trajectory identity must be object_action_sequence")
@@ -1102,22 +1351,37 @@ class MujocoManoEnvironment:
         self.mjx = mjx
         self.device = devices[0]
         self.mujoco, self.model = compile_model(
-            config.servo, object_type=self.object_type
+            config.servo,
+            object_type=self.object_type,
+            hand_side=self.model_hand_side,
         )
-        minimum_contact_capacity = 31 * config.num_envs
+        minimum_contact_capacity = minimum_warp_contact_capacity(
+            config.num_envs, self.hand_sides
+        )
         if config.contact_capacity < minimum_contact_capacity:
             raise ValueError(
                 f"contact_capacity {config.contact_capacity} is below {minimum_contact_capacity} "
                 f"required for {config.num_envs} {self.object_type} worlds"
             )
         self.producer = MjxWarpPhysicalProducer(
-            self.mujoco, self.model, object_type=self.object_type
+            self.mujoco,
+            self.model,
+            object_type=self.object_type,
+            hand_sides=self.hand_sides,
+            primary_hand_side=self.primary_hand_side,
         )
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
             raise RuntimeError(f"MJX did not select Warp: {self.mjx_model.impl}")
-        self.joint_lower = self.model.jnt_range[:26, 0].astype(np.float64, copy=True)
-        self.joint_upper = self.model.jnt_range[:26, 1].astype(np.float64, copy=True)
+        # Controls are laid out in canonical right-then-left model order;
+        # observations and policy actions may expose only the selected side.
+        self.model_joint_dof = self.model_action_dim
+        self.joint_lower = self.model.jnt_range[: self.model_joint_dof, 0].astype(
+            np.float64, copy=True
+        )
+        self.joint_upper = self.model.jnt_range[: self.model_joint_dof, 1].astype(
+            np.float64, copy=True
+        )
         self._step_fn = jax.jit(jax.vmap(lambda world: mjx.step(self.mjx_model, world)))
         self._forward_fn = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
         self._build_reference_tables()
@@ -1125,18 +1389,26 @@ class MujocoManoEnvironment:
         # Warp contact implementation metadata is static for the whole batch.
         # Replicate one capacity-configured world, then replace only dynamic
         # per-world qpos/qvel/ctrl below during reset.
+        initial_host_data = self._initial_host_data(0)
+        # Revised 28-DoF hands add joint-limit/contact constraints.  The
+        # historical default ``constraint_capacity`` was sufficient for the
+        # 26-DoF pose but can be smaller than the initial reference state's
+        # solved ``nefc``.  Grow the Warp buffers from the native probe while
+        # retaining user-provided larger capacities.
+        warp_contact_capacity = max(config.contact_capacity, int(initial_host_data.ncon) + 1)
+        warp_constraint_capacity = max(config.constraint_capacity, int(initial_host_data.nefc) + 1)
         single_data = mjx.put_data(
             self.model,
-            self._initial_host_data(0),
+            initial_host_data,
             device=self.device,
             impl="warp",
-            naconmax=config.contact_capacity,
-            njmax=config.constraint_capacity,
+            naconmax=warp_contact_capacity,
+            njmax=warp_constraint_capacity,
         )
         batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
         self.data = jax.vmap(lambda _: single_data)(batch_index)
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
-        self._reset_ctrl_device = jax.device_put(self.reference_q[:, 0], self.device)
+        self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)
         self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
         self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
         self._controller_targets_fn = jax.jit(self._device_controller_targets)
@@ -1147,13 +1419,21 @@ class MujocoManoEnvironment:
         for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):
             self.expected_contact_mask[env_id, keypoint_ids] = 1.0
         self.expected_contact_weights = self.expected_contact_mask.copy()
-        self.active_joint_mask = _active_joint_mask(self.expected_contact_mask)
+        self.active_joint_mask_by_side = _active_joint_mask(
+            self.expected_contact_mask, finger_dof=self.finger_dof
+        )
+        self.active_joint_mask = np.tile(
+            self.active_joint_mask_by_side,
+            (1, len(self.hand_layout.controlled_sides)),
+        )
         self.object_geometry = geometry_encoding(
             object_name=self.object_type,
             geometry_type=object_runtime(self.object_type).geometry_type,
             dimensions=np.ptp(object_collision_vertices(self.object_type), axis=0),
         )
-        self.object_support_points = object_collision_vertices(self.object_type).copy()
+        self.object_support_points = reduce_support_points(
+            object_collision_vertices(self.object_type)
+        ).copy()
         self.object_gravity_world_force = (
             np.asarray(self.model.opt.gravity, dtype=np.float64)
             * float(self.model.body_subtreemass[self.producer.object_body_id])
@@ -1172,15 +1452,26 @@ class MujocoManoEnvironment:
         self._dynamic_templates: NDArray[np.float64] | None = None
         self.progress = np.zeros(config.num_envs, dtype=np.int64)
         self.trajectory_steps = np.zeros(config.num_envs, dtype=np.int64)
-        self.cumulative_offset = np.zeros((config.num_envs, 3), dtype=np.float64)
-        self.cumulative_joint_offset = np.zeros((config.num_envs, 20), dtype=np.float64)
+        self.cumulative_offset = np.zeros(
+            (config.num_envs, 3 * len(self.hand_layout.controlled_sides)),
+            dtype=np.float64,
+        )
+        self.cumulative_joint_offset = np.zeros(
+            (config.num_envs, self.hand_layout.cumulative_dim), dtype=np.float64
+        )
+        self.cumulative_offset_by_side = {
+            side: np.zeros((config.num_envs, 3), dtype=np.float64)
+            for side in self.hand_layout.controlled_sides
+        }
         self.reset_mask = np.zeros(config.num_envs, dtype=bool)
         self.episode_returns = np.zeros(config.num_envs, dtype=np.float64)
         self.last_physical: PhysicalSnapshot | None = None
         self.last_observation: ObservationResult | None = None
         self.last_reward: RewardDiagnostics | None = None
         self.last_termination: TerminationResult | None = None
-        self.last_controller_targets: NDArray[np.float64] | None = np.zeros((config.num_envs, 26), dtype=np.float64)
+        self.last_controller_targets: NDArray[np.float64] | None = np.zeros(
+            (config.num_envs, self.model_action_dim), dtype=np.float64
+        )
         self.control_call = 0
         self.last_transition: TransitionSnapshot | None = None
         self._initializing_point_templates = True
@@ -1226,10 +1517,12 @@ class MujocoManoEnvironment:
         self.mjx = mjx
         self.phase_timings = PhaseTimings(enabled=config.profile_phases)
         self.mujoco, self.model = compile_unified_model(
-            config.servo, object_types=names
+            config.servo,
+            object_types=names,
+            hand_side=self.model_hand_side,
         )
-        minimum_contact_capacity = (
-            UNIFIED_WARP_CONTACTS_PER_WORLD * config.num_envs + 64
+        minimum_contact_capacity = minimum_warp_contact_capacity(
+            config.num_envs, self.hand_sides
         )
         if config.contact_capacity < minimum_contact_capacity:
             raise ValueError(
@@ -1237,7 +1530,11 @@ class MujocoManoEnvironment:
                 f"required for {config.num_envs} unified worlds"
             )
         self.producer = UnifiedMjxWarpPhysicalProducer(
-            self.mujoco, self.model, object_types=names
+            self.mujoco,
+            self.model,
+            object_types=names,
+            hand_sides=self.hand_sides,
+            primary_hand_side=self.primary_hand_side,
         )
         self.producer.set_active_objects(self._unified_object_indices)
         self._unified_qpos_addresses = np.asarray(
@@ -1256,24 +1553,32 @@ class MujocoManoEnvironment:
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
             raise RuntimeError(f"MJX did not select Warp: {self.mjx_model.impl}")
-        self.joint_lower = self.model.jnt_range[:26, 0].astype(np.float64, copy=True)
-        self.joint_upper = self.model.jnt_range[:26, 1].astype(np.float64, copy=True)
+        self.model_joint_dof = self.model_action_dim
+        self.joint_lower = self.model.jnt_range[: self.model_joint_dof, 0].astype(
+            np.float64, copy=True
+        )
+        self.joint_upper = self.model.jnt_range[: self.model_joint_dof, 1].astype(
+            np.float64, copy=True
+        )
         self._step_fn = jax.jit(jax.vmap(lambda world: mjx.step(self.mjx_model, world)))
         self._forward_fn = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
         self._build_reference_tables()
         self._reset_qpos = self._initial_qpos()
+        initial_host_data = self._initial_host_data(0)
+        warp_contact_capacity = max(config.contact_capacity, int(initial_host_data.ncon) + 1)
+        warp_constraint_capacity = max(config.constraint_capacity, int(initial_host_data.nefc) + 1)
         single_data = mjx.put_data(
             self.model,
-            self._initial_host_data(0),
+            initial_host_data,
             device=self.device,
             impl="warp",
-            naconmax=config.contact_capacity,
-            njmax=config.constraint_capacity,
+            naconmax=warp_contact_capacity,
+            njmax=warp_constraint_capacity,
         )
         batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
         self.data = jax.vmap(lambda _: single_data)(batch_index)
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
-        self._reset_ctrl_device = jax.device_put(self.reference_q[:, 0], self.device)
+        self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)
         self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
         self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
         self._controller_targets_fn = jax.jit(self._device_controller_targets)
@@ -1284,7 +1589,13 @@ class MujocoManoEnvironment:
         for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):
             self.expected_contact_mask[env_id, keypoint_ids] = 1.0
         self.expected_contact_weights = self.expected_contact_mask.copy()
-        self.active_joint_mask = _active_joint_mask(self.expected_contact_mask)
+        self.active_joint_mask_by_side = _active_joint_mask(
+            self.expected_contact_mask, finger_dof=self.finger_dof
+        )
+        self.active_joint_mask = np.tile(
+            self.active_joint_mask_by_side,
+            (1, len(self.hand_layout.controlled_sides)),
+        )
         self.object_geometry = np.stack(
             [
                 geometry_encoding(
@@ -1296,7 +1607,8 @@ class MujocoManoEnvironment:
             ]
         )
         self.object_support_points = tuple(
-            object_collision_vertices(object_type).copy() for object_type in self.object_types
+            reduce_support_points(object_collision_vertices(object_type)).copy()
+            for object_type in self.object_types
         )
         self.object_gravity_world_force = np.stack(
             [
@@ -1314,6 +1626,12 @@ class MujocoManoEnvironment:
             _source_surface_template(42, object_type) for object_type in self.object_types
         )
         self._static_template = self._static_templates[0]
+        self._unified_static_point_template = PointCloudTemplate(
+            np.stack([template.local_points for template in self._static_templates]),
+            mode="static_seed_42",
+            normalized=True,
+            scale=np.stack([template.scale for template in self._static_templates]),
+        )
         self._dynamic_templates = None
         self._point_rngs = [
             np.random.default_rng(config.point_seed + index) for index in range(config.num_envs)
@@ -1326,15 +1644,26 @@ class MujocoManoEnvironment:
             torch.rand(config.num_envs, device="cuda")
         self.progress = np.zeros(config.num_envs, dtype=np.int64)
         self.trajectory_steps = np.zeros(config.num_envs, dtype=np.int64)
-        self.cumulative_offset = np.zeros((config.num_envs, 3), dtype=np.float64)
-        self.cumulative_joint_offset = np.zeros((config.num_envs, 20), dtype=np.float64)
+        self.cumulative_offset = np.zeros(
+            (config.num_envs, 3 * len(self.hand_layout.controlled_sides)),
+            dtype=np.float64,
+        )
+        self.cumulative_joint_offset = np.zeros(
+            (config.num_envs, self.hand_layout.cumulative_dim), dtype=np.float64
+        )
+        self.cumulative_offset_by_side = {
+            side: np.zeros((config.num_envs, 3), dtype=np.float64)
+            for side in self.hand_layout.controlled_sides
+        }
         self.reset_mask = np.zeros(config.num_envs, dtype=bool)
         self.episode_returns = np.zeros(config.num_envs, dtype=np.float64)
         self.last_physical: PhysicalSnapshot | None = None
         self.last_observation: ObservationResult | None = None
         self.last_reward: RewardDiagnostics | None = None
         self.last_termination: TerminationResult | None = None
-        self.last_controller_targets: NDArray[np.float64] | None = np.zeros((config.num_envs, 26), dtype=np.float64)
+        self.last_controller_targets: NDArray[np.float64] | None = np.zeros(
+            (config.num_envs, self.model_action_dim), dtype=np.float64
+        )
         self.control_call = 0
         self.last_transition: TransitionSnapshot | None = None
         self._initializing_point_templates = True
@@ -1368,7 +1697,9 @@ class MujocoManoEnvironment:
             route_config = replace(
                 config,
                 num_envs=len(env_ids),
-                contact_capacity=max(128, 31 * len(env_ids) + 64),
+                contact_capacity=recommended_warp_contact_capacity(
+                    len(env_ids), self.hand_sides
+                ),
             )
             route = MujocoManoEnvironment(
                 TrajectoryBatch(tuple(trajectories[int(index)] for index in env_ids)),
@@ -1416,7 +1747,8 @@ class MujocoManoEnvironment:
             config.num_envs,
         )
         self.object_support_points = tuple(
-            object_collision_vertices(object_type).copy() for object_type in self.object_types
+            reduce_support_points(object_collision_vertices(object_type)).copy()
+            for object_type in self.object_types
         )
         self.object_gravity_world_force = _scatter_routed_value(
             [
@@ -1435,6 +1767,15 @@ class MujocoManoEnvironment:
     @property
     def is_heterogeneous(self) -> bool:
         return bool(self._object_routes)
+
+    def normalize_actions(self, raw_actions: NDArray[object]) -> NDArray[np.float64]:
+        """Validate a live 28/56-wide MuJoCo action batch."""
+
+        values = np.asarray(raw_actions, dtype=np.float64)
+        expected = (self.config.num_envs, self.action_dim)
+        if values.shape != expected or not np.all(np.isfinite(values)):
+            raise ValueError(f"raw_actions must be finite ({expected[0]}, {expected[1]})")
+        return values
 
     def _sync_heterogeneous_state(self) -> None:
         routes = list(self._object_routes.values())
@@ -1508,9 +1849,7 @@ class MujocoManoEnvironment:
         NDArray[np.bool_],
         dict[str, NDArray[Any]],
     ]:
-        actions = np.asarray(raw_actions, dtype=np.float64)
-        if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
-            raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
+        actions = self.normalize_actions(raw_actions)
         routed_outputs = []
         for env_ids, route in self._object_routes.values():
             observation, rewards, resets, extras = route.step(actions[env_ids])
@@ -1551,19 +1890,48 @@ class MujocoManoEnvironment:
                     for value in values
                 ]
             )
-        self.reference_q = pad("q_ref")
+        self.reference_q_by_side = {
+            side: np.stack(
+                [
+                    np.pad(
+                        _expand_legacy_hand_dofs(item.q_ref_for(side)),
+                        ((0, max_length - len(item.q_ref)), (0, 0)),
+                        mode="edge",
+                    )
+                    for item in self.trajectories
+                ]
+            )
+            for side in self.hand_sides
+        }
+        self.reference_q = self.reference_q_by_side[self.primary_hand_side]
+        self.reference_q_model = np.concatenate(
+            [self.reference_q_by_side[side] for side in self.model_hand_sides], axis=-1
+        )
         self.reference_object_pos = pad("object_pos")
         self.reference_object_quat_xyzw = pad("object_quat_xyzw")
         self.reference_source_indices = np.stack(
             [np.pad(item.source_indices, (0, max_length - len(item.source_indices)), mode="edge") for item in self.trajectories]
         )
         self.contact_start_frames = np.asarray(
-            [item.identity.movement_start_raw - item.source_indices[0] for item in self.trajectories], dtype=np.int64
+            [
+                item.identity.movement_start_raw - int(item.source_indices[0])
+                for item in self.trajectories
+            ],
+            dtype=np.int64,
         )
+        # ``object_move.end_frame`` is inclusive in both the source metadata
+        # and reward window.  Modern decoding converts it to an exclusive
+        # Python slice stop while retaining this raw inclusive identity value.
         self.contact_end_frames = np.asarray(
-            [item.identity.movement_end_raw - item.source_indices[0] for item in self.trajectories], dtype=np.int64
+            [
+                item.identity.movement_end_raw - int(item.source_indices[0])
+                for item in self.trajectories
+            ],
+            dtype=np.int64,
         )
-        if np.any(self.contact_start_frames < 0) or np.any(self.contact_end_frames >= self.trajectory_lengths):
+        if np.any(self.contact_start_frames < 0) or np.any(
+            self.contact_end_frames >= self.trajectory_lengths
+        ):
             raise ValueError("trajectory movement window does not map into its reference slice")
         # Compatibility diagnostics still expose scalar values for a single/shared trajectory.
         self.contact_start_frame = int(self.contact_start_frames[0])
@@ -1571,7 +1939,9 @@ class MujocoManoEnvironment:
 
     def _initial_qpos(self) -> NDArray[np.float64]:
         qpos = np.zeros((self.config.num_envs, self.model.nq), dtype=np.float64)
-        qpos[:, :26] = self.reference_q[:, 0]
+        for side_index, side in enumerate(self.model_hand_sides):
+            start = side_index * self.hand_dof
+            qpos[:, start : start + self.hand_dof] = self.reference_q_by_side[side][:, 0]
         if getattr(self, "_unified_object_batch", False):
             # Inactive bodies retain native gravity but start high enough that
             # a bounded episode cannot reach the floor or hand workspace.
@@ -1599,7 +1969,7 @@ class MujocoManoEnvironment:
         self.mujoco.mj_resetData(self.model, data)
         data.qpos[:] = self._reset_qpos[env_id]
         data.qvel[:] = 0.0
-        data.ctrl[:] = self.reference_q[env_id, 0]
+        data.ctrl[:] = self.reference_q_model[env_id, 0]
         data.qfrc_applied[:] = 0.0
         self.mujoco.mj_forward(self.model, data)
         return data
@@ -1707,15 +2077,15 @@ class MujocoManoEnvironment:
     def _point_template(self) -> PointCloudTemplate:
         if self.config.compatibility.point_template_mode == "static_seed_42":
             if getattr(self, "_unified_object_batch", False):
-                templates = [
-                    self._static_templates[int(index)]
-                    for index in self._unified_object_indices
-                ]
                 return PointCloudTemplate(
-                    np.stack([template.local_points for template in templates]),
+                    self._unified_static_point_template.local_points[
+                        self._unified_object_indices
+                    ],
                     mode="static_seed_42",
                     normalized=True,
-                    scale=np.stack([template.scale for template in templates]),
+                    scale=self._unified_static_point_template.scale[
+                        self._unified_object_indices
+                    ],
                 )
             return self._static_template
         if self._dynamic_templates is None:
@@ -1788,7 +2158,7 @@ class MujocoManoEnvironment:
             ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
             qpos[env_ids] = self._reset_qpos[env_ids]
             qvel[env_ids] = 0.0
-            ctrl[env_ids] = self.reference_q[env_ids, 0]
+            ctrl[env_ids] = self.reference_q_model[env_ids, 0]
             self.data = self.data.replace(
                 qpos=self.jax.device_put(self.jp.asarray(qpos), self.device),
                 qvel=self.jax.device_put(self.jp.asarray(qvel), self.device),
@@ -1802,6 +2172,8 @@ class MujocoManoEnvironment:
         self.trajectory_steps[env_ids] = 0
         self.cumulative_offset[env_ids] = 0.0
         self.cumulative_joint_offset[env_ids] = 0.0
+        for values in self.cumulative_offset_by_side.values():
+            values[env_ids] = 0.0
         self.reset_mask[env_ids] = False
         self.episode_returns[env_ids] = 0.0
         self._set_dynamic_templates(env_ids)
@@ -1850,20 +2222,55 @@ class MujocoManoEnvironment:
     def _reference_gather(self, table: NDArray[np.float64], indices: NDArray[np.int64]) -> NDArray[np.float64]:
         return table[np.arange(self.config.num_envs), indices]
 
+    def _reference_model_gather(self, indices: NDArray[np.int64]) -> NDArray[np.float64]:
+        """Gather all compiled-hand references in canonical model order."""
+
+        return np.concatenate(
+            [
+                self.reference_q_by_side[side][np.arange(self.config.num_envs), indices]
+                for side in self.model_hand_sides
+            ],
+            axis=1,
+        )
+
+    def _combined_cumulative_offset(self) -> NDArray[np.float64]:
+        """Expose every controlled hand's XYZ residual in action-slot order."""
+
+        if not hasattr(self, "hand_layout") or not hasattr(self, "cumulative_offset_by_side"):
+            return np.asarray(self.cumulative_offset, dtype=np.float64)
+        values = [
+            self.cumulative_offset_by_side[side]
+            for side in self.hand_layout.controlled_sides
+        ]
+        if not values:
+            return np.zeros((self.config.num_envs, 0), dtype=np.float64)
+        return np.concatenate(values, axis=1)
+
     def _device_controller_targets(self, targets: Any, current_qpos: Any) -> Any:
         """Apply the source's nearest-Euler controller mapping without host state copies."""
 
-        wrist_delta = (targets[:, 3:6] - current_qpos[:, 3:6] + np.pi) % (2.0 * np.pi) - np.pi
-        resolved = targets.at[:, 3:6].set(current_qpos[:, 3:6] + wrist_delta)
+        resolved = targets
+        for side_index in range(len(self.hand_sides)):
+            start = side_index * self.hand_dof
+            wrist = slice(start + 3, start + 6)
+            wrist_delta = (
+                targets[:, wrist] - current_qpos[:, wrist] + np.pi
+            ) % (2.0 * np.pi) - np.pi
+            resolved = resolved.at[:, wrist].set(current_qpos[:, wrist] + wrist_delta)
         return self.jp.clip(resolved, self._joint_lower_device, self._joint_upper_device)
 
     def _build_observation(self, physical: PhysicalSnapshot) -> ObservationResult:
         indices = self._target_indices()
         next_indices = np.minimum(indices + 5, self.trajectory_lengths - 1)
+        primary_index = self.model_hand_sides.index(self.primary_hand_side)
+        primary_slice = slice(
+            primary_index * self.hand_dof,
+            (primary_index + 1) * self.hand_dof,
+        )
         state = ObservationState(
             mano_dof_pos=physical.mano_dof_pos,
-            mano_dof_lower=self.joint_lower,
-            mano_dof_upper=self.joint_upper,
+            mano_dof_lower=self.joint_lower[primary_slice],
+            mano_dof_upper=self.joint_upper[primary_slice],
             hand_position=physical.hand_position,
             hand_orientation_xyzw=physical.hand_orientation_xyzw,
             object_position=physical.object_position,
@@ -1871,7 +2278,7 @@ class MujocoManoEnvironment:
             target_object_position=self._reference_gather(self.reference_object_pos, indices),
             target_object_orientation_xyzw=self._reference_gather(self.reference_object_quat_xyzw, indices),
             target_object_pos_next_5=self._reference_gather(self.reference_object_pos, next_indices),
-            cumulative_offset=self.cumulative_offset,
+            cumulative_offset=self._combined_cumulative_offset(),
             cumulative_joint_offset=self.cumulative_joint_offset,
             point_cloud=self._point_template(),
             object_geometry=np.broadcast_to(self.object_geometry, (self.config.num_envs, 12)),
@@ -1893,7 +2300,7 @@ class MujocoManoEnvironment:
             target_object_position=self._reference_gather(self.reference_object_pos, indices),
             object_orientation_xyzw=physical.object_orientation_xyzw,
             target_object_orientation_xyzw=self._reference_gather(self.reference_object_quat_xyzw, indices),
-            cumulative_offset=self.cumulative_offset,
+            cumulative_offset=self._combined_cumulative_offset(),
             cumulative_joint_offset=self.cumulative_joint_offset,
             active_joint_mask=self.active_joint_mask,
             hand_object_force_on_object_world_N=physical.hand_object_force_on_object_world_N,
@@ -1945,30 +2352,57 @@ class MujocoManoEnvironment:
         if self.is_heterogeneous:
             return self._heterogeneous_step(raw_actions)
         materialization_phase = self._phase_start("action_numpy_materialization")
-        actions = np.asarray(raw_actions, dtype=np.float64)
+        actions = self.normalize_actions(raw_actions)
         self._phase_stop("action_numpy_materialization", materialization_phase)
-        if actions.shape != (self.config.num_envs, 26) or not np.all(np.isfinite(actions)):
-            raise ValueError(f"raw_actions must be finite ({self.config.num_envs}, 26)")
         action_phase = self._phase_start("action_conversion_processing")
         mocap_indices = self._target_indices()
-        mocap_targets = self._reference_gather(self.reference_q, mocap_indices)
-        action_result = process_residual_actions(
-            actions,
-            trajectory_steps=self.trajectory_steps,
-            cumulative_offset=self.cumulative_offset,
-            cumulative_joint_offset=self.cumulative_joint_offset,
-            mocap_targets=mocap_targets,
-            joint_lower=self.joint_lower,
-            joint_upper=self.joint_upper,
-            active_joint_mask=self.active_joint_mask,
-            use_residual=np.full(self.config.num_envs, self.config.residual_enabled, dtype=np.float64),
-            config=self.config.residual_action,
+        actions_by_side = self.hand_layout.split(actions)
+        action_results: dict[str, Any] = {}
+        for side in self.hand_layout.controlled_sides:
+            cumulative_slice = self.hand_layout.cumulative_slice(side)
+            model_index = self.model_hand_sides.index(side)
+            model_slice = slice(
+                model_index * self.hand_dof,
+                (model_index + 1) * self.hand_dof,
+            )
+            side_result = process_residual_actions(
+                actions_by_side[side],
+                trajectory_steps=self.trajectory_steps,
+                cumulative_offset=self.cumulative_offset_by_side[side],
+                cumulative_joint_offset=self.cumulative_joint_offset[:, cumulative_slice],
+                mocap_targets=self._reference_gather(
+                    self.reference_q_by_side[side], mocap_indices
+                ),
+                joint_lower=self.joint_lower[model_slice],
+                joint_upper=self.joint_upper[model_slice],
+                active_joint_mask=self.active_joint_mask_by_side,
+                use_residual=np.full(
+                    self.config.num_envs,
+                    self.config.residual_enabled,
+                    dtype=np.float64,
+                ),
+                config=self.config.residual_action,
+            )
+            action_results[side] = side_result
+            self.cumulative_offset_by_side[side] = side_result.cumulative_offset
+            self.cumulative_joint_offset[:, cumulative_slice] = side_result.cumulative_joint_offset
+        self.cumulative_offset = self._combined_cumulative_offset()
+        mocap_targets = self._reference_model_gather(mocap_indices)
+        processed_targets = np.concatenate(
+            [
+                action_results[side].targets
+                if side in action_results
+                else self._reference_gather(self.reference_q_by_side[side], mocap_indices)
+                for side in self.model_hand_sides
+            ],
+            axis=1,
         )
         self._phase_stop("action_conversion_processing", action_phase)
         controller_phase = self._phase_start("controller_target_work")
         if self.config.device_resident_controls:
             controller_targets_device = self._controller_targets_fn(
-                self.jax.device_put(action_result.targets, self.device), self.data.qpos[:, :26]
+                self.jax.device_put(processed_targets, self.device),
+                self.data.qpos[:, : self.model_action_dim],
             )
             controller_targets = (
                 np.asarray(controller_targets_device, dtype=np.float64)
@@ -1976,16 +2410,24 @@ class MujocoManoEnvironment:
                 else None
             )
         else:
-            current_qpos = np.asarray(self.data.qpos, dtype=np.float64)[:, :26]
+            current_qpos = np.asarray(self.data.qpos, dtype=np.float64)[:, : self.model_action_dim]
             controller_targets = np.stack(
                 [
-                    command_target(action_result.targets[index], current_qpos[index], self.joint_lower, self.joint_upper)
+                    np.concatenate(
+                        [
+                            command_target(
+                                processed_targets[index, model_index * self.hand_dof : (model_index + 1) * self.hand_dof],
+                                current_qpos[index, model_index * self.hand_dof : (model_index + 1) * self.hand_dof],
+                                self.joint_lower[model_index * self.hand_dof : (model_index + 1) * self.hand_dof],
+                                self.joint_upper[model_index * self.hand_dof : (model_index + 1) * self.hand_dof],
+                            )
+                            for model_index, _ in enumerate(self.model_hand_sides)
+                        ]
+                    )
                     for index in range(self.config.num_envs)
                 ]
             )
             controller_targets_device = self.jax.device_put(self.jp.asarray(controller_targets), self.device)
-        self.cumulative_offset = action_result.cumulative_offset
-        self.cumulative_joint_offset = action_result.cumulative_joint_offset
         self.last_controller_targets = None if controller_targets is None else controller_targets.copy()
         self.trajectory_steps += 1
         self.trajectory_steps[self.progress == 0] = 0
@@ -2051,7 +2493,7 @@ class MujocoManoEnvironment:
                 raw_actions=actions.copy(),
                 command_reference_indices=mocap_indices.copy(),
                 command_targets=mocap_targets.copy(),
-                processed_targets=action_result.targets.copy(),
+                processed_targets=processed_targets.copy(),
                 controller_targets=controller_targets.copy(),
                 reset_applied=pending_reset.copy(),
                 progress=self.progress.copy(),

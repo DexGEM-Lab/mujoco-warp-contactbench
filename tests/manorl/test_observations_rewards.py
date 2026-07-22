@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from sim.manorl.abi import check_termination, early_phase_mask
 from sim.manorl.observations import (
-    CHECKPOINT_SIDECAR_COMPATIBILITY,
     CONTACT_FORCE_THRESHOLD,
     CURRENT_SOURCE_COMPATIBILITY,
     OBSERVATION_KEYS,
     OBSERVATION_SLICES,
     POINT_COUNT,
     RAW_OBSERVATION_DIM,
+    SOURCE_ALIGNED_COMPATIBILITY,
     ObservationState,
     PointCloudTemplate,
     action_type_one_hot,
@@ -168,21 +167,21 @@ def test_observation_has_all_named_source_slices_in_exact_order() -> None:
     assert np.all(result.policy_input >= -5.0)
 
 
-def test_point_cloud_compatibility_variants_are_explicit_and_transform_source_frames() -> None:
+def test_point_cloud_contracts_are_explicit_and_transform_source_frames() -> None:
     state = _observation_state(batch=2)
     current = build_observation(state, compatibility=CURRENT_SOURCE_COMPATIBILITY)
     np.testing.assert_allclose(current.raw[0, OBSERVATION_SLICES["object_point_cloud_raw"]][:3], [-8.9, 0.2, 0.3])
     assert (CURRENT_SOURCE_COMPATIBILITY.early_phase_steps, CURRENT_SOURCE_COMPATIBILITY.movement_pre_padding) == (100, 250)
-    assert (CHECKPOINT_SIDECAR_COMPATIBILITY.early_phase_steps, CHECKPOINT_SIDECAR_COMPATIBILITY.movement_pre_padding) == (50, 200)
+    assert (SOURCE_ALIGNED_COMPATIBILITY.early_phase_steps, SOURCE_ALIGNED_COMPATIBILITY.movement_pre_padding) == (30, 100)
     dynamic_points = np.zeros((2, POINT_COUNT, 3))
     dynamic_points[0, 0] = [0.1, 0.0, 0.0]
     dynamic_points[1, 0] = [0.2, 0.0, 0.0]
     dynamic = replace(state, point_cloud=PointCloudTemplate(dynamic_points, mode="dynamic_reset"))
-    historical = build_observation(dynamic, compatibility=CHECKPOINT_SIDECAR_COMPATIBILITY)
-    cloud = historical.raw[:, OBSERVATION_SLICES["object_point_cloud_raw"]].reshape(2, POINT_COUNT, 3)
+    production = build_observation(dynamic, compatibility=SOURCE_ALIGNED_COMPATIBILITY)
+    cloud = production.raw[:, OBSERVATION_SLICES["object_point_cloud_raw"]].reshape(2, POINT_COUNT, 3)
     np.testing.assert_allclose(cloud[:, 0], [[-8.9, 0.0, 0.0], [-8.8, 0.0, 0.0]])
     with pytest.raises(ValueError, match="template mode"):
-        build_observation(state, compatibility=CHECKPOINT_SIDECAR_COMPATIBILITY)
+        build_observation(state, compatibility=SOURCE_ALIGNED_COMPATIBILITY)
     with pytest.raises(ValueError, match="template mode"):
         build_observation(dynamic, compatibility=CURRENT_SOURCE_COMPATIBILITY)
     normalized = replace(
@@ -214,19 +213,6 @@ def test_contact_order_mask_and_geometry_encoding_match_source_rules() -> None:
     np.testing.assert_allclose(geometry_encoding(object_name="sphere1", geometry_type="box", dimensions=np.array([0.1, 0.2, 0.3])), [0.0] * 6 + [1.0, 1.0, 1.0] + [0.0] * 3)
     np.testing.assert_allclose(geometry_encoding(object_name="banana", geometry_type="box", dimensions=np.array([0.1, 0.2, 0.3])), [0.0] * 9 + [0.5, 1.0, 1.0])
     np.testing.assert_array_equal(geometry_encoding(object_name="cube1", geometry_type="unknown", dimensions=np.array([])), np.zeros(12))
-
-
-def test_replay_derived_contact_features_preserve_isaac_keypoint_order() -> None:
-    trace = Path(__file__).resolve().parents[2] / "outputs/manorl/cube1_01_009_isaacgym_20260714_recovered.npz"
-    with np.load(trace) as data:
-        indices = np.array([0, 1, 2, 300, 790])
-        forces = data["contact_keypoint_force_xyz"][indices]
-        source_magnitudes = data["contact_keypoint_force_magnitude"][indices]
-        source_mask = data["expected_contact_mask"][indices]
-    contact = extract_contact_features(forces)
-    np.testing.assert_allclose(contact.magnitude, source_magnitudes, rtol=1e-6, atol=1e-5)
-    np.testing.assert_array_equal(source_mask, expected_contact_mask_from_keypoint_ids(np.tile([[3, 15]], (len(indices), 1)), len(indices)))
-    np.testing.assert_allclose(contact.normalized_magnitude, np.tanh(source_magnitudes * 0.025), rtol=1e-6, atol=1e-7)
 
 
 def test_observation_inputs_fail_fast_for_missing_shapes_and_nonfinite_values() -> None:
@@ -268,8 +254,8 @@ def test_reward_terms_and_windows_match_target_equations() -> None:
     window_state = _reward_state(batch=3, steps=np.array([99, 105, 111], dtype=np.int64))
     window = compute_rewards(
         window_state,
-        compatibility=CHECKPOINT_SIDECAR_COMPATIBILITY,
-        termination=_termination_for(window_state, CHECKPOINT_SIDECAR_COMPATIBILITY),
+        compatibility=SOURCE_ALIGNED_COMPATIBILITY,
+        termination=_termination_for(window_state, SOURCE_ALIGNED_COMPATIBILITY),
     )
     np.testing.assert_allclose(window.contact, [0.0, 0.4, 0.0])
     np.testing.assert_allclose(window.distance_gate, [0.0, 0.4, 0.4])
@@ -363,14 +349,14 @@ def test_reward_contact_preserves_nonuniform_weights_and_zero_expected_contacts(
     np.testing.assert_allclose(diagnostics.contact, [0.1, 0.0])
 
 
-def test_reward_compatibility_rotation_and_termination_interaction() -> None:
+def test_reward_timing_contract_rotation_and_termination_interaction() -> None:
     state = _reward_state(steps=np.array([50], dtype=np.int64))
     current = compute_rewards(state, compatibility=CURRENT_SOURCE_COMPATIBILITY, termination=_termination_for(state, CURRENT_SOURCE_COMPATIBILITY))
-    historical = compute_rewards(state, compatibility=CHECKPOINT_SIDECAR_COMPATIBILITY, termination=_termination_for(state, CHECKPOINT_SIDECAR_COMPATIBILITY))
+    production = compute_rewards(state, compatibility=SOURCE_ALIGNED_COMPATIBILITY, termination=_termination_for(state, SOURCE_ALIGNED_COMPATIBILITY))
     np.testing.assert_array_equal(current.early_phase, [True])
-    np.testing.assert_array_equal(historical.early_phase, [False])
+    np.testing.assert_array_equal(production.early_phase, [False])
     np.testing.assert_allclose(current.total, current.action_penalty)
-    assert historical.total[0] > current.total[0]
+    assert production.total[0] > current.total[0]
 
     angles = np.deg2rad(np.array([0.0, 20.0, 90.0, 91.0, 0.0]))
     rotation_state = _reward_state(batch=5, steps=np.full(5, 105, dtype=np.int64))

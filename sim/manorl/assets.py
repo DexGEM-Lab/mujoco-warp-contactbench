@@ -17,11 +17,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from sim.manorl.contracts import (
+    ACTION_SIDE_ORDER,
+    JOINT_DOF,
     EFFORT,
     FLOOR_TOP_Z,
     JOINT_ARMATURE,
     JOINT_FRICTIONLOSS,
-    JOINT_NAMES,
+    normalize_hand_side,
     OBJECT_TYPE,
     PHYSICS_TIMESTEP,
     ServoConfig,
@@ -34,6 +36,11 @@ ALL_ASSETS_SIM_ROOT = ALL_ASSETS_ROOT / "Assets" / "sim"
 ALL_OBJECT_GRASPS = ALL_ASSETS_ROOT / "Assets" / "object_grasps_simple.yaml"
 ALL_OBJECT_GRASPS_SHA256 = "97293b96a3015173bf2fa875d165b04c925953147ebc0f4c0935ed1215558a9d"
 HAND_URDF = ASSET_ROOT / "hand" / "mano_hand.urdf"
+HAND_LEFT_ROOT = ASSET_ROOT / "hand_left"
+HAND_URDF_BY_SIDE = {
+    "right": HAND_URDF,
+    "left": HAND_LEFT_ROOT / "mano_hand.urdf",
+}
 OBJECT_URDF = ASSET_ROOT / "cube1" / "cube1.urdf"
 ASSET_MANIFEST = ASSET_ROOT / "manifest.json"
 OBJECT_MESH = ASSET_ROOT / "cube1" / "cube1_aligned.stl"
@@ -43,6 +50,39 @@ HAND_VISUAL_MESH_ROOT = (
 OBJECT_VISUAL_MESH_ROOT = ALL_ASSETS_SIM_ROOT / "mano_assets" / "objects"
 VISUAL_GEOM_GROUP = 2
 COLLISION_GEOM_GROUP = 3
+
+
+def hand_asset_root(hand_side: str = "right") -> Path:
+    """Return the curated runtime root for one normalized hand side."""
+
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
+    root = ASSET_ROOT / ("hand" if side == "right" else "hand_left")
+    if not root.is_dir():
+        raise FileNotFoundError(f"curated {side}-hand runtime assets are absent: {root}")
+    return root
+
+
+def hand_urdf_path(hand_side: str = "right") -> Path:
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
+    path = HAND_URDF_BY_SIDE[side]
+    if not path.is_file():
+        raise FileNotFoundError(f"curated {side}-hand URDF is absent: {path}")
+    return path
+
+
+def hand_joint_names(hand_side: str = "right") -> tuple[str, ...]:
+    """Read and validate the authoritative joint order from side metadata."""
+
+    root = hand_asset_root(hand_side)
+    metadata_path = root / "metadata.json"
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid {hand_side} hand metadata: {metadata_path}") from exc
+    names = tuple(payload.get("joint_names", ()))
+    if len(names) != JOINT_DOF or len(set(names)) != JOINT_DOF:
+        raise ValueError(f"{hand_side} hand metadata must declare {JOINT_DOF} unique joints")
+    return names
 
 
 @dataclass(frozen=True)
@@ -55,14 +95,42 @@ class ObjectRuntime:
     free_joint_name: str
     source_mesh_filename: str
     urdf_path: Path
-    collision_mesh_path: Path
+    collision_mesh_paths: tuple[Path, ...]
     grasp_mapping_path: Path
     source_mesh_scale: tuple[float, float, float]
-    collision_mesh_scale: tuple[float, float, float]
+    collision_mesh_scales: tuple[tuple[float, float, float], ...]
     rgba: str
     geometry_type: str = "box"
-    collision_geom_count: int = 1
     expected_sha256: tuple[tuple[Path, str], ...] = ()
+
+    @property
+    def collision_geom_count(self) -> int:
+        return len(self.collision_mesh_paths)
+
+    @property
+    def collision_mesh_path(self) -> Path:
+        """Compatibility accessor for legacy single-piece callers.
+
+        Multi-piece runtimes must use :attr:`collision_mesh_paths`; returning
+        the first piece here keeps older asset probes useful without silently
+        dropping pieces from scene construction or vertex decoding.
+        """
+
+        return self.collision_mesh_paths[0]
+
+    @property
+    def collision_mesh_scale(self) -> tuple[float, float, float]:
+        """Compatibility accessor for the first collision piece."""
+
+        return self.collision_mesh_scales[0]
+
+    def __post_init__(self) -> None:
+        if not self.collision_mesh_paths:
+            raise ValueError(f"{self.object_type} runtime requires collision meshes")
+        if len(self.collision_mesh_scales) != len(self.collision_mesh_paths):
+            raise ValueError(
+                f"{self.object_type} collision mesh paths/scales must have equal lengths"
+            )
 
 
 def _all_assets_runtime(
@@ -87,10 +155,10 @@ def _all_assets_runtime(
         free_joint_name=f"{object_type}_free",
         source_mesh_filename=f"{object_type}.obj",
         urdf_path=urdf_path,
-        collision_mesh_path=collision_path,
+        collision_mesh_paths=(collision_path,),
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scale=(1.0, 1.0, 1.0),
+        collision_mesh_scales=((1.0, 1.0, 1.0),),
         rgba=rgba,
         expected_sha256=(
             (urdf_path, urdf_sha256),
@@ -112,10 +180,10 @@ _OBJECT_RUNTIMES = {
         free_joint_name="cube1_free",
         source_mesh_filename="cube1.obj",
         urdf_path=ASSET_ROOT / "cube1" / "cube1.urdf",
-        collision_mesh_path=OBJECT_MESH,
+        collision_mesh_paths=(OBJECT_MESH,),
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((0.001, 0.001, 0.001),),
         rgba="0.8 0.18 0.16 1",
         expected_sha256=((ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),),
     ),
@@ -191,6 +259,66 @@ _OBJECT_RUNTIMES = {
         collision_sha256="da32bee52e7841bb2e1313ed9752623c351f34e0023d0f7a7a276c5323835601",
         rgba="0.46 0.68 0.18 1",
     ),
+    "banana": ObjectRuntime(
+        object_type="banana",
+        link_name="banana_link",
+        body_name="banana",
+        free_joint_name="banana_free",
+        source_mesh_filename="banana.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "banana" / "banana.urdf",
+        collision_mesh_paths=tuple(
+            ALL_ASSETS_SIM_ROOT
+            / "decomposed"
+            / "banana"
+            / "coacd"
+            / f"coacd_convex_piece_{index}.obj"
+            for index in range(3)
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 3,
+        rgba="0.95 0.78 0.16 1.0",
+        geometry_type="irregular",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "banana.urdf",
+                "9e57e199b7a8815f267a9e08ee7665e3f87dea4392a782d369ca43bd333be70b",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_assets" / "objects" / "banana" / "banana.obj",
+                "2a1eb42fe4ff1330cad77b79453894a3c9d36c30b44ec36fc17fdeb92e13e8bb",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "banana" / "banana.urdf",
+                "58a9ce7603e02d8dc257786e44164c0c1f75d58e4b16f61e0affec8cf49adb50",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "banana"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "b5e054445e1d454b5b0b457883a33ccd188c0d559e554213c0e2639aa1f3dad5",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "banana"
+                / "coacd"
+                / "coacd_convex_piece_1.obj",
+                "1c54bbb35c33b1bf3f8c2c3da1345913b3d6b17902ff45d570468be851647286",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "banana"
+                / "coacd"
+                / "coacd_convex_piece_2.obj",
+                "a2978545c35275ceeacd7b132ba6fd64312517ab7a2aed1d580abe632fa8d706",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
 }
 
 
@@ -211,7 +339,12 @@ def object_runtime(object_type: str = OBJECT_TYPE) -> ObjectRuntime:
     runtime = _OBJECT_RUNTIMES[object_type]
     missing = [
         str(path)
-        for path in (runtime.urdf_path, runtime.collision_mesh_path, runtime.grasp_mapping_path)
+        for path in (
+            runtime.urdf_path,
+            *runtime.collision_mesh_paths,
+            runtime.grasp_mapping_path,
+            *(path for path, _ in runtime.expected_sha256),
+        )
         if not path.is_file()
     ]
     if missing:
@@ -295,36 +428,61 @@ def _visual_rgba(
     return global_materials.get(material_name or "", fallback)
 
 
-def _required_paths(object_type: str | None = None) -> tuple[Path, ...]:
-    hand_meshes = tuple((ASSET_ROOT / "hand" / "meshes").glob("*.stl"))
+def _required_paths(object_type: str | None = None, *, hand_side: str = "right") -> tuple[Path, ...]:
+    hand_root = hand_asset_root(hand_side)
+    hand_meshes = tuple(
+        path for path in (hand_root / "meshes").glob("*.stl")
+        if not path.name.startswith("visual_")
+    )
     if len(hand_meshes) != 16:
-        raise FileNotFoundError(f"expected exactly 16 curated hand collision meshes, got {len(hand_meshes)}")
+        raise FileNotFoundError(
+            f"expected exactly 16 curated {hand_side}-hand collision meshes, got {len(hand_meshes)}"
+        )
     runtimes = (object_runtime(object_type),) if object_type is not None else tuple(
         object_runtime(name) for name in supported_object_types()
     )
     object_paths = tuple(
         path
         for runtime in runtimes
-        for path in (runtime.urdf_path, runtime.collision_mesh_path, runtime.grasp_mapping_path)
+        for path in (
+            runtime.urdf_path,
+            *runtime.collision_mesh_paths,
+            runtime.grasp_mapping_path,
+            *(path for path, _ in runtime.expected_sha256),
+        )
     )
-    paths = (HAND_URDF, *hand_meshes, ASSET_MANIFEST, *object_paths)
+    paths = (hand_urdf_path(hand_side), hand_root / "metadata.json", *hand_meshes, ASSET_MANIFEST, *object_paths)
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"curated ManoRL assets are incomplete: {missing}")
     return tuple(paths)
 
 
-def validate_asset_manifest(object_type: str | None = None) -> dict[str, Any]:
+def validate_asset_manifest(object_type: str | None = None, *, hand_side: str = "right") -> dict[str, Any]:
     """Verify every curated file against its committed provenance digest."""
 
-    required_paths = _required_paths(object_type)
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
+    required_paths = _required_paths(object_type, hand_side=side)
     manifest = json.loads(ASSET_MANIFEST.read_text(encoding="utf-8"))
-    if manifest.get("source_commit") != "ead79126589d1abf2362ea30b9d674d9e675a2f9":
-        raise ValueError("asset manifest does not name the settled all_assets commit")
+    if manifest.get("source_commit") != "033b358b73c57e5f437f6582b6a9b0d4add7f9ee":
+        raise ValueError("asset manifest does not name the 28-DoF all_assets commit")
     entries = manifest.get("files", [])
     if not isinstance(entries, list):
         raise ValueError("asset manifest files must be a list")
     digests_by_path = {entry.get("curated_path"): entry for entry in entries}
+    bundles = manifest.get("hand_bundles", {})
+    bundle = bundles.get(side) if isinstance(bundles, dict) else None
+    if not isinstance(bundle, dict) or bundle.get("curated_root") != hand_asset_root(side).name:
+        raise ValueError(f"asset manifest has no integrity bundle for {side} hand")
+    bundle_rows: list[str] = []
+    for bundle_path in sorted(hand_asset_root(side).rglob("*")):
+        if bundle_path.is_file():
+            bundle_rows.append(
+                f"{bundle_path.relative_to(hand_asset_root(side)).as_posix()}:{hashlib.sha256(bundle_path.read_bytes()).hexdigest()}"
+            )
+    bundle_digest = hashlib.sha256("\n".join(bundle_rows).encode()).hexdigest()
+    if bundle_digest != bundle.get("sha256"):
+        raise ValueError(f"{side} hand asset bundle digest mismatch: {bundle_digest}")
     runtimes = (object_runtime(object_type),) if object_type is not None else tuple(
         object_runtime(name) for name in supported_object_types()
     )
@@ -346,7 +504,11 @@ def validate_asset_manifest(object_type: str | None = None) -> dict[str, Any]:
             if digest != expected_digest:
                 raise ValueError(f"pinned all_assets digest mismatch for {path}: {digest}")
         else:
-            if relative not in digests_by_path:
+            # Side-specific runtime files are checked against the manifest when
+            # entries are present.  Older manifests intentionally omitted the
+            # left-hand bundle; its metadata/URDF/mesh digests are still
+            # verified by the explicit side manifest entries below.
+            if relative not in digests_by_path and not relative.startswith("hand_left/"):
                 raise ValueError(f"asset manifest has no digest entry for {relative}")
     for entry in entries:
         path = ASSET_ROOT / entry["curated_path"]
@@ -392,6 +554,9 @@ def _link_collision(
     *,
     hand_contacts_enabled: bool,
     viewer_visuals: bool,
+    hand_root: Path,
+    name_prefix: str = "",
+    asset_prefix: str = "",
 ) -> None:
     collisions = link.findall("collision")
     if len(collisions) > 1:
@@ -404,14 +569,14 @@ def _link_collision(
     if mesh is None:
         raise ValueError(f"hand collision for {link.get('name')} is not a mesh")
     filename = Path(mesh.get("filename", "")).name
-    source_path = ASSET_ROOT / "hand" / "meshes" / filename
+    source_path = hand_root / "meshes" / filename
     if not source_path.is_file():
         raise FileNotFoundError(f"curated hand collision mesh is absent: {source_path}")
     position, quaternion = _origin(collision.find("origin"))
     attributes = {
-        "name": f"{link.get('name')}_collision",
+        "name": f"{name_prefix}{link.get('name')}_collision",
         "type": "mesh",
-        "mesh": f"hand_{Path(filename).stem}",
+        "mesh": f"{asset_prefix}hand_{Path(filename).stem}",
         "pos": _format(position),
         "quat": _format(quaternion),
         "rgba": "0.88 0.58 0.46 1",
@@ -434,6 +599,8 @@ def _link_visuals(
     link: ET.Element,
     *,
     global_materials: dict[str, str],
+    name_prefix: str = "",
+    asset_prefix: str = "",
 ) -> None:
     visuals = link.findall("visual")
     for index, visual in enumerate(visuals):
@@ -442,7 +609,7 @@ def _link_visuals(
         sphere = None if geometry is None else geometry.find("sphere")
         position, quaternion = _origin(visual.find("origin"))
         attributes = {
-            "name": f"{link.get('name')}_visual" + (f"_{index}" if index else ""),
+            "name": f"{name_prefix}{link.get('name')}_visual" + (f"_{index}" if index else ""),
             "pos": _format(position),
             "quat": _format(quaternion),
             "rgba": _visual_rgba(visual, global_materials, "0.88 0.58 0.46 1"),
@@ -454,7 +621,7 @@ def _link_visuals(
             filename = Path(mesh.get("filename", "")).name
             attributes.update(
                 type="mesh",
-                mesh=f"hand_{Path(filename).stem}_visual",
+                mesh=f"{asset_prefix}hand_{Path(filename).stem}_visual",
             )
         elif sphere is not None:
             attributes.update(type="sphere", size=sphere.get("radius", ""))
@@ -470,7 +637,12 @@ def _hand_tree(
     *,
     hand_contacts_enabled: bool,
     visual_meshes: bool = False,
+    hand_side: str = "right",
+    name_prefix: str = "",
+    asset_prefix: str = "",
 ) -> None:
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
+    hand_root = hand_asset_root(side)
     links = {element.get("name", ""): element for element in urdf_root.findall("link")}
     joints = list(urdf_root.findall("joint"))
     children: dict[str, list[ET.Element]] = {}
@@ -496,8 +668,8 @@ def _hand_tree(
         raise ValueError("authoritative hand URDF must reference 16 unique collision meshes")
     for filename in mesh_files:
         attributes = {
-            "name": f"hand_{Path(filename).stem}",
-            "file": str((ASSET_ROOT / "hand" / "meshes" / filename).resolve()),
+            "name": f"{asset_prefix}hand_{Path(filename).stem}",
+            "file": str((hand_root / "meshes" / filename).resolve()),
         }
         source_mesh = next(
             link.find("collision/geometry/mesh")
@@ -529,10 +701,10 @@ def _hand_tree(
             raise ValueError("authoritative hand URDF must reference 16 unique visual meshes")
         for filename, source_mesh in visual_meshes_by_filename.items():
             attributes = {
-                "name": f"hand_{Path(filename).stem}_visual",
+                "name": f"{asset_prefix}hand_{Path(filename).stem}_visual",
                 "file": str(
                     _resolve_mesh_path(
-                        HAND_URDF,
+                        hand_urdf_path(side),
                         source_mesh.get("filename", ""),
                         fallback_roots=(HAND_VISUAL_MESH_ROOT,),
                     )
@@ -544,7 +716,7 @@ def _hand_tree(
             ET.SubElement(asset, "mesh", attributes)
 
     def append_link(parent_xml: ET.Element, link_name: str, source_joint: ET.Element | None) -> None:
-        attributes = {"name": link_name, "gravcomp": "1"}
+        attributes = {"name": f"{name_prefix}{link_name}", "gravcomp": "1"}
         if source_joint is not None:
             position, quaternion = _origin(source_joint.find("origin"))
             attributes.update(pos=_format(position), quat=_format(quaternion))
@@ -560,7 +732,7 @@ def _hand_tree(
             ET.SubElement(
                 body,
                 "joint",
-                name=source_joint.get("name", ""),
+                name=f"{name_prefix}{source_joint.get('name', '')}",
                 type="slide" if joint_type == "prismatic" else "hinge",
                 axis=axis.get("xyz", ""),
                 range=f"{limit.get('lower')} {limit.get('upper')}",
@@ -575,9 +747,18 @@ def _hand_tree(
             links[link_name],
             hand_contacts_enabled=hand_contacts_enabled,
             viewer_visuals=visual_meshes,
+            hand_root=hand_root,
+            name_prefix=name_prefix,
+            asset_prefix=asset_prefix,
         )
         if visual_meshes:
-            _link_visuals(body, links[link_name], global_materials=global_materials)
+            _link_visuals(
+                body,
+                links[link_name],
+                global_materials=global_materials,
+                name_prefix=name_prefix,
+                asset_prefix=asset_prefix,
+            )
         for joint in children.get(link_name, []):
             child = joint.find("child")
             assert child is not None
@@ -586,15 +767,15 @@ def _hand_tree(
     append_link(worldbody, "base_link", None)
 
 
-def _add_hand_self_collision_excludes(contact: ET.Element) -> None:
+def _add_hand_self_collision_excludes(contact: ET.Element, *, name_prefix: str = "") -> None:
     for group_name, body_names in HAND_SELF_COLLISION_GROUPS.items():
         for pair_index, (first, second) in enumerate(combinations(body_names, 2)):
             ET.SubElement(
                 contact,
                 "exclude",
-                name=f"{group_name}_internal_{pair_index}",
-                body1=first,
-                body2=second,
+                name=f"{name_prefix}{group_name}_internal_{pair_index}",
+                body1=f"{name_prefix}{first}",
+                body2=f"{name_prefix}{second}",
             )
 
 
@@ -616,28 +797,53 @@ def _object_body(
             f"{runtime.object_type} URDF must contain exactly "
             f"{runtime.collision_geom_count} collision mesh(es)"
         )
-    collision = collisions[0]
-    source_mesh = collision.find("geometry/mesh")
-    if (
-        source_mesh is None
-        or Path(source_mesh.get("filename", "")).name != runtime.source_mesh_filename
+    collision_assets: list[tuple[ET.Element, str]] = []
+    for collision_index, (collision, collision_path, collision_scale) in enumerate(
+        zip(
+            collisions,
+            runtime.collision_mesh_paths,
+            runtime.collision_mesh_scales,
+            strict=True,
+        )
     ):
-        raise ValueError(
-            f"{runtime.object_type} URDF collision must reference "
-            f"{runtime.source_mesh_filename}"
+        source_mesh = collision.find("geometry/mesh")
+        expected_filename = (
+            runtime.source_mesh_filename
+            if runtime.collision_geom_count == 1
+            else collision_path.name
         )
-    mesh_scale = _numbers(source_mesh.get("scale"), 3, (1.0, 1.0, 1.0))
-    if mesh_scale != runtime.source_mesh_scale:
-        raise ValueError(
-            f"{runtime.object_type} URDF collision scale must remain {runtime.source_mesh_scale}"
+        if (
+            source_mesh is None
+            or Path(source_mesh.get("filename", "")).name != expected_filename
+        ):
+            raise ValueError(
+                f"{runtime.object_type} URDF collision {collision_index} must reference "
+                f"{expected_filename}"
+            )
+        expected_source_scale = (
+            runtime.source_mesh_scale
+            if runtime.collision_geom_count == 1
+            else collision_scale
         )
-    ET.SubElement(
-        asset,
-        "mesh",
-        name=f"{runtime.object_type}_mesh",
-        file=str(runtime.collision_mesh_path.resolve()),
-        scale=_format(runtime.collision_mesh_scale),
-    )
+        mesh_scale = _numbers(source_mesh.get("scale"), 3, (1.0, 1.0, 1.0))
+        if mesh_scale != expected_source_scale:
+            raise ValueError(
+                f"{runtime.object_type} URDF collision {collision_index} scale must remain "
+                f"{expected_source_scale}"
+            )
+        asset_name = (
+            f"{runtime.object_type}_mesh"
+            if runtime.collision_geom_count == 1
+            else f"{runtime.object_type}_collision_mesh_{collision_index}"
+        )
+        ET.SubElement(
+            asset,
+            "mesh",
+            name=asset_name,
+            file=str(collision_path.resolve()),
+            scale=_format(collision_scale),
+        )
+        collision_assets.append((collision, asset_name))
 
     body = ET.SubElement(
         worldbody,
@@ -650,23 +856,29 @@ def _object_body(
     )
     ET.SubElement(body, "freejoint", name=runtime.free_joint_name)
     _link_inertial(body, object_link)
-    position, quaternion = _origin(collision.find("origin"))
-    collision_geom = ET.SubElement(
-        body,
-        "geom",
-        name=f"{runtime.object_type}_collision",
-        type="mesh",
-        mesh=f"{runtime.object_type}_mesh",
-        pos=_format(position),
-        quat=_format(quaternion),
-        rgba=runtime.rgba,
-        contype="2",
-        conaffinity="5",
-        condim="3",
-        friction="0.9 0.01 0.001",
-    )
-    if visual_meshes:
-        collision_geom.set("group", str(COLLISION_GEOM_GROUP))
+    for collision_index, (collision, asset_name) in enumerate(collision_assets):
+        position, quaternion = _origin(collision.find("origin"))
+        geom_name = (
+            f"{runtime.object_type}_collision"
+            if collision_index == 0
+            else f"{runtime.object_type}_piece_{collision_index}_collision"
+        )
+        collision_geom = ET.SubElement(
+            body,
+            "geom",
+            name=geom_name,
+            type="mesh",
+            mesh=asset_name,
+            pos=_format(position),
+            quat=_format(quaternion),
+            rgba=runtime.rgba,
+            contype="2",
+            conaffinity="5",
+            condim="3",
+            friction="0.9 0.01 0.001",
+        )
+        if visual_meshes:
+            collision_geom.set("group", str(COLLISION_GEOM_GROUP))
     if visual_meshes:
         visuals = object_link.findall("visual")
         if len(visuals) != 1:
@@ -749,12 +961,15 @@ def build_scene_xml(
     *,
     object_type: str = OBJECT_TYPE,
     visual_meshes: bool = False,
+    hand_side: str = "right",
 ) -> str:
     """Build one homogeneous scene from a materialized object runtime."""
 
     runtime = object_runtime(object_type)
-    validate_asset_manifest(object_type)
-    hand_root = ET.parse(HAND_URDF).getroot()
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=True)
+    scene_sides = ACTION_SIDE_ORDER if side == "both" else (side,)
+    for scene_side in scene_sides:
+        validate_asset_manifest(object_type, hand_side=scene_side)
     object_root = ET.parse(runtime.urdf_path).getroot()
     root = ET.Element("mujoco", model=f"manorl_{runtime.object_type}_reference")
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
@@ -769,7 +984,9 @@ def build_scene_xml(
     _add_scene_visual_assets(asset)
     worldbody = ET.SubElement(root, "worldbody")
     contact = ET.SubElement(root, "contact")
-    _add_hand_self_collision_excludes(contact)
+    for scene_side in scene_sides:
+        prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
+        _add_hand_self_collision_excludes(contact, name_prefix=prefix)
     ET.SubElement(
         worldbody,
         "geom",
@@ -782,30 +999,37 @@ def build_scene_xml(
         conaffinity="1",
         friction="1 0.01 0.001",
     )
-    _hand_tree(
-        worldbody,
-        asset,
-        hand_root,
-        hand_contacts_enabled=servo.hand_contacts_enabled,
-        visual_meshes=visual_meshes,
-    )
+    for scene_side in scene_sides:
+        prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
+        _hand_tree(
+            worldbody,
+            asset,
+            ET.parse(hand_urdf_path(scene_side)).getroot(),
+            hand_contacts_enabled=servo.hand_contacts_enabled,
+            visual_meshes=visual_meshes,
+            hand_side=scene_side,
+            name_prefix=prefix,
+            asset_prefix=prefix,
+        )
     _object_body(worldbody, asset, object_root, runtime, visual_meshes=visual_meshes)
 
     actuator = ET.SubElement(root, "actuator")
-    for name, effort, kp, dampratio in zip(
-        JOINT_NAMES, EFFORT, servo.kp, servo.dampratio, strict=True
-    ):
-        ET.SubElement(
-            actuator,
-            "position",
-            name=name,
-            joint=name,
-            kp=f"{kp:.17g}",
-            dampratio=f"{dampratio:.17g}",
-            inheritrange="1",
-            forcelimited="true",
-            forcerange=f"{-effort:.17g} {effort:.17g}",
-        )
+    for scene_side in scene_sides:
+        prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
+        for name, effort, kp, dampratio in zip(
+            hand_joint_names(scene_side), EFFORT, servo.kp, servo.dampratio, strict=True
+        ):
+            ET.SubElement(
+                actuator,
+                "position",
+                name=f"{prefix}{name}",
+                joint=f"{prefix}{name}",
+                kp=f"{kp:.17g}",
+                dampratio=f"{dampratio:.17g}",
+                inheritrange="1",
+                forcelimited="true",
+                forcerange=f"{-effort:.17g} {effort:.17g}",
+            )
     ET.indent(root, space="  ")
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
@@ -815,6 +1039,7 @@ def build_unified_scene_xml(
     *,
     object_types: Iterable[str],
     visual_meshes: bool = False,
+    hand_side: str = "right",
 ) -> str:
     """Build one fixed-topology scene containing several real object meshes.
 
@@ -829,9 +1054,11 @@ def build_unified_scene_xml(
     if not names:
         raise ValueError("unified scene requires at least one object type")
     runtimes = tuple(object_runtime(name) for name in names)
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=True)
+    scene_sides = ACTION_SIDE_ORDER if side == "both" else (side,)
     for name in names:
-        validate_asset_manifest(name)
-    hand_root = ET.parse(HAND_URDF).getroot()
+        for scene_side in scene_sides:
+            validate_asset_manifest(name, hand_side=scene_side)
     root = ET.Element("mujoco", model="manorl_unified")
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(
@@ -845,7 +1072,9 @@ def build_unified_scene_xml(
     _add_scene_visual_assets(asset)
     worldbody = ET.SubElement(root, "worldbody")
     contact = ET.SubElement(root, "contact")
-    _add_hand_self_collision_excludes(contact)
+    for scene_side in scene_sides:
+        prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
+        _add_hand_self_collision_excludes(contact, name_prefix=prefix)
     ET.SubElement(
         worldbody,
         "geom",
@@ -858,13 +1087,18 @@ def build_unified_scene_xml(
         conaffinity="1",
         friction="1 0.01 0.001",
     )
-    _hand_tree(
-        worldbody,
-        asset,
-        hand_root,
-        hand_contacts_enabled=servo.hand_contacts_enabled,
-        visual_meshes=visual_meshes,
-    )
+    for scene_side in scene_sides:
+        prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
+        _hand_tree(
+            worldbody,
+            asset,
+            ET.parse(hand_urdf_path(scene_side)).getroot(),
+            hand_contacts_enabled=servo.hand_contacts_enabled,
+            visual_meshes=visual_meshes,
+            hand_side=scene_side,
+            name_prefix=prefix,
+            asset_prefix=prefix,
+        )
     for runtime in runtimes:
         object_root = ET.parse(runtime.urdf_path).getroot()
         _object_body(
@@ -876,20 +1110,22 @@ def build_unified_scene_xml(
         )
 
     actuator = ET.SubElement(root, "actuator")
-    for name, effort, kp, dampratio in zip(
-        JOINT_NAMES, EFFORT, servo.kp, servo.dampratio, strict=True
-    ):
-        ET.SubElement(
-            actuator,
-            "position",
-            name=name,
-            joint=name,
-            kp=f"{kp:.17g}",
-            dampratio=f"{dampratio:.17g}",
-            inheritrange="1",
-            forcelimited="true",
-            forcerange=f"{-effort:.17g} {effort:.17g}",
-        )
+    for scene_side in scene_sides:
+        prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
+        for name, effort, kp, dampratio in zip(
+            hand_joint_names(scene_side), EFFORT, servo.kp, servo.dampratio, strict=True
+        ):
+            ET.SubElement(
+                actuator,
+                "position",
+                name=f"{prefix}{name}",
+                joint=f"{prefix}{name}",
+                kp=f"{kp:.17g}",
+                dampratio=f"{dampratio:.17g}",
+                inheritrange="1",
+                forcelimited="true",
+                forcerange=f"{-effort:.17g} {effort:.17g}",
+            )
     ET.indent(root, space="  ")
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
@@ -909,22 +1145,37 @@ def validate_compiled_model(
     servo: ServoConfig = ServoConfig(),
     *,
     object_type: str = OBJECT_TYPE,
+    hand_side: str = "right",
 ) -> None:
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=True)
+    scene_sides = ACTION_SIDE_ORDER if side == "both" else (side,)
     runtime = object_runtime(object_type)
+    expected_joint_names = tuple(
+        f"{scene_side}_{name}" if len(scene_sides) > 1 else name
+        for scene_side in scene_sides
+        for name in hand_joint_names(scene_side)
+    )
     joint_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, model.njnt)
-    if joint_names[: len(JOINT_NAMES)] != JOINT_NAMES or joint_names[len(JOINT_NAMES) :] != (
+    if joint_names[: len(expected_joint_names)] != expected_joint_names or joint_names[len(expected_joint_names) :] != (
         runtime.free_joint_name,
     ):
         raise ValueError(f"compiled joint order mismatch: {joint_names}")
     actuator_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu)
-    if actuator_names != JOINT_NAMES:
+    if actuator_names != expected_joint_names:
         raise ValueError(f"compiled actuator order mismatch: {actuator_names}")
-    if model.nu != 26 or model.nq != 33 or model.nv != 32:
+    expected_dof = len(expected_joint_names)
+    if model.nu != expected_dof or model.nq != expected_dof + 7 or model.nv != expected_dof + 6:
         raise ValueError(f"compiled dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}")
     if not np.isclose(model.opt.timestep, PHYSICS_TIMESTEP):
         raise ValueError(f"compiled timestep mismatch: {model.opt.timestep}")
     for actuator_id, (name, effort, kp, dampratio) in enumerate(
-        zip(JOINT_NAMES, EFFORT, servo.kp, servo.dampratio, strict=True)
+        zip(
+            expected_joint_names,
+            tuple(EFFORT) * len(scene_sides),
+            tuple(servo.kp) * len(scene_sides),
+            tuple(servo.dampratio) * len(scene_sides),
+            strict=True,
+        )
     ):
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         dof_address = int(model.jnt_dofadr[joint_id])
@@ -977,8 +1228,10 @@ def validate_compiled_model(
         if model.geom_bodyid[geom_id] not in (0, object_id)
         and _is_collision_geom(mujoco, model, geom_id)
     ]
-    if len(hand_geom_ids) != 16:
-        raise ValueError(f"expected 16 hand collision geoms, got {len(hand_geom_ids)}")
+    if len(hand_geom_ids) != 16 * len(scene_sides):
+        raise ValueError(
+            f"expected {16 * len(scene_sides)} hand collision geoms, got {len(hand_geom_ids)}"
+        )
     expected_hand_bits = (1, 7) if servo.hand_contacts_enabled else (0, 0)
     if not np.all(model.geom_contype[hand_geom_ids] == expected_hand_bits[0]) or not np.all(
         model.geom_conaffinity[hand_geom_ids] == expected_hand_bits[1]
@@ -986,12 +1239,14 @@ def validate_compiled_model(
         raise ValueError("compiled hand collision masks mismatch servo configuration")
     expected_exclude_signatures = {
         (min(first_id, second_id) << 16) + max(first_id, second_id)
+        for scene_side in scene_sides
+        for prefix in [f"{scene_side}_" if len(scene_sides) > 1 else ""]
         for body_names in HAND_SELF_COLLISION_GROUPS.values()
         for first_name, second_name in combinations(body_names, 2)
         for first_id, second_id in [
             (
-                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, first_name),
-                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, second_name),
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{prefix}{first_name}"),
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{prefix}{second_name}"),
             )
         ]
     }
@@ -1009,6 +1264,7 @@ def compile_model(
     *,
     object_type: str = OBJECT_TYPE,
     visual_meshes: bool = False,
+    hand_side: str = "right",
 ) -> tuple[Any, Any]:
     """Compile and validate one bounded native-servo scene."""
 
@@ -1017,10 +1273,17 @@ def compile_model(
     except ImportError as exc:
         raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
     model = mujoco.MjModel.from_xml_string(
-        build_scene_xml(servo, object_type=object_type, visual_meshes=visual_meshes)
+        build_scene_xml(
+            servo,
+            object_type=object_type,
+            visual_meshes=visual_meshes,
+            hand_side=hand_side,
+        )
     )
-    validate_compiled_model(mujoco, model, servo, object_type=object_type)
-    validate_static_fk(mujoco, model, object_type=object_type)
+    validate_compiled_model(
+        mujoco, model, servo, object_type=object_type, hand_side=hand_side
+    )
+    validate_static_fk(mujoco, model, object_type=object_type, hand_side=hand_side)
     return mujoco, model
 
 
@@ -1030,31 +1293,46 @@ def validate_unified_compiled_model(
     servo: ServoConfig = ServoConfig(),
     *,
     object_types: Iterable[str],
+    hand_side: str = "right",
 ) -> None:
     """Validate the fixed hand topology and every real object in a superset scene."""
 
     names = tuple(dict.fromkeys(object_types))
     if not names:
         raise ValueError("unified model validation requires at least one object type")
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=True)
+    scene_sides = ACTION_SIDE_ORDER if side == "both" else (side,)
     runtimes = tuple(object_runtime(name) for name in names)
+    expected_hand_joint_names = tuple(
+        f"{scene_side}_{name}" if len(scene_sides) > 1 else name
+        for scene_side in scene_sides
+        for name in hand_joint_names(scene_side)
+    )
     joint_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, model.njnt)
-    expected_joints = JOINT_NAMES + tuple(runtime.free_joint_name for runtime in runtimes)
+    expected_joints = expected_hand_joint_names + tuple(runtime.free_joint_name for runtime in runtimes)
     if joint_names != expected_joints:
         raise ValueError(f"unified joint order mismatch: {joint_names}")
     actuator_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu)
-    if actuator_names != JOINT_NAMES:
+    if actuator_names != expected_hand_joint_names:
         raise ValueError(f"unified actuator order mismatch: {actuator_names}")
-    expected_nq = 26 + 7 * len(runtimes)
-    expected_nv = 26 + 6 * len(runtimes)
-    if model.nu != 26 or model.nq != expected_nq or model.nv != expected_nv:
+    expected_dof = len(expected_hand_joint_names)
+    expected_nq = expected_dof + 7 * len(runtimes)
+    expected_nv = expected_dof + 6 * len(runtimes)
+    if model.nu != expected_dof or model.nq != expected_nq or model.nv != expected_nv:
         raise ValueError(
             f"unified dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}; "
-            f"expected nq={expected_nq}, nv={expected_nv}, nu=26"
+            f"expected nq={expected_nq}, nv={expected_nv}, nu={expected_dof}"
         )
     if not np.isclose(model.opt.timestep, PHYSICS_TIMESTEP):
         raise ValueError(f"unified timestep mismatch: {model.opt.timestep}")
     for actuator_id, (name, effort, kp, dampratio) in enumerate(
-        zip(JOINT_NAMES, EFFORT, servo.kp, servo.dampratio, strict=True)
+        zip(
+            expected_hand_joint_names,
+            tuple(EFFORT) * len(scene_sides),
+            tuple(servo.kp) * len(scene_sides),
+            tuple(servo.dampratio) * len(scene_sides),
+            strict=True,
+        )
     ):
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         dof_address = int(model.jnt_dofadr[joint_id])
@@ -1092,8 +1370,10 @@ def validate_unified_compiled_model(
         }
         and _is_collision_geom(mujoco, model, geom_id)
     ]
-    if len(hand_geom_ids) != 16:
-        raise ValueError(f"expected 16 hand collision geoms, got {len(hand_geom_ids)}")
+    if len(hand_geom_ids) != 16 * len(scene_sides):
+        raise ValueError(
+            f"expected {16 * len(scene_sides)} hand collision geoms, got {len(hand_geom_ids)}"
+        )
     expected_hand_bits = (1, 7) if servo.hand_contacts_enabled else (0, 0)
     if not np.all(model.geom_contype[hand_geom_ids] == expected_hand_bits[0]) or not np.all(
         model.geom_conaffinity[hand_geom_ids] == expected_hand_bits[1]
@@ -1121,7 +1401,7 @@ def validate_unified_compiled_model(
             model.geom_conaffinity[object_geom_ids] == 5
         ):
             raise ValueError(f"compiled {runtime.object_type} collision masks mismatch")
-    validate_static_fk(mujoco, model, object_type=names[0])
+    validate_static_fk(mujoco, model, object_type=names[0], hand_side=side)
 
 
 def compile_unified_model(
@@ -1129,6 +1409,7 @@ def compile_unified_model(
     *,
     object_types: Iterable[str],
     visual_meshes: bool = False,
+    hand_side: str = "right",
 ) -> tuple[Any, Any]:
     """Compile one fixed-topology model containing the requested real objects."""
 
@@ -1140,10 +1421,15 @@ def compile_unified_model(
     except ImportError as exc:
         raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
     model = mujoco.MjModel.from_xml_string(
-        build_unified_scene_xml(servo, object_types=names, visual_meshes=visual_meshes)
+        build_unified_scene_xml(
+            servo,
+            object_types=names,
+            visual_meshes=visual_meshes,
+            hand_side=hand_side,
+        )
     )
     validate_unified_compiled_model(
-        mujoco, model, servo, object_types=names
+        mujoco, model, servo, object_types=names, hand_side=hand_side
     )
     return mujoco, model
 
@@ -1164,10 +1450,10 @@ def _matrix_from_pose(position: tuple[float, ...], quaternion_wxyz: tuple[float,
     return transform
 
 
-def urdf_zero_fk() -> dict[str, NDArray[np.float64]]:
+def urdf_zero_fk(hand_side: str = "right") -> dict[str, NDArray[np.float64]]:
     """Compute zero-joint link transforms independently from the MJCF builder."""
 
-    root = ET.parse(HAND_URDF).getroot()
+    root = ET.parse(hand_urdf_path(hand_side)).getroot()
     transforms = {"base_link": np.eye(4, dtype=np.float64)}
     remaining = list(root.findall("joint"))
     while remaining:
@@ -1191,12 +1477,20 @@ def urdf_zero_fk() -> dict[str, NDArray[np.float64]]:
 
 
 def validate_static_fk(
-    mujoco: Any, model: Any, *, object_type: str = OBJECT_TYPE, atol: float = 1e-10
+    mujoco: Any,
+    model: Any,
+    *,
+    object_type: str = OBJECT_TYPE,
+    hand_side: str = "right",
+    atol: float = 1e-10,
 ) -> None:
     """Check compiled body frames against independent zero-pose URDF FK."""
 
+    side = normalize_hand_side(hand_side, allow_auto=False, allow_both=True)
+    scene_sides = ACTION_SIDE_ORDER if side == "both" else (side,)
     data = mujoco.MjData(model)
-    data.qpos[:26] = 0.0
+    hand_width = sum(len(hand_joint_names(scene_side)) for scene_side in scene_sides)
+    data.qpos[:hand_width] = 0.0
     runtime = object_runtime(object_type)
     object_joint = mujoco.mj_name2id(
         model, mujoco.mjtObj.mjOBJ_JOINT, runtime.free_joint_name
@@ -1204,14 +1498,17 @@ def validate_static_fk(
     object_qpos_adr = model.jnt_qposadr[object_joint]
     data.qpos[object_qpos_adr + 3] = 1.0
     mujoco.mj_forward(model, data)
-    for name, expected in urdf_zero_fk().items():
-        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
-        if body_id < 0:
-            raise ValueError(f"compiled hand body is absent: {name}")
-        if not np.allclose(data.xpos[body_id], expected[:3, 3], atol=atol, rtol=0):
-            raise ValueError(f"compiled static FK position mismatch at {name}")
-        if not np.allclose(data.xmat[body_id].reshape(3, 3), expected[:3, :3], atol=atol, rtol=0):
-            raise ValueError(f"compiled static FK orientation mismatch at {name}")
+    for scene_side in scene_sides:
+        prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
+        for name, expected in urdf_zero_fk(scene_side).items():
+            compiled_name = f"{prefix}{name}"
+            body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, compiled_name)
+            if body_id < 0:
+                raise ValueError(f"compiled hand body is absent: {compiled_name}")
+            if not np.allclose(data.xpos[body_id], expected[:3, 3], atol=atol, rtol=0):
+                raise ValueError(f"compiled static FK position mismatch at {compiled_name}")
+            if not np.allclose(data.xmat[body_id].reshape(3, 3), expected[:3, :3], atol=atol, rtol=0):
+                raise ValueError(f"compiled static FK orientation mismatch at {compiled_name}")
 
 
 @lru_cache(maxsize=None)
@@ -1220,7 +1517,28 @@ def object_collision_vertices(object_type: str = OBJECT_TYPE) -> NDArray[np.floa
 
     runtime = object_runtime(object_type)
     validate_asset_manifest(object_type)
-    path = runtime.collision_mesh_path
+    pieces = [
+        _collision_mesh_vertices(object_type, path, scale)
+        for path, scale in zip(
+            runtime.collision_mesh_paths,
+            runtime.collision_mesh_scales,
+            strict=True,
+        )
+    ]
+    result = np.concatenate(pieces, axis=0)
+    if result.ndim != 2 or result.shape[1] != 3 or len(result) < 12 or not np.all(np.isfinite(result)):
+        raise ValueError(f"unexpected {object_type} collision vertices: {result.shape}")
+    result.setflags(write=False)
+    return result
+
+
+def _collision_mesh_vertices(
+    object_type: str,
+    path: Path,
+    scale: tuple[float, float, float],
+) -> NDArray[np.float64]:
+    """Decode one digest-checked collision piece into metric triangles."""
+
     if path.suffix.lower() == ".stl":
         payload = path.read_bytes()
         if len(payload) < 84:
@@ -1256,8 +1574,7 @@ def object_collision_vertices(object_type: str = OBJECT_TYPE) -> NDArray[np.floa
         result = vertex_array[face_array].reshape(-1, 3)
     else:
         raise ValueError(f"unsupported collision mesh format for {object_type}: {path.suffix}")
-    result = result * np.asarray(runtime.collision_mesh_scale, dtype=np.float64)
+    result = result * np.asarray(scale, dtype=np.float64)
     if result.ndim != 2 or result.shape[1] != 3 or len(result) < 12 or not np.all(np.isfinite(result)):
-        raise ValueError(f"unexpected {object_type} collision vertices: {result.shape}")
-    result.setflags(write=False)
+        raise ValueError(f"unexpected {object_type} collision piece vertices: {result.shape}")
     return result

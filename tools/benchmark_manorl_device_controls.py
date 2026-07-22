@@ -28,7 +28,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
+from sim.manorl.environment import (
+    EnvironmentConfig,
+    MujocoManoEnvironment,
+    recommended_warp_contact_capacity,
+)
 from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
 
 
@@ -76,9 +80,11 @@ def _run_mode(
     repeat: int,
     order_index: int,
 ) -> dict[str, Any]:
-    contact_capacity = max(128, 31 * args.num_envs + 64)
     trajectories = load_assigned_trajectory_batch(
         TrajectorySelection(object_type="cube1", gesture="01"), num_envs=args.num_envs
+    )
+    contact_capacity = recommended_warp_contact_capacity(
+        args.num_envs, trajectories.hand_sides
     )
     environment = MujocoManoEnvironment(
         trajectories,
@@ -91,7 +97,12 @@ def _run_mode(
             profile_phases=args.profile_phases,
         ),
     )
-    actions = np.linspace(-0.75, 0.75, args.num_envs * 26, dtype=np.float64).reshape(args.num_envs, 26)
+    actions = np.linspace(
+        -0.75,
+        0.75,
+        args.num_envs * environment.action_dim,
+        dtype=np.float64,
+    ).reshape(args.num_envs, environment.action_dim)
     for _ in range(args.warmup_steps):
         environment.step(actions)
     environment.jax.block_until_ready(environment.data.qpos)
