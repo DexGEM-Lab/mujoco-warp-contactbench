@@ -474,10 +474,25 @@ def test_source_counter_schedule_terminal_observation_and_delayed_reset(trajecto
     np.testing.assert_allclose(env.last_physical.object_position[0], trajectory.object_pos[0], atol=1e-7)
 
 
-def test_compiled_floor_is_neutral_gray(trajectory) -> None:
+def test_compiled_floor_uses_checkerboard_material(trajectory) -> None:
+    import mujoco
+
     env = _environment(trajectory)
     floor_id = env.model.geom("floor").id
-    np.testing.assert_allclose(env.model.geom_rgba[floor_id], (0.7, 0.7, 0.7, 1.0), rtol=0.0, atol=1e-7)
+    material_id = mujoco.mj_name2id(
+        env.model, mujoco.mjtObj.mjOBJ_MATERIAL, "floor_checker"
+    )
+    texture_id = mujoco.mj_name2id(
+        env.model, mujoco.mjtObj.mjOBJ_TEXTURE, "floor_checker"
+    )
+
+    assert material_id >= 0 and texture_id >= 0
+    assert env.model.geom_matid[floor_id] == material_id
+    assert texture_id in env.model.mat_texid[material_id]
+    np.testing.assert_allclose(
+        env.model.mat_texrepeat[material_id], (8.0, 8.0), rtol=0.0, atol=0.0
+    )
+    assert env.model.mat_texuniform[material_id]
 
 
 def test_object_point_cloud_world_uses_metric_template_and_object_pose(trajectory) -> None:

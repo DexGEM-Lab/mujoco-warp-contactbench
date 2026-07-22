@@ -547,6 +547,41 @@ def _object_body(
     )
 
 
+def _add_scene_visual_assets(asset: ET.Element) -> None:
+    """Add viewer-only sky and floor assets shared by every scene topology."""
+
+    ET.SubElement(
+        asset,
+        "texture",
+        type="skybox",
+        builtin="gradient",
+        rgb1="0.07 0.12 0.18",
+        rgb2="0.35 0.48 0.62",
+        width="512",
+        height="512",
+    )
+    ET.SubElement(
+        asset,
+        "texture",
+        name="floor_checker",
+        type="2d",
+        builtin="checker",
+        rgb1="0.18 0.20 0.22",
+        rgb2="0.72 0.74 0.76",
+        width="512",
+        height="512",
+    )
+    ET.SubElement(
+        asset,
+        "material",
+        name="floor_checker",
+        texture="floor_checker",
+        texrepeat="8 8",
+        texuniform="true",
+        reflectance="0.08",
+    )
+
+
 def build_scene_xml(
     servo: ServoConfig = ServoConfig(), *, object_type: str = OBJECT_TYPE
 ) -> str:
@@ -566,18 +601,7 @@ def build_scene_xml(
         integrator="implicitfast",
     )
     asset = ET.SubElement(root, "asset")
-    # Visual-only skybox: it supplies a readable horizon in MuJoCo viewers and
-    # is not referenced by any physical geom, contact, or actuator.
-    ET.SubElement(
-        asset,
-        "texture",
-        type="skybox",
-        builtin="gradient",
-        rgb1="0.07 0.12 0.18",
-        rgb2="0.35 0.48 0.62",
-        width="512",
-        height="512",
-    )
+    _add_scene_visual_assets(asset)
     worldbody = ET.SubElement(root, "worldbody")
     contact = ET.SubElement(root, "contact")
     _add_hand_self_collision_excludes(contact)
@@ -588,7 +612,7 @@ def build_scene_xml(
         type="plane",
         pos=f"0 0 {FLOOR_TOP_Z}",
         size="1 1 0.01",
-        rgba="0.7 0.7 0.7 1",
+        material="floor_checker",
         contype="4",
         conaffinity="1",
         friction="1 0.01 0.001",
@@ -651,16 +675,7 @@ def build_unified_scene_xml(
         integrator="implicitfast",
     )
     asset = ET.SubElement(root, "asset")
-    ET.SubElement(
-        asset,
-        "texture",
-        type="skybox",
-        builtin="gradient",
-        rgb1="0.07 0.12 0.18",
-        rgb2="0.35 0.48 0.62",
-        width="512",
-        height="512",
-    )
+    _add_scene_visual_assets(asset)
     worldbody = ET.SubElement(root, "worldbody")
     contact = ET.SubElement(root, "contact")
     _add_hand_self_collision_excludes(contact)
@@ -671,7 +686,7 @@ def build_unified_scene_xml(
         type="plane",
         pos=f"0 0 {FLOOR_TOP_Z}",
         size="1 1 0.01",
-        rgba="0.7 0.7 0.7 1",
+        material="floor_checker",
         contype="4",
         conaffinity="1",
         friction="1 0.01 0.001",
