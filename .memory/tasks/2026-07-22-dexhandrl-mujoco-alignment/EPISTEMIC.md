@@ -2,41 +2,44 @@
 
 ## Current model
 
-Aligned Gym contact feedback is causally sufficient for grasp formation and lift, but counterfactual late contact is only one contributor to ejection. The all-contact actual-checkpoint intervention reduced pre-movement policy-mean RMSE by `73.37%` and lifted the object `0.28963 m`. Switching from replayed Gym contacts to live MuJoCo contacts after decision 440 preserved both results, yet post-switch angular speed still reached `24.24 rad/s`, linear speed `2.126 m/s`, late position RMSE `0.24497 m`, and final error `0.24497 m`. The switch improved angular speed from `46.54 rad/s` and late RMSE from `0.385 m`, establishing a real contact-feedback contribution, but it did not eliminate the failure (OPS, `2026-07-23T05:45:00Z`).
+Aligned Gym observation values are a major causal driver of checkpoint action divergence, but contact plus hand-frame point cloud are insufficient for stable trajectory completion. In the full visible actual-checkpoint intervention, importing those slices reduced policy-mean RMSE over decisions `421..470` from `0.313735` to `0.071386` (`77.246%`) and produced `0.311934 m` maximum lift. The rollout still became inaccurate and dynamically unstable: object-position error exceeded `0.05 m` at frame `403`, post-decision-190 angular and linear speeds reached `28.825 rad/s` and `1.1025 m/s`, and late position RMSE and final position error were both `0.2053 m`. Only two of seven preregistered criteria passed (OPS, `2026-07-23T06:08:10Z`).
 
-The phase switch was late relative to the causal onset. During decisions `421..440`, live MuJoCo contact magnitude averaged `0.04766` while replayed Gym contact magnitude averaged `0.00515`, a `9.25×` mismatch. By decision 440, the finger target already differed from Gym by `0.0788 rad`. Thus the policy had already integrated counterfactual low-force evidence into a divergent command before live contact resumed. This explains the partial phase-switch improvement without making contact the sole late mechanism (OPS, `2026-07-23T05:45:00Z`).
+The causal boundary is now narrower than observation mismatch. Exact full-control replay succeeds under the same preserved object COM, hand friction, default gains, and live MuJoCo physics, with movement position RMSE `0.03736 m` and maximum lift `0.2859 m`. Thus MuJoCo can execute the Gym trajectory when given the complete applied control. The unresolved gap lies between policy output and the full applied target or in the state-dependent physical evolution downstream of that target (OPS, `2026-07-23T06:08:10Z`).
 
-Relative-pose feedback is now the dominant live policy-input mechanism around ejection. Offline checkpoint replay is numerically faithful (`1.58e-7` RMSE). Replacing only point cloud during decisions `421..440` reduces policy error by `63.06%`. During `441..470`, the reductions are point cloud `34.75%`, object state `22%`, velocity `14%`, and contact only `7.32%`. Because `object_point_cloud_hand_frame` expresses object pose relative to the hand, its divergence transmits the coupled hand/object physical-state mismatch back into policy actions even after contact becomes live. The next closed-loop intervention adds only this relative-pose channel to the already proven all-contact diagnostic (OPS, `2026-07-23T05:50:00Z`).
+The next discriminating intervention imports only Gym `final_action`. MuJoCo observations and every downstream stateful transformation remain live. This separates policy-action divergence from cumulative offsets, residual correction, postfilters, full-target routing, actuators, contacts, and physics. The local policy mean remains recorded as the counterfactual diagnostic, while the imported action is the sole intervention (OPS, `2026-07-23T06:08:10Z`).
 
 ## Ruled out
 
 - Wrong object inertial origin caused the earlier open-loop rotation/ejection. Preserving the `7.48 mm` URDF COM offset corrected it and enabled successful exact-control lift.
-- Checkpoint loading, observation normalization, network mapping, and policy execution do not explain policy-mean divergence; offline replay is accurate to `1.58e-7` RMSE.
-- Point-cloud sampling order or local geometry does not explain point-cloud mismatch; canonical Gym and MuJoCo samples agree at nanometer scale. The live point-cloud difference encodes relative hand/object pose divergence.
-- Contact feedback being insufficient for grasp and lift is ruled out: both all-contact and phase-switch closed-loop runs preserve the `73.37%` pre-movement policy improvement and `0.28963 m` lift.
-- Hidden late live contact force as the sole ejection cause is ruled out. Restoring live contact after decision 440 improves the ejection but leaves `24.24 rad/s` angular speed and `0.24497 m` final error.
-- A general actuator force limit of `50` is not sufficient to explain release failure because exact Gym controls release correctly through the same MuJoCo actuators.
-- Scalar finger proportional stiffness, direct Gym finger gains, direct Gym base-rotation gains, and the inverse-error `base_rot_kp=4000` estimate are rejected by prior diagnostics.
-- The bad-`kp` ejection does not justify changing object/contact settings or softening `solref`; the production-gain control arm succeeds with those settings unchanged.
+- Checkpoint loading, observation normalization, network mapping, and policy execution do not explain stored policy-mean divergence; offline network replay is numerically faithful.
+- Point-cloud sampling order or local geometry does not explain point-cloud mismatch; canonical Gym and MuJoCo samples agree at nanometer scale. The live difference encodes relative hand/object pose divergence.
+- Observation mismatch being incidental is ruled out. Imported contact plus point-cloud values reduce late policy-mean RMSE by `77.246%` and restore strong lift.
+- Contact plus point cloud being sufficient for trajectory stability is ruled out. Despite improved action agreement and `0.311934 m` lift, the intervention passes only two of seven criteria and ends with `0.2053 m` position error.
+- General MuJoCo inability to realize the desired trajectory is ruled out at the tested COM/friction/default-gain setting: exact full-control replay achieves `0.03736 m` movement position RMSE and `0.2859 m` lift.
+- Hidden late live contact force as the sole ejection cause, scalar finger proportional stiffness, direct Gym finger gains, direct Gym base-rotation gains, and the inverse-error `base_rot_kp=4000` estimate remain rejected by prior diagnostics.
 
 ## Preregistered next intervention
 
-Run one complete 631-decision visible actual-checkpoint closed loop with `env=1`, preserved COM, stable production defaults, and hand friction `3 0.01 0.001`. Starting from the proven all-contact diagnostic, make exactly one addition: import aligned Gym `object_point_cloud_hand_frame` for every row alongside the same three aligned Gym contact slices:
+Run one complete 631-decision visible actual-checkpoint trace with `env=1`. Import only Gym `final_action` at aligned frames. Keep all of the following live and local to MuJoCo:
 
-- `contact_force_magnitude`
-- `contact_force_directions`
-- `object_contact_force_magnitude`
-- `object_point_cloud_hand_frame`
+- observation generation;
+- cumulative base and joint offsets;
+- reference target and residual/correction processing;
+- velocity and position postfilters;
+- full-target construction and state-dependent routing;
+- actuator, contact, and physics evolution.
 
-All policy actions, control targets, and physics remain live. This remains a diagnostic and must not create a production dependency on Gym traces.
+Record local `policy_mean` alongside the imported `final_action`, with explicit metadata identifying an action-only intervention. Reject configurations that combine this mode with control-trace or observation-trace intervention.
 
-Predictions:
+If policy-action divergence is a sufficient cause of the remaining failure, predict:
 
-1. Maximum lift remains `>=0.25 m`.
-2. Policy-mean RMSE over decisions `421..470` improves by `>=40%` relative to the all-contact run.
-3. The first object-position error above `0.05 m` is delayed beyond frame `575`.
-4. After decision 190, maximum angular speed is `<=10 rad/s` and maximum linear speed is `<=0.8 m/s`.
-5. Late position RMSE is `<=0.15 m`, and final position error is `<=0.10 m`.
-6. If these criteria fail, contact plus point cloud are insufficient; object-state feedback or physical response dominates. Do not add further replay slices blindly.
+1. Groupwise applied-active/full-target RMSE versus Gym is `<=0.02 rad`.
+2. Movement object-position RMSE is `<=0.08 m`.
+3. Maximum lift is `>=0.25 m`.
+4. Maximum angular speed after decision 190 is `<=10 rad/s`.
+5. Late object-position RMSE is `<=0.10 m`.
+6. Final object-position error is `<=0.05 m`.
+
+If the action-only intervention fails while exact full-control replay continues to pass, policy-action divergence is insufficient. The remaining mechanism lies in downstream state-dependent residual correction or actuator/contact evolution.
 
 Evidence provenance: `OPS.md`.
