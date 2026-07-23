@@ -534,30 +534,41 @@ $MUJOCO_PYTHON tools/compare_dexhandrl_traces.py \
   --output outputs/dexhandrl_trace/first_divergence.json
 ```
 
-The v2 comparator fails on identity, decision-frame, state-frame, or schema
+The v3 comparator fails on identity, decision-frame, state-frame, or schema
 mismatch; reports every named `obs_layout.py` slice for both processed and RMS
-observations; and separates decision-time inputs from post-physics state.
-Each row names its action boundary with `decision_frame` and its resulting state
-with `state_frame = decision_frame + 1`. MuJoCo records the authoritative raw
-Lance reference and pre-coupling corrected target, then declares
+observations; and separates decision-time inputs from post-physics state. Gym
+initializes physical qpos/object state at Lance frame 61, then its reset
+observation is the policy decision at frame 62. The inclusive physical window
+is 61–693: traces contain 1–631 actions, decisions 62–692, and resulting
+states 63–693. MuJoCo follows this same split: reset initializes frame 61 and
+returns the frame-62 target with zero episode time. Each action adds `1/633` to
+policy episode time. MuJoCo records the authoritative raw Lance reference and
+pre-coupling corrected target, then declares
 `applied_active_target == corrected_active_target` with `post_filters: []`.
+
+Existing v2 smoke NPZ artifacts remain structural evidence only: their
+synthetic 61/62 labels are one frame early, so they are not alignment evidence.
+Fresh v3 traces use Gym's live `current_frame_idx` rather than synthesized
+frame labels.
 
 Current seq1 acceptance status:
 
 - Reference PD (`use_residual=false`) is at the same object-position-error
   scale: about 0.009 m mean in IsaacGym and 0.011 m in MuJoCo over the shared
-  pre-lift window (Lance frames 62–307). Over the full shared 632-frame
-  sequence, the means are about 0.0856 m and 0.0754 m respectively; this is
+  pre-lift window (Lance frames 62–307). The historical 632-frame summary
+  used v2's synthetic labels and is structural-only evidence; this is
   an error-scale comparison, not a claim that either pure-PD run completes the
   lift.
 - The converted 461D rl-games checkpoint reproduces recorded policy actions
   from either backend to below `1e-6`, including RunningMeanStd, PointNet, FiLM,
   and actor weights.
-- The residual-policy physics result is not yet accepted. IsaacGym completes
-  632 frames with about 0.022 m mean and 0.074 m max object error. The final
-  MuJoCo mapping still crosses the default 0.1 m threshold near frame 303. A
-  relaxed-threshold diagnostic run completed 632 frames, but reached about
-  0.282 m during the lift because thumb/index contact was lost.
+- The residual-policy physics result is not yet accepted. Historical v2
+  smoke reports labeled 632 frames with about 0.022 m mean and 0.074 m max
+  object error, but those labels are not aligned. The final MuJoCo mapping
+  still crosses the default 0.1 m threshold near frame 303. A
+  relaxed-threshold diagnostic run reported 632 synthetically labeled frames
+  and reached about 0.282 m during the lift because thumb/index contact was
+  lost.
 
 The diagnostic overrides `--hand-self-collision-mode`,
 `--object-position-terminal-threshold`, and `--object-friction` are explicit.
@@ -595,6 +606,6 @@ bash scripts/import_isaac_assets.sh
 `tools/trace_dexhandrl_gym.py` invokes the sibling DexHandRL Hydra entrypoint in
 runtime-only mode. It pins the exact `cube1` / `01` Lance UUID and row before
 environment allocation, captures the checkpoint player's deterministic policy
-boundary and action-rule stages, and writes a schema-v2 NPZ. Run it with the
+boundary and action-rule stages, and writes a schema-v3 NPZ. Run it with the
 DexHandRL interpreter and `PYTHONDONTWRITEBYTECODE=1`; its Hydra and experiment
 outputs are placed beside the requested trace rather than in the Gym checkout.

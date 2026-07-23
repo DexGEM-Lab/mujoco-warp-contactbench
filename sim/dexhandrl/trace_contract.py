@@ -6,12 +6,19 @@ import numpy as np
 
 from sim.dexhandrl.obs_layout import ACTION_DIM_021PRO, OBS_DIM_021PRO
 
-SCHEMA = "dexhandrl.first_divergence_trace.v2"
+SCHEMA = "dexhandrl.first_divergence_trace.v3"
+# Gym initializes physics from frame 61, then its two reset observation passes expose
+# frame 62 to the policy. Trace rows name the policy decision, never the initializer.
+PHYSICAL_RESET_FRAME = 61
+RESET_DECISION_FRAME = 62
+FINAL_STATE_FRAME = 693
+MAX_ACTIONS = FINAL_STATE_FRAME - RESET_DECISION_FRAME
+EPISODE_TIME_FRAMES = FINAL_STATE_FRAME - PHYSICAL_RESET_FRAME + 1
 EXACT_IDENTITY = {
     "row_id": 22,
     "uuid": "c21d4fa5-185a-5ea7-aa22-e1d34beae42f",
     "object_name": "cube1", "action": "01", "sequence_index": 1,
-    "total_frames": 694, "movement_frames": [261, 575], "effective_window": [61, 693],
+    "total_frames": 694, "movement_frames": [261, 575], "effective_window": [PHYSICAL_RESET_FRAME, FINAL_STATE_FRAME],
 }
 VECTOR_SPECS = {
     "processed_observation": OBS_DIM_021PRO, "rms_observation": OBS_DIM_021PRO,
@@ -30,7 +37,7 @@ SCALAR_SPECS = {
 
 
 def validate_trace(metadata: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -> int:
-    """Validate the v2 decision/post-state trace boundary without runtimes."""
+    """Validate the v3 Gym-authoritative policy decision/post-state schedule."""
     if metadata.get("schema") != SCHEMA:
         raise ValueError(f"unexpected trace schema {metadata.get('schema')!r}")
     if metadata.get("backend") not in {"gym", "mujoco"}:
@@ -65,16 +72,23 @@ def validate_trace(metadata: Mapping[str, Any], arrays: Mapping[str, np.ndarray]
     decision = np.asarray(arrays["decision_frame"])
     state = np.asarray(arrays["state_frame"])
     reset = np.asarray(arrays["reset"])
-    if not 1 <= count <= 632:
-        raise ValueError("trace must contain 1..632 actions")
-    expected_decision = 61 + np.arange(count, dtype=np.int64)
+    if not 1 <= count <= MAX_ACTIONS:
+        raise ValueError(f"trace must contain 1..{MAX_ACTIONS} actions")
+    expected_decision = RESET_DECISION_FRAME + np.arange(count, dtype=np.int64)
     if not np.array_equal(decision, expected_decision):
-        raise ValueError("decision_frame must exactly equal 61 + arange(actions)")
-    if not np.array_equal(state, decision + 1) or int(state[-1]) > 693:
-        raise ValueError("state_frame must exactly equal decision_frame + 1 and be at most 693")
-    expected_reset = decision == 61
+        raise ValueError(
+            f"decision_frame must exactly equal {RESET_DECISION_FRAME} + arange(actions)"
+        )
+    if not np.array_equal(state, decision + 1) or int(state[-1]) > FINAL_STATE_FRAME:
+        raise ValueError(
+            "state_frame must exactly equal decision_frame + 1 and be at most "
+            f"{FINAL_STATE_FRAME}"
+        )
+    expected_reset = decision == RESET_DECISION_FRAME
     if not np.array_equal(reset, expected_reset):
-        raise ValueError("reset marker must be true only for decision_frame 61")
+        raise ValueError(
+            f"reset marker must be true only for decision_frame {RESET_DECISION_FRAME}"
+        )
     return count
 
 

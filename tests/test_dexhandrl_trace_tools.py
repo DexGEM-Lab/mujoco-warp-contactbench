@@ -8,18 +8,26 @@ import sys
 import numpy as np
 import pytest
 from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES
-from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, VECTOR_SPECS, validate_trace
+from sim.dexhandrl.trace_contract import (
+    EXACT_IDENTITY,
+    FINAL_STATE_FRAME,
+    MAX_ACTIONS,
+    RESET_DECISION_FRAME,
+    SCHEMA,
+    VECTOR_SPECS,
+    validate_trace,
+)
 from tools.compare_dexhandrl_traces import compare
-from tools.trace_dexhandrl_gym import (_compose_train_config, _deterministic_action,
+from tools.trace_dexhandrl_gym import (_authoritative_frame, _compose_train_config, _deterministic_action,
                                       _close_env_after_trace, _filter_exact_trajectory, _patch,
                                       _is_relative_to, _pre_action_observations,
                                       _preserve_bounded_run_play, _resolve_trace_paths,
                                       _restore_mapped_checkpoint,
                                       _validated_component_slices)
 
-def _trace(frames=(61, 62), *, backend="mujoco"):
+def _trace(frames=(62, 63), *, backend="mujoco"):
     arrays = {name: np.zeros((len(frames), width), dtype=np.float32) for name, width in VECTOR_SPECS.items()}
-    arrays.update({"decision_frame": np.asarray(frames, dtype=np.int64), "state_frame": np.asarray(frames, dtype=np.int64) + 1, "reset": np.asarray([frame == 61 for frame in frames], dtype=np.bool_), "terminated": np.zeros(len(frames), np.bool_), "truncated": np.zeros(len(frames), np.bool_)})
+    arrays.update({"decision_frame": np.asarray(frames, dtype=np.int64), "state_frame": np.asarray(frames, dtype=np.int64) + 1, "reset": np.asarray([frame == RESET_DECISION_FRAME for frame in frames], dtype=np.bool_), "terminated": np.zeros(len(frames), np.bool_), "truncated": np.zeros(len(frames), np.bool_)})
     return {"schema": SCHEMA, "backend": backend, "identity": dict(EXACT_IDENTITY), "post_filters": []}, arrays
 
 def _fresh_python(code: str) -> subprocess.CompletedProcess[str]:
@@ -55,10 +63,31 @@ def test_offline_safe_imports_do_not_load_runtime_modules():
         importlib.import_module(module)
     assert "isaacgym" not in sys.modules and "lance" not in sys.modules
 
-@pytest.mark.parametrize("frames", [(62, 63), (61, 61), (61, 63)])
+@pytest.mark.parametrize("frames", [(61, 62), (62, 64)])
 def test_trace_contract_rejects_invalid_decision_schedule(frames):
     metadata, arrays = _trace(frames)
     with pytest.raises(ValueError, match="decision_frame") : validate_trace(metadata, arrays)
+
+
+def test_trace_contract_rejects_632_actions_and_accepts_full_v3_schedule():
+    metadata, arrays = _trace(tuple(RESET_DECISION_FRAME + np.arange(MAX_ACTIONS + 1)))
+    with pytest.raises(ValueError, match=f"1..{MAX_ACTIONS}"): validate_trace(metadata, arrays)
+
+    metadata, arrays = _trace(tuple(RESET_DECISION_FRAME + np.arange(MAX_ACTIONS)))
+    assert validate_trace(metadata, arrays) == MAX_ACTIONS
+    assert arrays["decision_frame"][-1] == FINAL_STATE_FRAME - 1
+    assert arrays["state_frame"][-1] == FINAL_STATE_FRAME
+
+
+def test_gym_authoritative_frame_helper_reads_reset_and_progression():
+    class Tensor:
+        def __init__(self, value): self.value = value
+        def item(self): return self.value
+
+    env = type("Env", (), {"task": type("Task", (), {"task_states": {"current_frame_idx": [Tensor(62)]}})()})()
+    assert _authoritative_frame(env) == RESET_DECISION_FRAME
+    env.task.task_states["current_frame_idx"][0] = Tensor(63)
+    assert _authoritative_frame(env) == RESET_DECISION_FRAME + 1
 
 def test_trace_contract_rejects_wrong_state_dtype_and_filter_metadata():
     metadata, arrays = _trace(); arrays["state_frame"][1] = 62
@@ -295,7 +324,7 @@ def test_comparator_reports_both_observation_slices_and_control_contract(tmp_pat
     for name, arrays in (("gym", left), ("mujoco", right)):
         path = tmp_path / f"{name}.npz"; np.savez_compressed(path, metadata=np.asarray(json.dumps(meta if name == "gym" else {**meta, "backend": "mujoco"})), **arrays); paths.append(str(path))
     report = compare(*paths)
-    assert report["shared_input"]["processed_observation_slices"]["active_finger_dof_pos"]["first_frame"] == 62
-    assert report["shared_input"]["rms_observation_slices"]["active_finger_dof_pos"]["first_frame"] == 62
+    assert report["shared_input"]["processed_observation_slices"]["active_finger_dof_pos"]["first_frame"] == 63
+    assert report["shared_input"]["rms_observation_slices"]["active_finger_dof_pos"]["first_frame"] == 63
     assert report["first_divergence"]["shared_input_stage"] == "processed_observation"
     assert report["stage_semantics"]["applied_active_target"] == "a mismatch is a control-contract divergence"

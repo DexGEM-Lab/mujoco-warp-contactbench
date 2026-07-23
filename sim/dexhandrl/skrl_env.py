@@ -751,6 +751,8 @@ class DexHandRLMJXEnv:
     def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[np.ndarray, dict[str, Any]]:
         if seed is not None:
             self.cfg.seed = seed
+        # Gym reset initializes physical qpos/object state from start_frame, but
+        # its second reset observation is the policy's first decision frame.
         self._current_frame = self.start_frame
         self._episode_step_count = 0
         self._done = False
@@ -758,10 +760,21 @@ class DexHandRLMJXEnv:
         self.joint_offset[:] = 0.0
         self._last_action_trace = None
         self._set_initial_state()
+        self._current_frame = min(self.start_frame + 1, self.end_frame)
         obs, info = self._build_observation(target_frame=self._current_frame)
         self._last_obs = obs
         self._last_info = info
         return obs, info
+
+    def _normalized_episode_time(self) -> float:
+        """Gym-compatible policy time: zero at reset and one increment per action."""
+        return float(
+            np.clip(
+                (self._episode_step_count * self.cfg.dt) / max(self.max_episode_time_s, 1e-6),
+                0.0,
+                1.0,
+            )
+        )
 
     def _apply_residual_action(self, action: np.ndarray, target_frame: int, current_full: np.ndarray | None) -> np.ndarray:
         # Lance hand_dof is the authoritative 22D active-space reference, before
@@ -989,13 +1002,9 @@ class DexHandRLMJXEnv:
         object_contact_force_magnitude = float(
             _normalize_contact_force(np.linalg.norm(contact_summary["object_force_vector"]), 100.0)
         )
-        episode_time = float(
-            np.clip(
-                ((target_frame - self.start_frame) * self.cfg.dt) / max(self.max_episode_time_s, 1e-6),
-                0.0,
-                1.0,
-            )
-        )
+        # Match Gym's episode counter: reset is zero even though its logical
+        # reference is start_frame + 1, and every policy action advances once.
+        episode_time = self._normalized_episode_time()
         target_pos = np.asarray(self.trajectory.object_pos[target_frame], dtype=np.float32)
         target_quat = np.asarray(self.trajectory.object_quat_xyzw[target_frame], dtype=np.float32)
         lookahead_frame = min(target_frame + 5, self.end_frame)
@@ -1057,8 +1066,8 @@ class DexHandRLMJXEnv:
             "current_frame": int(target_frame),
             "movement_start_frame": int(self.trajectory.movement_start_frame),
             "movement_end_frame": int(self.trajectory.movement_end_frame),
-            "episode_time_s": float((self._current_frame - self.start_frame) * self.cfg.dt),
-            "episode_progress": float((target_frame - self.start_frame) / max(self.episode_length_frames - 1, 1)),
+            "episode_time_s": float(self._episode_step_count * self.cfg.dt),
+            "episode_progress": episode_time,
             "object_position_error_m": float(np.linalg.norm(target_error)),
             "object_position": object_pos,
             "target_object_position": target_pos,

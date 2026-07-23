@@ -8,7 +8,13 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, validate_trace
+from sim.dexhandrl.trace_contract import (
+    EXACT_IDENTITY,
+    MAX_ACTIONS,
+    RESET_DECISION_FRAME,
+    SCHEMA,
+    validate_trace,
+)
 
 CHECKPOINT = Path("/home/jay/dexrobot/FromSSH/dexhand_reconstruction/dexrobot_isaac/last_Dexhand021proReconstruction_ep_20000_rew_101.06729.pth")
 LANCE = Path("/mnt/nas-222-project/mocap/for_retargeting/dexhand021pro/results_all_mano/all/lance_new_all_generated_mano/lance_result_archive_full/dexhand021pro_lance_new_all_generated_mano_retarget_result_archive.lance")
@@ -26,6 +32,8 @@ def _append(store: dict[str, list[np.ndarray]], **items: np.ndarray) -> None:
 
 
 def run(output: Path, steps: int, checkpoint: Path) -> Path:
+    if not 1 <= steps <= MAX_ACTIONS:
+        raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
     import torch
     from sim.dexhandrl.hand_mapping import full_dof_from_qpos
     from sim.dexhandrl.rlgames_checkpoint import load_rlgames_checkpoint
@@ -42,7 +50,11 @@ def run(output: Path, steps: int, checkpoint: Path) -> Path:
     if callable(set_mode): set_mode("eval")
     names = ("decision_frame", "state_frame", "reset", "terminated", "truncated", "processed_observation", "rms_observation", "policy_mean", "final_action", "base_offset_before", "base_offset_after", "joint_offset_before", "joint_offset_after", "reference_active_target", "corrected_active_target", "applied_active_target", "full_target", "hand_qpos", "hand_qvel", "object_position", "object_quaternion_xyzw", "object_linear_velocity", "target_object_position", "target_object_quaternion_xyzw")
     obs, _ = env.reset(); store: dict[str, list[np.ndarray]] = {name: [] for name in names}
-    for step in range(steps):
+    if int(env._current_frame) != RESET_DECISION_FRAME:
+        raise RuntimeError(
+            f"MuJoCo reset policy frame must be {RESET_DECISION_FRAME}, got {env._current_frame}"
+        )
+    for _step in range(steps):
         decision_frame = int(env._current_frame)
         before_base, before_joint = env.base_position_offset.copy(), env.joint_offset.copy()
         tensor = torch.as_tensor(obs[None], dtype=torch.float32, device=agent.policy.device)
@@ -56,7 +68,7 @@ def run(output: Path, steps: int, checkpoint: Path) -> Path:
         state_frame = int(env._current_frame)
         full_target = np.asarray(trace["full_target"], dtype=np.float32)
         corrected = np.asarray(trace["corrected_active_target"], dtype=np.float32)
-        _append(store, decision_frame=np.asarray(decision_frame), state_frame=np.asarray(state_frame), reset=np.asarray(decision_frame == 61), terminated=np.asarray(terminated), truncated=np.asarray(truncated),
+        _append(store, decision_frame=np.asarray(decision_frame), state_frame=np.asarray(state_frame), reset=np.asarray(decision_frame == RESET_DECISION_FRAME), terminated=np.asarray(terminated), truncated=np.asarray(truncated),
           processed_observation=obs, rms_observation=normalized.detach().cpu().numpy()[0], policy_mean=mean.detach().cpu().numpy()[0], final_action=action,
           base_offset_before=before_base, base_offset_after=env.base_position_offset, joint_offset_before=before_joint, joint_offset_after=env.joint_offset,
           reference_active_target=np.asarray(trace["reference_active_target"], dtype=np.float32), corrected_active_target=corrected, applied_active_target=corrected, full_target=full_target,
@@ -70,6 +82,6 @@ def run(output: Path, steps: int, checkpoint: Path) -> Path:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__); p.add_argument("--output", type=Path, required=True); p.add_argument("--steps", type=int, default=3); p.add_argument("--checkpoint", type=Path, default=CHECKPOINT); a = p.parse_args()
+    p = argparse.ArgumentParser(description=__doc__); p.add_argument("--output", type=Path, required=True); p.add_argument("--steps", type=int, default=3, help=f"actions to trace (1..{MAX_ACTIONS})"); p.add_argument("--checkpoint", type=Path, default=CHECKPOINT); a = p.parse_args()
     print(run(a.output, a.steps, a.checkpoint)); return 0
 if __name__ == "__main__": raise SystemExit(main())

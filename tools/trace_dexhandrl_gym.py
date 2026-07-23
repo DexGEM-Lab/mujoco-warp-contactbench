@@ -15,7 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES
-from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, validate_trace
+from sim.dexhandrl.trace_contract import (
+    EXACT_IDENTITY,
+    FINAL_STATE_FRAME,
+    MAX_ACTIONS,
+    RESET_DECISION_FRAME,
+    SCHEMA,
+    validate_trace,
+)
 
 GYM_ROOT = Path("/home/jay/dexrobot/FromSSH/dexhand_reconstruction/dexrobot_isaac")
 
@@ -25,7 +32,7 @@ def _git_snapshot(root: Path) -> tuple[str, str]:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--output", type=Path, required=True); p.add_argument("--steps", type=int, default=3)
+    p.add_argument("--output", type=Path, required=True); p.add_argument("--steps", type=int, default=3, help=f"actions to trace (1..{MAX_ACTIONS})")
     p.add_argument("--gym-root", type=Path, default=GYM_ROOT); p.add_argument("--checkpoint", type=Path, required=True)
     return p
 
@@ -75,6 +82,15 @@ def _filter_exact_trajectory(result: dict[tuple[str, str], list[dict]]) -> dict[
 
 def _as_np(value: Any) -> np.ndarray:
     return value.detach().cpu().numpy().astype(np.float32, copy=True)
+
+
+def _authoritative_frame(env: Any) -> int:
+    """Read Gym's live policy frame, never infer one from trace row count."""
+    try:
+        frame = env.task.task_states["current_frame_idx"][0]
+        return int(frame.item())
+    except (AttributeError, KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("Gym task did not expose current_frame_idx[0]") from exc
 
 
 def _deterministic_action(mu, low, high, clip_actions: bool):
@@ -218,8 +234,8 @@ def run(args: argparse.Namespace) -> None:
     """Use the sibling Hydra entrypoint and patch only live Python objects."""
     if os.environ.get("PYTHONDONTWRITEBYTECODE") != "1":
         raise RuntimeError("set PYTHONDONTWRITEBYTECODE=1 before a Gym trace")
-    if not 1 <= args.steps <= 632:
-        raise ValueError("--steps must be in 1..632")
+    if not 1 <= args.steps <= MAX_ACTIONS:
+        raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
     gym_root, output, runtime = _resolve_trace_paths(args)
     before = _git_snapshot(gym_root)
     old_cwd, old_path, old_argv = Path.cwd(), list(sys.path), list(sys.argv)
@@ -290,6 +306,10 @@ def run(args: argparse.Namespace) -> None:
                 if (int(env.task.trajectory_start_frame[0]), int(env.task.trajectory_end_frame[0])) != (61, 693):
                     raise RuntimeError("task trajectory window is not exactly 61..693")
                 obs = player.env_reset(player.env)
+                if _authoritative_frame(env) != RESET_DECISION_FRAME:
+                    raise RuntimeError(
+                        f"Gym reset policy frame must be {RESET_DECISION_FRAME}, got {_authoritative_frame(env)}"
+                    )
                 if tuple(obs.shape[-1:]) != (461,) or int(env.obs_buf.shape[-1]) != 461:
                     raise RuntimeError(f"Gym observation width is not 461: player={tuple(obs.shape)}, env={tuple(env.obs_buf.shape)}")
                 component_slices = _validated_component_slices(
@@ -297,7 +317,12 @@ def run(args: argparse.Namespace) -> None:
                     env.observation_encoder.observation_keys,
                 )
                 for step in range(args.steps):
-                    decision = 61 + step
+                    decision = _authoritative_frame(env)
+                    if decision != RESET_DECISION_FRAME + step:
+                        raise RuntimeError(
+                            f"Gym decision schedule diverged at action {step}: expected "
+                            f"{RESET_DECISION_FRAME + step}, got {decision}"
+                        )
                     preprocessed = player._preproc_obs(obs)
                     rms = player.model.norm_obs(preprocessed)
                     processed_observation, rms_observation = _pre_action_observations(preprocessed, rms)
@@ -308,21 +333,37 @@ def run(args: argparse.Namespace) -> None:
                     player.states = model_result["rnn_states"]
                     action = _deterministic_action(mus, player.actions_low, player.actions_high, player.clip_actions)
                     # Defer the automatic terminal reset before the terminal step, preserving its state frame.
-                    env._trace_defer_reset = decision == EXACT_IDENTITY["effective_window"][1] - 1
-                    # `env.step` owns the actual action boundary and our pre hook snapshots its authoritative targets.
+                    env._trace_defer_reset = decision == FINAL_STATE_FRAME - 1
+                    # `env.step` owns the action boundary; its live frame is the state record.
                     next_obs, _reward, done, _info = player.env_step(player.env, action)
-                    state = decision + 1
+                    state = _authoritative_frame(env)
+                    if state != decision + 1:
+                        raise RuntimeError(
+                            f"Gym state frame must advance from {decision} to {decision + 1}, got {state}"
+                        )
+                    done_value = bool(done[0].item())
+                    if done_value and state == FINAL_STATE_FRAME:
+                        terminated, truncated = False, True
+                    elif done_value and state < FINAL_STATE_FRAME:
+                        terminated, truncated = True, False
+                    elif done_value:
+                        raise RuntimeError(f"Gym ended at invalid state frame {state}")
+                    elif state >= FINAL_STATE_FRAME:
+                        raise RuntimeError("Gym reached terminal state without reporting done")
+                    else:
+                        terminated, truncated = False, False
                     if not captured:
                         raise RuntimeError("pre_physics_step did not expose action stages")
                     rb = env.rigid_body_states[0, env.task.object_local_rigid_body_index]
-                    _ = done  # termination is recorded below from reset_buf after post physics.
-                    values = dict(decision_frame=np.asarray(decision), state_frame=np.asarray(state), reset=np.asarray(step == 0),
-                        terminated=np.asarray(bool(env.reset_buf[0].item())), truncated=np.asarray(False), processed_observation=processed_observation, rms_observation=rms_observation, policy_mean=_as_np(mus[0]), final_action=_as_np(action[0]),
+                    values = dict(decision_frame=np.asarray(decision), state_frame=np.asarray(state), reset=np.asarray(decision == RESET_DECISION_FRAME),
+                        terminated=np.asarray(terminated), truncated=np.asarray(truncated), processed_observation=processed_observation, rms_observation=rms_observation, policy_mean=_as_np(mus[0]), final_action=_as_np(action[0]),
                         base_offset_after=_as_np(env.task.task_states["base_position_offset"][0]), joint_offset_after=_as_np(env.task.task_states["joint_offset"][0]), hand_qpos=_as_np(env.dof_pos[0]), hand_qvel=_as_np(env.dof_vel[0]),
                         object_position=_as_np(rb[:3]), object_quaternion_xyzw=_as_np(rb[3:7]), object_linear_velocity=_as_np(rb[7:10]),
                         target_object_position=_as_np(env.obs_dict["target_object_position"][0]), target_object_quaternion_xyzw=_as_np(env.obs_dict["target_object_orientation"][0]))
                     values.update(captured)
                     for name, value in values.items(): store[name].append(value)
+                    if terminated:
+                        raise RuntimeError(f"Gym non-timeout termination at decision {decision}, state {state}")
                     obs = next_obs
                 _write_trace(output, store, args.checkpoint, before[1], component_slices)
 

@@ -18,6 +18,44 @@ from sim.dexhandrl.skrl_env import _decode_contact_force_world, _mask_contact_ve
 from sim.dexhandrl.skrl_env import _farthest_point_sample
 
 
+def test_reset_keeps_physical_start_but_exposes_next_policy_frame() -> None:
+    task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
+    task.start_frame, task.end_frame = 61, 693
+    task.base_position_offset = np.zeros(3, dtype=np.float32)
+    task.joint_offset = np.zeros(16, dtype=np.float32)
+    physical_frames, observed_frames = [], []
+
+    def set_initial_state():
+        physical_frames.append(task._current_frame)
+
+    def build_observation(*, target_frame):
+        observed_frames.append(target_frame)
+        return np.zeros(461, dtype=np.float32), {"current_frame": target_frame}
+
+    task._set_initial_state = set_initial_state
+    task._build_observation = build_observation
+    obs, info = task.reset()
+
+    assert physical_frames == [61]
+    assert observed_frames == [62]
+    assert task._current_frame == 62
+    assert task._episode_step_count == 0
+    assert obs.shape == (461,)
+    assert info["current_frame"] == 62
+
+
+def test_episode_time_uses_action_count_not_logical_frame() -> None:
+    task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
+    task.cfg = SimpleNamespace(dt=0.02)
+    task.max_episode_time_s = 633 * task.cfg.dt
+    task._episode_step_count = 0
+    assert task._normalized_episode_time() == 0.0
+    task._episode_step_count = 1
+    assert task._normalized_episode_time() == pytest.approx(1 / 633)
+    task._episode_step_count = 631
+    assert task._normalized_episode_time() == pytest.approx(631 / 633)
+
+
 REWARD_WEIGHTS = {
     "alive": 0.001,
     "object_pos_tracking_x": 0.05,
