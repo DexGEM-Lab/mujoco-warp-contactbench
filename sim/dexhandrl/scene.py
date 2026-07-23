@@ -7,7 +7,9 @@ import math
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
+from typing import Any
 
+from sim.dexhandrl.contracts import DexHandPhysicsConfig, format_friction, legacy_physics_config
 from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT
 
 
@@ -106,30 +108,40 @@ def _parse_object_asset(object_name: str, isaac_source_root: Path) -> dict[str, 
     }
 
 
-def _replace_or_insert_option(xml: str, dt: float, substeps: int) -> str:
-    timestep = dt / max(int(substeps), 1)
-    option = f'<option gravity="0 0 -9.81" iterations="80" solver="Newton" timestep="{timestep}" />'
+def _replace_exactly_once(xml: str, pattern: str, replacement: str, description: str) -> str:
+    result, count = re.subn(pattern, replacement, xml)
+    if count != 1:
+        raise RuntimeError(f"expected exactly one {description} transformation, found {count}")
+    return result
+
+
+def _replace_or_insert_option(xml: str, physics: DexHandPhysicsConfig) -> str:
+    # Euler is MuJoCo's default; serializing it changes the frozen legacy XML bytes.
+    gravity = " ".join(f"{value:g}" for value in physics.gravity)
+    option = (f'<option gravity="{gravity}" iterations="{physics.iterations}" '
+              f'solver="{physics.solver}" timestep="{physics.physics_dt:g}" />')
     if "<option" in xml:
-        return re.sub(r"<option[^>]*/>", option, xml, count=1)
+        return _replace_exactly_once(xml, r"<option[^>]*/>", option, "option")
+    if xml.count("<compiler") != 1:
+        raise RuntimeError("expected exactly one compiler tag when inserting option")
     return xml.replace("<compiler", f"{option}\n  <compiler", 1)
 
 
 def _patch_hand_xml(
-    xml: str, isaac_source_root: Path, dt: float, substeps: int, hand_friction: str = "0.5 0.01 0.001"
+    xml: str, isaac_source_root: Path, dt: float = 0.01, substeps: int = 10, hand_friction: str = "0.5 0.01 0.001", *, physics: DexHandPhysicsConfig | None = None
 ) -> str:
     """Patch the one canonical hand-geometry default without touching scene geoms."""
     hand_dir = (isaac_source_root / HAND_XML_RELATIVE).parent
     mesh_dir = (hand_dir / "../marvin_021pro_urdf/meshes").resolve()
-    xml = re.sub(r'meshdir="[^"]+"', f'meshdir="{mesh_dir.as_posix()}"', xml, count=1)
+    physics = physics or legacy_physics_config(dt=dt, substeps=substeps, hand_friction=hand_friction)
+    xml = _replace_exactly_once(xml, r'meshdir="[^"]+"', f'meshdir="{mesh_dir.as_posix()}"', "mesh directory")
     canonical_hand_geom = r'(<geom\s+friction=")3 2 2("(?=\s+solref=))'
-    xml, replacements = re.subn(canonical_hand_geom, rf'\g<1>{hand_friction}\g<2>', xml)
-    if replacements != 1:
-        raise RuntimeError(
-            "expected exactly one canonical hand default geom friction='3 2 2' replacement, "
-            f"found {replacements}"
-        )
-    xml = re.sub(r'<size[^>]*/>', '<size njmax="2048" nconmax="8192" />', xml, count=1)
-    xml = _replace_or_insert_option(xml, dt=dt, substeps=substeps)
+    try:
+        xml = _replace_exactly_once(xml, canonical_hand_geom, rf'\g<1>{format_friction(physics.material.hand_friction)}\g<2>', "canonical hand friction")
+    except RuntimeError as error:
+        raise RuntimeError("expected exactly one canonical hand default geom friction replacement") from error
+    xml = _replace_exactly_once(xml, r'<size[^>]*/>', f'<size njmax="{physics.model_njmax}" nconmax="{physics.model_nconmax}" />', "model capacity")
+    xml = _replace_or_insert_option(xml, physics)
     return xml
 
 
@@ -200,6 +212,8 @@ def _patch_pd_gains(
     finger_kp: float,
     finger_kv: float,
     finger_force: float,
+    *,
+    strict: bool = False,
 ) -> str:
     replacements = {
         "act_ARTx": (base_pos_kp, base_pos_kv, _force_range(base_pos_force)),
@@ -233,62 +247,191 @@ def _patch_pd_gains(
         rf'\1forcerange="{_force_range(finger_force)}"',
         xml,
     )
+    if strict:
+        expected = _ACTUATOR_NAMES
+        actual = tuple(re.findall(r'<position name="([^"]+)"', xml))
+        if actual != expected:
+            raise RuntimeError("PD gain transformation changed actuator names/order")
+        for name in expected:
+            match = re.search(rf'<position name="{re.escape(name)}"[^>]*/>', xml)
+            if match is None or 'kp="' not in match.group(0) or 'forcerange="' not in match.group(0):
+                raise RuntimeError(f"PD gain transformation did not apply exactly once: {name}")
     return xml
+
+
+_UNSET = object()
 
 
 def build_dexhandrl_scene_xml(
     output_path: Path,
     object_name: str,
     isaac_source_root: Path = DEFAULT_ISAAC_SOURCE_ROOT,
-    dt: float = 0.01,
-    substeps: int = 10,
-    base_pos_kp: float = 5000,
-    base_pos_kv: float = 500,
-    base_pos_force: float = 500,
-    base_rot_kp: float = 10000,
-    base_rot_kv: float = 125,
-    base_rot_force: float = 100,
-    finger_kp: float = 15,
-    finger_kv: float = 0,
-    finger_force: float = 50,
-    hand_self_collision_mode: str = "disable_within_finger",
-    hand_friction: str = "0.5 0.01 0.001",
-    object_friction: str = "0.5 0.01 0.001",
-    ground_friction: str = "0.5 0.5 0",
+    *,
+    physics: DexHandPhysicsConfig | None = None,
+    dt: Any = _UNSET, substeps: Any = _UNSET,
+    base_pos_kp: Any = _UNSET, base_pos_kv: Any = _UNSET, base_pos_force: Any = _UNSET,
+    base_rot_kp: Any = _UNSET, base_rot_kv: Any = _UNSET, base_rot_force: Any = _UNSET,
+    finger_kp: Any = _UNSET, finger_kv: Any = _UNSET, finger_force: Any = _UNSET,
+    hand_self_collision_mode: Any = _UNSET,
+    hand_friction: Any = _UNSET, object_friction: Any = _UNSET, ground_friction: Any = _UNSET,
 ) -> Path:
     """Create a MuJoCo XML with DexHand021Pro and one Lance object."""
 
+    legacy = {name: value for name, value in {
+        "dt": dt, "substeps": substeps, "base_pos_kp": base_pos_kp, "base_pos_kv": base_pos_kv,
+        "base_pos_force": base_pos_force, "base_rot_kp": base_rot_kp, "base_rot_kv": base_rot_kv,
+        "base_rot_force": base_rot_force, "finger_kp": finger_kp, "finger_kv": finger_kv,
+        "finger_force": finger_force, "hand_self_collision_mode": hand_self_collision_mode,
+        "hand_friction": hand_friction, "object_friction": object_friction, "ground_friction": ground_friction,
+    }.items() if value is not _UNSET}
+    if physics is not None and legacy:
+        raise ValueError("physics cannot be combined with legacy scene overrides")
+    config = physics or legacy_physics_config(**legacy)
     hand_xml_path = isaac_source_root / HAND_XML_RELATIVE
     if not hand_xml_path.exists():
         raise FileNotFoundError(f"DexHand021Pro hand XML not found: {hand_xml_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     asset = _parse_object_asset(object_name=object_name, isaac_source_root=isaac_source_root)
     xml = hand_xml_path.read_text(encoding="utf-8")
+    _validate_hand_source(xml)
     xml = _patch_hand_xml(
-        xml, isaac_source_root=isaac_source_root, dt=dt, substeps=substeps, hand_friction=hand_friction
+        xml, isaac_source_root=isaac_source_root, physics=config
     )
     xml = _patch_pd_gains(
         xml,
-        base_pos_kp=base_pos_kp,
-        base_pos_kv=base_pos_kv,
-        base_pos_force=base_pos_force,
-        base_rot_kp=base_rot_kp,
-        base_rot_kv=base_rot_kv,
-        base_rot_force=base_rot_force,
-        finger_kp=finger_kp,
-        finger_kv=finger_kv,
-        finger_force=finger_force,
+        base_pos_kp=config.servo.base_pos_kp,
+        base_pos_kv=config.servo.base_pos_kv,
+        base_pos_force=config.servo.base_pos_force,
+        base_rot_kp=config.servo.base_rot_kp,
+        base_rot_kv=config.servo.base_rot_kv,
+        base_rot_force=config.servo.base_rot_force,
+        finger_kp=config.servo.finger_kp,
+        finger_kv=config.servo.finger_kv,
+        finger_force=config.servo.finger_force,
+        strict=True,
     )
+    if xml.count("  </asset>") != 1 or xml.count("  </worldbody>") != 1 or xml.count("  <actuator>") != 1:
+        raise RuntimeError("hand source has ambiguous scene insertion anchors")
     xml = xml.replace("  </asset>", _object_asset_xml(object_name, asset) + "  </asset>", 1)
     xml = xml.replace(
         "  </worldbody>",
-        _ground_xml(ground_friction) + _object_body_xml(object_name, asset, object_friction) + "  </worldbody>",
+        _ground_xml(format_friction(config.material.ground_friction)) + _object_body_xml(object_name, asset, format_friction(config.material.object_friction)) + "  </worldbody>",
         1,
     )
     xml = xml.replace(
         "  <actuator>",
-        _hand_self_collision_excludes_xml(hand_self_collision_mode) + "  <actuator>",
+        _hand_self_collision_excludes_xml(config.hand_self_collision_mode) + "  <actuator>",
         1,
     )
     output_path.write_text(xml, encoding="utf-8")
     return output_path
+
+
+_ACTUATOR_NAMES = (
+    "act_ARTx", "act_ARTy", "act_ARTz", "act_ARRx", "act_ARRy", "act_ARRz",
+    *(f"act_r_f_jiont_{finger}_{joint}" for finger in range(1, 6) for joint in range(1, 5)),
+)
+_JOINT_NAMES = tuple(name.removeprefix("act_") for name in _ACTUATOR_NAMES)
+
+
+def _validate_hand_source(xml: str) -> None:
+    """Guard the fragile legacy textual port against a changed hand asset."""
+    names = tuple(re.findall(r'<position name="([^"]+)"', xml))
+    if names != _ACTUATOR_NAMES:
+        raise RuntimeError(f"hand source actuator order/names changed: {names}")
+    for name in _ACTUATOR_NAMES:
+        if not re.search(rf'<position name="{re.escape(name)}" joint="{re.escape(name.removeprefix("act_"))}"', xml):
+            raise RuntimeError(f"hand source actuator transmission changed: {name}")
+    required_bodies = ("RFH1", "right_hand_base", *(f"RH{finger}_{link}" for finger in range(5) for link in range(4)))
+    missing = [name for name in required_bodies if f'name="{name}"' not in xml]
+    if missing:
+        raise RuntimeError(f"hand source required bodies absent: {missing}")
+
+
+def _model_names(mujoco: Any, model: Any, obj: Any, count: int) -> tuple[str, ...]:
+    return tuple(mujoco.mj_id2name(model, obj, index) or "" for index in range(count))
+
+
+def _close(actual: float, expected: float, label: str) -> None:
+    if not math.isclose(float(actual), float(expected), rel_tol=1e-8, abs_tol=1e-10):
+        raise ValueError(f"compiled {label} mismatch: {actual!r} != {expected!r}")
+
+
+def validate_dexhandrl_compiled_model(
+    mujoco: Any, model: Any, physics: DexHandPhysicsConfig = DexHandPhysicsConfig(), *, object_name: str = "cube1"
+) -> None:
+    """Fail closed unless a compiled model realizes the DexHand legacy profile."""
+    if model.nu != 26 or model.nq != 33 or model.nv != 32:
+        raise ValueError(f"compiled dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}")
+    if model.njmax != physics.model_njmax or model.nconmax != physics.model_nconmax:
+        raise ValueError("compiled model capacities mismatch")
+    _close(model.opt.timestep, physics.physics_dt, "timestep")
+    if int(model.opt.integrator) != int(mujoco.mjtIntegrator.mjINT_EULER):
+        raise ValueError("compiled integrator must be Euler")
+    if int(model.opt.solver) != int(mujoco.mjtSolver.mjSOL_NEWTON) or int(model.opt.iterations) != physics.iterations:
+        raise ValueError("compiled solver configuration mismatch")
+    for actual, expected in zip(model.opt.gravity, physics.gravity, strict=True):
+        _close(actual, expected, "gravity")
+    joints = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, model.njnt)
+    if joints != _JOINT_NAMES + (f"{object_name}_free",):
+        raise ValueError(f"compiled joint order mismatch: {joints}")
+    actuators = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu)
+    if actuators != _ACTUATOR_NAMES:
+        raise ValueError(f"compiled actuator order mismatch: {actuators}")
+    group_values = (
+        *((physics.servo.base_pos_kp, physics.servo.base_pos_kv, physics.servo.base_pos_force) for _ in range(3)),
+        *((physics.servo.base_rot_kp, physics.servo.base_rot_kv, physics.servo.base_rot_force) for _ in range(3)),
+        *((physics.servo.finger_kp, physics.servo.finger_kv, physics.servo.finger_force) for _ in range(20)),
+    )
+    for actuator_id, (name, (kp, kv, force)) in enumerate(zip(_ACTUATOR_NAMES, group_values, strict=True)):
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name.removeprefix("act_"))
+        if joint_id < 0 or int(model.actuator_trnid[actuator_id, 0]) != joint_id:
+            raise ValueError(f"compiled actuator transmission mismatch: {name}")
+        if int(model.actuator_trntype[actuator_id]) != int(mujoco.mjtTrn.mjTRN_JOINT):
+            raise ValueError(f"compiled actuator transmission type mismatch: {name}")
+        _close(model.actuator_gainprm[actuator_id, 0], kp, f"actuator gain {name}")
+        _close(model.actuator_biasprm[actuator_id, 1], -kp, f"actuator bias {name}")
+        _close(model.actuator_biasprm[actuator_id, 2], -kv, f"actuator damping {name}")
+        if not model.actuator_forcelimited[actuator_id]:
+            raise ValueError(f"compiled actuator force limit missing: {name}")
+        _close(model.actuator_forcerange[actuator_id, 0], -force, f"actuator lower force {name}")
+        _close(model.actuator_forcerange[actuator_id, 1], force, f"actuator upper force {name}")
+    object_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{object_name}_collision")
+    ground_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
+    object_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, object_name)
+    if min(object_geom, ground_geom, object_body) < 0:
+        raise ValueError("compiled object, ground, or object body absent")
+    def friction(geom_id: int, expected: tuple[float, float, float], label: str) -> None:
+        for actual, value in zip(model.geom_friction[geom_id], expected, strict=True):
+            _close(actual, value, f"{label} friction")
+    friction(object_geom, physics.material.object_friction, "object")
+    friction(ground_geom, physics.material.ground_friction, "ground")
+    for actual, value in zip(model.geom_solref[object_geom], physics.material.object_solref, strict=True):
+        _close(actual, value, "object solref")
+    for actual, value in zip(model.geom_solimp[object_geom], physics.material.object_solimp, strict=True):
+        _close(actual, value, "object solimp")
+    hand_geoms = [index for index in range(model.ngeom) if index not in (ground_geom, object_geom)]
+    if len(hand_geoms) != 47:
+        raise ValueError(f"compiled hand geom count mismatch: {len(hand_geoms)}")
+    for geom_id in hand_geoms:
+        friction(geom_id, physics.material.hand_friction, "hand")
+    for name in ("RFH1", "right_hand_base", object_name, f"{object_name}_free", "ground"):
+        kind = mujoco.mjtObj.mjOBJ_JOINT if name.endswith("_free") else (mujoco.mjtObj.mjOBJ_GEOM if name == "ground" else mujoco.mjtObj.mjOBJ_BODY)
+        if mujoco.mj_name2id(model, kind, name) < 0:
+            raise ValueError(f"compiled required name absent: {name}")
+
+
+def compile_dexhandrl_model(
+    object_name: str = "cube1", physics: DexHandPhysicsConfig = DexHandPhysicsConfig(), *, isaac_source_root: Path = DEFAULT_ISAAC_SOURCE_ROOT
+) -> tuple[Any, Any]:
+    """Build, compile, and validate the canonical profile without importing ManoRL."""
+    try:
+        import mujoco
+    except ImportError as error:  # pragma: no cover - environment dependent
+        raise RuntimeError("mujoco is required to compile DexHandRL") from error
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="dexhandrl_contract_") as directory:
+        path = build_dexhandrl_scene_xml(Path(directory) / "scene.xml", object_name, isaac_source_root, physics=physics)
+        model = mujoco.MjModel.from_xml_path(str(path))
+    validate_dexhandrl_compiled_model(mujoco, model, physics, object_name=object_name)
+    return mujoco, model

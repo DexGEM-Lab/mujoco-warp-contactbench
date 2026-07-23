@@ -1,3 +1,4 @@
+import hashlib
 import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -5,12 +6,15 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT
+from sim.dexhandrl.contracts import DexHandPhysicsConfig
 from sim.dexhandrl.scene import (
     _parse_object_asset,
     _parse_urdf_origin,
     _patch_hand_xml,
     _rpy_to_wxyz,
     build_dexhandrl_scene_xml,
+    compile_dexhandrl_model,
+    validate_dexhandrl_compiled_model,
 )
 
 
@@ -89,6 +93,37 @@ def test_generated_cube1_xml_and_compiled_inertial_frame(tmp_path: Path) -> None
     # The XML collision origin is zero; compilation relocates the free body to its COM.
     assert model.geom_pos[geom_id] == pytest.approx(model.body_ipos[body_id], abs=2e-12)
     assert model.geom_friction[geom_id] == pytest.approx((0.5, 0.01, 0.001), abs=1e-15)
+
+
+def test_default_xml_matches_frozen_oracle_and_physics_legacy_resolution(tmp_path: Path) -> None:
+    frozen = Path("outputs/dexhandrl_refactor/manorl_style_baseline_20260723/cube1_scene.xml")
+    default = build_dexhandrl_scene_xml(tmp_path / "default.xml", "cube1")
+    canonical = build_dexhandrl_scene_xml(tmp_path / "canonical.xml", "cube1", physics=DexHandPhysicsConfig())
+    legacy = build_dexhandrl_scene_xml(tmp_path / "legacy.xml", "cube1", dt=0.01, substeps=10, finger_kp=15)
+    assert default.read_bytes() == canonical.read_bytes() == legacy.read_bytes()
+    assert hashlib.sha256(default.read_bytes()).hexdigest() == "6e4910823f8992037fe6d6633f5b734189891ed2a832a6e74ee40c06277eb122"
+    if frozen.exists():
+        assert default.read_bytes() == frozen.read_bytes()
+    with pytest.raises(ValueError, match="cannot be combined"):
+        build_dexhandrl_scene_xml(tmp_path / "bad.xml", "cube1", physics=DexHandPhysicsConfig(), dt=0.01)
+
+
+def test_compiled_validator_rejects_option_actuator_and_material_mutations() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    mujoco, model = compile_dexhandrl_model()
+    validate_dexhandrl_compiled_model(mujoco, model)
+    model.opt.iterations += 1
+    with pytest.raises(ValueError, match="solver"):
+        validate_dexhandrl_compiled_model(mujoco, model)
+    model.opt.iterations -= 1
+    model.actuator_gainprm[0, 0] += 1
+    with pytest.raises(ValueError, match="gain"):
+        validate_dexhandrl_compiled_model(mujoco, model)
+    model.actuator_gainprm[0, 0] -= 1
+    object_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_collision")
+    model.geom_friction[object_geom, 0] += 1
+    with pytest.raises(ValueError, match="object friction"):
+        validate_dexhandrl_compiled_model(mujoco, model)
 
 
 def test_hand_friction_patch_changes_only_canonical_hand_default(tmp_path: Path) -> None:
