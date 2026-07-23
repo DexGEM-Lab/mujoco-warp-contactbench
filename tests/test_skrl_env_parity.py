@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -68,6 +69,9 @@ def test_default_reset_settles_one_control_frame_before_policy_frame() -> None:
 
     task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
     task.cfg = DexHandRLMJXEnvConfig()
+    task.cfg.dt = 1.0
+    task.cfg.substeps = 1
+    task.cfg.naconmax = 1
     task.start_frame = 61
     task.trajectory = SimpleNamespace(
         object_pos=np.zeros((62, 3), dtype=np.float32),
@@ -78,7 +82,8 @@ def test_default_reset_settles_one_control_frame_before_policy_frame() -> None:
     task.model = SimpleNamespace(nu=1)
     task.mx = object()
     task.jnp = SimpleNamespace(asarray=lambda value, dtype: value)
-    task.mjx = SimpleNamespace(make_data=lambda *args, **kwargs: Data())
+    make_data_calls = []
+    task.mjx = SimpleNamespace(make_data=lambda *args, **kwargs: (make_data_calls.append(kwargs) or Data()))
     task.jax = SimpleNamespace(block_until_ready=lambda value: value)
     task.forward = lambda mx, dx: dx
     step_calls = []
@@ -103,7 +108,9 @@ def test_default_reset_settles_one_control_frame_before_policy_frame() -> None:
         skrl_env_module.make_ctrl_vector = original["ctrl"]
 
     assert task.cfg.settle_frames == 1
-    assert len(step_calls) == task.cfg.substeps == 10
+    assert task.cfg.physics.substeps == 10
+    assert len(step_calls) == 10
+    assert make_data_calls == [{"impl": "warp", "naconmax": 8192, "njmax": 8192}]
     np.testing.assert_array_equal(task.active_prev_targets, np.zeros(22, dtype=np.float32))
 
 
@@ -150,6 +157,7 @@ def test_active_target_limits_use_model_base_then_primary_finger_order() -> None
 def test_active_target_filter_recurrence_and_exact_max_deltas() -> None:
     task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
     task.cfg = DexHandRLMJXEnvConfig(dt=0.01)
+    task.cfg.dt = 1.0
     expected = np.asarray([0.03] * 3 + [0.1] * 3 + [0.02] * 16, dtype=np.float32)
     np.testing.assert_array_equal(task._build_active_max_deltas(), expected)
 
@@ -190,14 +198,29 @@ def test_all_action_branches_trace_applied_active_target(monkeypatch, use_residu
 
 def test_episode_time_uses_action_count_not_logical_frame() -> None:
     task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
-    task.cfg = SimpleNamespace(dt=0.02)
-    task.max_episode_time_s = 633 * task.cfg.dt
+    task.cfg = DexHandRLMJXEnvConfig(dt=0.02)
+    task.cfg.dt = 1.0
+    task.max_episode_time_s = 633 * task.cfg.physics.control_dt
     task._episode_step_count = 0
     assert task._normalized_episode_time() == 0.0
     task._episode_step_count = 1
     assert task._normalized_episode_time() == pytest.approx(1 / 633)
     task._episode_step_count = 631
     assert task._normalized_episode_time() == pytest.approx(631 / 633)
+
+
+def test_runtime_implementation_never_reads_mutable_physics_aliases() -> None:
+    source = inspect.getsource(DexHandRLMJXEnv)
+
+    for alias in ("cfg.dt", "cfg.substeps", "cfg.naconmax", "self.cfg.dt", "self.cfg.substeps", "self.cfg.naconmax"):
+        assert alias not in source
+    for canonical in (
+        "cfg.physics.control_dt",
+        "self.cfg.physics.control_dt",
+        "self.cfg.physics.substeps",
+        "self.cfg.physics.runtime_naconmax",
+    ):
+        assert canonical in source
 
 
 REWARD_WEIGHTS = {

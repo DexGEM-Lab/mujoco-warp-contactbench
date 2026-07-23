@@ -625,7 +625,7 @@ class DexHandRLMJXEnv:
         )
         self.episode_length_frames = max(1, self.end_frame - self.start_frame + 1)
         self.last_contact_frame = int(self.trajectory.movement_end_frame)
-        self.max_episode_time_s = float(self.episode_length_frames * cfg.dt)
+        self.max_episode_time_s = float(self.episode_length_frames * cfg.physics.control_dt)
 
         self.geometry = geometry_from_isaac_urdf(cfg.object_name, isaac_source_root=cfg.isaac_source_root)
         self.geometry_encoding = encode_geometry_12d(self.geometry)
@@ -791,9 +791,9 @@ class DexHandRLMJXEnv:
 
     def _build_active_max_deltas(self) -> np.ndarray:
         return np.asarray(
-            [self.cfg.dt * self.cfg.policy_base_lin_velocity_limit] * 3
-            + [self.cfg.dt * self.cfg.policy_base_ang_velocity_limit] * 3
-            + [self.cfg.dt * self.cfg.policy_finger_velocity_limit] * 16,
+            [self.cfg.physics.control_dt * self.cfg.policy_base_lin_velocity_limit] * 3
+            + [self.cfg.physics.control_dt * self.cfg.policy_base_ang_velocity_limit] * 3
+            + [self.cfg.physics.control_dt * self.cfg.policy_finger_velocity_limit] * 16,
             dtype=np.float32,
         )
 
@@ -829,7 +829,7 @@ class DexHandRLMJXEnv:
         ctrl = make_ctrl_vector(initial_full, self.ids.actuator_ids, self.model.nu)
         dx = dx.replace(ctrl=self.jnp.asarray(ctrl, dtype=dx.ctrl.dtype))
         dx = self.forward(self.mx, dx)
-        for _ in range(max(self.cfg.settle_frames, 0) * max(self.cfg.substeps, 1)):
+        for _ in range(max(self.cfg.settle_frames, 0) * max(self.cfg.physics.substeps, 1)):
             dx = self.step_fn(self.mx, dx)
         self.jax.block_until_ready(dx.qpos)
         self._dx = dx
@@ -859,7 +859,7 @@ class DexHandRLMJXEnv:
         """Gym-compatible policy time: zero at reset and one increment per action."""
         return float(
             np.clip(
-                (self._episode_step_count * self.cfg.dt) / max(self.max_episode_time_s, 1e-6),
+                (self._episode_step_count * self.cfg.physics.control_dt) / max(self.max_episode_time_s, 1e-6),
                 0.0,
                 1.0,
             )
@@ -979,9 +979,9 @@ class DexHandRLMJXEnv:
         impl = dx._impl
         nacon = np.asarray(impl.nacon)
         active_contacts = int(nacon[0]) if nacon.shape else int(nacon)
-        if active_contacts >= self.cfg.naconmax:
+        if active_contacts >= self.cfg.physics.runtime_naconmax:
             raise RuntimeError(
-                f"MJX contact buffer reached naconmax={self.cfg.naconmax}; "
+                f"MJX contact buffer reached naconmax={self.cfg.physics.runtime_naconmax}; "
                 "increase naconmax to avoid contact truncation"
             )
 
@@ -1147,7 +1147,7 @@ class DexHandRLMJXEnv:
             "current_frame": int(target_frame),
             "movement_start_frame": int(self.trajectory.movement_start_frame),
             "movement_end_frame": int(self.trajectory.movement_end_frame),
-            "episode_time_s": float(self._episode_step_count * self.cfg.dt),
+            "episode_time_s": float(self._episode_step_count * self.cfg.physics.control_dt),
             "episode_progress": episode_time,
             "object_position_error_m": float(np.linalg.norm(target_error)),
             "object_position": object_pos,
@@ -1270,7 +1270,7 @@ class DexHandRLMJXEnv:
         ctrl = make_ctrl_vector(full_targets, self.ids.actuator_ids, self.model.nu)
         self._dx = self._dx.replace(ctrl=self.jnp.asarray(ctrl, dtype=self._dx.ctrl.dtype))
         self._dx = self.forward(self.mx, self._dx)
-        for _ in range(max(self.cfg.substeps, 1)):
+        for _ in range(max(self.cfg.physics.substeps, 1)):
             self._dx = self.step_fn(self.mx, self._dx)
         self.jax.block_until_ready(self._dx.qpos)
 
