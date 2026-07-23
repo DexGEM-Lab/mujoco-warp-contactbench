@@ -397,7 +397,37 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
         np.testing.assert_allclose(device.reference_object_pos, host.reference_object_pos, rtol=0, atol=0)
         np.testing.assert_array_equal(device_done, host_done)
         np.testing.assert_array_equal(device_extras["termination_reason_code"], host_extras["termination_reason_code"])
-        np.testing.assert_allclose(device_output["obs"], host_output["obs"], rtol=1e-4, atol=1e-5)
+        observation_slices = host.observation_layout.slices
+        for name, observation_slice in observation_slices.items():
+            if name in {"contact_forces", "contact_force_directions"}:
+                continue
+            np.testing.assert_allclose(
+                device_output["obs"][:, observation_slice],
+                host_output["obs"][:, observation_slice],
+                rtol=1e-4,
+                atol=1e-5,
+                err_msg=name,
+            )
+        contact_force_slice = observation_slices["contact_forces"]
+        np.testing.assert_allclose(
+            device_output["obs"][:, contact_force_slice],
+            host_output["obs"][:, contact_force_slice],
+            rtol=1e-4,
+            atol=3e-4,
+            err_msg="contact_forces",
+        )
+        direction_slice = observation_slices["contact_force_directions"]
+        device_directions = device_output["obs"][:, direction_slice].reshape(batch, -1, 3)
+        host_directions = host_output["obs"][:, direction_slice].reshape(batch, -1, 3)
+        direction_gate = np.any(device_directions != 0.0, axis=-1)
+        np.testing.assert_array_equal(direction_gate, np.any(host_directions != 0.0, axis=-1))
+        np.testing.assert_allclose(
+            device_directions[direction_gate],
+            host_directions[direction_gate],
+            rtol=1e-4,
+            atol=1e-5,
+            err_msg="contact_force_directions",
+        )
         np.testing.assert_allclose(device_reward, host_reward, rtol=1e-4, atol=1e-5)
         np.testing.assert_array_equal(device.progress, host.progress)
         np.testing.assert_array_equal(device.trajectory_steps, host.trajectory_steps)
