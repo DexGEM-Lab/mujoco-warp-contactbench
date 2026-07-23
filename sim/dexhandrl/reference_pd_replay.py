@@ -39,7 +39,8 @@ from sim.dexhandrl.hand_mapping import (  # noqa: E402
 )
 from sim.dexhandrl.lance_loader import load_trajectory  # noqa: E402
 from sim.dexhandrl.parity import rotation_angle_error_deg  # noqa: E402
-from sim.dexhandrl.scene import build_dexhandrl_scene_xml  # noqa: E402
+from sim.dexhandrl.contracts import resolve_physics_config  # noqa: E402
+from sim.dexhandrl.scene import build_dexhandrl_scene_xml, validate_dexhandrl_compiled_model  # noqa: E402
 
 
 FINGER_CONTACT_GROUPS = {
@@ -145,7 +146,23 @@ def _finger_force_from_body_force(body_force: dict[str, float]) -> dict[str, flo
     }
 
 
+def _physics_from_args(args: argparse.Namespace):
+    """Resolve the replay CLI's historical physical flags once at its boundary."""
+    if getattr(args, "physics", None) is not None:
+        return resolve_physics_config(args.physics)
+    return resolve_physics_config(
+        dt=args.dt, substeps=args.substeps,
+        base_pos_kp=args.base_pos_kp, base_pos_kv=args.base_pos_kv, base_pos_force=args.base_pos_force,
+        base_rot_kp=args.base_rot_kp, base_rot_kv=args.base_rot_kv, base_rot_force=args.base_rot_force,
+        finger_kp=args.finger_kp, finger_kv=args.finger_kv, finger_force=args.finger_force,
+        hand_friction=args.hand_friction, object_friction=args.object_friction,
+        ground_friction=args.ground_friction, collision=args.collision,
+        naconmax=args.naconmax, njmax=args.njmax,
+    )
+
+
 def replay(args: argparse.Namespace) -> dict[str, Any]:
+    physics = _physics_from_args(args)
     requested_device = str(args.device)
     if requested_device == "cpu":
         os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -185,31 +202,22 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
         output_path=Path(tempfile.mkdtemp(prefix="dexhandrl_mjx_scene_")) / "dexhandrl.xml",
         object_name=traj.object_name,
         isaac_source_root=args.isaac_source_root,
-        dt=args.dt,
-        substeps=args.substeps,
-        base_pos_kp=args.base_pos_kp,
-        base_pos_kv=args.base_pos_kv,
-        base_pos_force=args.base_pos_force,
-        base_rot_kp=args.base_rot_kp,
-        base_rot_kv=args.base_rot_kv,
-        base_rot_force=args.base_rot_force,
-        finger_kp=args.finger_kp,
-        finger_kv=args.finger_kv,
-        finger_force=args.finger_force,
-        object_friction=args.object_friction,
-        ground_friction=args.ground_friction,
+        physics=physics,
     )
     args.scene_copy.parent.mkdir(parents=True, exist_ok=True)
     args.scene_copy.write_text(scene_path.read_text(encoding="utf-8"), encoding="utf-8")
 
     model = mujoco.MjModel.from_xml_path(str(scene_path))
+    validate_dexhandrl_compiled_model(mujoco, model, physics, object_name=traj.object_name)
     ids = resolve_mujoco_ids(mujoco, model, object_name=traj.object_name)
     route_joint_upper_limits = dexhand021pro_route_joint_upper_limits(mujoco, model)
     geom_body_names = _geom_body_names(mujoco, model)
     geom_names = _geom_names(mujoco, model)
     pyramidal = int(model.opt.cone) == int(mujoco.mjtCone.mjCONE_PYRAMIDAL)
     mx = mjx.put_model(model, impl="warp")
-    dx = mjx.make_data(model, impl="warp", naconmax=args.naconmax, njmax=args.njmax)
+    dx = mjx.make_data(
+        model, impl="warp", naconmax=physics.runtime_naconmax, njmax=physics.runtime_njmax
+    )
     forward = jax.jit(mjx.forward)
     step = jax.jit(mjx.step)
 
@@ -443,23 +451,24 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
         "movement_start_frame": int(traj.movement_start_frame),
         "movement_end_frame": int(traj.movement_end_frame),
         "use_residual": False,
+        "physics_contract": physics.record(),
         "control": {
             "mode": "reference_pd",
             "reference_joint_source": args.reference_joint_source,
-            "dt": args.dt,
-            "substeps": args.substeps,
+            "dt": physics.control_dt,
+            "substeps": physics.substeps,
             "settle_frames": args.settle_frames,
             "pre_contact_frames": args.pre_contact_frames,
             "object_reset_z_offset": args.object_reset_z_offset,
-            "base_pos_kp": args.base_pos_kp,
-            "base_pos_kv": args.base_pos_kv,
-            "base_pos_force": args.base_pos_force,
-            "base_rot_kp": args.base_rot_kp,
-            "base_rot_kv": args.base_rot_kv,
-            "base_rot_force": args.base_rot_force,
-            "finger_kp": args.finger_kp,
-            "finger_kv": args.finger_kv,
-            "finger_force": args.finger_force,
+            "base_pos_kp": physics.servo.base_pos_kp,
+            "base_pos_kv": physics.servo.base_pos_kv,
+            "base_pos_force": physics.servo.base_pos_force,
+            "base_rot_kp": physics.servo.base_rot_kp,
+            "base_rot_kv": physics.servo.base_rot_kv,
+            "base_rot_force": physics.servo.base_rot_force,
+            "finger_kp": physics.servo.finger_kp,
+            "finger_kv": physics.servo.finger_kv,
+            "finger_force": physics.servo.finger_force,
         },
         "scene_xml": str(scene_path),
         "scene_copy": str(args.scene_copy),
@@ -622,8 +631,10 @@ def main() -> int:
     parser.add_argument("--finger-kp", type=float, default=15)
     parser.add_argument("--finger-kv", type=float, default=0)
     parser.add_argument("--finger-force", type=float, default=50)
+    parser.add_argument("--hand-friction", default="0.5 0.01 0.001")
     parser.add_argument("--object-friction", default="0.5 0.01 0.001")
     parser.add_argument("--ground-friction", default="0.5 0.5 0")
+    parser.add_argument("--collision", choices=("none", "disable_within_finger", "all_disabled"), default="disable_within_finger")
     parser.add_argument(
         "--reference-joint-source",
         choices=("active", "full_raw"),

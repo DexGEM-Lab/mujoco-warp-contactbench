@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT, DEFAULT_LANCE_PATH, DEFAULT_OUTPUT_ROOT  # noqa: E402
+from sim.dexhandrl.contracts import resolve_physics_config  # noqa: E402
 from sim.dexhandrl.reference_pd_replay import replay  # noqa: E402
 
 
@@ -93,7 +94,20 @@ def _add_isaac_comparison(
     }
 
 
+def _physics_from_args(args: argparse.Namespace):
+    return resolve_physics_config(
+        dt=args.dt, substeps=args.substeps,
+        base_pos_kp=args.base_pos_kp, base_pos_kv=args.base_pos_kv, base_pos_force=args.base_pos_force,
+        base_rot_kp=args.base_rot_kp, base_rot_kv=args.base_rot_kv, base_rot_force=args.base_rot_force,
+        finger_kp=args.finger_kp, finger_kv=args.finger_kv, finger_force=args.finger_force,
+        hand_friction=args.hand_friction, object_friction=args.object_friction,
+        ground_friction=args.ground_friction, collision=args.collision,
+        naconmax=args.naconmax, njmax=args.njmax,
+    )
+
+
 def run_batch(args: argparse.Namespace) -> dict[str, Any]:
+    physics = _physics_from_args(args)
     isaac_records = _load_isaac_records(args.isaacgym_metrics)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -114,9 +128,23 @@ def run_batch(args: argparse.Namespace) -> dict[str, Any]:
             start_frame=args.start_frame,
             pre_contact_frames=args.pre_contact_frames,
             object_reset_z_offset=args.object_reset_z_offset,
+            physics=physics,
             dt=args.dt,
             substeps=args.substeps,
             settle_frames=args.settle_frames,
+            base_pos_kp=physics.servo.base_pos_kp,
+            base_pos_kv=physics.servo.base_pos_kv,
+            base_pos_force=physics.servo.base_pos_force,
+            base_rot_kp=physics.servo.base_rot_kp,
+            base_rot_kv=physics.servo.base_rot_kv,
+            base_rot_force=physics.servo.base_rot_force,
+            finger_kp=physics.servo.finger_kp,
+            finger_kv=physics.servo.finger_kv,
+            finger_force=physics.servo.finger_force,
+            hand_friction=" ".join(map(str, physics.material.hand_friction)),
+            object_friction=" ".join(map(str, physics.material.object_friction)),
+            ground_friction=" ".join(map(str, physics.material.ground_friction)),
+            collision=physics.hand_self_collision_mode,
             reference_joint_source=args.reference_joint_source,
             naconmax=args.naconmax,
             njmax=args.njmax,
@@ -146,10 +174,11 @@ def run_batch(args: argparse.Namespace) -> dict[str, Any]:
         "max_sequences": int(args.max_sequences),
         "max_frames": int(args.max_frames),
         "elapsed_s": time.perf_counter() - started,
+        "physics_contract": physics.record(),
         "control": {
             "reference_joint_source": args.reference_joint_source,
-            "dt": args.dt,
-            "substeps": args.substeps,
+            "dt": physics.control_dt,
+            "substeps": physics.substeps,
             "settle_frames": args.settle_frames,
             "pre_contact_frames": args.pre_contact_frames,
             "object_reset_z_offset": args.object_reset_z_offset,
@@ -201,6 +230,19 @@ def main() -> int:
     parser.add_argument("--dt", type=float, default=0.01)
     parser.add_argument("--substeps", type=int, default=10)
     parser.add_argument("--settle-frames", type=int, default=0)
+    parser.add_argument("--base-pos-kp", type=float, default=5000)
+    parser.add_argument("--base-pos-kv", type=float, default=500)
+    parser.add_argument("--base-pos-force", type=float, default=500)
+    parser.add_argument("--base-rot-kp", type=float, default=10000)
+    parser.add_argument("--base-rot-kv", type=float, default=125)
+    parser.add_argument("--base-rot-force", type=float, default=100)
+    parser.add_argument("--finger-kp", type=float, default=15)
+    parser.add_argument("--finger-kv", type=float, default=0)
+    parser.add_argument("--finger-force", type=float, default=50)
+    parser.add_argument("--hand-friction", default="0.5 0.01 0.001")
+    parser.add_argument("--object-friction", default="0.5 0.01 0.001")
+    parser.add_argument("--ground-friction", default="0.5 0.5 0")
+    parser.add_argument("--collision", choices=("none", "disable_within_finger", "all_disabled"), default="disable_within_finger")
     parser.add_argument(
         "--reference-joint-source",
         choices=("active", "full_raw"),

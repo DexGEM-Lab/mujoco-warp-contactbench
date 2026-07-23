@@ -16,6 +16,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+from sim.dexhandrl.contracts import DexHandPhysicsConfig, resolve_physics_config
 from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES, OBS_DIM_021PRO
 from sim.dexhandrl.trace_contract import (
     EXACT_IDENTITY,
@@ -370,13 +371,26 @@ def _passive_trace_viewer(env: Any, headless: bool) -> Iterator[PassiveTraceView
 
 
 def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None = None,
-        hand_friction: str = "0.5 0.01 0.001", headless: bool = True,
-        finger_kp: float = 15.0, finger_kv: float = 0.0,
-        base_rot_kp: float = 10000.0, base_rot_kv: float = 125.0,
-        base_rot_force: float = 100.0, observation_trace: Path | None = None,
+        hand_friction: str | None = None, headless: bool = True,
+        finger_kp: float | None = None, finger_kv: float | None = None,
+        base_rot_kp: float | None = None, base_rot_kv: float | None = None,
+        base_rot_force: float | None = None, observation_trace: Path | None = None,
         replace_observation_component: tuple[str, ...] = (),
         observation_intervention_end_frame: int | None = None,
-        action_trace: Path | None = None) -> Path:
+        action_trace: Path | None = None, *, physics: DexHandPhysicsConfig | None = None,
+        dt: float | None = None, substeps: int | None = None,
+        base_pos_kp: float | None = None, base_pos_kv: float | None = None, base_pos_force: float | None = None,
+        finger_force: float | None = None, object_friction: str | None = None,
+        ground_friction: str | None = None, collision: str | None = None,
+        naconmax: int | None = None, njmax: int | None = None) -> Path:
+    physics = resolve_physics_config(
+        physics, dt=dt, substeps=substeps,
+        base_pos_kp=base_pos_kp, base_pos_kv=base_pos_kv, base_pos_force=base_pos_force,
+        base_rot_kp=base_rot_kp, base_rot_kv=base_rot_kv, base_rot_force=base_rot_force,
+        finger_kp=finger_kp, finger_kv=finger_kv, finger_force=finger_force,
+        hand_friction=hand_friction, object_friction=object_friction, ground_friction=ground_friction,
+        collision=collision, naconmax=naconmax, njmax=njmax,
+    )
     if not 1 <= steps <= MAX_ACTIONS:
         raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
     _validate_trace_interventions(
@@ -394,8 +408,7 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
     from sim.dexhandrl.skrl_train import SkrlLauncherConfig, _build_agent
     cfg = DexHandRLMJXEnvConfig(lance_path=LANCE, isaac_source_root=ISAAC, object_name="cube1", action="01", sequence_index=1,
         uuid=EXACT_IDENTITY["uuid"], device="cpu", use_residual=True, seed=0, object_position_terminal_threshold=1e9,
-        hand_friction=hand_friction, finger_kp=finger_kp, finger_kv=finger_kv,
-        base_rot_kp=base_rot_kp, base_rot_kv=base_rot_kv, base_rot_force=base_rot_force)
+        physics=physics)
     env = DexHandRLMJXEnv(cfg)
     if env.trajectory.row_id != 22 or env.start_frame != 61 or env.end_frame != 693:
         raise RuntimeError(f"exact trajectory isolation failed: row={env.trajectory.row_id}, window={env.start_frame}..{env.end_frame}")
@@ -456,7 +469,7 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
                 break
     scalar_types = {"decision_frame": np.int64, "state_frame": np.int64, "reset": np.bool_, "terminated": np.bool_, "truncated": np.bool_}
     arrays = {key: np.asarray(values, dtype=scalar_types.get(key, np.float32)) for key, values in store.items()}
-    metadata: dict[str, Any] = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint), "friction": {"hand": cfg.hand_friction, "object": cfg.object_friction, "ground": cfg.ground_friction}, "finger_pd": {"kp": cfg.finger_kp, "kv": cfg.finger_kv, "force": cfg.finger_force}, "base_rotation_pd": {"kp": cfg.base_rot_kp, "kv": cfg.base_rot_kv, "force": cfg.base_rot_force}, "viewer": {"headless": headless, "semantics": "native passive viewer mirrors completed MJX qpos/qvel via mj_forward and never advances environment physics", "env_count": 1}}
+    metadata: dict[str, Any] = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint), "physics_contract": physics.record(), "friction": {"hand": cfg.hand_friction, "object": cfg.object_friction, "ground": cfg.ground_friction}, "finger_pd": {"kp": cfg.finger_kp, "kv": cfg.finger_kv, "force": cfg.finger_force}, "base_rotation_pd": {"kp": cfg.base_rot_kp, "kv": cfg.base_rot_kv, "force": cfg.base_rot_force}, "viewer": {"headless": headless, "semantics": "native passive viewer mirrors completed MJX qpos/qvel via mj_forward and never advances environment physics", "env_count": 1}}
     if intervention is not None:
         metadata["control_trace_intervention"] = intervention.metadata_record()
         metadata["policy_action_provenance"] = "imported from Gym control trace; policy/action records do not arise from MuJoCo observation"
@@ -487,6 +500,17 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--base-rot-kp", type=float, default=10000.0)
     p.add_argument("--base-rot-kv", type=float, default=125.0)
     p.add_argument("--base-rot-force", type=float, default=100.0)
+    p.add_argument("--finger-force", type=float, default=None)
+    p.add_argument("--dt", type=float, default=None)
+    p.add_argument("--substeps", type=int, default=None)
+    p.add_argument("--base-pos-kp", type=float, default=None)
+    p.add_argument("--base-pos-kv", type=float, default=None)
+    p.add_argument("--base-pos-force", type=float, default=None)
+    p.add_argument("--object-friction", default=None)
+    p.add_argument("--ground-friction", default=None)
+    p.add_argument("--collision", choices=("none", "disable_within_finger", "all_disabled"), default=None)
+    p.add_argument("--naconmax", type=int, default=None)
+    p.add_argument("--njmax", type=int, default=None)
     p.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     return p
 
@@ -499,10 +523,18 @@ def main() -> int:
                                       tuple(a.replace_observation_component), a.observation_intervention_end_frame)
     except ValueError as error:
         parser.error(str(error))
+    extra_physics = {
+        "dt": a.dt, "substeps": a.substeps, "base_pos_kp": a.base_pos_kp,
+        "base_pos_kv": a.base_pos_kv, "base_pos_force": a.base_pos_force,
+        "finger_force": a.finger_force, "object_friction": a.object_friction,
+        "ground_friction": a.ground_friction, "collision": a.collision,
+        "naconmax": a.naconmax, "njmax": a.njmax,
+    }
+    call_kwargs = {name: value for name, value in extra_physics.items() if value is not None}
     print(run(a.output, a.steps, a.checkpoint, a.control_trace, a.hand_friction, a.headless,
               a.finger_kp, a.finger_kv, a.base_rot_kp, a.base_rot_kv, a.base_rot_force,
               a.observation_trace, tuple(a.replace_observation_component), a.observation_intervention_end_frame,
-              a.action_trace))
+              a.action_trace, **call_kwargs))
     return 0
 
 
