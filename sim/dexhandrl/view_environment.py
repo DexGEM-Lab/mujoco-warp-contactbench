@@ -25,6 +25,37 @@ def _require_graphical_display(*, headless: bool) -> None:
         raise RuntimeError("the native DexHand viewer requires DISPLAY to name a graphical display server")
 
 
+_VIEWER_SHUTDOWN_TIMEOUT_S = 5.0
+_VIEWER_SHUTDOWN_POLL_S = 0.01
+
+
+def _wait_for_passive_viewer_shutdown(
+    handle: Any,
+    *,
+    timeout_s: float = _VIEWER_SHUTDOWN_TIMEOUT_S,
+    clock: Any = time.monotonic,
+    sleeper: Any = time.sleep,
+) -> None:
+    """Wait for MuJoCo's passive-viewer thread to release its simulator.
+
+    ``Handle.close()`` only asks the viewer thread to stop.  The private
+    ``_sim`` weakref becomes empty after that thread has left GLFW/GLX, which
+    must happen before Python's GLFW atexit handler unloads the library.
+    """
+    sim_ref = getattr(handle, "_sim", None)
+    if not callable(sim_ref):
+        return
+
+    deadline = clock() + timeout_s
+    while sim_ref() is not None:
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"MuJoCo passive viewer did not stop within {timeout_s:g}s after close()"
+            )
+        sleeper(min(_VIEWER_SHUTDOWN_POLL_S, remaining))
+
+
 def mirror_mjx_state_to_mjdata(data: Any, state: Any) -> None:
     """Copy the render-relevant dynamic state without advancing simulation."""
     for name in ("qpos", "qvel", "ctrl"):
@@ -82,9 +113,11 @@ class PassiveDexHandViewer:
         return True
 
     def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            self.handle.close()
+        if self._closed:
+            return
+        self._closed = True
+        self.handle.close()
+        _wait_for_passive_viewer_shutdown(self.handle)
 
 
 @contextmanager

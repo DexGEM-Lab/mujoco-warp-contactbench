@@ -11,7 +11,9 @@ from sim.dexhandrl.view_environment import (
     ZeroActionStepper,
     _parser,
     _require_graphical_display,
+    _wait_for_passive_viewer_shutdown,
 )
+from tools.trace_dexhandrl_mujoco import PassiveTraceViewer
 
 
 def test_viewer_parser_supports_native_zero_action_command(tmp_path):
@@ -63,6 +65,49 @@ def test_environment_public_mirror_copies_all_dynamic_viewer_fields():
     np.testing.assert_array_equal(data.qvel, state.qvel)
     np.testing.assert_array_equal(data.ctrl, state.ctrl)
     assert data.time == 0.25
+
+
+def test_passive_viewer_close_returns_immediately_without_mujoco_weakref():
+    class Handle:
+        def __init__(self): self.close_count = 0
+        def close(self): self.close_count += 1
+
+    viewer = PassiveDexHandViewer(object(), object(), object(), Handle(), 0)
+    viewer.close()
+    viewer.close()
+    assert viewer.handle.close_count == 1
+
+
+def test_passive_viewer_waits_for_mujoco_thread_weakref_to_clear():
+    class Handle:
+        def __init__(self):
+            self.close_count = 0
+            self.running = object()
+            self._sim = lambda: self.running
+        def close(self): self.close_count += 1
+
+    handle, elapsed = Handle(), [0.0]
+    def clock(): return elapsed[0]
+    def sleeper(delay):
+        elapsed[0] += delay
+        handle.running = None
+
+    _wait_for_passive_viewer_shutdown(handle, timeout_s=1.0, clock=clock, sleeper=sleeper)
+    assert elapsed[0] == pytest.approx(0.01)
+
+
+def test_passive_viewer_shutdown_timeout_is_explicit():
+    handle, elapsed = type("Handle", (), {})(), [0.0]
+    handle._sim = lambda: object()
+    def clock(): return elapsed[0]
+    def sleeper(delay): elapsed[0] += delay
+
+    with pytest.raises(RuntimeError, match="did not stop within 0.03s"):
+        _wait_for_passive_viewer_shutdown(handle, timeout_s=0.03, clock=clock, sleeper=sleeper)
+
+
+def test_trace_viewer_alias_inherits_passive_viewer_shutdown():
+    assert PassiveTraceViewer is PassiveDexHandViewer
 
 
 def test_passive_viewer_mirrors_without_step_calls():
