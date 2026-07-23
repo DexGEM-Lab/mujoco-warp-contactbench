@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Write an exact, deterministic MuJoCo DexHand decision/post-state trace."""
 from __future__ import annotations
-import argparse, json, sys
+
+import argparse
+from contextlib import contextmanager, nullcontext
+import hashlib
+import json
+import sys
 from pathlib import Path
+from typing import Any, Iterator, Mapping
+
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,12 +20,113 @@ from sim.dexhandrl.trace_contract import (
     MAX_ACTIONS,
     RESET_DECISION_FRAME,
     SCHEMA,
+    load_trace,
     validate_trace,
 )
 
 CHECKPOINT = Path("/home/jay/dexrobot/FromSSH/dexhand_reconstruction/dexrobot_isaac/last_Dexhand021proReconstruction_ep_20000_rew_101.06729.pth")
 LANCE = Path("/mnt/nas-222-project/mocap/for_retargeting/dexhand021pro/results_all_mano/all/lance_new_all_generated_mano/lance_result_archive_full/dexhand021pro_lance_new_all_generated_mano_retarget_result_archive.lance")
 ISAAC = Path("/home/jay/dexrobot/FromSSH/dexhand_reconstruction/dexrobot_isaac")
+CONTROL_TRACE_ARRAYS = (
+    "policy_mean", "final_action", "base_offset_before", "base_offset_after",
+    "joint_offset_before", "joint_offset_after", "reference_active_target",
+    "corrected_active_target", "applied_active_target", "full_target",
+)
+CONTROL_TRACE_ATOL = 2e-6
+
+
+class ControlTraceIntervention:
+    """Fail-closed source-control injection for the preregistered Gym replay.
+
+    It replaces only the environment's action-to-target transformation. MuJoCo
+    still generates the observation and post-step physical state.
+    """
+
+    def __init__(self, source_path: Path, metadata: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -> None:
+        if metadata.get("backend") != "gym":
+            raise ValueError("--control-trace must be a Gym trace")
+        self.source_path = source_path.resolve()
+        self.metadata = dict(metadata)
+        self.arrays = {name: np.asarray(value) for name, value in arrays.items()}
+        self.count = validate_trace(self.metadata, self.arrays)
+        for name in CONTROL_TRACE_ARRAYS:
+            value = self.arrays.get(name)
+            if value is None or not np.all(np.isfinite(value)):
+                raise ValueError(f"control trace requires finite {name}")
+        self.source_sha256 = hashlib.sha256(self.source_path.read_bytes()).hexdigest()
+        self._row = 0
+
+    @classmethod
+    def load(cls, path: Path, steps: int) -> "ControlTraceIntervention":
+        metadata, arrays = load_trace(str(path))
+        intervention = cls(path, metadata, arrays)
+        if intervention.count < steps:
+            raise ValueError(
+                f"--control-trace has {intervention.count} actions, fewer than requested --steps={steps}"
+            )
+        return intervention
+
+    def current(self, target_frame: int) -> dict[str, np.ndarray]:
+        if self._row >= self.count:
+            raise RuntimeError("control trace exhausted before MuJoCo step")
+        source_frame = int(self.arrays["decision_frame"][self._row])
+        if source_frame != target_frame:
+            raise RuntimeError(
+                f"control trace decision frame {source_frame} does not equal live target frame {target_frame}"
+            )
+        return {name: np.asarray(self.arrays[name][self._row], dtype=np.float32).copy()
+                for name in CONTROL_TRACE_ARRAYS}
+
+    def apply(self, env: Any, target_frame: int) -> np.ndarray:
+        """Assert live offset state, then inject one source control row."""
+        source = self.current(target_frame)
+        for label, live, expected in (
+            ("base_position_offset", env.base_position_offset, source["base_offset_before"]),
+            ("joint_offset", env.joint_offset, source["joint_offset_before"]),
+        ):
+            live = np.asarray(live, dtype=np.float32)
+            if not np.all(np.isfinite(live)) or not np.allclose(live, expected, rtol=0.0, atol=CONTROL_TRACE_ATOL):
+                maximum = float(np.max(np.abs(live - expected))) if live.shape == expected.shape else float("inf")
+                raise RuntimeError(
+                    f"control trace {label} mismatch at frame {target_frame}: max_abs_error={maximum}"
+                )
+        env.base_position_offset[...] = source["base_offset_after"]
+        env.joint_offset[...] = source["joint_offset_after"]
+        env.active_prev_targets = source["applied_active_target"].copy()
+        env._last_action_trace = {
+            "decision_frame": target_frame,
+            "reference_active_target": source["reference_active_target"].copy(),
+            "corrected_active_target": source["corrected_active_target"].copy(),
+            "applied_active_target": source["applied_active_target"].copy(),
+            "full_target": source["full_target"].copy(),
+        }
+        self._row += 1
+        return source["full_target"].copy()
+
+    @contextmanager
+    def patch(self, env: Any) -> Iterator[None]:
+        """Inject source targets only while the diagnostic trace executes."""
+        original = env._apply_residual_action
+
+        def injected(_action: np.ndarray, target_frame: int, _current_full: np.ndarray | None) -> np.ndarray:
+            return self.apply(env, target_frame)
+
+        env._apply_residual_action = injected
+        try:
+            yield
+        finally:
+            env._apply_residual_action = original
+
+    def metadata_record(self) -> dict[str, Any]:
+        return {
+            "source_path": str(self.source_path),
+            "source_sha256": self.source_sha256,
+            "source_backend": "gym",
+            "semantics": (
+                "Gym source offsets, policy/action records, and action-stage targets are imported; "
+                "only MuJoCo processed/RMS observations and post-physics state are live."
+            ),
+        }
 
 
 def _ordered_qvel(env) -> np.ndarray:
@@ -31,9 +139,10 @@ def _append(store: dict[str, list[np.ndarray]], **items: np.ndarray) -> None:
         store[key].append(np.asarray(value))
 
 
-def run(output: Path, steps: int, checkpoint: Path) -> Path:
+def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None = None) -> Path:
     if not 1 <= steps <= MAX_ACTIONS:
         raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
+    intervention = ControlTraceIntervention.load(control_trace, steps) if control_trace is not None else None
     import torch
     from sim.dexhandrl.hand_mapping import full_dof_from_qpos
     from sim.dexhandrl.rlgames_checkpoint import load_rlgames_checkpoint
@@ -45,44 +154,67 @@ def run(output: Path, steps: int, checkpoint: Path) -> Path:
     if env.trajectory.row_id != 22 or env.start_frame != 61 or env.end_frame != 693:
         raise RuntimeError(f"exact trajectory isolation failed: row={env.trajectory.row_id}, window={env.start_frame}..{env.end_frame}")
     launcher = SkrlLauncherConfig(device="cpu", num_envs=1, rlgames_checkpoint=checkpoint)
-    agent, _ = _build_agent(env, launcher); load_rlgames_checkpoint(agent, checkpoint)
+    agent, _ = _build_agent(env, launcher)
+    load_rlgames_checkpoint(agent, checkpoint)
     set_mode = getattr(agent, "set_running_mode", None)
-    if callable(set_mode): set_mode("eval")
+    if callable(set_mode):
+        set_mode("eval")
     names = ("decision_frame", "state_frame", "reset", "terminated", "truncated", "processed_observation", "rms_observation", "policy_mean", "final_action", "base_offset_before", "base_offset_after", "joint_offset_before", "joint_offset_after", "reference_active_target", "corrected_active_target", "applied_active_target", "full_target", "hand_qpos", "hand_qvel", "object_position", "object_quaternion_xyzw", "object_linear_velocity", "target_object_position", "target_object_quaternion_xyzw")
     obs, _ = env.reset(); store: dict[str, list[np.ndarray]] = {name: [] for name in names}
     if int(env._current_frame) != RESET_DECISION_FRAME:
-        raise RuntimeError(
-            f"MuJoCo reset policy frame must be {RESET_DECISION_FRAME}, got {env._current_frame}"
-        )
-    for _step in range(steps):
-        decision_frame = int(env._current_frame)
-        before_base, before_joint = env.base_position_offset.copy(), env.joint_offset.copy()
-        tensor = torch.as_tensor(obs[None], dtype=torch.float32, device=agent.policy.device)
-        normalized = agent._observation_preprocessor(tensor)
-        with torch.no_grad(): mean, _ = agent.policy.compute({"observations": normalized}, role="policy")
-        action = torch.clamp(mean, -1, 1).detach().cpu().numpy()[0]
-        next_obs, _, terminated, truncated, info = env.step(action)
-        trace = env._last_action_trace
-        if trace is None or trace["decision_frame"] != decision_frame:
-            raise RuntimeError("environment did not expose authoritative action trace for this decision")
-        state_frame = int(env._current_frame)
-        full_target = np.asarray(trace["full_target"], dtype=np.float32)
-        corrected = np.asarray(trace["corrected_active_target"], dtype=np.float32)
-        applied = np.asarray(trace["applied_active_target"], dtype=np.float32)
-        _append(store, decision_frame=np.asarray(decision_frame), state_frame=np.asarray(state_frame), reset=np.asarray(decision_frame == RESET_DECISION_FRAME), terminated=np.asarray(terminated), truncated=np.asarray(truncated),
-          processed_observation=obs, rms_observation=normalized.detach().cpu().numpy()[0], policy_mean=mean.detach().cpu().numpy()[0], final_action=action,
-          base_offset_before=before_base, base_offset_after=env.base_position_offset, joint_offset_before=before_joint, joint_offset_after=env.joint_offset,
-          reference_active_target=np.asarray(trace["reference_active_target"], dtype=np.float32), corrected_active_target=corrected, applied_active_target=applied, full_target=full_target,
-          hand_qpos=full_dof_from_qpos(np.asarray(env._dx.qpos), env.ids), hand_qvel=_ordered_qvel(env), object_position=np.asarray(info["object_position"]), object_quaternion_xyzw=np.asarray(env._dx.xquat[env.object_body_id], dtype=np.float32)[[1, 2, 3, 0]], object_linear_velocity=np.asarray(env._dx.qvel[env.ids.object_free_dof_addr:env.ids.object_free_dof_addr + 3]), target_object_position=np.asarray(info["target_object_position"]), target_object_quaternion_xyzw=np.asarray(env.trajectory.object_quat_xyzw[state_frame]))
-        obs = next_obs
-        if terminated or truncated: break
+        raise RuntimeError(f"MuJoCo reset policy frame must be {RESET_DECISION_FRAME}, got {env._current_frame}")
+    patch = intervention.patch(env) if intervention is not None else nullcontext()
+    with patch:
+        for _step in range(steps):
+            decision_frame = int(env._current_frame)
+            source = intervention.current(decision_frame) if intervention is not None else None
+            tensor = torch.as_tensor(obs[None], dtype=torch.float32, device=agent.policy.device)
+            normalized = agent._observation_preprocessor(tensor)
+            rms_observation = normalized.detach().cpu().numpy()[0]
+            if source is None:
+                before_base, before_joint = env.base_position_offset.copy(), env.joint_offset.copy()
+                with torch.no_grad():
+                    mean, _ = agent.policy.compute({"observations": normalized}, role="policy")
+                policy_mean = mean.detach().cpu().numpy()[0]
+                action = torch.clamp(mean, -1, 1).detach().cpu().numpy()[0]
+            else:
+                before_base, before_joint = source["base_offset_before"], source["joint_offset_before"]
+                policy_mean, action = source["policy_mean"], source["final_action"]
+            next_obs, _, terminated, truncated, info = env.step(action)
+            trace = env._last_action_trace
+            if trace is None or trace["decision_frame"] != decision_frame:
+                raise RuntimeError("environment did not expose authoritative action trace for this decision")
+            state_frame = int(env._current_frame)
+            if source is not None:
+                for name in ("reference_active_target", "corrected_active_target", "applied_active_target", "full_target"):
+                    if not np.array_equal(np.asarray(trace[name], dtype=np.float32), source[name]):
+                        raise RuntimeError(f"environment altered injected source {name}")
+            _append(store, decision_frame=np.asarray(decision_frame), state_frame=np.asarray(state_frame), reset=np.asarray(decision_frame == RESET_DECISION_FRAME), terminated=np.asarray(terminated), truncated=np.asarray(truncated),
+              processed_observation=obs, rms_observation=rms_observation, policy_mean=policy_mean, final_action=action,
+              base_offset_before=before_base, base_offset_after=(source["base_offset_after"] if source is not None else env.base_position_offset), joint_offset_before=before_joint, joint_offset_after=(source["joint_offset_after"] if source is not None else env.joint_offset),
+              reference_active_target=(source["reference_active_target"] if source is not None else np.asarray(trace["reference_active_target"], dtype=np.float32)), corrected_active_target=(source["corrected_active_target"] if source is not None else np.asarray(trace["corrected_active_target"], dtype=np.float32)), applied_active_target=(source["applied_active_target"] if source is not None else np.asarray(trace["applied_active_target"], dtype=np.float32)), full_target=(source["full_target"] if source is not None else np.asarray(trace["full_target"], dtype=np.float32)),
+              hand_qpos=full_dof_from_qpos(np.asarray(env._dx.qpos), env.ids), hand_qvel=_ordered_qvel(env), object_position=np.asarray(info["object_position"]), object_quaternion_xyzw=np.asarray(env._dx.xquat[env.object_body_id], dtype=np.float32)[[1, 2, 3, 0]], object_linear_velocity=np.asarray(env._dx.qvel[env.ids.object_free_dof_addr:env.ids.object_free_dof_addr + 3]), target_object_position=np.asarray(info["target_object_position"]), target_object_quaternion_xyzw=np.asarray(env.trajectory.object_quat_xyzw[state_frame]))
+            obs = next_obs
+            if terminated or truncated:
+                break
     scalar_types = {"decision_frame": np.int64, "state_frame": np.int64, "reset": np.bool_, "terminated": np.bool_, "truncated": np.bool_}
     arrays = {key: np.asarray(values, dtype=scalar_types.get(key, np.float32)) for key, values in store.items()}
-    metadata = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint)}
+    metadata: dict[str, Any] = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint)}
+    if intervention is not None:
+        metadata["control_trace_intervention"] = intervention.metadata_record()
+        metadata["policy_action_provenance"] = "imported from Gym control trace; policy/action records do not arise from MuJoCo observation"
     validate_trace(metadata, arrays); output.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(output, metadata=np.asarray(json.dumps(metadata)), **arrays); return output
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__); p.add_argument("--output", type=Path, required=True); p.add_argument("--steps", type=int, default=3, help=f"actions to trace (1..{MAX_ACTIONS})"); p.add_argument("--checkpoint", type=Path, default=CHECKPOINT); a = p.parse_args()
-    print(run(a.output, a.steps, a.checkpoint)); return 0
-if __name__ == "__main__": raise SystemExit(main())
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--steps", type=int, default=3, help=f"actions to trace (1..{MAX_ACTIONS})")
+    p.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
+    p.add_argument("--control-trace", type=Path, help="validated Gym trace whose exact control stages are injected")
+    a = p.parse_args()
+    print(run(a.output, a.steps, a.checkpoint, a.control_trace)); return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

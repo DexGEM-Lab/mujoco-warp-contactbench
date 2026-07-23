@@ -18,6 +18,7 @@ from sim.dexhandrl.trace_contract import (
     validate_trace,
 )
 from tools.compare_dexhandrl_traces import compare
+from tools.trace_dexhandrl_mujoco import ControlTraceIntervention
 from tools.trace_dexhandrl_gym import (_authoritative_frame, _compose_train_config, _deterministic_action,
                                       _close_env_after_trace, _filter_exact_trajectory, _patch,
                                       _is_relative_to, _pre_action_observations,
@@ -317,12 +318,82 @@ def test_gym_apply_patch_reinstalls_bounded_run_play_and_restores_after_error():
     assert FakeRunner.run_play is original_run_play
 
 
+def _control_trace(tmp_path, *, metadata=None, arrays=None):
+    source_metadata, source_arrays = _trace(backend="gym")
+    if metadata is not None:
+        source_metadata = metadata
+    if arrays is not None:
+        source_arrays = arrays
+    path = tmp_path / "gym_control.npz"
+    np.savez_compressed(path, metadata=np.asarray(json.dumps(source_metadata)), **source_arrays)
+    return path
+
+
+def test_control_trace_rejects_non_gym_identity_frame_and_nonfinite_sources(tmp_path):
+    metadata, arrays = _trace(backend="mujoco")
+    with pytest.raises(ValueError, match="Gym trace"):
+        ControlTraceIntervention.load(_control_trace(tmp_path, metadata=metadata), 1)
+    metadata, arrays = _trace(backend="gym"); metadata["identity"]["row_id"] = 9
+    with pytest.raises(ValueError, match="identity"):
+        ControlTraceIntervention.load(_control_trace(tmp_path, metadata=metadata), 1)
+    metadata, arrays = _trace(backend="gym"); arrays["policy_mean"][0, 0] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        ControlTraceIntervention.load(_control_trace(tmp_path, metadata=metadata, arrays=arrays), 1)
+    intervention = ControlTraceIntervention.load(_control_trace(tmp_path), 1)
+    with pytest.raises(RuntimeError, match="decision frame"):
+        intervention.current(RESET_DECISION_FRAME + 1)
+
+
+def test_control_trace_updates_exact_state_and_returns_exact_source_target(tmp_path):
+    path = _control_trace(tmp_path)
+    intervention = ControlTraceIntervention.load(path, 1)
+    for name, value in (("base_offset_before", [0.1, 0.2, 0.3]), ("base_offset_after", [0.4, 0.5, 0.6]),
+                        ("joint_offset_before", np.arange(16)), ("joint_offset_after", np.arange(16) + 1),
+                        ("applied_active_target", np.arange(22)), ("reference_active_target", np.arange(22) + 2),
+                        ("corrected_active_target", np.arange(22) + 3), ("full_target", np.arange(26) + 4)):
+        intervention.arrays[name][0] = np.asarray(value, dtype=np.float32)
+    env = type("Env", (), {})()
+    env.base_position_offset = intervention.arrays["base_offset_before"][0].copy()
+    env.joint_offset = intervention.arrays["joint_offset_before"][0].copy()
+    target = intervention.apply(env, RESET_DECISION_FRAME)
+    np.testing.assert_array_equal(target, intervention.arrays["full_target"][0])
+    np.testing.assert_array_equal(env.base_position_offset, intervention.arrays["base_offset_after"][0])
+    np.testing.assert_array_equal(env.joint_offset, intervention.arrays["joint_offset_after"][0])
+    np.testing.assert_array_equal(env.active_prev_targets, intervention.arrays["applied_active_target"][0])
+    np.testing.assert_array_equal(env._last_action_trace["full_target"], target)
+
+
+def test_control_trace_rejects_offset_mismatch_and_normal_patch_is_unchanged(tmp_path):
+    intervention = ControlTraceIntervention.load(_control_trace(tmp_path), 1)
+    env = type("Env", (), {})()
+    env.base_position_offset = np.ones(3, dtype=np.float32)
+    env.joint_offset = np.zeros(16, dtype=np.float32)
+    with pytest.raises(RuntimeError, match="base_position_offset mismatch"):
+        intervention.apply(env, RESET_DECISION_FRAME)
+
+    def normal_action(*_): return np.full(26, 7, dtype=np.float32)
+    env._apply_residual_action = normal_action
+    assert env._apply_residual_action(None, None, None)[0] == 7
+    with intervention.patch(env):
+        env.base_position_offset = np.zeros(3, dtype=np.float32)
+        env.joint_offset = np.zeros(16, dtype=np.float32)
+        assert env._apply_residual_action(None, RESET_DECISION_FRAME, None).shape == (26,)
+    assert env._apply_residual_action is normal_action
+
+
+def test_control_trace_intervention_metadata_states_imported_policy_semantics(tmp_path):
+    record = ControlTraceIntervention.load(_control_trace(tmp_path), 1).metadata_record()
+    assert len(record["source_sha256"]) == 64
+    assert record["source_backend"] == "gym"
+    assert "imported" in record["semantics"] and "MuJoCo" in record["semantics"]
+
+
 def test_mujoco_trace_producer_declares_and_records_post_filters() -> None:
     producer = Path(__file__).resolve().parents[1] / "tools" / "trace_dexhandrl_mujoco.py"
     source = producer.read_text(encoding="utf-8")
-    assert 'applied = np.asarray(trace["applied_active_target"], dtype=np.float32)' in source
-    assert 'applied_active_target=applied' in source
     assert '"post_filters": ["velocity_clamp", "position_clamp"]' in source
+    assert "class ControlTraceIntervention" in source
+    assert '"applied_active_target": source["applied_active_target"].copy()' in source
 
 
 def test_comparator_reports_both_observation_slices_and_control_contract(tmp_path):

@@ -549,6 +549,30 @@ across simulator actuator semantics. MuJoCo records the authoritative raw Lance 
 and applied target after Gym's ordered `velocity_clamp` then `position_clamp` active-space
 filters. Runtime parity acceptance remains pending a fresh cross-simulator trace.
 
+#### Preregistered exact-Gym control replay
+
+Use a validated Gym trace as the source for a causally bounded replay; this
+injects its per-decision offsets and action stages into MuJoCo while leaving
+MuJoCo to produce the processed/RMS observations and post-physics state.
+
+```bash
+$MUJOCO_PYTHON tools/trace_dexhandrl_mujoco.py \
+  --checkpoint "$CHECKPOINT" --steps 631 \
+  --control-trace outputs/dexhandrl_trace/v3_full631_gym/gym_v3_full631.npz \
+  --output outputs/dexhandrl_trace/exact_gym_control_mujoco.npz
+```
+
+The source must be the exact schema-v3 Gym row-22 trace, contain at least the
+requested decisions, and match live frames 62–692. The replay fails before a
+physics step if its source identity, schedule, finite control arrays, or live
+pre-action offsets disagree. Its policy/action and control-stage records are
+imported source evidence, not policy outputs from MuJoCo observations. Compare
+only its MuJoCo post-physics state with Gym: movement object RMSE below `0.10 m`
+and maximum lift above `0.20 m` indicates control-dominant divergence; RMSE
+above `0.15 m` with lift below `0.10 m` indicates physics/contact-dominant
+divergence; other outcomes are mixed. These are diagnostic interpretations,
+not runtime acceptance claims.
+
 Existing v2 smoke NPZ artifacts remain structural evidence only: their
 synthetic 61/62 labels are one frame early, so they are not alignment evidence.
 Fresh v3 traces use Gym's live `current_frame_idx` rather than synthesized
