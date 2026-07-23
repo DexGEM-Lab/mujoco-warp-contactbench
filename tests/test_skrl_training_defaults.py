@@ -27,6 +27,7 @@ def test_cli_defaults_match_isaac_ppo_configuration() -> None:
         == 0.1
     )
     assert args.object_friction == defaults.object_friction == "0.5 0.01 0.001"
+    assert args.settle_frames == defaults.settle_frames == 1
     assert args.finger_kp == defaults.finger_kp == 15.0
     assert args.finger_kv == defaults.finger_kv == 0.0
     assert args.naconmax == defaults.naconmax == 8192
@@ -36,6 +37,7 @@ def test_cli_defaults_match_isaac_ppo_configuration() -> None:
 def test_env_defaults_match_reference_pd_baseline() -> None:
     cfg = DexHandRLMJXEnvConfig()
 
+    assert cfg.settle_frames == 1
     assert cfg.base_rot_kp == 10000.0
     assert cfg.base_rot_kv == 125.0
     assert cfg.base_rot_force == 100.0

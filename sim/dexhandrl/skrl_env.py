@@ -107,7 +107,8 @@ class DexHandRLMJXEnvConfig:
     use_residual: bool = True
     dt: float = 0.01
     substeps: int = 10
-    settle_frames: int = 0
+    # Gym advances one 0.01 s control frame during reset before policy frame 62.
+    settle_frames: int = 1
     pre_contact_frames: int = 200
     post_contact_frames: int = 250
     object_reset_z_offset: float = 0.01
@@ -440,8 +441,7 @@ def _normalize_contact_force(values: np.ndarray, max_contact_force: float) -> np
 
 def _normalize_active_positions(values: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> np.ndarray:
     denom = np.clip(upper - lower, 1e-6, None)
-    normalized = 2.0 * (np.asarray(values, dtype=np.float32) - lower) / denom - 1.0
-    return np.clip(normalized, -1.0, 1.0)
+    return 2.0 * (np.asarray(values, dtype=np.float32) - lower) / denom - 1.0
 
 
 def _mask_contact_vectors(vectors: np.ndarray, mask: np.ndarray) -> np.ndarray:

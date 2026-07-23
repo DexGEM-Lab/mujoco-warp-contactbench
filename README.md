@@ -499,7 +499,7 @@ PYTHON=/home/zrg/miniconda3/envs/mujoco_contactbench/bin/python \
   bash scripts/run_dexhandrl_skrl.sh \
   --mode rollout --device cpu --num-envs 1 \
   --object-name cube1 --action 01 --sequence-index 1 \
-  --finger-kp 15 --finger-kv 0 --finger-force 50 \
+  --settle-frames 1 --finger-kp 15 --finger-kv 0 --finger-force 50 \
   --hand-self-collision-mode disable_within_finger \
   --rollout-keep-observation \
   --rlgames-checkpoint /path/to/last_Dexhand021proReconstruction_ep_20000.pth
@@ -540,9 +540,12 @@ observations; and separates decision-time inputs from post-physics state. Gym
 initializes physical qpos/object state at Lance frame 61, then its reset
 observation is the policy decision at frame 62. The inclusive physical window
 is 61–693: traces contain 1–631 actions, decisions 62–692, and resulting
-states 63–693. MuJoCo follows this same split: reset initializes frame 61 and
-returns the frame-62 target with zero episode time. Each action adds `1/633` to
-policy episode time. MuJoCo records the authoritative raw Lance reference and
+states 63–693. MuJoCo follows this same split: reset initializes frame 61, advances one
+`0.01 s` reset control frame, and returns the frame-62 target with zero episode
+time. Each action adds `1/633` to policy episode time. The production
+`substeps=10` and finger `kp/kv=15/0` remain evidence-backed MuJoCo defaults:
+Gym's PhysX `substeps=2` and numeric finger `300/20` gains do not transfer
+across simulator actuator semantics. MuJoCo records the authoritative raw Lance reference and
 pre-coupling corrected target, then declares
 `applied_active_target == corrected_active_target` with `post_filters: []`.
 

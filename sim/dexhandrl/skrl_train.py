@@ -41,6 +41,7 @@ class SkrlLauncherConfig:
     post_contact_frames: int = 250
     object_position_terminal_threshold: float = 0.1
     substeps: int = 10
+    settle_frames: int = 1
     finger_kp: float = 15.0
     finger_kv: float = 0.0
     finger_force: float = 50.0
@@ -187,6 +188,7 @@ def _make_env_factory(cfg: SkrlLauncherConfig, spec: dict[str, Any], env_index: 
         post_contact_frames=cfg.post_contact_frames,
         object_position_terminal_threshold=cfg.object_position_terminal_threshold,
         substeps=cfg.substeps,
+        settle_frames=cfg.settle_frames,
         finger_kp=cfg.finger_kp,
         finger_kv=cfg.finger_kv,
         finger_force=cfg.finger_force,
@@ -511,6 +513,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--post-contact-frames", type=int, default=250)
     parser.add_argument("--object-position-terminal-threshold", type=float, default=0.1)
     parser.add_argument("--substeps", type=int, default=10)
+    parser.add_argument("--settle-frames", type=int, default=1)
     parser.add_argument("--finger-kp", type=float, default=15.0)
     parser.add_argument("--finger-kv", type=float, default=0.0)
     parser.add_argument("--finger-force", type=float, default=50.0)
@@ -594,6 +597,7 @@ def main(argv: list[str] | None = None) -> None:
         post_contact_frames=int(args.post_contact_frames),
         object_position_terminal_threshold=float(args.object_position_terminal_threshold),
         substeps=int(args.substeps),
+        settle_frames=max(int(args.settle_frames), 0),
         finger_kp=float(args.finger_kp),
         finger_kv=float(args.finger_kv),
         finger_force=float(args.finger_force),

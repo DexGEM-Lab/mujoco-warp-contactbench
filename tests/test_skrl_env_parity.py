@@ -14,7 +14,11 @@ from sim.dexhandrl.parity import (
 )
 from sim.dexhandrl.skrl_env import DexHandRLMJXEnv
 from sim.dexhandrl.skrl_env import DexHandRLMJXEnvConfig
-from sim.dexhandrl.skrl_env import _decode_contact_force_world, _mask_contact_vectors
+from sim.dexhandrl.skrl_env import (
+    _decode_contact_force_world,
+    _mask_contact_vectors,
+    _normalize_active_positions,
+)
 from sim.dexhandrl.skrl_env import _farthest_point_sample
 
 
@@ -42,6 +46,65 @@ def test_reset_keeps_physical_start_but_exposes_next_policy_frame() -> None:
     assert task._episode_step_count == 0
     assert obs.shape == (461,)
     assert info["current_frame"] == 62
+
+
+def test_default_reset_settles_one_control_frame_before_policy_frame() -> None:
+    class Data:
+        def __init__(self):
+            self.qpos = np.zeros(1, dtype=np.float32)
+            self.ctrl = np.zeros(1, dtype=np.float32)
+
+        def replace(self, *, ctrl):
+            self.ctrl = ctrl
+            return self
+
+    task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
+    task.cfg = DexHandRLMJXEnvConfig()
+    task.start_frame = 61
+    task.trajectory = SimpleNamespace(
+        object_pos=np.zeros((62, 3), dtype=np.float32),
+        object_quat_xyzw=np.zeros((62, 4), dtype=np.float32),
+    )
+    task.route_joint_upper_limits = {}
+    task.ids = SimpleNamespace(actuator_ids=(),)
+    task.model = SimpleNamespace(nu=1)
+    task.mx = object()
+    task.jnp = SimpleNamespace(asarray=lambda value, dtype: value)
+    task.mjx = SimpleNamespace(make_data=lambda *args, **kwargs: Data())
+    task.jax = SimpleNamespace(block_until_ready=lambda value: value)
+    task.forward = lambda mx, dx: dx
+    step_calls = []
+    task.step_fn = lambda mx, dx: (step_calls.append(1) or dx)
+
+    original = {
+        "reference": skrl_env_module._reference_full_targets,
+        "hand": skrl_env_module.set_hand_qpos,
+        "object": skrl_env_module.set_object_freejoint,
+        "ctrl": skrl_env_module.make_ctrl_vector,
+    }
+    try:
+        skrl_env_module._reference_full_targets = lambda *args, **kwargs: np.zeros(1, dtype=np.float32)
+        skrl_env_module.set_hand_qpos = lambda _jnp, dx, _ids, _full: dx
+        skrl_env_module.set_object_freejoint = lambda _jnp, dx, _ids, _pos, _quat: dx
+        skrl_env_module.make_ctrl_vector = lambda _full, _ids, _nu: np.zeros(1, dtype=np.float32)
+        task._set_initial_state()
+    finally:
+        skrl_env_module._reference_full_targets = original["reference"]
+        skrl_env_module.set_hand_qpos = original["hand"]
+        skrl_env_module.set_object_freejoint = original["object"]
+        skrl_env_module.make_ctrl_vector = original["ctrl"]
+
+    assert task.cfg.settle_frames == 1
+    assert len(step_calls) == task.cfg.substeps == 10
+
+
+def test_active_position_normalization_matches_unclipped_gym_affine_contract() -> None:
+    lower = np.asarray([0.0, -2.0], dtype=np.float32)
+    upper = np.asarray([2.0, 2.0], dtype=np.float32)
+
+    normalized = _normalize_active_positions(np.asarray([-1.0, 3.0], dtype=np.float32), lower, upper)
+
+    np.testing.assert_allclose(normalized, np.asarray([-2.0, 1.5], dtype=np.float32))
 
 
 def test_episode_time_uses_action_count_not_logical_frame() -> None:
