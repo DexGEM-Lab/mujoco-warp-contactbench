@@ -6,6 +6,12 @@ Inspect the current `dev` ManoRL implementation and refactor DexHandRL so its st
 
 Treat this as a T3 cross-module contract change. Preserve DexHandRL-specific observation, action, and checkpoint contracts. Use ManoRL as the architectural and provenance reference for shared mechanisms, not as a source of physics constants to copy wholesale into a different hand/task.
 
+## Training launch scope
+
+Prepare and launch one action-conditioned DexHandRL policy for `cube1` over all dataset actions `01`, `02`, `03`, `04`, `09`, `10`, and `18`. The production run must use 1,024 environments, 3,000 PPO updates, and GPU 1 on Server2. Server2 must use an isolated mirror of this feature and a uniquely named tmux session. Existing GPU 1 jobs must remain running; do not kill or replace them.
+
+A direct invocation of the current trainer is invalid. Its dataset selector accepts exactly one action, and its `SyncVectorEnv` execution creates independent single-world runtimes rather than true batched, device-resident physics. Implement the missing heterogeneous action assignment and batched runtime contract before attempting the production launch.
+
 ## Parameter contracts
 
 Make every relevant parameter's ownership explicit:
@@ -26,6 +32,9 @@ Make every relevant parameter's ownership explicit:
 - Keep diagnostic flags fail-closed and behavior-neutral by default. Enabling, importing, or defining diagnostic facilities must not change production defaults; any diagnostic intervention must require explicit opt-in and record its provenance.
 - Add focused regression tests for shared-vs-task-specific parameter ownership, default behavior, the native `residual=false` path, preserved observation/action/checkpoint contracts, and diagnostic isolation.
 - Compare refactored behavior against the existing recorded DexHandRL baselines, including native checkpoint behavior and the established exact-control/source-conditioned reference. Report whether differences arise from structural refactoring, intentional parameter provenance changes, or pre-existing simulator-specific dynamics.
+- Extend training to assign the seven requested dataset actions across the 1,024 environments with all actions represented and per-action counts differing by at most one. Train one shared action-conditioned policy rather than seven independent policies.
+- Replace the single-world `SyncVectorEnv` training path with true batched, device-resident physics suitable for the 1,024-environment GPU run. Do not represent Python-level aggregation of 1,024 independent worlds as batched execution.
+- Mirror the accepted feature state to an isolated Server2 location, launch under a unique tmux name on GPU 1, and preserve the existing GPU 1 processes.
 
 ## Acceptance target
 
@@ -38,8 +47,12 @@ The refactor is accepted when:
 5. native and MJX paths consume the same scene, `physics_contract`, controller, reset, filters, frames, targets, and task semantics, with backend identity visible in viewer telemetry;
 6. a fixed cube1/action02/sequence0 residual-off 50-step comparison proves exact frame/target/control inputs and reports state/observation divergence without an equivalence claim;
 7. diagnostic flags and tooling do not affect production defaults unless explicitly enabled;
-8. focused regression tests cover the changed contracts; and
-9. behavior is compared with existing baselines, with observed changes attributed to a concrete mechanism rather than assumed parity.
+8. focused regression tests cover the changed contracts;
+9. behavior is compared with existing baselines, with observed changes attributed to a concrete mechanism rather than assumed parity;
+10. the 1,024 environments receive a deterministic balanced assignment over actions `01`, `02`, `03`, `04`, `09`, `10`, and `18`, and one action-conditioned policy consumes the resulting heterogeneous batch;
+11. rollout physics is genuinely batched and device-resident rather than a `SyncVectorEnv` collection of single-world runtimes;
+12. a finite one-update, 1,024-environment GPU 1 preflight completes on Server2 and demonstrates sufficient memory headroom without terminating PIDs `1872925` or `1881324`; and
+13. only after that preflight, the 3,000-update run is launched in the isolated Server2 mirror under a uniquely named tmux session, and the first training progress plus the concrete progress and checkpoint output paths are verified.
 
 ## Constraints
 

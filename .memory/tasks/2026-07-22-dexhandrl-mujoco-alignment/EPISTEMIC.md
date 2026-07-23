@@ -1,6 +1,16 @@
 # Epistemic Record
 
-## Current claim
+## Current training-launch claim
+
+The requested Server2 production run cannot be launched correctly through the current training entry point. Its dataset path filters for exactly one action, while the request requires a balanced heterogeneous batch over actions `01`, `02`, `03`, `04`, `09`, `10`, and `18`. Its `SyncVectorEnv` path also constructs independent single-world runtimes; raising the environment count to 1,024 would multiply Python/runtime overhead without providing true batched, device-resident physics. A direct 1,024-environment launch would therefore violate both the data-assignment and execution contracts.
+
+The target is one action-conditioned policy for `cube1`, trained with 1,024 environments for 3,000 PPO updates on Server2 GPU 1. The implementation must first provide deterministic balanced all-action assignment (all seven actions represented, counts differing by at most one) and a genuinely batched device-resident physics path. The discriminating preflight is one finite PPO update at the full 1,024-environment scale: it must complete on GPU 1 with adequate headroom while PIDs `1872925` and `1881324` remain alive. Only then is the 3,000-update run eligible to launch in a uniquely named tmux session from an isolated Server2 mirror.
+
+Server2 is ready in dependencies, data, and source inputs, but it does not yet contain this feature mirror or a `sim/dexhandrl` checkout. Existing Unison configuration covers only the primary `dev` root and is stopped, so it cannot be treated as feature synchronization. GPU 1 currently has the two existing processes, approximately 21.5 GiB free, and 0% utilization in the sampled observation. Free memory is encouraging but does not establish training headroom; the finite full-scale preflight is the required evidence.
+
+Production acceptance additionally requires observing the first training progress from the 3,000-update run and recording the concrete progress and checkpoint output paths. Existing GPU jobs must not be killed to make the launch fit.
+
+## Accepted viewer claim
 
 The explicit CPU-only `mujoco-native` backend is accepted for the interactive, single-environment DexHandRL viewer. It makes the viewer responsive while executing the production environment rather than replaying or mirroring an injected trace. It uses the same generated scene, immutable `physics_contract`, controller, reset, ordered filters, frame/reference schedule, state-dependent target routing, observations, rewards, and termination logic as `mjx-warp`. Viewer telemetry names the active backend.
 
