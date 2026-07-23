@@ -6,8 +6,11 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT
-from sim.dexhandrl.contracts import DexHandPhysicsConfig
+from sim.dexhandrl.contracts import DexHandMaterialConfig, DexHandPhysicsConfig, DexHandServoConfig
 from sim.dexhandrl.scene import (
+    _compiled_exclude_pairs,
+    _hand_self_collision_exclude_pairs,
+    _object_contact_xml,
     _parse_object_asset,
     _parse_urdf_origin,
     _patch_hand_xml,
@@ -71,7 +74,6 @@ def test_generated_cube1_xml_and_compiled_inertial_frame(tmp_path: Path) -> None
     assert tuple(float(value) for value in inertial.attrib["pos"].split()) == pytest.approx(
         (0.005175592236, -0.005187185076, 0.001516276923), abs=0.0
     )
-    # MuJoCo forbids an inertial orientation alongside fullinertia; identity is implicit.
     assert "quat" not in inertial.attrib
     assert tuple(float(value) for value in geom.attrib["pos"].split()) == (0.0, 0.0, 0.0)
     assert tuple(float(value) for value in geom.attrib["quat"].split()) == (1.0, 0.0, 0.0, 0.0)
@@ -83,14 +85,9 @@ def test_generated_cube1_xml_and_compiled_inertial_frame(tmp_path: Path) -> None
     model = mujoco.MjModel.from_xml_path(str(xml_path))
     body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "cube1")
     geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_collision")
-    assert model.body_ipos[body_id] == pytest.approx(
-        (0.005175592236, -0.005187185076, 0.001516276923), abs=1e-14
-    )
+    assert model.body_ipos[body_id] == pytest.approx((0.005175592236, -0.005187185076, 0.001516276923), abs=1e-14)
     assert model.body_mass[body_id] == pytest.approx(0.125, abs=1e-15)
-    assert sorted(model.body_inertia[body_id]) == pytest.approx(
-        sorted((0.0001333333352, 0.0001333333353, 0.0001333333366)), abs=1e-15
-    )
-    # The XML collision origin is zero; compilation relocates the free body to its COM.
+    assert sorted(model.body_inertia[body_id]) == pytest.approx(sorted((0.0001333333352, 0.0001333333353, 0.0001333333366)), abs=1e-15)
     assert model.geom_pos[geom_id] == pytest.approx(model.body_ipos[body_id], abs=2e-12)
     assert model.geom_friction[geom_id] == pytest.approx((0.5, 0.01, 0.001), abs=1e-15)
 
@@ -126,9 +123,18 @@ def test_compiled_validator_rejects_option_actuator_and_material_mutations() -> 
         validate_dexhandrl_compiled_model(mujoco, model)
 
 
+def test_object_contact_xml_preserves_default_bytes_and_emits_custom_tails() -> None:
+    assert _object_contact_xml(DexHandPhysicsConfig()) == ("0.006 1", "0.95 0.995 0.0001")
+    custom = DexHandPhysicsConfig(material=DexHandMaterialConfig(object_solimp=(0.95, 0.995, 0.0001, 0.75, 3.0)))
+    assert _object_contact_xml(custom) == ("0.006 1", "0.95 0.995 0.0001 0.75 3")
+    with pytest.raises(ValueError, match="time constant"):
+        DexHandMaterialConfig(object_solref=(0.0, 1.0))
+
+
 def test_hand_friction_patch_changes_only_canonical_hand_default(tmp_path: Path) -> None:
     patched = _patch_hand_xml(_HAND_XML, tmp_path, dt=0.01, substeps=10, hand_friction="3 2 2")
-
+    with pytest.raises(ValueError, match="cannot be combined"):
+        _patch_hand_xml(_HAND_XML, tmp_path, dt=0.01, physics=DexHandPhysicsConfig())
     assert 'friction="3 2 2" solref=' in patched
     assert patched.count('friction="3 2 2"') == 1
 
@@ -140,3 +146,29 @@ def test_hand_friction_patch_changes_only_canonical_hand_default(tmp_path: Path)
 def test_hand_friction_patch_fails_closed_without_one_canonical_default(xml: str, tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="exactly one canonical hand default"):
         _patch_hand_xml(xml, tmp_path, dt=0.01, substeps=10, hand_friction="3 2 2")
+
+
+@pytest.mark.parametrize("mode, expected_count", [("none", 0), ("disable_within_finger", 40), ("all_disabled", 210)])
+def test_compiled_self_collision_exclude_signatures_exact(mode: str, expected_count: int) -> None:
+    mujoco = pytest.importorskip("mujoco")
+    physics = DexHandPhysicsConfig(hand_self_collision_mode=mode)
+    mujoco, model = compile_dexhandrl_model(physics=physics)
+    assert model.nexclude == expected_count
+    assert _compiled_exclude_pairs(mujoco, model) == _hand_self_collision_exclude_pairs(mode)
+    if expected_count:
+        model.exclude_signature[0] = model.exclude_signature[1]
+        with pytest.raises(ValueError, match="self-collision"):
+            validate_dexhandrl_compiled_model(mujoco, model, physics)
+
+
+def test_high_precision_scene_contract_compiles(tmp_path: Path) -> None:
+    mujoco = pytest.importorskip("mujoco")
+    physics = DexHandPhysicsConfig(
+        control_dt=0.010000000000001,
+        servo=DexHandServoConfig(finger_kp=15.123456789012345),
+        material=DexHandMaterialConfig(object_friction=(0.5000000000000001, 0.010000000000001, 0.001000000000001)),
+    )
+    path = build_dexhandrl_scene_xml(tmp_path / "precise.xml", "cube1", physics=physics)
+    assert 'kp="15.123456789012344"' in path.read_text()
+    model = mujoco.MjModel.from_xml_path(str(path))
+    validate_dexhandrl_compiled_model(mujoco, model, physics)

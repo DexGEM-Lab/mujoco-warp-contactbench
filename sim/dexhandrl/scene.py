@@ -10,7 +10,11 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, format_friction, legacy_physics_config
-from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT
+from sim.dexhandrl.constants import (
+    DEFAULT_ISAAC_SOURCE_ROOT,
+    DEXHAND021PRO_CONTACT_BODY_NAMES,
+    DEXHAND021PRO_FINGERTIP_BODY_NAMES,
+)
 
 
 HAND_XML_RELATIVE = Path(
@@ -18,6 +22,28 @@ HAND_XML_RELATIVE = Path(
     "marvin_021pro_right_hand_floating_simplified.xml"
 )
 OBJECT_URDF_RELATIVE = Path("assets/all_assets/Assets/sim/mano_objects_urdf")
+_UNSET = object()
+
+# These spellings are part of the frozen legacy XML oracle.  All non-legacy
+# values use 17 significant digits so XML round-trips their floating values.
+_LEGACY_FLOAT_TEXT = {
+    0.0: "0", 0.0001: "0.0001", 0.001: "0.001", 0.006: "0.006", 0.01: "0.01",
+    0.5: "0.5", 0.95: "0.95", 0.995: "0.995", 1.0: "1", 2.0: "2", 3.0: "3",
+    9.81: "9.81", 15.0: "15", 50.0: "50", 80.0: "80", 100.0: "100",
+    125.0: "125", 500.0: "500", 5000.0: "5000", 10000.0: "10000",
+}
+
+
+def _format_float(value: float) -> str:
+    value = float(value)
+    text = _LEGACY_FLOAT_TEXT.get(abs(value))
+    if text is not None:
+        return f"-{text}" if value < 0 else text
+    return f"{value:.17g}"
+
+
+def _format_numbers_legacy_compatible(values: tuple[float, ...]) -> str:
+    return " ".join(_format_float(value) for value in values)
 
 
 def _object_urdf_path(object_name: str, isaac_source_root: Path) -> Path:
@@ -117,9 +143,9 @@ def _replace_exactly_once(xml: str, pattern: str, replacement: str, description:
 
 def _replace_or_insert_option(xml: str, physics: DexHandPhysicsConfig) -> str:
     # Euler is MuJoCo's default; serializing it changes the frozen legacy XML bytes.
-    gravity = " ".join(f"{value:g}" for value in physics.gravity)
+    gravity = _format_numbers_legacy_compatible(physics.gravity)
     option = (f'<option gravity="{gravity}" iterations="{physics.iterations}" '
-              f'solver="{physics.solver}" timestep="{physics.physics_dt:g}" />')
+              f'solver="{physics.solver}" timestep="{_format_float(physics.physics_dt)}" />')
     if "<option" in xml:
         return _replace_exactly_once(xml, r"<option[^>]*/>", option, "option")
     if xml.count("<compiler") != 1:
@@ -128,12 +154,25 @@ def _replace_or_insert_option(xml: str, physics: DexHandPhysicsConfig) -> str:
 
 
 def _patch_hand_xml(
-    xml: str, isaac_source_root: Path, dt: float = 0.01, substeps: int = 10, hand_friction: str = "0.5 0.01 0.001", *, physics: DexHandPhysicsConfig | None = None
+    xml: str,
+    isaac_source_root: Path,
+    dt: Any = _UNSET,
+    substeps: Any = _UNSET,
+    hand_friction: Any = _UNSET,
+    *,
+    physics: DexHandPhysicsConfig | None = None,
 ) -> str:
     """Patch the one canonical hand-geometry default without touching scene geoms."""
+    legacy = {
+        name: value
+        for name, value in {"dt": dt, "substeps": substeps, "hand_friction": hand_friction}.items()
+        if value is not _UNSET
+    }
+    if physics is not None and legacy:
+        raise ValueError("physics cannot be combined with legacy hand XML overrides")
     hand_dir = (isaac_source_root / HAND_XML_RELATIVE).parent
     mesh_dir = (hand_dir / "../marvin_021pro_urdf/meshes").resolve()
-    physics = physics or legacy_physics_config(dt=dt, substeps=substeps, hand_friction=hand_friction)
+    physics = physics or legacy_physics_config(**legacy)
     xml = _replace_exactly_once(xml, r'meshdir="[^"]+"', f'meshdir="{mesh_dir.as_posix()}"', "mesh directory")
     canonical_hand_geom = r'(<geom\s+friction=")3 2 2("(?=\s+solref=))'
     try:
@@ -152,8 +191,22 @@ def _object_asset_xml(object_name: str, asset: dict[str, object]) -> str:
     )
 
 
-def _object_body_xml(object_name: str, asset: dict[str, object], object_friction: str) -> str:
+def _object_contact_xml(physics: DexHandPhysicsConfig) -> tuple[str, str]:
+    solref = _format_numbers_legacy_compatible(physics.material.object_solref)
+    solimp_values = physics.material.object_solimp
+    # The legacy three-field form expands to the same compiled five-field values.
+    # Serialize tails only when a custom contract changes either tail value.
+    solimp = _format_numbers_legacy_compatible(
+        solimp_values[:3] if solimp_values[3:] == (0.5, 2.0) else solimp_values
+    )
+    return solref, solimp
+
+
+def _object_body_xml(
+    object_name: str, asset: dict[str, object], object_friction: str, physics: DexHandPhysicsConfig
+) -> str:
     inertia = asset["inertia"]
+    solref, solimp = _object_contact_xml(physics)
     inertial_pos = _format_numbers(asset["inertial_pos"])
     inertial_quat = _format_numbers(asset["inertial_quat"])
     inertial_orientation = "" if inertial_quat == "1 0 0 0" else f' quat="{inertial_quat}"'
@@ -163,7 +216,7 @@ def _object_body_xml(object_name: str, asset: dict[str, object], object_friction
     <body name="{object_name}" pos="0 0 0">
       <freejoint name="{object_name}_free" />
       <inertial pos="{inertial_pos}"{inertial_orientation} mass="{asset["mass"]}" fullinertia="{inertia["ixx"]} {inertia["iyy"]} {inertia["izz"]} {inertia["ixy"]} {inertia["ixz"]} {inertia["iyz"]}" />
-      <geom name="{object_name}_collision" type="mesh" mesh="{object_name}_mesh" pos="{collision_pos}" quat="{collision_quat}" contype="1" conaffinity="1" condim="3" friction="{object_friction}" solref="0.006 1" solimp="0.95 0.995 0.0001" rgba="0.80 0.18 0.16 1" />
+      <geom name="{object_name}_collision" type="mesh" mesh="{object_name}_mesh" pos="{collision_pos}" quat="{collision_quat}" contype="1" conaffinity="1" condim="3" friction="{object_friction}" solref="{solref}" solimp="{solimp}" rgba="0.80 0.18 0.16 1" />
     </body>
 '''
 
@@ -172,23 +225,27 @@ def _ground_xml(ground_friction: str) -> str:
     return f'    <geom name="ground" type="plane" size="3 3 0.05" pos="0 0 0" contype="1" conaffinity="1" friction="{ground_friction}" rgba="0.55 0.55 0.55 1" />\n'
 
 
-def _hand_self_collision_excludes_xml(mode: str = "disable_within_finger") -> str:
+def _hand_self_collision_exclude_pairs(mode: str = "disable_within_finger") -> set[tuple[str, str]]:
     valid_modes = {"none", "disable_within_finger", "all_disabled"}
     if mode not in valid_modes:
         raise ValueError(f"hand self-collision mode must be one of {sorted(valid_modes)}, got {mode!r}")
     if mode == "none":
-        return ""
-
-    excluded_pairs: set[tuple[str, str]] = set()
+        return set()
     finger_bodies = [f"RH{finger}_{link}" for finger in range(5) for link in range(4)]
     if mode == "all_disabled":
-        excluded_pairs.update(tuple(sorted(pair)) for pair in combinations(["RFH1", *finger_bodies], 2))
-    else:
-        for finger in range(5):
-            bodies = [f"RH{finger}_{link}" for link in range(4)]
-            excluded_pairs.update(tuple(sorted(pair)) for pair in combinations(bodies, 2))
-            for proximal_body in bodies[:2]:
-                excluded_pairs.add(tuple(sorted(("RFH1", proximal_body))))
+        return {tuple(sorted(pair)) for pair in combinations(["RFH1", *finger_bodies], 2)}
+    excluded_pairs = set()
+    for finger in range(5):
+        bodies = [f"RH{finger}_{link}" for link in range(4)]
+        excluded_pairs.update(tuple(sorted(pair)) for pair in combinations(bodies, 2))
+        excluded_pairs.update(tuple(sorted(("RFH1", body))) for body in bodies[:2])
+    return excluded_pairs
+
+
+def _hand_self_collision_excludes_xml(mode: str = "disable_within_finger") -> str:
+    excluded_pairs = _hand_self_collision_exclude_pairs(mode)
+    if not excluded_pairs:
+        return ""
     lines = ["  <contact>\n"]
     for body1, body2 in sorted(excluded_pairs):
         lines.append(f'    <exclude body1="{body1}" body2="{body2}" />\n')
@@ -198,7 +255,7 @@ def _hand_self_collision_excludes_xml(mode: str = "disable_within_finger") -> st
 
 def _force_range(limit: float) -> str:
     value = abs(float(limit))
-    return f"-{value:g} {value:g}"
+    return f"-{_format_float(value)} {_format_float(value)}"
 
 
 def _patch_pd_gains(
@@ -224,22 +281,22 @@ def _patch_pd_gains(
         "act_ARRz": (base_rot_kp, base_rot_kv, _force_range(base_rot_force)),
     }
     for name, (kp, kv, force_range) in replacements.items():
-        xml = re.sub(rf'(<position name="{name}"[^>]*?)kp="[^"]+"', rf'\1kp="{kp:g}"', xml, count=1)
-        xml = re.sub(rf'(<position name="{name}"[^>]*?)kv="[^"]+"', rf'\1kv="{kv:g}"', xml, count=1)
+        xml = re.sub(rf'(<position name="{name}"[^>]*?)kp="[^"]+"', rf'\1kp="{_format_float(kp)}"', xml, count=1)
+        xml = re.sub(rf'(<position name="{name}"[^>]*?)kv="[^"]+"', rf'\1kv="{_format_float(kv)}"', xml, count=1)
         xml = re.sub(rf'(<position name="{name}"[^>]*?)forcerange="[^"]+"', rf'\1forcerange="{force_range}"', xml, count=1)
     xml = re.sub(
         r'(<position name="act_r_f_jiont_[^"]+"[^>]*?)kp="[^"]+"',
-        rf'\1kp="{finger_kp:g}"',
+        rf'\1kp="{_format_float(finger_kp)}"',
         xml,
     )
     xml = re.sub(
         r'(<position name="act_r_f_jiont_[^"]+"(?![^>]*kv=)[^>]*?)\s*/>',
-        rf'\1 kv="{finger_kv:g}" forcelimited="true" forcerange="{_force_range(finger_force)}" />',
+        rf'\1 kv="{_format_float(finger_kv)}" forcelimited="true" forcerange="{_force_range(finger_force)}" />',
         xml,
     )
     xml = re.sub(
         r'(<position name="act_r_f_jiont_[^"]+"[^>]*?)kv="[^"]+"',
-        rf'\1kv="{finger_kv:g}"',
+        rf'\1kv="{_format_float(finger_kv)}"',
         xml,
     )
     xml = re.sub(
@@ -257,9 +314,6 @@ def _patch_pd_gains(
             if match is None or 'kp="' not in match.group(0) or 'forcerange="' not in match.group(0):
                 raise RuntimeError(f"PD gain transformation did not apply exactly once: {name}")
     return xml
-
-
-_UNSET = object()
 
 
 def build_dexhandrl_scene_xml(
@@ -315,7 +369,7 @@ def build_dexhandrl_scene_xml(
     xml = xml.replace("  </asset>", _object_asset_xml(object_name, asset) + "  </asset>", 1)
     xml = xml.replace(
         "  </worldbody>",
-        _ground_xml(format_friction(config.material.ground_friction)) + _object_body_xml(object_name, asset, format_friction(config.material.object_friction)) + "  </worldbody>",
+        _ground_xml(format_friction(config.material.ground_friction)) + _object_body_xml(object_name, asset, format_friction(config.material.object_friction), config) + "  </worldbody>",
         1,
     )
     xml = xml.replace(
@@ -355,6 +409,21 @@ def _model_names(mujoco: Any, model: Any, obj: Any, count: int) -> tuple[str, ..
 def _close(actual: float, expected: float, label: str) -> None:
     if not math.isclose(float(actual), float(expected), rel_tol=1e-8, abs_tol=1e-10):
         raise ValueError(f"compiled {label} mismatch: {actual!r} != {expected!r}")
+
+
+def _compiled_exclude_pairs(mujoco: Any, model: Any) -> set[tuple[str, str]]:
+    pairs = set()
+    for signature in model.exclude_signature:
+        # MuJoCo packs the lower and upper body ids in the two 16-bit halves.
+        body1, body2 = int(signature) & 0xFFFF, int(signature) >> 16
+        names = (
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body1),
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body2),
+        )
+        if None in names:
+            raise ValueError(f"compiled exclude has unnamed body signature: {signature}")
+        pairs.add(tuple(sorted(names)))
+    return pairs
 
 
 def validate_dexhandrl_compiled_model(
@@ -415,7 +484,14 @@ def validate_dexhandrl_compiled_model(
         raise ValueError(f"compiled hand geom count mismatch: {len(hand_geoms)}")
     for geom_id in hand_geoms:
         friction(geom_id, physics.material.hand_friction, "hand")
-    for name in ("RFH1", "right_hand_base", object_name, f"{object_name}_free", "ground"):
+    expected_excludes = _hand_self_collision_exclude_pairs(physics.hand_self_collision_mode)
+    actual_excludes = _compiled_exclude_pairs(mujoco, model)
+    if model.nexclude != len(expected_excludes) or actual_excludes != expected_excludes:
+        raise ValueError("compiled hand self-collision excludes mismatch")
+    required_bodies = (
+        "right_hand_base", *DEXHAND021PRO_CONTACT_BODY_NAMES, *DEXHAND021PRO_FINGERTIP_BODY_NAMES, object_name
+    )
+    for name in (*required_bodies, f"{object_name}_free", "ground"):
         kind = mujoco.mjtObj.mjOBJ_JOINT if name.endswith("_free") else (mujoco.mjtObj.mjOBJ_GEOM if name == "ground" else mujoco.mjtObj.mjOBJ_BODY)
         if mujoco.mj_name2id(model, kind, name) < 0:
             raise ValueError(f"compiled required name absent: {name}")

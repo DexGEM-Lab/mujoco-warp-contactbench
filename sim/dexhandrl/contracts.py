@@ -12,6 +12,13 @@ PROVENANCE_LABELS = frozenset(
 )
 
 
+def _validate_provenance(provenance: dict[str, str]) -> dict[str, str]:
+    invalid = {field: label for field, label in provenance.items() if label not in PROVENANCE_LABELS}
+    if invalid:
+        raise ValueError(f"unsupported DexHand provenance label(s): {invalid}")
+    return provenance
+
+
 def parse_friction(value: str | tuple[float, float, float] | list[float]) -> tuple[float, float, float]:
     """Parse the MuJoCo sliding/torsional/rolling friction triple."""
     if isinstance(value, str):
@@ -24,7 +31,9 @@ def parse_friction(value: str | tuple[float, float, float] | list[float]) -> tup
 
 
 def format_friction(value: str | tuple[float, float, float] | list[float]) -> str:
-    return " ".join(f"{part:g}" for part in parse_friction(value))
+    # Preserve frozen legacy spellings; custom values retain 17 significant digits.
+    legacy = {0.0: "0", 0.001: "0.001", 0.01: "0.01", 0.5: "0.5", 3.0: "3", 2.0: "2"}
+    return " ".join(legacy.get(part, f"{part:.17g}") for part in parse_friction(value))
 
 
 def _finite_positive(name: str, value: float, *, allow_zero: bool = False) -> None:
@@ -73,6 +82,8 @@ class DexHandMaterialConfig:
             if len(values) != count or not all(math.isfinite(v) and v >= 0 for v in values):
                 raise ValueError(f"{name} must contain {count} finite non-negative values")
             object.__setattr__(self, name, values)
+        if self.object_solref[0] <= 0:
+            raise ValueError("object_solref time constant must be a finite positive number")
 
 
 @dataclass(frozen=True)
@@ -86,6 +97,8 @@ class DexHandPhysicsConfig:
     gravity: tuple[float, float, float] = (0.0, 0.0, -9.81)
     model_njmax: int = 2048
     model_nconmax: int = 8192
+    # Stage 2 runtime allocation limits.  They are intentionally not serialized
+    # into, or validated against, the compiled MuJoCo model capacities.
     runtime_naconmax: int = 8192
     runtime_njmax: int = 8192
     servo: DexHandServoConfig = DexHandServoConfig()
@@ -119,14 +132,14 @@ class DexHandPhysicsConfig:
         """JSON-serializable contract and explicit parameter-provenance labels."""
         record = asdict(self)
         record["physics_dt"] = self.physics_dt
-        record["provenance"] = {
+        record["provenance"] = _validate_provenance({
             "profile": "legacy_port_v1",
             "servo": "legacy_port_v1",
             "material": "legacy_port_v1",
             "object_asset": "asset_authoritative",
             "trajectory": "trajectory_authoritative",
             "runtime_capacity": "task_authoritative",
-        }
+        })
         return record
 
 
