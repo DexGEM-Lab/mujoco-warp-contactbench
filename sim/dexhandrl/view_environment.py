@@ -1,7 +1,8 @@
-"""Native passive viewer for one production DexHandRL MJX environment.
+"""Graphical viewer for one production DexHandRL environment on either backend.
 
-The viewer is an observer: environment ``step`` owns every physics transition;
-this module mirrors the resulting MJX state into native ``MjData`` for display.
+The viewer is an observer: environment ``step`` owns every physics transition.
+For MJX-Warp it mirrors state into native ``MjData`` for display; for explicit
+CPU-only native MuJoCo it renders the live native state without stepping it.
 """
 from __future__ import annotations
 

@@ -1,4 +1,8 @@
-"""Gym-like DexHandRL MJX environment for skrl-style training."""
+"""Gym-like DexHandRL environment for skrl-style training and native viewing.
+
+The default MJX-Warp backend owns batched training; the explicit CPU-only native
+MuJoCo backend executes the same task semantics for one interactive environment.
+"""
 
 from __future__ import annotations
 
@@ -165,6 +169,9 @@ class DexHandRLMJXEnvConfig:
         if self.runtime_backend not in {"mjx-warp", "mujoco-native"}:
             raise ValueError(f"unsupported runtime_backend: {self.runtime_backend!r}")
         if self.runtime_backend == "mujoco-native" and self.device != "cpu":
+            # Keep this validation beside configuration resolution as well as
+            # in environment construction: callers can inspect a config before
+            # constructing an environment, and construction remains fail-closed.
             raise ValueError("mujoco-native runtime_backend requires device='cpu'")
         self.physics = resolve_physics_config(
             self.physics,
@@ -595,6 +602,8 @@ class DexHandRLMJXEnv:
         if cfg.device not in {"cpu", "gpu"}:
             raise ValueError(f"unsupported MJX device: {cfg.device!r}")
         if cfg.runtime_backend == "mujoco-native" and cfg.device != "cpu":
+            # Intentional duplicate of config validation: this protects callers
+            # that mutate a config after construction before environment startup.
             raise ValueError("mujoco-native runtime_backend requires device='cpu'")
 
         # The native viewer path deliberately does not import JAX/MJX: importing
@@ -1013,12 +1022,27 @@ class DexHandRLMJXEnv:
                     f"native MuJoCo contact buffer reached nconmax={capacity}; increase nconmax to avoid contact truncation"
                 )
             contacts = [dx.contact[index] for index in range(active_contacts)]
-            contact_geom = np.asarray([[contact.geom1, contact.geom2] for contact in contacts], dtype=np.int32)
-            contact_frame = np.asarray([contact.frame for contact in contacts], dtype=np.float32).reshape(active_contacts, 9)
-            contact_friction = np.asarray([contact.friction for contact in contacts], dtype=np.float32).reshape(active_contacts, 5)
-            contact_dim = np.asarray([contact.dim for contact in contacts], dtype=np.int32)
+            # Normalize native empty buffers to the fixed MJX decoder layout.
+            contact_geom = np.asarray(
+                [[contact.geom1, contact.geom2] for contact in contacts], dtype=np.int32
+            ).reshape(active_contacts, 2)
+            contact_frame = np.asarray(
+                [contact.frame for contact in contacts], dtype=np.float32
+            ).reshape(active_contacts, 9)
+            contact_friction = np.asarray(
+                [contact.friction for contact in contacts], dtype=np.float32
+            ).reshape(active_contacts, 5)
+            contact_dim = np.asarray([contact.dim for contact in contacts], dtype=np.int32).reshape(
+                active_contacts
+            )
             contact_efc_address = np.asarray(
-                [[contact.efc_address + offset for offset in range(6)] for contact in contacts], dtype=np.int32
+                [
+                    [-1] * 6
+                    if int(contact.efc_address) < 0
+                    else [int(contact.efc_address) + offset for offset in range(6)]
+                    for contact in contacts
+                ],
+                dtype=np.int32,
             ).reshape(active_contacts, 6)
             efc_force = np.asarray(dx.efc_force)
         else:

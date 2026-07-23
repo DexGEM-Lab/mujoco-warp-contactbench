@@ -5,6 +5,7 @@ import os
 import numpy as np
 import pytest
 
+import sim.dexhandrl.skrl_env as skrl_env_module
 from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 from sim.dexhandrl.view_environment import (
     PassiveDexHandViewer,
@@ -120,17 +121,38 @@ def test_zero_action_stepper_steps_production_shaped_environment_and_resets_when
     assert env.actions[0].shape == (22,) and not env.actions[0].any()
 
 
-def test_native_contact_collection_decodes_actual_zero_contact_state():
+def test_native_contact_collection_normalizes_empty_buffers_and_unsolved_addresses(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def collect(**kwargs):
+        captured.update(kwargs)
+        return {"active_contact_count": kwargs["active_contacts"]}
+
+    monkeypatch.setattr(skrl_env_module, "collect_contact_summary", collect)
     env = object.__new__(DexHandRLMJXEnv)
     env.cfg = type("Cfg", (), {"runtime_backend": "mujoco-native", "object_name": "cube1"})()
     env._dx = type("Data", (), {"ncon": 0, "efc_force": np.zeros(0)})()
     env.model = type("Model", (), {"nconmax": 8, "opt": type("Opt", (), {"cone": 0})()})()
-    env.mujoco = type("MuJoCo", (), {"mjtCone": type("Cone", (), {"mjCONE_PYRAMIDAL": 1})})()
+    # MuJoCo's native enum is PYRAMIDAL=0, ELLIPTIC=1.
+    env.mujoco = type("MuJoCo", (), {"mjtCone": type("Cone", (), {"mjCONE_PYRAMIDAL": 0})})()
     env.geom_body_names, env.geom_names = {}, {}
     env.contact_body_names = ["RFH1"]
-    summary = env._collect_contacts()
-    assert summary["active_contact_count"] == 0
-    np.testing.assert_array_equal(summary["contact_force_vectors"], np.zeros((1, 3), dtype=np.float32))
+    assert env._collect_contacts() == {"active_contact_count": 0}
+    assert np.asarray(captured["contact_geom"]).shape == (0, 2)
+    assert np.asarray(captured["contact_frame"]).shape == (0, 9)
+    assert np.asarray(captured["contact_friction"]).shape == (0, 5)
+    assert np.asarray(captured["contact_dim"]).shape == (0,)
+    assert np.asarray(captured["contact_efc_address"]).shape == (0, 6)
+    assert captured["pyramidal"] is True
+
+    unsolved = type(
+        "Contact",
+        (),
+        {"geom1": 0, "geom2": 1, "frame": np.eye(3).ravel(), "friction": np.ones(5), "dim": 3, "efc_address": -1},
+    )()
+    env._dx = type("Data", (), {"ncon": 1, "contact": [unsolved], "efc_force": np.zeros(0)})()
+    assert env._collect_contacts() == {"active_contact_count": 1}
+    np.testing.assert_array_equal(captured["contact_efc_address"], [[-1] * 6])
 
 
 def test_environment_public_mirror_copies_all_dynamic_viewer_fields():
