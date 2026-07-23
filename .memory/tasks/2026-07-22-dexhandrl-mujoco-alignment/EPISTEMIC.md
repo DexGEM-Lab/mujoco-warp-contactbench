@@ -1,31 +1,43 @@
 # Epistemic Record
 
-## Final claim
+## Current claim
 
-The ManoRL-style DexHandRL structural refactor is accepted as behavior-neutral at candidate HEAD `6718da5`. The generated scene, compiled model signature, and every frozen reset-plus-50-step array remained bit-exact to the clean pre-refactor baseline. The refactor therefore changed ownership, validation, compatibility resolution, and viewer UX without changing the frozen `legacy_port_v1` physical behavior (OPS: Stage 1 baseline and final evidence entries).
+The completed ManoRL-style structural refactor remains behavior-neutral at its accepted candidate: its generated scene, compiled model signature, and frozen reset-plus-50-step arrays were bit-exact to the clean pre-refactor `legacy_port_v1` baseline. The newly requested native interactive backend is **preregistered and not yet implemented or accepted**.
 
-Migration status remains **candidate; native behavioral parity pending**. The native 461D rl-games checkpoint limitation is unchanged: its network mapping is numerically faithful, but MuJoCo and Gym physical state produce different observation feedback and state-dependent 22D-to-26D routed targets. The structural refactor does not claim that the native checkpoint now grasps, lifts, and places successfully.
+MJX-Warp remains the unchanged default and authoritative execution path for training, batches, and exact reference traces. Native MuJoCo is scoped to an explicit CPU-only backend for the interactive `env=1` viewer. Backend selection must be visible and fail closed; native execution cannot become a default, automatic fallback, or source of an “exact trace” claim.
 
-## Parameter provenance and ownership
+## Live performance theory
 
-`DexHandPhysicsConfig` is the sole production physical source. Its frozen `DexHandServoConfig` and `DexHandMaterialConfig` own the existing DexHand values: control/physics periods `0.01/0.001 s`, Euler/Newton with 80 iterations, base-position `5000/500/500`, base-rotation `10000/125/100`, finger `15/0/50`, hand/object friction `0.5/0.01/0.001`, and ground friction `0.5/0.5/0`. These values have `legacy_port_v1` provenance because they define the accepted port and its baselines. Asset geometry/inertials, trajectory identity, and runtime allocation retain their separate asset-, trajectory-, and task-authoritative provenance in the serialized `physics_contract` record.
+Single-world MJX execution overhead dominates the interactive viewer workload. At one control frame, measured MJX CPU time is about `290 ms` (`3.45 Hz`). Disabling contacts changes it only to `279 ms`, about a four-percent improvement, despite the hand collision model containing 22 convex geoms with 9,850 vertices and 19,612 faces. Reducing to one substep changes the cost to `50.5 ms`; Newton with 10 iterations costs `139.6 ms`; a fused 10-substep path costs `170 ms` and is exact at the sampled state. MJX on GPU still costs `93 ms` per control frame. Native MuJoCo advances the same 10 substeps in `0.551 ms` on CPU.
 
-The refactor copied current `dev` ManoRL's architectural pattern—immutable records, one resolver, contract-driven, byte-preserving, fail-closed textual scene transformation, compiled validation, explicit runtime allocation, and a passive viewer—not ManoRL's numeric physics parameters. Direct historical gain transfers across PhysX and MuJoCo already failed, so shared organization is evidence-backed while shared numeric values are not.
+These observations reject collision complexity as the principal single-environment bottleneck. They support dispatch, compilation/runtime, and single-world MJX execution cost as the dominant mechanism. Native stepping is therefore the principled interactive backend: it removes the dominant MJX single-world path while preserving MJX where batching amortizes that path and where existing exact traces are authoritative.
 
-Compatibility CLI/API fields are boundary aliases only. `resolve_physics_config` normalizes them once into the immutable profile and rejects a canonical profile combined with legacy physical overrides. Production environments and tools consume the resolved object, and runtime/trace metadata persists its complete `physics_contract` rather than reconstructing provenance from scattered arguments.
+This theory predicts that native MuJoCo will make the one-environment viewer responsive without changing MJX training or trace behavior. It does not predict numerical state equivalence. Even with the same model and control inputs, native MuJoCo and MJX-Warp may diverge through backend solver, contact, and floating-point execution. The comparison must expose that divergence rather than hide it behind shared configuration.
 
-## Compiled invariants
+## Shared semantic contract
 
-Scene construction validates source asset, name, and transformation assumptions before compilation; provenance is serialized metadata. Compiled validation enforces timestep, Euler integrator, Newton solver and 80 iterations, joint and actuator dimensions/order, gains and force limits, friction/contact settings, reset-critical names, and model capacities. These checks prevent a structurally valid XML from silently violating the runtime ABI.
+Both backends must consume one generated scene and the same immutable serialized `physics_contract`. They must share controller parameters and update order, reset state and settle semantics, active-to-full target routing, velocity clamp then position clamp, frame schedule, reference targets, residual-off behavior, termination/reward/task logic, and observation construction.
 
-Model and runtime capacities remain intentionally distinct. Compiled MuJoCo scene capacity is `njmax=2048`, `nconmax=8192`; MJX-Warp runtime allocation is `njmax=8192`, `naconmax=8192`. Runtime capacity is not serialized into the scene, and model `nconmax` is not treated as runtime `naconmax`.
+The interactive native path advances physics with native MuJoCo CPU stepping. The viewer may render that native state directly, but viewer code remains outside controller and task ownership. Telemetry must name the backend so a user can distinguish `native_mujoco` from `mjx_warp` at runtime.
 
-## Production viewer
+## Acceptance preregistration
 
-The supported visible path is `sim.dexhandrl.view_environment` with one environment, no checkpoint, and canonical ManoRL-style flags such as `--object cube1 --gesture 02 --speed 0.25 --use_residual false --terminal true`. Graphical mode is implicit. Speed defaults to `0.25`; residual correction is selected by an explicit `true`/`false` value. Terminal mode maps `true` to the `0.1 m` object-position threshold after DexHandRL's 130-frame early-phase grace period and maps `false` to the effectively disabled `1e6 m` threshold. The old selector, residual, realtime, headless, and explicit-threshold flags remain compatibility aliases. The viewer supplies zero 22D actions to the production `DexHandRLMJXEnv`; the environment remains the only owner of physics stepping. The native passive viewer mirrors completed `qpos`, `qvel`, `ctrl`, and simulation time, runs forward kinematics for display, and synchronizes the window without stepping the model.
+Acceptance requires all of the following:
 
-The initial exit-139 defect was a teardown race: MuJoCo's GLX viewer thread could still own simulator state when GLFW termination ran. Waiting for the passive handle's `_sim` weak reference to clear resolves that mechanism; the corrected natural-close run exits zero, and the visible screenshot confirms the actual production window (OPS: final viewer and teardown entries).
+1. The existing MJX-Warp default is unchanged and its frozen default trace remains bit-exact. Training, batched execution, and exact-trace production continue to select MJX-Warp unless the caller explicitly requests otherwise.
+2. Native MuJoCo is an explicit CPU-only, `env=1`, interactive viewer backend. Unsupported batch, accelerator, or exact-trace use fails explicitly; no silent fallback is allowed.
+3. The native and MJX paths resolve the same scene and `physics_contract` and execute the same controller, reset, ordered filters, frame/target schedule, routing, observations, rewards, and termination semantics.
+4. A fixed cube1/action02/sequence0, residual-off comparison runs reset plus 50 control steps. Its paired records prove exact frame indices, reference targets, corrected/applied active targets, full controller outputs, and controls before backend stepping.
+5. The comparison reports per-field state and observation differences, including first divergence and magnitude. State or observation equality is recorded only if observed; shared inputs must never be presented as silent backend equivalence.
+6. Viewer telemetry identifies the active backend, and the required `DISPLAY=:1`, non-headless, `env=1` native run visibly advances through native MuJoCo stepping.
+7. Existing observation/action/checkpoint ABI, provenance, diagnostic isolation, and compatibility entry points remain intact.
 
-## Residual uncertainty and scope boundary
+## Parameter provenance and invariants
 
-Replay, skrl training/evaluation, and the standalone production viewer still have distinct task loops. Training/evaluation additionally use `SyncVectorEnv`; this scope did not replace those loops with one batched rollout producer. The delivered centralization is narrower and explicit: all production paths resolve the same immutable physical contract, record the same metadata contract, validate the same compiled invariants, and share the passive-viewer semantics where rendering is supported. A future batched unified producer would be a separate runtime architecture change and is not implied by Stage 1 acceptance.
+`DexHandPhysicsConfig` remains the sole production physical source. Its frozen `DexHandServoConfig` and `DexHandMaterialConfig` own the accepted DexHand values: control/physics periods `0.01/0.001 s`, Euler/Newton with 80 iterations, base-position `5000/500/500`, base-rotation `10000/125/100`, finger `15/0/50`, hand/object friction `0.5/0.01/0.001`, and ground friction `0.5/0.5/0`. Backend choice does not create a second set of physics constants.
+
+Scene construction and compiled validation continue to enforce source asset assumptions, timestep, integrator/solver settings, dimensions and ordering, gains and limits, friction/contact settings, reset-critical names, and capacities. Compiled model capacities (`njmax=2048`, `nconmax=8192`) remain distinct from MJX-Warp runtime allocation (`njmax=8192`, `naconmax=8192`). Native execution reuses the compiled model contract; it does not inherit MJX runtime allocation as physical provenance.
+
+## Scope boundary
+
+This change targets interactive single-environment stepping. It does not replace the MJX-Warp training or batch architecture, redefine exact trace authority, tune physics, transfer ManoRL numeric parameters, or claim native checkpoint Gym parity. The prior native 461D checkpoint limitation also remains: numerically faithful network mapping does not make MuJoCo and Gym physical feedback or state-dependent routed targets equivalent.
