@@ -448,18 +448,19 @@ mass/inertia remain expressed about the source center-of-mass frame.
 
 DexHandRL now follows the current `dev` ManoRL architecture: frozen configuration
 records own the physical contract, one resolver normalizes compatibility inputs,
-scene construction is structured, and compilation validates the resulting model
-before runtime allocation. This copied ManoRL's organization and validation
-style, not its numeric parameters. The hand, actuators, contacts, and source
-simulator differ, so the existing evidence-backed DexHandRL values remain owned
-by the immutable `DexHandPhysicsConfig`, `DexHandServoConfig`, and
-`DexHandMaterialConfig` under the `legacy_port_v1` profile.
+scene construction is a contract-driven, byte-preserving, fail-closed textual
+transformation, and compilation validates the resulting model before runtime
+allocation. This copied ManoRL's organization and validation style, not its
+numeric parameters. The hand, actuators, contacts, and source simulator differ,
+so the existing evidence-backed DexHandRL values remain owned by the immutable
+`DexHandPhysicsConfig`, `DexHandServoConfig`, and `DexHandMaterialConfig` under
+the `legacy_port_v1` profile.
 
-The scene boundary validates required assets, names, dimensions, provenance, and
-configuration before compiling. Compiled validation then checks timestep,
-integrator and solver settings, joint/actuator order and dimensions, gains and
-force limits, friction/contact settings, reset-critical names, and model
-capacities. Compiler/model capacity and MJX-Warp runtime capacity are separate:
+The scene boundary validates source asset, name, and transformation assumptions
+before compiling; provenance is serialized metadata. Compiled validation then
+checks timestep, integrator and solver settings, joint/actuator order and
+dimensions, gains and force limits, friction/contact settings, reset-critical
+names, and model capacities. Compiler/model capacity and MJX-Warp runtime capacity are separate:
 the model keeps `njmax=2048` and `nconmax=8192`, while runtime allocation uses
 `njmax=8192` and `naconmax=8192`.
 
