@@ -1,47 +1,31 @@
 # Epistemic Record
 
-## Refactor theory
+## Final claim
 
-The next milestone is a behavior-neutral structural refactor of DexHandRL. ManoRL is the reference for architecture and evidence discipline: immutable configuration contracts, a single scene source of truth, structured compilation, validation of the compiled model, explicit runtime capacities, one production rollout/viewer path, compatibility shims at legacy entry points, and baseline artifacts that make unintended changes mechanically detectable. ManoRL's numeric physics parameters are not transferable evidence for DexHandRL because the hands, actuators, contacts, observations, and source simulator semantics differ.
+The ManoRL-style DexHandRL structural refactor is accepted as behavior-neutral at candidate HEAD `6718da5`. The generated scene, compiled model signature, and every frozen reset-plus-50-step array remained bit-exact to the clean pre-refactor baseline. The refactor therefore changed ownership, validation, compatibility resolution, and viewer UX without changing the frozen `legacy_port_v1` physical behavior (OPS: Stage 1 baseline and final evidence entries).
 
-DexHandRL's accepted behavior is frozen as the `legacy_port_v1` profile. It owns the existing control period (`0.01 s`), physics period (`0.001 s`, ten substeps), Euler integrator, Newton solver with 80 iterations, servo gains and effort limits, hand/object/ground friction, contact configuration, reset sequence, observation/action/checkpoint ABI, active-to-full target routing, and default CLI/API behavior. These values are preserved because they define the existing port and its recorded baselines, not because they are presumed physically optimal. Structural Stage 1 performs no parameter tuning.
+Migration status remains **candidate; native behavioral parity pending**. The native 461D rl-games checkpoint limitation is unchanged: its network mapping is numerically faithful, but MuJoCo and Gym physical state produce different observation feedback and state-dependent 22D-to-26D routed targets. The structural refactor does not claim that the native checkpoint now grasps, lifts, and places successfully.
 
-## Target contract
+## Parameter provenance and ownership
 
-A central immutable DexHand contract is the sole production source for physics, servo, material/contact, reset, and capacity settings. Every field carries one provenance class:
+`DexHandPhysicsConfig` is the sole production physical source. Its frozen `DexHandServoConfig` and `DexHandMaterialConfig` own the existing DexHand values: control/physics periods `0.01/0.001 s`, Euler/Newton with 80 iterations, base-position `5000/500/500`, base-rotation `10000/125/100`, finger `15/0/50`, hand/object friction `0.5/0.01/0.001`, and ground friction `0.5/0.5/0`. These values have `legacy_port_v1` provenance because they define the accepted port and its baselines. Asset geometry/inertials, trajectory identity, and runtime allocation retain their separate asset-, trajectory-, and task-authoritative provenance in the serialized `physics_contract` record.
 
-- `source_contract`: dictated by an upstream asset, dataset, or DexHand/Isaac interface;
-- `legacy_port_v1`: inherited MuJoCo-port behavior frozen for compatibility;
-- `runtime_capacity`: allocation-only limits that must not alter scene semantics;
-- `diagnostic_override`: explicit opt-in experiment state, excluded from production defaults.
+The refactor copied current `dev` ManoRL's architectural pattern—immutable records, one resolver, structured scene construction, compiled validation, explicit runtime allocation, and a passive viewer—not ManoRL's numeric physics parameters. Direct historical gain transfers across PhysX and MuJoCo already failed, so shared organization is evidence-backed while shared numeric values are not.
 
-The contract names the integrator, solver, solver iterations, and both time scales explicitly. Scene generation consumes the contract rather than performing string replacement or rediscovering defaults. It emits a structured MuJoCo document and fails closed when required source assets, names, dimensions, or provenance are absent. Compilation is a separate boundary and validates the resulting model's timestep, integrator, solver, iterations, joint/actuator order and dimensions, servo arrays and limits, materials/friction/contact masks, reset-critical names, and model capacities.
+Compatibility CLI/API fields are boundary aliases only. `resolve_physics_config` normalizes them once into the immutable profile and rejects a canonical profile combined with legacy physical overrides. Production environments and tools consume the resolved object, and runtime/trace metadata persists its complete `physics_contract` rather than reconstructing provenance from scattered arguments.
 
-Model compiler capacities and MJX runtime capacities remain distinct contracts. The frozen scene/model values are `njmax=2048` and `nconmax=8192`. MJX/Warp allocation remains `njmax=8192` and `naconmax=8192`. A refactor must never serialize the runtime constraint allocation into the model's `njmax`, nor conflate MuJoCo `nconmax` with MJX/Warp `naconmax`.
+## Compiled invariants
 
-## Runtime and compatibility model
+Scene construction validates required assets, model names, dimensions, configuration, and provenance before compilation. Compiled validation enforces timestep, Euler integrator, Newton solver and 80 iterations, joint and actuator dimensions/order, gains and force limits, friction/contact settings, reset-critical names, and model capacities. These checks prevent a structurally valid XML from silently violating the runtime ABI.
 
-There is one production viewer/rollout implementation. With `residual=false` and no checkpoint it supplies a zero 22-dimensional action through the native production environment; it does not inject a diagnostic trace or bypass control construction. Rendering uses the same passive mirror primitive as other production visualization: simulation advances only in the environment stepper, while the viewer copies the selected environment state into a native MuJoCo viewer model under the viewer lock and synchronizes without stepping physics.
+Model and runtime capacities remain intentionally distinct. Compiled MuJoCo scene capacity is `njmax=2048`, `nconmax=8192`; MJX-Warp runtime allocation is `njmax=8192`, `naconmax=8192`. Runtime capacity is not serialized into the scene, and model `nconmax` is not treated as runtime `naconmax`.
 
-Existing command names and import surfaces remain compatibility shims that translate legacy arguments into the central contract and delegate to the production implementation. CLI and Python API defaults, observation width/layout and normalization, 22-dimensional action semantics, state-dependent 26-DoF full-target routing, checkpoint mapping, termination/reset behavior, and output conventions remain unchanged.
+## Production viewer
 
-## Stage 1 preregistered acceptance
+The supported visible path is `sim.dexhandrl.view_environment` with one environment, no checkpoint, `--no-use-residual`, and `--no-headless`. It supplies zero 22D actions to the production `DexHandRLMJXEnv`; the environment remains the only owner of physics stepping. The native passive viewer mirrors completed `qpos`, `qvel`, `ctrl`, and simulation time, runs forward kinematics for display, and synchronizes the window without stepping the model.
 
-The baseline frozen at clean HEAD `ac2cc9c645da5b47bf417ae6ab488aeeeeb1dcbf` is the Stage 1 oracle. Under the same CPU backend, dependency versions, asset/dataset bytes, configuration, seed, and machine execution environment, all of the following must hold:
+The initial exit-139 defect was a teardown race: MuJoCo's GLX viewer thread could still own simulator state when GLFW termination ran. Waiting for the passive handle's `_sim` weak reference to clear resolves that mechanism; the corrected natural-close run exits zero, and the visible screenshot confirms the actual production window (OPS: final viewer and teardown entries).
 
-1. The default generated XML is byte-identical and has the same SHA-256.
-2. The compiled model signature is bit-exact, including dimensions, names/order, option fields, capacities, actuator arrays, joint arrays, and relevant geom/material/contact arrays.
-3. Every array in the reset-plus-50-step zero-action NPZ is bit-exact in dtype, shape, and C-order bytes. Numeric tolerance, dtype coercion, or selective-array comparison is a failure.
-4. Existing CLI/API defaults and compatibility entry points are unchanged.
-5. Focused contract, scene/compiled-validation, environment, ABI/checkpoint, zero-action, viewer/passive-mirror, and compatibility-shim tests pass.
-6. A real graphical run succeeds with `DISPLAY=:1`, `env=1`, action `02`, no checkpoint, `residual=false`, and the production viewer. The observed policy input is zero action and the viewer mirrors state without stepping it.
+## Residual uncertainty and scope boundary
 
-Any XML, model-signature, or NPZ-array difference blocks Stage 1 and must be localized before further work. No mismatch may be explained away as an expected consequence of refactoring because the proposed mechanism is behavior-neutral.
-
-## Evidence boundary
-
-The earlier PhysX-versus-MuJoCo parity investigation established why ManoRL values must not be copied numerically: direct transfers of Gym finger and wrist gains degraded response, while DexHand-specific COM preservation and contact evidence identified task-local mechanisms. Those experiments remain historical evidence about simulator transfer. They do not authorize Stage 1 tuning and are outside its acceptance surface.
-
-The current `dev` ManoRL implementation supports the architectural theory: it separates immutable contracts, structured scene/model construction, compiled validation, runtime MJX capacity allocation, environment stepping, and a passive viewer mirror. DexHandRL currently spreads the corresponding ownership across scene generation, environment configuration, replay/viewer scripts, and CLI surfaces. The refactor should remove that ownership ambiguity while preserving `legacy_port_v1` bytes and behavior.
-
-Evidence provenance and frozen artifact hashes: `OPS.md`.
+Replay, skrl training/evaluation, and the standalone production viewer still have distinct task loops. Training/evaluation additionally use `SyncVectorEnv`; this scope did not replace those loops with one batched rollout producer. The delivered centralization is narrower and explicit: all production paths resolve the same immutable physical contract, record the same metadata contract, validate the same compiled invariants, and share the passive-viewer semantics where rendering is supported. A future batched unified producer would be a separate runtime architecture change and is not implied by Stage 1 acceptance.

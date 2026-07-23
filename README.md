@@ -444,6 +444,66 @@ the generated scene XML there for PD/contact tuning. Override
 the source URDF inertial and collision origins (including fixed-axis RPY), so
 mass/inertia remain expressed about the source center-of-mass frame.
 
+### `legacy_port_v1` runtime contract
+
+DexHandRL now follows the current `dev` ManoRL architecture: frozen configuration
+records own the physical contract, one resolver normalizes compatibility inputs,
+scene construction is structured, and compilation validates the resulting model
+before runtime allocation. This copied ManoRL's organization and validation
+style, not its numeric parameters. The hand, actuators, contacts, and source
+simulator differ, so the existing evidence-backed DexHandRL values remain owned
+by the immutable `DexHandPhysicsConfig`, `DexHandServoConfig`, and
+`DexHandMaterialConfig` under the `legacy_port_v1` profile.
+
+The scene boundary validates required assets, names, dimensions, provenance, and
+configuration before compiling. Compiled validation then checks timestep,
+integrator and solver settings, joint/actuator order and dimensions, gains and
+force limits, friction/contact settings, reset-critical names, and model
+capacities. Compiler/model capacity and MJX-Warp runtime capacity are separate:
+the model keeps `njmax=2048` and `nconmax=8192`, while runtime allocation uses
+`njmax=8192` and `naconmax=8192`.
+
+Current production defaults are:
+
+| Contract group | `legacy_port_v1` default |
+| --- | --- |
+| Control / physics period | `0.01 s` / `0.001 s` (10 substeps) |
+| Integrator / solver | Euler / Newton, 80 iterations |
+| Base position `kp / kv / force` | `5000 / 500 / 500` |
+| Base rotation `kp / kv / force` | `10000 / 125 / 100` |
+| Finger `kp / kv / force` | `15 / 0 / 50` |
+| Hand friction (sliding / torsional / rolling) | `0.5 / 0.01 / 0.001` |
+| Object friction (sliding / torsional / rolling) | `0.5 / 0.01 / 0.001` |
+| Ground friction (sliding / torsional / rolling) | `0.5 / 0.5 / 0` |
+| Model `njmax / nconmax` | `2048 / 8192` |
+| Runtime `njmax / naconmax` | `8192 / 8192` |
+
+Historical CLI names such as `--dt`, `--collision`, `--njmax`, and
+`--naconmax` remain compatibility aliases. They resolve exactly once into the
+immutable profile; supplying both a profile and legacy physical overrides is
+rejected rather than assigned an implicit precedence. Runtime and trace metadata
+store the resolved contract as `physics_contract`, including parameter
+provenance and the model/runtime capacity distinction.
+
+Run the first-class production viewer with one environment, no checkpoint, and
+residual correction disabled as follows:
+
+```bash
+DISPLAY=:1 PYTHONPATH="$PWD" \
+  /home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python \
+  -m sim.dexhandrl.view_environment \
+  --device cpu --object-name cube1 --action 02 --sequence-index 0 \
+  --no-use-residual --no-headless
+```
+
+This sends zero 22D actions through `DexHandRLMJXEnv`; with residual correction
+disabled, the environment follows its reference targets through the production
+control path. The native passive viewer mirrors completed `qpos`, `qvel`,
+`ctrl`, and simulation time, calls forward kinematics only for rendering, and
+never steps physics. `--checkpoint` is rejected because this command is the
+no-checkpoint zero-action path. Add, for example, `--max-steps 500 --no-loop`
+for a bounded run.
+
 The skrl-facing environment entry point is
 `sim.dexhandrl.skrl_env.DexHandRLMJXEnv`. It exposes the IsaacGym-compatible
 22D action space and 461D policy observation layout:
