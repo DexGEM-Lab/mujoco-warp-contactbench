@@ -119,7 +119,7 @@ def _allocation_request(kind: str, args: tuple[Any, ...], kwargs: dict[str, Any]
 
 
 _install_lock = threading.Lock()
-_installation: tuple[ModuleType, CcdWorkspaceSpec, PersistentCcdWorkspace, Any] | None = None
+_installation: tuple[ModuleType, ModuleType | None, CcdWorkspaceSpec, PersistentCcdWorkspace, Any] | None = None
 _active = False
 
 
@@ -156,6 +156,7 @@ def install_persistent_ccd_workspace(
     nmaxpolygon: int,
     nmaxmeshdeg: int,
     collision_module: ModuleType | None = None,
+    driver_module: ModuleType | None = None,
 ) -> PersistentCcdWorkspace:
     """Install one exact persistent workspace for bundled Warp convex narrowphase.
 
@@ -173,11 +174,16 @@ def install_persistent_ccd_workspace(
     )
     if collision_module is None:
         from mujoco.mjx.third_party.mujoco_warp._src import collision_convex as collision_module
+        from mujoco.mjx.third_party.mujoco_warp._src import collision_driver as driver_module
 
     with _install_lock:
         if _installation is not None:
-            installed_module, installed_spec, workspace, _ = _installation
-            if installed_module is not collision_module or installed_spec != spec:
+            installed_module, installed_driver, installed_spec, workspace, _ = _installation
+            if (
+                installed_module is not collision_module
+                or installed_driver is not driver_module
+                or installed_spec != spec
+            ):
                 raise RuntimeError(
                     "persistent CCD workspace is already installed with an incompatible module or static shape"
                 )
@@ -214,8 +220,15 @@ def install_persistent_ccd_workspace(
                 with _install_lock:
                     _active = False
 
+        if driver_module is not None:
+            bound = getattr(driver_module, "convex_narrowphase", None)
+            if bound is not original:
+                raise RuntimeError(
+                    "persistent CCD workspace found an unexpected collision_driver convex_narrowphase binding"
+                )
+            driver_module.convex_narrowphase = wrapped
         collision_module.convex_narrowphase = wrapped
-        _installation = (collision_module, spec, workspace, original)
+        _installation = (collision_module, driver_module, spec, workspace, original)
         return workspace
 
 

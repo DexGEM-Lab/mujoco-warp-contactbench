@@ -71,7 +71,7 @@ def _collision(*, malformed: bool = False) -> ModuleType:
     return module
 
 
-def _install(workspace, collision):
+def _install(workspace, collision, driver=None):
     return workspace.install_persistent_ccd_workspace(
         device_ordinal=2,
         naccdmax=5,
@@ -79,6 +79,7 @@ def _install(workspace, collision):
         nmaxpolygon=11,
         nmaxmeshdeg=13,
         collision_module=collision,
+        driver_module=driver,
     )
 
 
@@ -96,6 +97,19 @@ def test_workspace_reuses_exact_allocation_sequence_and_zeros_nccd() -> None:
     assert all(device == "cuda:2" for _, _, device in original_wp.allocations)
     assert installed.nccd.zero_calls == 2
     assert _install(workspace, collision) is installed
+
+
+def test_workspace_patches_collision_driver_bound_reference() -> None:
+    workspace = _fresh_workspace_module()
+    collision = _collision()
+    driver = ModuleType("fake_collision_driver")
+    driver.convex_narrowphase = collision.convex_narrowphase
+    installed = _install(workspace, collision, driver)
+
+    driver.convex_narrowphase()
+
+    assert driver.convex_narrowphase is collision.convex_narrowphase
+    assert installed.nccd.zero_calls == 1
 
 
 def test_workspace_rejects_shape_mismatch_and_restores_module_wp() -> None:
@@ -132,7 +146,7 @@ def test_workspace_rejects_duplicate_and_incompatible_installations() -> None:
     collision.convex_narrowphase = duplicate_zeros
     # The installed wrapper owns the original function, so exercise the proxy
     # directly to distinguish duplicate allocation from a changed callable.
-    proxy = workspace._WorkspaceWarpProxy(workspace._installation[2], collision.wp)
+    proxy = workspace._WorkspaceWarpProxy(workspace._installation[3], collision.wp)
     proxy.zeros(6, dtype=int)
     with pytest.raises(RuntimeError, match="duplicate"):
         proxy.zeros(6, dtype=int)
