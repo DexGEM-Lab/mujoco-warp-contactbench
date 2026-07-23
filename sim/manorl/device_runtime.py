@@ -69,6 +69,7 @@ def reduce_warp_contacts(
     ngeom: int,
     keypoint_geom_ids: Sequence[int],
     object_geom_ids: Sequence[int],
+    compute_dtype: str = "float32",
 ) -> DeviceContactReduction:
     """Reduce the pinned MJX-Warp contact ABI without host materialization.
 
@@ -77,10 +78,21 @@ def reduce_warp_contacts(
     a gather or scatter. Invalid live rows are similarly sanitized for safe
     gathers, then reported through ``valid`` so the environment can fail closed
     on the same transition without copying the contact buffers to NumPy.
+
+    ``compute_dtype`` is deliberately static. Production uses ``float32`` to
+    match the CUDA MJX buffers and avoid silently requesting global JAX x64.
+    ``float64`` is an explicit equivalence/debug option and requires JAX x64
+    to have been enabled by the application before this reducer is compiled.
     """
 
+    import jax
     import jax.numpy as jp
 
+    if compute_dtype not in {"float32", "float64"}:
+        raise ValueError("compute_dtype must be float32 or float64")
+    if compute_dtype == "float64" and not jax.config.x64_enabled:
+        raise ValueError("float64 contact reduction requires jax_enable_x64")
+    floating_dtype = jp.float64 if compute_dtype == "float64" else jp.float32
     if ngeom < 1:
         raise ValueError("ngeom must be positive")
     keypoint_ids = np.asarray(keypoint_geom_ids, dtype=np.int32)
@@ -102,10 +114,10 @@ def reduce_warp_contacts(
     world = jp.asarray(world)
     dimension = jp.asarray(dimension)
     addresses = jp.asarray(addresses)
-    friction = jp.asarray(friction)
-    frame = jp.asarray(frame)
-    force = jp.asarray(constraint_force)
-    nefc = jp.asarray(nefc).reshape(-1)
+    friction = jp.asarray(friction, dtype=floating_dtype)
+    frame = jp.asarray(frame, dtype=floating_dtype)
+    force = jp.asarray(constraint_force, dtype=floating_dtype)
+    nefc_values = jp.asarray(nefc).reshape(-1)
     if geom.ndim != 2 or geom.shape[1] != 2:
         raise ValueError("geom must have shape (capacity, 2)")
     capacity = geom.shape[0]
@@ -119,9 +131,16 @@ def reduce_warp_contacts(
         or friction.shape[1] < 2
         or frame.shape != (capacity, 3, 3)
         or force.ndim != 2
-        or nefc.shape != (batch,)
+        or nefc_values.shape not in {(1,), (batch,)}
     ):
         raise ValueError("MJX-Warp contact ABI shapes differ from the pinned contract")
+    # Warp emits either a global scalar constraint count or one count per
+    # world. Mirror the host producer before contact-address validation.
+    nefc = (
+        jp.broadcast_to(nefc_values, (batch,))
+        if nefc_values.shape == (1,)
+        else nefc_values
+    )
 
     count = jp.asarray(nacon).reshape(())
     slots = jp.arange(capacity, dtype=jp.int32)
@@ -151,6 +170,10 @@ def reduce_warp_contacts(
         axis=1,
     )
     world_force = jp.einsum("ni,nij->nj", local_force, frame)
+    # The host decoder rejects a non-finite world force for every live
+    # contact, including object/floor and hand/floor pairs that are not part
+    # of either reduced output. Check before reduced-pair masking.
+    valid = valid & jp.all(jp.where(contribution[:, None], jp.isfinite(world_force), True))
     world_force = jp.where(contribution[:, None], world_force, 0.0)
 
     keypoint_lookup = jp.full((ngeom,), -1, dtype=jp.int32).at[jp.asarray(keypoint_ids)].set(

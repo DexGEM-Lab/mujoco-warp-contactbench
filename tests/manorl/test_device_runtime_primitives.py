@@ -37,11 +37,12 @@ def _fixture() -> dict[str, object]:
     }
 
 
-def _jitted_reducer(fixture: dict[str, object]):
+def _jitted_reducer(fixture: dict[str, object], *, compute_dtype: str = "float32"):
     static = {
         key: fixture[key]
         for key in ("ngeom", "keypoint_geom_ids", "object_geom_ids")
     }
+    static["compute_dtype"] = compute_dtype
     dynamic = {key: value for key, value in fixture.items() if key not in static}
     fn = jax.jit(lambda **values: reduce_warp_contacts(**values, **static))
     return fn(**dynamic)
@@ -97,6 +98,85 @@ def test_contact_reduction_rejects_capacity_saturation() -> None:
     fixture["nacon"] = np.asarray([len(np.asarray(fixture["world"]))], dtype=np.int32)
     actual = _jitted_reducer(fixture)
     assert bool(actual.valid) is False
+
+
+def test_scalar_nefc_broadcast_matches_host_decoder() -> None:
+    fixture = _fixture()
+    fixture["nefc"] = np.asarray([31], dtype=np.int32)
+    actual = _jitted_reducer(fixture)
+    count = int(np.asarray(fixture["nacon"])[0])
+    expected = _decode_contact_forces(
+        count=count,
+        geom=np.asarray(fixture["geom"]),
+        world=np.asarray(fixture["world"]),
+        dimension=np.asarray(fixture["dimension"]),
+        addresses=np.asarray(fixture["addresses"]),
+        nefc=np.full(4, 31, dtype=np.int64),
+        friction=np.asarray(fixture["friction"]),
+        frame=np.asarray(fixture["frame"]),
+        constraint_force=np.asarray(fixture["constraint_force"]),
+        ngeom=int(fixture["ngeom"]),
+        keypoint_geom_ids=fixture["keypoint_geom_ids"],
+        object_geom_ids=set(fixture["object_geom_ids"]),
+    )
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces), expected[0][:, :16], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces), expected[1], rtol=1e-6, atol=1e-6)
+    np.testing.assert_array_equal(np.asarray(actual.per_world_count), expected[2])
+    assert bool(actual.valid) is True
+
+
+def test_nonfinite_live_floor_contact_fails_closed_like_host_decoder() -> None:
+    fixture = _fixture()
+    # Geom 21 is neither a hand keypoint nor the object geom. The row remains
+    # live and therefore must fail before reduction hides it from outputs.
+    fixture["geom"] = np.asarray(fixture["geom"]).copy()
+    fixture["geom"][0] = (21, 22)
+    fixture["constraint_force"] = np.asarray(fixture["constraint_force"]).copy()
+    addresses = np.asarray(fixture["addresses"])
+    fixture["constraint_force"][np.asarray(fixture["world"])[0], addresses[0, 0]] = np.nan
+    actual = _jitted_reducer(fixture)
+    assert bool(actual.valid) is False
+    with pytest.raises(RuntimeError, match="non-finite world force"):
+        _decode_contact_forces(
+            count=int(np.asarray(fixture["nacon"])[0]),
+            geom=np.asarray(fixture["geom"]),
+            world=np.asarray(fixture["world"]),
+            dimension=np.asarray(fixture["dimension"]),
+            addresses=addresses,
+            nefc=np.asarray(fixture["nefc"]),
+            friction=np.asarray(fixture["friction"]),
+            frame=np.asarray(fixture["frame"]),
+            constraint_force=np.asarray(fixture["constraint_force"]),
+            ngeom=int(fixture["ngeom"]),
+            keypoint_geom_ids=fixture["keypoint_geom_ids"],
+            object_geom_ids=set(fixture["object_geom_ids"]),
+        )
+
+
+def test_float64_reducer_matches_float64_host_decoder() -> None:
+    if not jax.config.x64_enabled:
+        pytest.skip("JAX x64 is disabled")
+    fixture = _fixture()
+    for key in ("friction", "frame", "constraint_force"):
+        fixture[key] = np.asarray(fixture[key], dtype=np.float64)
+    actual = _jitted_reducer(fixture, compute_dtype="float64")
+    expected = _decode_contact_forces(
+        count=int(np.asarray(fixture["nacon"])[0]),
+        geom=np.asarray(fixture["geom"]),
+        world=np.asarray(fixture["world"]),
+        dimension=np.asarray(fixture["dimension"]),
+        addresses=np.asarray(fixture["addresses"]),
+        nefc=np.asarray(fixture["nefc"]),
+        friction=np.asarray(fixture["friction"]),
+        frame=np.asarray(fixture["frame"]),
+        constraint_force=np.asarray(fixture["constraint_force"]),
+        ngeom=int(fixture["ngeom"]),
+        keypoint_geom_ids=fixture["keypoint_geom_ids"],
+        object_geom_ids=set(fixture["object_geom_ids"]),
+    )
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces), expected[0][:, :16], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces), expected[1], rtol=1e-12, atol=1e-12)
+    assert bool(actual.valid) is True
 
 
 @pytest.mark.skipif(
