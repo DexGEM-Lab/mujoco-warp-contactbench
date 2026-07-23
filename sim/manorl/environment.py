@@ -2411,14 +2411,16 @@ class MujocoManoEnvironment:
             )
 
     def warp_ccd_metadata(self) -> dict[str, object]:
+        naccdmax = getattr(self, "warp_ccd_naccdmax", None)
+        guard_available = getattr(self, "_warp_ccd_overflow_guard_available", False)
         return {
             "ccd_iterations": self.config.warp_ccd_iterations,
             "contacts_per_world": self.config.warp_ccd_contacts_per_world,
-            "naccdmax": self.warp_ccd_naccdmax,
-            "overflow_guard": "available" if self._warp_ccd_overflow_guard_available else (
-                "unavailable" if self.warp_ccd_naccdmax is not None else "not_requested"
+            "naccdmax": naccdmax,
+            "overflow_guard": "available" if guard_available else (
+                "unavailable" if naccdmax is not None else "not_requested"
             ),
-            "overflow_guard_limitation": self._warp_ccd_overflow_guard_limitation,
+            "overflow_guard_limitation": getattr(self, "_warp_ccd_overflow_guard_limitation", None),
         }
 
     def _target_indices(self) -> NDArray[np.int64]:
