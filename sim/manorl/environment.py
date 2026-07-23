@@ -187,6 +187,10 @@ class EnvironmentConfig:
     # warp_ccd_contacts_per_world scales only GJK scratch, never naconmax.
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
+    # Experimental process-local replacement for the bundled Warp CCD scratch
+    # allocations made inside JAX FFI graph execution. It is intentionally
+    # restricted to a single unified model until multi-route ownership exists.
+    warp_persistent_ccd_workspace: bool = False
     hand_side: str = "auto"
 
     def __post_init__(self) -> None:
@@ -264,6 +268,14 @@ class EnvironmentConfig:
         ):
             if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
                 raise ValueError(f"{name} must be a positive integer when provided")
+        if not isinstance(self.warp_persistent_ccd_workspace, bool):
+            raise TypeError("warp_persistent_ccd_workspace must be bool")
+        if self.warp_persistent_ccd_workspace and self.device != "gpu":
+            raise ValueError("warp_persistent_ccd_workspace requires device='gpu'")
+        if self.warp_persistent_ccd_workspace and self.warp_ccd_contacts_per_world is None:
+            raise ValueError("warp_persistent_ccd_workspace requires warp_ccd_contacts_per_world")
+        if self.warp_persistent_ccd_workspace and not self.unified_object_batch:
+            raise ValueError("warp_persistent_ccd_workspace requires unified_object_batch=True")
         normalize_hand_side(self.hand_side)
 
     @property
@@ -1814,6 +1826,20 @@ class MujocoManoEnvironment:
         batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
         self.data = jax.vmap(lambda _: single_data)(batch_index)
         self._configure_warp_ccd_overflow_guard()
+        if config.warp_persistent_ccd_workspace:
+            from sim.manorl.mjx_warp_workspace import (
+                install_persistent_ccd_workspace,
+                warp_device_ordinal,
+            )
+
+            impl = self.mjx_model._impl
+            self.warp_persistent_ccd_workspace = install_persistent_ccd_workspace(
+                device_ordinal=warp_device_ordinal(self.device),
+                naccdmax=self.warp_ccd_naccdmax,
+                epa_iterations=int(self.model.opt.ccd_iterations),
+                nmaxpolygon=int(impl.nmaxpolygon),
+                nmaxmeshdeg=int(impl.nmaxmeshdeg),
+            )
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
         self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)
         self._joint_lower_device = jax.device_put(self.joint_lower, self.device)

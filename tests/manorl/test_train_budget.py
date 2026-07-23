@@ -1006,6 +1006,23 @@ def test_cli_accepts_unified_batch_with_explicit_ccd(
     assert budget.warp_ccd_contacts_per_world == 12
 
 
+def test_cli_accepts_persistent_ccd_workspace_for_unified_training(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured = []
+    monkeypatch.setattr(tool, "run", lambda output, budget: captured.append((output, budget)) or {})
+
+    assert tool.main([
+        "--output", str(tmp_path / "workspace"),
+        "--unified-object-batch",
+        "--warp-ccd-contacts-per-world", "12",
+        "--warp-persistent-ccd-workspace",
+    ]) == 0
+
+    assert captured[-1][1].warp_persistent_ccd_workspace is True
+
+
 def test_cli_parses_all_and_exact_pair_selection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

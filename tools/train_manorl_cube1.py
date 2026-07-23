@@ -214,6 +214,7 @@ class TrainingBudget:
     unified_object_batch: bool = False
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
+    warp_persistent_ccd_workspace: bool = False
 
     @property
     def transitions(self) -> int:
@@ -1967,6 +1968,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             unified_object_batch=budget.unified_object_batch,
             warp_ccd_iterations=budget.warp_ccd_iterations,
             warp_ccd_contacts_per_world=budget.warp_ccd_contacts_per_world,
+            warp_persistent_ccd_workspace=budget.warp_persistent_ccd_workspace,
             hand_side=budget.hand_side,
         ),
     )
@@ -2362,6 +2364,11 @@ def main(argv: list[str] | None = None) -> int:
         "--warp-ccd-contacts-per-world", type=int,
         help="experimental independent Warp GJK scratch contacts per world",
     )
+    parser.add_argument(
+        "--warp-persistent-ccd-workspace",
+        action="store_true",
+        help="experimentally preallocate bundled Warp CCD scratch for unified GPU training",
+    )
     parser.add_argument("--wandb", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
@@ -2401,6 +2408,11 @@ def main(argv: list[str] | None = None) -> int:
     ):
         if value is not None and value < 1:
             parser.error(f"--{name} must be positive when provided")
+    if args.warp_persistent_ccd_workspace:
+        if not args.unified_object_batch:
+            parser.error("--warp-persistent-ccd-workspace requires --unified-object-batch")
+        if args.warp_ccd_contacts_per_world is None:
+            parser.error("--warp-persistent-ccd-workspace requires --warp-ccd-contacts-per-world")
     evaluation_num_envs_maximum = min(args.num_envs, 128)
     if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
         parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")
@@ -2501,6 +2513,7 @@ def main(argv: list[str] | None = None) -> int:
             unified_object_batch=args.unified_object_batch,
             warp_ccd_iterations=args.warp_ccd_iterations,
             warp_ccd_contacts_per_world=args.warp_ccd_contacts_per_world,
+            warp_persistent_ccd_workspace=args.warp_persistent_ccd_workspace,
         ),
     )
     if args.console_format == "json":

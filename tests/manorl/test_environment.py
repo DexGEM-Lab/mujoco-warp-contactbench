@@ -113,6 +113,35 @@ def test_environment_config_accepts_unified_batch_with_explicit_ccd() -> None:
     assert config.warp_ccd_explicit is True
 
 
+def test_persistent_ccd_workspace_config_requires_unified_gpu_explicit_capacity() -> None:
+    with pytest.raises(ValueError, match="device='gpu'"):
+        EnvironmentConfig(
+            unified_object_batch=True,
+            warp_ccd_contacts_per_world=12,
+            warp_persistent_ccd_workspace=True,
+        )
+    with pytest.raises(ValueError, match="warp_ccd_contacts_per_world"):
+        EnvironmentConfig(
+            device="gpu",
+            unified_object_batch=True,
+            warp_persistent_ccd_workspace=True,
+        )
+    with pytest.raises(ValueError, match="unified_object_batch=True"):
+        EnvironmentConfig(
+            device="gpu",
+            warp_ccd_contacts_per_world=12,
+            warp_persistent_ccd_workspace=True,
+        )
+
+    config = EnvironmentConfig(
+        device="gpu",
+        unified_object_batch=True,
+        warp_ccd_contacts_per_world=12,
+        warp_persistent_ccd_workspace=True,
+    )
+    assert config.warp_persistent_ccd_workspace is True
+
+
 def test_bimanual_reference_tables_use_compiled_right_left_order() -> None:
     """Metadata lookup may be left/right, but model qpos/ctrl slots are right/left."""
 
