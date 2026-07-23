@@ -58,6 +58,25 @@ def _require_batch(value: Any, batch: int, trailing: tuple[int, ...], name: str)
     return value
 
 
+def route_full_to_active(*, full: Any) -> Any:
+    """Exact batched 26D-to-22D active extraction.
+
+    This is the device equivalent of :func:`full_to_active_dof`: direct joints
+    are copied while each coupled distal target is the non-negative sum of its
+    joint3 and joint4 targets.
+    """
+    import jax.numpy as jp
+    full = jp.asarray(full)
+    if full.ndim != 2 or full.shape[1] != 26:
+        raise ValueError("full must be (batch,26)")
+    active = jp.zeros((full.shape[0], 22), dtype=full.dtype).at[:, :6].set(full[:, :6])
+    active = active.at[:, 6 + jp.asarray(_DIRECT_ACTIVE)].set(full[:, jp.asarray(_DIRECT_FULL)])
+    return active.at[:, 6 + jp.asarray(_ROUTED_ACTIVE)].set(
+        jp.maximum(full[:, jp.asarray(_ROUTED_FULL_3)], 0.0)
+        + jp.maximum(full[:, jp.asarray(_ROUTED_FULL_4)], 0.0)
+    )
+
+
 def route_active_to_full(*, active: Any, current_full: Any, route_upper: Any) -> Any:
     """Exact batched 22D-to-26D DexHand distal routing.
 
@@ -124,7 +143,13 @@ def apply_device_control(
     next_joint = jdecay[:, None] * joint_offset + jp.clip(action[:, 6:], -1., 1.) * active_mask * jp.asarray(_JOINT_SCALES)[None]
     next_joint = jp.clip(next_joint, -jp.asarray(_JOINT_MAX)[None], jp.asarray(_JOINT_MAX)[None]) * active_mask
     next_base, next_joint = jp.where(enabled[:, None], next_base, 0.), jp.where(enabled[:, None], next_joint, 0.)
-    corrected = reference.at[:, :3].add(next_base).at[:, 6:].add(next_joint)
+    # Scalar parity first routes the raw Lance active reference through the
+    # live distal split, then extracts its corrected active representation.
+    # The latter can differ from the raw reference when a coupled target is
+    # clamped by the live joint distribution or route limits.
+    reference_full = route_active_to_full(active=reference, current_full=current, route_upper=route_upper)
+    corrected = route_full_to_active(full=reference_full)
+    corrected = corrected.at[:, :3].add(next_base).at[:, 6:].add(next_joint)
     applied = jp.clip(previous + jp.clip(corrected - previous, -max_delta, max_delta), lower, upper)
     full = route_active_to_full(active=applied, current_full=current, route_upper=route_upper)
     ids = jp.asarray(actuator_ids)
@@ -229,6 +254,7 @@ def compute_device_reward_done(
     early_phase_frames: int, contact_force_threshold: float,
     max_contact_reward: float, max_stability_reward: float, stability_scale: float,
     object_terminal_threshold: float, reward_weights: Any,
+    termination_failure_reward: float, termination_timeout_reward: float,
 ) -> DeviceReward:
     """Compute scalar-environment parity reward components and done masks."""
     import jax.numpy as jp
@@ -251,6 +277,14 @@ def compute_device_reward_done(
     raw=jp.stack((jp.ones((batch,),obj.dtype),tracking[:,0],tracking[:,1],tracking[:,2],quality,stability,rot,tip_penalty,position,action_joint),axis=1)
     raw=jp.where(early[:,None],raw.at[:,1:7].set(0.),raw)
     weighted=raw*weights[None]; error=jp.linalg.norm(obj-target,axis=1); terminated=(~early)&(error>object_terminal_threshold); truncated=frame>=lengths-1
-    total=jp.sum(weighted,axis=1)+jp.where(terminated,-200.,0.)
-    valid=jp.all(jp.isfinite(raw))&jp.all(jp.isfinite(total))&jp.all((expected==0)|(expected==1))
+    termination_reward = jp.where(
+        terminated,
+        jp.asarray(termination_failure_reward, dtype=obj.dtype),
+        jp.where(truncated, jp.asarray(termination_timeout_reward, dtype=obj.dtype), 0.0),
+    )
+    total=jp.sum(weighted,axis=1)+termination_reward
+    valid=(jp.all(jp.isfinite(raw))&jp.all(jp.isfinite(total))
+           &jp.isfinite(jp.asarray(termination_failure_reward))
+           &jp.isfinite(jp.asarray(termination_timeout_reward))
+           &jp.all((expected==0)|(expected==1)))
     return DeviceReward(total,raw,weighted,terminated,truncated,valid)
