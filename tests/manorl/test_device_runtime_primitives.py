@@ -9,6 +9,9 @@ jax = pytest.importorskip("jax")
 
 from sim.manorl.device_runtime import (
     DevicePhysicalFeatures,
+    advance_device_task_counters,
+    check_device_termination,
+    compute_device_reward_28,
     build_device_observation_28,
     extract_mjx_physical_features,
     jax_to_torch_cuda,
@@ -16,6 +19,8 @@ from sim.manorl.device_runtime import (
     torch_to_jax_cuda,
 )
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment, _decode_contact_forces
+from sim.manorl.abi import check_termination
+from sim.manorl.rewards import RewardConfig, RewardState, compute_rewards
 from sim.manorl.observations import (
     CURRENT_SOURCE_COMPATIBILITY,
     SOURCE_ALIGNED_COMPATIBILITY,
@@ -197,6 +202,51 @@ def test_physical_feature_offsets_preserve_left_handedness_flip() -> None:
     left = extract_mjx_physical_features(**common, fingertip_local_offsets=left_offsets)
     np.testing.assert_allclose(np.asarray(right.fingertip_positions)[..., 1:], np.asarray(left.fingertip_positions)[..., 1:])
     np.testing.assert_allclose(np.asarray(right.fingertip_positions)[..., 0], -np.asarray(left.fingertip_positions)[..., 0])
+
+
+def test_jitted_device_reward_and_termination_match_numpy_contract() -> None:
+    rng = np.random.default_rng(401)
+    batch = 7
+    q = rng.normal(size=(batch, 4)); q /= np.linalg.norm(q, axis=1, keepdims=True)
+    target_q = rng.normal(size=(batch, 4)); target_q /= np.linalg.norm(target_q, axis=1, keepdims=True)
+    state = dict(
+        object_position=rng.normal(size=(batch, 3)).astype(np.float32), target_object_position=rng.normal(size=(batch, 3)).astype(np.float32),
+        object_orientation_xyzw=q.astype(np.float32), target_object_orientation_xyzw=target_q.astype(np.float32),
+        cumulative_offset=rng.normal(size=(batch, 3)).astype(np.float32), cumulative_joint_offset=rng.normal(size=(batch, 22)).astype(np.float32),
+        active_joint_mask=rng.integers(0, 2, size=(batch, 22), dtype=np.int8).astype(bool),
+        hand_object_force_on_object_world_N=rng.normal(size=(batch, 16, 3)).astype(np.float32),
+        expected_contact_mask=rng.integers(0, 2, size=(batch, 16)).astype(np.float32), expected_contact_weights=rng.uniform(0.1, 2, size=(batch, 16)).astype(np.float32),
+        object_linear_velocity=rng.normal(size=(batch, 3)).astype(np.float32), trajectory_steps=np.asarray((0, 5, 20, 21, 89, 90, 120), np.int64),
+        contact_start_frames=np.full(batch, 20, np.int64), contact_end_frames=np.full(batch, 90, np.int64),
+        rotation_disabled_mask=np.asarray((False, True, False, False, False, False, False)), early_phase_starts=np.zeros(batch, np.int64),
+    )
+    progress = np.asarray((0, 1, 2, 3, 4, 5, 6), np.int64)
+    lengths = np.asarray((10, 2, 10, 10, 10, 10, 7), np.int64)
+    early = state["trajectory_steps"] < 30
+    host_term = check_termination(object_position=state["object_position"], target_position=state["target_object_position"], progress=progress, trajectory_lengths=lengths, early_mask=early, max_deviation_distance=1.2, deviation_penalty=0.7)
+    device_term = jax.jit(lambda: check_device_termination(object_position=state["object_position"], target_position=state["target_object_position"], progress=progress, trajectory_lengths=lengths, early_mask=early, max_deviation_distance=1.2, deviation_penalty=0.7))()
+    np.testing.assert_array_equal(np.asarray(device_term.reset), host_term.reset)
+    np.testing.assert_array_equal(np.asarray(device_term.deviation_reset), host_term.deviation_reset)
+    host = compute_rewards(RewardState(**state), compatibility=SOURCE_ALIGNED_COMPATIBILITY, termination=host_term, config=RewardConfig())
+    device = jax.jit(lambda: compute_device_reward_28(**state, early_phase_steps=30, termination=device_term, config=RewardConfig()))()
+    for field in ("total", "distance_x", "distance_y", "distance_z", "rotation", "contact", "distance_gate", "object_stability", "survival", "deviation_penalty"):
+        np.testing.assert_allclose(np.asarray(getattr(device, field)), getattr(host, field), rtol=0, atol=2e-6)
+    np.testing.assert_array_equal(np.asarray(device.early_phase), host.early_phase)
+
+
+def test_device_counters_match_partial_delayed_reset_order() -> None:
+    progress = np.asarray((0, 3, 8), np.int64)
+    steps = np.asarray((0, 3, 8), np.int64)
+    returns = np.asarray((1.0, 2.0, 3.0), np.float32)
+    pending = np.asarray((False, True, False))
+    reward = np.asarray((0.1, 0.2, 0.3), np.float32)
+    reset = np.asarray((False, False, True))
+    actual = jax.jit(lambda: advance_device_task_counters(progress=progress, trajectory_steps=steps, episode_returns=returns, pending_reset=pending, reward_total=reward, next_reset=reset, control_call=np.asarray(9, np.int64)))()
+    np.testing.assert_array_equal(np.asarray(actual.progress), np.asarray((1, 0, 9)))
+    np.testing.assert_array_equal(np.asarray(actual.trajectory_steps), np.asarray((0, 0, 9)))
+    np.testing.assert_allclose(np.asarray(actual.episode_returns), np.asarray((1.1, 0.2, 3.3)), atol=2e-6)
+    np.testing.assert_array_equal(np.asarray(actual.reset_mask), reset)
+    assert int(np.asarray(actual.control_call)) == 10
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:

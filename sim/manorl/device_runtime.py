@@ -24,6 +24,40 @@ class DeviceContactReduction(NamedTuple):
     valid: Any
 
 
+class DeviceTermination(NamedTuple):
+    """Device equivalent of the termination ABI fields."""
+
+    reset: Any
+    deviation_reset: Any
+    deviation_penalty: Any
+
+
+class DeviceReward(NamedTuple):
+    """Device reward diagnostics in the source reward-contract order."""
+
+    total: Any
+    distance_x: Any
+    distance_y: Any
+    distance_z: Any
+    rotation: Any
+    contact: Any
+    distance_gate: Any
+    object_stability: Any
+    survival: Any
+    early_phase: Any
+    deviation_penalty: Any
+
+
+class DeviceTaskCounters(NamedTuple):
+    """Per-world transition state after the host-compatible commit order."""
+
+    progress: Any
+    trajectory_steps: Any
+    episode_returns: Any
+    reset_mask: Any
+    control_call: Any
+
+
 class DevicePhysicalFeatures(NamedTuple):
     """The source-order state fields consumed by observation/reward code."""
 
@@ -257,6 +291,120 @@ def build_device_observation_28(
         & jp.all((actions >= 1) & (actions <= 50))
     )
     return raw, valid
+
+
+def check_device_termination(
+    *, object_position: Any, target_position: Any, progress: Any,
+    trajectory_lengths: Any, early_mask: Any, max_deviation_distance: float,
+    deviation_penalty: float,
+) -> DeviceTermination:
+    """JAX form of :func:`check_termination` for the narrow device path."""
+
+    import jax.numpy as jp
+
+    object_position, target_position = jp.asarray(object_position), jp.asarray(target_position)
+    progress, lengths, early = jp.asarray(progress), jp.asarray(trajectory_lengths), jp.asarray(early_mask)
+    if object_position.ndim != 2 or object_position.shape[1] != 3 or target_position.shape != object_position.shape:
+        raise ValueError("object and target positions must both be (batch, 3)")
+    batch = object_position.shape[0]
+    if progress.shape != (batch,) or lengths.shape != (batch,) or early.shape != (batch,):
+        raise ValueError("termination vectors must be (batch,)")
+    if max_deviation_distance < 0 or deviation_penalty < 0:
+        raise ValueError("termination distances and penalty must be non-negative")
+    deviation = jp.linalg.norm(object_position - target_position, axis=1) > max_deviation_distance
+    deviation = deviation & ~early.astype(bool)
+    reset = (progress >= lengths - 1) | deviation
+    return DeviceTermination(reset, deviation, jp.where(deviation, -deviation_penalty, 0.0))
+
+
+def compute_device_reward_28(
+    *, object_position: Any, target_object_position: Any,
+    object_orientation_xyzw: Any, target_object_orientation_xyzw: Any,
+    cumulative_offset: Any, cumulative_joint_offset: Any, active_joint_mask: Any,
+    hand_object_force_on_object_world_N: Any, expected_contact_mask: Any,
+    expected_contact_weights: Any, object_linear_velocity: Any, trajectory_steps: Any,
+    contact_start_frames: Any, contact_end_frames: Any, rotation_disabled_mask: Any,
+    early_phase_starts: Any, early_phase_steps: int, termination: DeviceTermination, config: Any,
+) -> DeviceReward:
+    """Exact source reward equations evaluated on JAX arrays.
+
+    CUDA MJX inputs are float32, whereas the legacy decoder promotes them to
+    float64.  Consequently a force within one float32 ULP of 0.2 N can choose
+    the adjacent strict-gate outcome; outside that documented rounding band the
+    reward contract is numerically equivalent.
+    """
+
+    import jax.numpy as jp
+
+    obj, target = jp.asarray(object_position), jp.asarray(target_object_position)
+    quat, target_quat = jp.asarray(object_orientation_xyzw), jp.asarray(target_object_orientation_xyzw)
+    offsets, joints, active = jp.asarray(cumulative_offset), jp.asarray(cumulative_joint_offset), jp.asarray(active_joint_mask)
+    force, expected, weights, velocity = map(jp.asarray, (hand_object_force_on_object_world_N, expected_contact_mask, expected_contact_weights, object_linear_velocity))
+    steps, starts, ends = map(jp.asarray, (trajectory_steps, contact_start_frames, contact_end_frames))
+    disabled, early_starts = map(jp.asarray, (rotation_disabled_mask, early_phase_starts))
+    batch = obj.shape[0]
+    required = ((batch, 3), (batch, 3), (batch, 4), (batch, 4), (batch, 16, 3), (batch, 16), (batch, 16), (batch, 3))
+    if tuple(value.shape for value in (obj, target, quat, target_quat, force, expected, weights, velocity)) != required:
+        raise ValueError("device reward tensors differ from the 28-DoF reward ABI")
+    if offsets.shape != (batch, 3) or joints.shape != (batch, 22) or active.shape != (batch, 22):
+        raise ValueError("device reward supports one 28-DoF hand and 22 joint residuals")
+    if any(value.shape != (batch,) for value in (steps, starts, ends, disabled, early_starts)):
+        raise ValueError("device reward window vectors must be (batch,)")
+    distance = jp.abs(obj - target)
+    ungated = jp.asarray(config.distance_scales) * jp.exp(-config.distance_decay * distance)
+    ax, ay, az, aw = (quat[:, i] for i in range(4))
+    bx, by, bz, bw = (-target_quat[:, 0], -target_quat[:, 1], -target_quat[:, 2], target_quat[:, 3])
+    product = jp.stack((aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx, aw * bz + ax * by - ay * bx + az * bw), axis=1)
+    degrees = 2.0 * jp.arcsin(jp.minimum(jp.linalg.norm(product, axis=1), 1.0)) * 180.0 / 3.14159265359
+    segment_1 = config.rotation_segment_1_coeff * degrees**2 + 1.0
+    offset = degrees - config.rotation_segment_1_threshold_deg
+    segment_2 = config.rotation_segment_2_coeff * offset**2 + config.rotation_segment_2_linear_coeff * offset + config.rotation_segment_2_constant
+    rotation_value = jp.where(degrees <= config.rotation_segment_1_threshold_deg, segment_1, jp.where(degrees <= config.rotation_segment_2_threshold_deg, segment_2, config.rotation_segment_3_value))
+    rotation = jp.where(disabled.astype(bool), 0.0, config.rotation_scale * rotation_value + config.rotation_base_penalty)
+    position_base = jp.sum(jp.abs(offsets * config.position_penalty_scale), axis=1)
+    joint_base = jp.sum(jp.where(active.astype(bool), jp.abs(joints * config.joint_penalty_scale), 0.0), axis=1)
+    joint_base = joint_base / jp.maximum(active.sum(axis=1), 1.0) * config.reference_joint_count
+    action_penalty = -config.action_penalty_scale * (config.position_penalty_weight * position_base + config.joint_penalty_weight * joint_base)
+    magnitudes = jp.linalg.norm(force, axis=-1)
+    weighted_expected = jp.sum(expected * weights, axis=1)
+    weighted_correct = jp.sum((magnitudes > config.contact_force_threshold) * expected * weights, axis=1)
+    raw_contact = jp.where(weighted_expected > 0, weighted_correct / weighted_expected * config.max_contact_reward, 0.0)
+    within = (steps >= starts) & (steps <= ends)
+    valid_window = ends >= starts
+    contact = jp.where(within, raw_contact, 0.0) * config.direct_contact_reward_scale
+    distance_gate = jp.where(within & valid_window, jp.where(within, raw_contact, 0.0), 0.0)
+    distance_gate = jp.where((steps > ends) & valid_window, config.max_contact_reward, distance_gate)
+    distance_terms = ungated * distance_gate[:, None]
+    speed = jp.linalg.norm(velocity, axis=1)
+    stability = jp.where(valid_window & (steps > ends), config.max_object_stability_reward * jp.exp(-(speed / config.object_stability_reference_speed) ** 2), 0.0)
+    survival = jp.full((batch,), config.survival_reward, dtype=obj.dtype)
+    early = (steps >= early_starts) & (steps < early_starts + early_phase_steps)
+    total = jp.where(early, action_penalty, distance_terms.sum(axis=1) + rotation + action_penalty + contact + stability + survival) + termination.deviation_penalty
+    return DeviceReward(total, distance_terms[:, 0], distance_terms[:, 1], distance_terms[:, 2], rotation, contact, distance_gate, stability, survival, early, termination.deviation_penalty)
+
+
+def advance_device_task_counters(
+    *, progress: Any, trajectory_steps: Any, episode_returns: Any, pending_reset: Any,
+    reward_total: Any, next_reset: Any, control_call: Any,
+) -> DeviceTaskCounters:
+    """Commit counters in ``step`` order, including delayed partial resets."""
+
+    import jax.numpy as jp
+
+    progress, steps, returns, pending = map(jp.asarray, (progress, trajectory_steps, episode_returns, pending_reset))
+    reward, reset, call = map(jp.asarray, (reward_total, next_reset, control_call))
+    batch = progress.shape[0]
+    if any(value.shape != (batch,) for value in (steps, returns, pending, reward, reset)):
+        raise ValueError("device task counters must be batched equally")
+    stepped = steps + 1
+    stepped = jp.where(progress == 0, 0, stepped)
+    progressed = progress + 1
+    # Physics/control use the pre-reset values. The reset is deliberately
+    # applied before extraction, termination, reward and this return commit.
+    progressed = jp.where(pending.astype(bool), 0, progressed)
+    stepped = jp.where(pending.astype(bool), 0, stepped)
+    returns = jp.where(pending.astype(bool), 0.0, returns) + reward
+    return DeviceTaskCounters(progressed, stepped, returns, reset.astype(bool), call + 1)
 
 
 def reduce_warp_contacts(
