@@ -37,3 +37,7 @@ Work only in this linked feature worktree. Preserve current MANO behavior and
 unrelated files. Use explicit-file staging and inspect staged diffs. Commit
 coherent checkpoints. Stop after bootstrap and focused baseline checks; do not
 begin speculative observation/action repairs.
+
+All visual tests and final rollouts must use `env=1`, export `DISPLAY=:1`, and
+run explicitly non-headless with the viewer enabled when the runtime supports
+one. Numerical trace collection may remain headless.

@@ -2,30 +2,68 @@
 
 ## Current model
 
-The phase-130 checkpoint uses Gym's v3 live task clock: physical initialization is frame 61, policy decisions are frames 62–191, and post-step states are frames 63–192. The accepted filtered artifacts are:
+The complete paired rollout covers 631 policy decisions 62–692 and post-step
+states 63–693. Both artifacts are finite and end in a truncated final state:
 
-- Gym trace: `outputs/dexhandrl_trace/v3_phase130_gym/gym_v3_phase130.npz`, SHA256 `f04c21efff3d6e0dba55cf4cf15977906e975161ca95c74081ed53a36d4f5def`.
-- Filtered MuJoCo trace: `outputs/dexhandrl_trace/v3_phase130_mujoco_filtered/mujoco_v3_phase130.npz`, SHA256 `3532925b8745af6fac11966441cdc8955598d842244ad2ef7167b7e064779821`.
-- Filtered comparison: `outputs/dexhandrl_trace/v3_phase130_mujoco_filtered/compare_vs_gym.json`, SHA256 `5047d8d92e69094424ead89a88ee70794135cacfdba089297e8587b8333e6c06`.
+- Gym: `outputs/dexhandrl_trace/v3_full631_gym/gym_v3_full631.npz`, SHA256
+  `3fa200902b689f20664136c7988ab645a827b3f2cd6d32f79250ea657ca436ac`.
+- MuJoCo: `outputs/dexhandrl_trace/v3_full631_mujoco/mujoco_v3_full631.npz`,
+  SHA256 `c7fe9b357c7005eb4e74e915ff55e4ae77c5706a3e86cf443ee07542aaf136d4`.
+- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco/compare_vs_gym.json`,
+  SHA256 `7399bc9ffb3f5d24e9a236580ab240b430c90696ba6c6d3378df9c675ca6c150`.
+- Metrics: `outputs/dexhandrl_trace/v3_full631_mujoco/full_metrics.json`,
+  SHA256 `c385e7755fa65ee00a99065928ce0e5672c3bef34b000269b48a8a651e6c4e3c`.
 
-Both filtered commands exited 0 and the traces contain 130 rows. `reference_active_target` is exact on every row. Corrected targets first diverge at decision 191 with maximum `0.00134549`. Applied targets are bit/nearly exact through decision 190: decision 108 has residual numerical error `7.3e-12`, decisions 109 and 110 are exact including Gym's filter effects, and decision 190 has `9.2e-12`. Their first divergence moved from decision 109 to decision 191; the decision-191 maximum `0.00134549` is within the preregistered `0.0013467` bound. The post-filter prediction passed, so the ordered velocity/position filter contract and reset-target initialization are accepted.
+The MuJoCo trace, comparison, and metrics exited 0. The Gym artifact and runner
+completed, the environment closed, and the source checkout remained unchanged.
+Python then segfaulted during Isaac Gym interpreter teardown. The artifact is
+valid evidence, but a reproducible successful Gym CLI exit remains unresolved.
 
-## Alignment boundary
+## What the full rollout establishes
 
-Identity, frame schedule, reference, episode time, RMS loading, policy execution, residual algorithm, post-filters, and mapping algorithm are aligned. Remaining shared-observation differences are physical state: active qpos, kinematics, object state/contact, and point cloud.
+`reference_active_target` is exact across all 631 decisions. Corrected and
+applied active targets first diverge at decision 191, preserving the accepted
+filter boundary.
 
-`full_target` still diverges from frame 62 because physical-state-dependent routing distributes distal targets differently. This does not falsify the accepted filter contract. A physics intervention is now permitted by the task constraint, but it must follow a demonstrated mechanism rather than precede the full-trace evidence.
+MuJoCo tracks the free-space object trajectory adequately before movement:
+states 63–260 have maximum object position error `0.008136 m` (8.14 mm), below
+the preregistered `0.05 m` threshold. The failure begins with grasp and lift:
 
-## Full-trace preregistration
+- During movement, MuJoCo object position RMSE/max are `0.197747/0.293853 m`,
+  versus Gym `0.050173/0.087589 m`.
+- MuJoCo maximum lift is `0.031762 m`, versus Gym `0.308728 m`.
+- MuJoCo overall hand active-target RMSE is better at `0.030404 rad`, versus
+  Gym `0.088467 rad`, despite MuJoCo failing to lift the object.
+- During movement, hand-contact magnitude is active for 32 MuJoCo rows versus
+  269 Gym rows. MuJoCo loses hand contact around frame 300 while the target
+  continues rising.
 
-Generate and compare complete 631-action Gym and MuJoCo traces. Before seeing the result, the required invariants and measurements are:
+The evidence rules out generic servo inability as the principal explanation.
+The live mechanisms are grasp formation/retention in MuJoCo and closed-loop
+policy/control divergence after decision 191. The current paired rollout cannot
+separate them because each simulator follows its own state-conditioned policy,
+offsets, and control targets after divergence.
 
-- `reference_active_target` remains exact on all 631 rows.
-- The first corrected-target and applied-target divergence remains decision 191.
-- Quantify object position and orientation error relative to target.
-- Quantify object lift, including maximum and final lift.
-- Quantify hand target error, contact slices, and phase-local error, explicitly separating the interval before `movement_start=261` from the lift interval.
+## Exact-control replay preregistration
 
-Prediction: if error stays low before decision 261 and rises during lift, grasp/contact dynamics dominate. If error exceeds `0.05` before decision 261, free-space servo/model mismatch dominates. No tuning is permitted before this result is recorded.
+Run one no-tuning replay that forces all 631 Gym `full_target` rows and the Gym
+offset/action-stage records into MuJoCo while MuJoCo physics evolves. Exact
+reference and control arrays are required; approximation or regenerated policy
+outputs would invalidate the discrimination.
+
+Classify using MuJoCo's movement interval:
+
+- **Control-dominant:** object RMSE `<0.10 m` and maximum lift `>0.20 m`.
+- **Physics/contact-dominant:** object RMSE `>0.15 m` and maximum lift `<0.10 m`.
+- **Mixed:** every other outcome.
+
+A successful replay would show that divergent closed-loop policy/targets cause
+the failed lift. Failure under the exact Gym control sequence would localize the
+remaining gap to MuJoCo grasp/contact response. The mixed region preserves cases
+where both mechanisms contribute.
+
+All visual tests and final rollouts must use `env=1`, export `DISPLAY=:1`, and
+run explicitly non-headless with the viewer enabled when supported. Numerical
+trace collection may remain headless.
 
 Evidence provenance: `OPS.md`.
