@@ -118,12 +118,15 @@ def test_mujoco_trace_parser_exposes_finger_gains_with_production_defaults(tmp_p
     args = _parser().parse_args(["--output", str(tmp_path / "trace.npz")])
     assert args.finger_kp == 15.0
     assert args.finger_kv == 0.0
+    assert (args.base_rot_kp, args.base_rot_kv, args.base_rot_force) == (10000.0, 125.0, 100.0)
 
     args = _parser().parse_args([
         "--output", str(tmp_path / "trace.npz"), "--finger-kp", "7.5", "--finger-kv", "2.0",
+        "--base-rot-kp", "5000", "--base-rot-kv", "500", "--base-rot-force", "200",
     ])
     assert args.finger_kp == 7.5
     assert args.finger_kv == 2.0
+    assert (args.base_rot_kp, args.base_rot_kv, args.base_rot_force) == (5000.0, 500.0, 200.0)
 
 @pytest.mark.parametrize("frames", [(61, 62), (62, 64)])
 def test_trace_contract_rejects_invalid_decision_schedule(frames):
@@ -456,6 +459,7 @@ def test_mujoco_trace_producer_declares_and_records_post_filters() -> None:
     assert "class ControlTraceIntervention" in source
     assert '"applied_active_target": source["applied_active_target"].copy()' in source
     assert '"finger_pd": {"kp": cfg.finger_kp, "kv": cfg.finger_kv, "force": cfg.finger_force}' in source
+    assert '"base_rotation_pd": {"kp": cfg.base_rot_kp, "kv": cfg.base_rot_kv, "force": cfg.base_rot_force}' in source
 
 
 def test_comparator_reports_both_observation_slices_and_control_contract(tmp_path):
