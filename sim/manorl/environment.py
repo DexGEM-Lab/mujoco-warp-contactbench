@@ -106,6 +106,25 @@ _CUBE1_GRASP_ALIASES = {
     "18": ("thumb3", "index3"),
 }
 
+# Curated bridge for new-capture pairs omitted by the pinned source mapping.
+# It is deliberately pair-specific: YAML remains authoritative whenever it
+# declares the exact pair, and unknown pairs still fail. The regular 02/03/04
+# actions follow finger count and source consensus; lateral 18 follows source
+# consensus. Irregular pairs use reference-pose MuJoCo geometry proximity.
+_CURATED_GRASP_ALIASES_BY_PAIR = {
+    ("cylinder4", "14"): ("thumb3", "index3", "middle3", "ring3"),
+    ("cylinder4", "16"): ("index2", "index3", "middle2", "middle3"),
+    ("iphone", "02"): ("thumb3", "index3", "middle3"),
+    ("iphone", "03"): ("thumb3", "index3", "middle3", "ring3"),
+    ("iphone", "04"): ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    ("iphone", "08"): ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    ("iphone", "14"): ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    ("iphone", "15"): ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    ("iphone", "18"): ("thumb3", "index3"),
+    ("largeclamp", "12"): ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    ("powerdrill", "18"): ("thumb3", "index3"),
+}
+
 
 def minimum_warp_contact_capacity(num_envs: int, hand_sides: object) -> int:
     """Return the conservative batch contact floor for the compiled hands.
@@ -727,10 +746,16 @@ def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64
     mappings = payload.get(object_type) if isinstance(payload, dict) else None
     if not isinstance(mappings, dict):
         raise ValueError(f"invalid grasp mapping asset for {object_type!r}")
-    aliases = mappings.get(action_id)
+    aliases = (
+        mappings[action_id]
+        if action_id in mappings
+        else _CURATED_GRASP_ALIASES_BY_PAIR.get((object_type, action_id))
+    )
     if aliases is None:
         raise ValueError(f"no source grasp mapping for object={object_type!r}, gesture={action_id!r}")
-    if not isinstance(aliases, list) or not all(isinstance(alias, str) for alias in aliases):
+    if not isinstance(aliases, (list, tuple)) or not all(
+        isinstance(alias, str) for alias in aliases
+    ):
         raise ValueError(f"invalid source grasp aliases for {object_type!r}/{action_id!r}")
     alias_map = {
         "palm": "palm",
