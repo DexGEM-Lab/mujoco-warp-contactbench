@@ -1,0 +1,58 @@
+"""Dependency-light contract tests for the one-model DexHand MJX batch runtime."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from sim.dexhandrl.skrl_batch_env import (
+    DexHandRLBatchConfig,
+    conservative_batch_constraint_capacity,
+    conservative_batch_contact_capacity,
+)
+from sim.dexhandrl.trajectory_batch import DexHandTrajectoryBatch
+
+
+def _batch(worlds: int = 1) -> DexHandTrajectoryBatch:
+    frames = 3
+    zeros = lambda *shape, dtype=np.float32: np.zeros(shape, dtype=dtype)
+    return DexHandTrajectoryBatch(
+        hand_active=zeros(worlds, frames, 22), hand_finger_dof_full_raw=None,
+        full_raw_validity=np.zeros((worlds, frames), dtype=bool), object_pos=zeros(worlds, frames, 3),
+        object_quat_xyzw=zeros(worlds, frames, 4), lance_contact_annotation=zeros(worlds, frames, 16),
+        lengths=np.full(worlds, frames, dtype=np.int32), start_frames=np.zeros(worlds, dtype=np.int32),
+        movement_start_local=np.zeros(worlds, dtype=np.int32), movement_end_local=np.ones(worlds, dtype=np.int32),
+        row_ids=np.arange(worlds, dtype=np.int64), action_indices=np.zeros(worlds, dtype=np.int32),
+        actions=("01",) * worlds, uuids=tuple(f"u-{index}" for index in range(worlds)),
+        action_onehot50=zeros(worlds, 50), task_expected_contact_masks=zeros(worlds, 16),
+        task_contact_body_names=((),) * worlds, active_joint_masks=zeros(worlds, 16),
+        active_fingertip_masks=zeros(worlds, 5), rotation_disabled=np.zeros(worlds, dtype=bool),
+    )
+
+
+def test_batch_config_requires_all_actions_and_active_reference() -> None:
+    batch = _batch()
+    with pytest.raises(ValueError, match="action='all'"):
+        DexHandRLBatchConfig(trajectories=batch, action="01")
+    with pytest.raises(ValueError, match="reference_joint_source='active'"):
+        DexHandRLBatchConfig(trajectories=batch, reference_joint_source="full_raw")
+
+
+def test_batch_capacity_floors_are_global_and_separate() -> None:
+    batch = _batch(7)
+    assert conservative_batch_contact_capacity(7) == 3648
+    assert conservative_batch_constraint_capacity(7) == 2048
+    with pytest.raises(ValueError, match="global 512-row-per-world floor"):
+        DexHandRLBatchConfig(trajectories=batch, contact_capacity=3583)
+    with pytest.raises(ValueError, match="constraint floor"):
+        DexHandRLBatchConfig(trajectories=batch, constraint_capacity=895)
+
+
+def test_device_transition_source_has_no_host_conversion() -> None:
+    source = Path("sim/dexhandrl/skrl_batch_env.py").read_text(encoding="utf-8")
+    transition = source.split("    def _transition(", 1)[1].split("    def _replace_rows", 1)[0]
+    assert "np.asarray" not in transition
+    assert "jax.vmap" in source
+    assert "reduce_dexhand_contacts" in source
+    assert "data._impl" in source
