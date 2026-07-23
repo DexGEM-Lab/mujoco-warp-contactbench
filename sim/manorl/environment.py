@@ -152,8 +152,10 @@ class EnvironmentConfig:
     # device-resident rollout mode: state, observation, reward, and Gymnasium
     # remain on their existing host contracts.
     device_contact_decode: bool = False
-    # Narrow end-to-end device transition. It intentionally has a separate
+    # Narrow end-to-end training transition. It intentionally has a separate
     # opt-in from contact decoding because it changes the live step boundary.
+    # It retains no full PhysicalSnapshot, so evaluation remains explicitly
+    # unsupported until its diagnostics contract is adapted.
     device_transition: bool = False
     capture_transition_diagnostics: bool = True
     profile_phases: bool = False
@@ -2514,16 +2516,43 @@ class MujocoManoEnvironment:
         self.control_call = int(np.asarray(counters.control_call))
         self.last_physical = None
         self.last_observation = None
-        self.last_reward = None
-        self.last_termination = None
+        # These compact vectors already cross the Gym boundary.  Materialize
+        # the complete diagnostics contract from kernel outputs so training
+        # telemetry observes the reward actually used for this transition.
+        self.last_reward = RewardDiagnostics(
+            total=reward_total.copy(),
+            distance_x=np.asarray(reward.distance_x, dtype=np.float64),
+            distance_y=np.asarray(reward.distance_y, dtype=np.float64),
+            distance_z=np.asarray(reward.distance_z, dtype=np.float64),
+            ungated_distance_x=np.asarray(reward.ungated_distance_x, dtype=np.float64),
+            ungated_distance_y=np.asarray(reward.ungated_distance_y, dtype=np.float64),
+            ungated_distance_z=np.asarray(reward.ungated_distance_z, dtype=np.float64),
+            rotation=np.asarray(reward.rotation, dtype=np.float64),
+            position_penalty=np.asarray(reward.position_penalty, dtype=np.float64),
+            joint_penalty=np.asarray(reward.joint_penalty, dtype=np.float64),
+            action_penalty=np.asarray(reward.action_penalty, dtype=np.float64),
+            raw_contact=np.asarray(reward.raw_contact, dtype=np.float64),
+            contact=np.asarray(reward.contact, dtype=np.float64),
+            distance_gate=np.asarray(reward.distance_gate, dtype=np.float64),
+            object_stability=np.asarray(reward.object_stability, dtype=np.float64),
+            object_speed=np.asarray(reward.object_speed, dtype=np.float64),
+            survival=np.asarray(reward.survival, dtype=np.float64),
+            early_phase=np.asarray(reward.early_phase, dtype=bool),
+            deviation_penalty=np.asarray(termination.deviation_penalty, dtype=np.float64),
+        )
+        self.last_termination = TerminationResult(
+            reset=reset.copy(),
+            deviation_reset=np.asarray(termination.deviation_reset, dtype=bool),
+            deviation_penalty=np.asarray(termination.deviation_penalty, dtype=np.float64),
+        )
         self.last_transition = None
         extras = {
             "time_outs": np.zeros(self.config.num_envs, dtype=bool),
-            "termination_reason_code": np.asarray(termination.reason_code, dtype=np.int32),
-            "termination_success": np.asarray(termination.reason_code == 1, dtype=bool),
-            "termination_failure": np.asarray(termination.reason_code == 2, dtype=bool),
-            "trajectory_complete_reset_mask": np.asarray(termination.reason_code == 1, dtype=bool),
-            "deviation_reset_mask": np.asarray(termination.deviation_reset, dtype=bool),
+            "termination_reason_code": self.last_termination.reason_code.copy(),
+            "termination_success": self.last_termination.success.copy(),
+            "termination_failure": self.last_termination.failure.copy(),
+            "trajectory_complete_reset_mask": self.last_termination.success.copy(),
+            "deviation_reset_mask": self.last_termination.deviation_reset.copy(),
         }
         return np.clip(observation, -5.0, 5.0), reward_total, reset, extras
 

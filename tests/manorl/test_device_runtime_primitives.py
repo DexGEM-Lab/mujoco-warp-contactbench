@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -230,7 +231,13 @@ def test_jitted_device_reward_and_termination_match_numpy_contract() -> None:
     np.testing.assert_array_equal(np.asarray(device_term.reason_code), host_term.reason_code)
     host = compute_rewards(RewardState(**state), compatibility=SOURCE_ALIGNED_COMPATIBILITY, termination=host_term, config=RewardConfig())
     device = jax.jit(lambda: compute_device_reward_28(**state, early_phase_steps=30, termination=device_term, config=RewardConfig()))()
-    for field in ("total", "distance_x", "distance_y", "distance_z", "rotation", "contact", "distance_gate", "object_stability", "survival", "deviation_penalty"):
+    for field in (
+        "total", "distance_x", "distance_y", "distance_z",
+        "ungated_distance_x", "ungated_distance_y", "ungated_distance_z",
+        "rotation", "position_penalty", "joint_penalty", "action_penalty",
+        "raw_contact", "contact", "distance_gate", "object_stability",
+        "object_speed", "survival", "deviation_penalty",
+    ):
         np.testing.assert_allclose(np.asarray(getattr(device, field)), getattr(host, field), rtol=0, atol=2e-6)
     np.testing.assert_array_equal(np.asarray(device.early_phase), host.early_phase)
 
@@ -317,6 +324,76 @@ def test_device_transition_matches_numpy_across_delayed_partial_reset_cycles() -
         np.testing.assert_array_equal(np.asarray(actual.trajectory_steps), steps_after_reset)
         np.testing.assert_allclose(np.asarray(actual.episode_returns), expected_returns, atol=2e-6)
         progress, steps, returns, pending, call = (np.asarray(actual.progress), np.asarray(actual.trajectory_steps), np.asarray(actual.episode_returns), np.asarray(actual.reset_mask), np.asarray(actual.control_call))
+
+
+@pytest.mark.skipif(
+    os.environ.get("MANORL_RUN_DEVICE_TRANSITION_PARITY") != "1",
+    reason="device-transition host oracle is opt-in and requires configured CUDA JAX/MJX",
+)
+def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> None:
+    """Exercise the actual environment seam before a remote throughput run.
+
+    The reference targets force a terminal world, a post-window/contact-reward
+    world, and a deviation world.  We compare physical state and references
+    before policy outputs because output agreement alone can hide divergent
+    simulator state.
+    """
+    if jax.default_backend() != "gpu":
+        pytest.skip("configured CUDA JAX backend required")
+    batch = 4
+    trajectory = load_reference_trajectory()
+    compatibility = replace(SOURCE_ALIGNED_COMPATIBILITY, early_phase_steps=0)
+    reward_config = replace(RewardConfig(), contact_force_threshold=-1.0)
+    common = dict(
+        num_envs=batch, device="gpu", device_resident_controls=True,
+        capture_transition_diagnostics=False, compatibility=compatibility,
+        point_sampling_backend="numpy_per_env", reward_config=reward_config,
+        max_deviation_distance=0.05,
+    )
+    host = MujocoManoEnvironment(trajectory, EnvironmentConfig(**common))
+    device = MujocoManoEnvironment(trajectory, EnvironmentConfig(**common, device_transition=True))
+    # Mutate before the device branch retains its immutable tables.  This makes
+    # each requested boundary deterministic rather than relying on a contact
+    # realization from the random action trace.
+    for environment in (host, device):
+        environment.trajectory_lengths[:] = np.asarray((2, 80, 80, 80), dtype=np.int64)
+        environment.contact_start_frames[:] = 0
+        environment.contact_end_frames[:] = 0
+        environment.expected_contact_mask[:] = 1.0
+        environment.expected_contact_weights[:] = 1.0
+        environment.reference_object_pos[2] += np.asarray((10.0, 0.0, 0.0))
+    rng = np.random.default_rng(20260723)
+    saw_terminal = saw_deviation = saw_contact = saw_post_window = False
+    for step in range(64):
+        if step in (16, 43):
+            ids = np.asarray((1, 3), dtype=np.int64)
+            host.reset(env_ids=ids)
+            device.reset(env_ids=ids)
+        actions = rng.uniform(-0.25, 0.25, size=(batch, host.action_dim))
+        host_output, host_reward, host_done, host_extras = host.step(actions)
+        device_output, device_reward, device_done, device_extras = device.step(actions)
+        host_physical = host.producer.extract(host.data)
+        device_physical = device.producer.extract(device.data)
+        for field in ("object_position", "object_orientation_xyzw", "mano_dof_pos", "object_linear_velocity"):
+            np.testing.assert_allclose(
+                getattr(device_physical, field), getattr(host_physical, field), rtol=1e-4, atol=1e-5
+            )
+        np.testing.assert_allclose(device._target_indices(), host._target_indices(), rtol=0, atol=0)
+        np.testing.assert_allclose(device.reference_object_pos, host.reference_object_pos, rtol=0, atol=0)
+        np.testing.assert_array_equal(device_done, host_done)
+        np.testing.assert_array_equal(device_extras["termination_reason_code"], host_extras["termination_reason_code"])
+        np.testing.assert_allclose(device_output["obs"], host_output["obs"], rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(device_reward, host_reward, rtol=1e-4, atol=1e-5)
+        np.testing.assert_array_equal(device.progress, host.progress)
+        np.testing.assert_array_equal(device.trajectory_steps, host.trajectory_steps)
+        np.testing.assert_array_equal(device.reset_mask, host.reset_mask)
+        np.testing.assert_allclose(device.episode_returns, host.episode_returns, rtol=1e-4, atol=1e-5)
+        assert device.last_reward is not None
+        saw_terminal |= bool(np.any(device.last_termination.success))
+        saw_deviation |= bool(np.any(device.last_termination.failure))
+        saw_contact |= bool(np.any(device.last_reward.raw_contact > 0.0))
+        saw_post_window |= bool(np.any(device.trajectory_steps > device.contact_end_frames))
+    assert saw_terminal and saw_deviation and saw_contact and saw_post_window
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:

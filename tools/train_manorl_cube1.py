@@ -973,6 +973,10 @@ def _evaluation_group_results(
 
 def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trained"]) -> EvaluationResult:
     environment = runtime.gymnasium_env.environment
+    if environment.config.device_transition:
+        raise RuntimeError(
+            "device_transition is training-only: evaluation requires a full physical snapshot"
+        )
     # ``deterministic_actions`` only selects the Gaussian mean. PointNet/FiLM
     # still contains BatchNorm, so evaluation must also switch skrl modules to
     # eval mode or the reported policy changes with vector batch statistics.

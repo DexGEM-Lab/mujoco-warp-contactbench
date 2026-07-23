@@ -502,6 +502,17 @@ def test_train_emits_gym_style_object_and_pair_telemetry(
     assert episode_records[0]["reward_components"]["contact_reward"] == [2.0, 4.0]
 
 
+def test_evaluate_rejects_training_only_device_transition() -> None:
+    tool = _load_tool()
+    runtime = SimpleNamespace(
+        gymnasium_env=SimpleNamespace(
+            environment=SimpleNamespace(config=SimpleNamespace(device_transition=True))
+        )
+    )
+    with pytest.raises(RuntimeError, match="device_transition is training-only"):
+        tool._evaluate(runtime, "zero")
+
+
 def test_evaluate_waits_for_each_pair_first_termination() -> None:
     tool = _load_tool()
 

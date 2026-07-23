@@ -35,16 +35,29 @@ class DeviceTermination(NamedTuple):
 
 
 class DeviceReward(NamedTuple):
-    """Device reward diagnostics in source order plus fail-closed validity."""
+    """Compact source-order reward diagnostics plus fail-closed validity.
+
+    These fields are the complete host ``RewardDiagnostics`` contract.  They
+    are produced while the reward kernel is live, so training telemetry need
+    not invent values or reconstruct a physical snapshot on the host.
+    """
 
     total: Any
     distance_x: Any
     distance_y: Any
     distance_z: Any
+    ungated_distance_x: Any
+    ungated_distance_y: Any
+    ungated_distance_z: Any
     rotation: Any
+    position_penalty: Any
+    joint_penalty: Any
+    action_penalty: Any
+    raw_contact: Any
     contact: Any
     distance_gate: Any
     object_stability: Any
+    object_speed: Any
     survival: Any
     early_phase: Any
     deviation_penalty: Any
@@ -378,7 +391,9 @@ def compute_device_reward_28(
     position_base = jp.sum(jp.abs(offsets * config.position_penalty_scale), axis=1)
     joint_base = jp.sum(jp.where(active.astype(bool), jp.abs(joints * config.joint_penalty_scale), 0.0), axis=1)
     joint_base = joint_base / jp.maximum(active.sum(axis=1), 1.0) * config.reference_joint_count
-    action_penalty = -config.action_penalty_scale * (config.position_penalty_weight * position_base + config.joint_penalty_weight * joint_base)
+    position_penalty = -config.action_penalty_scale * config.position_penalty_weight * position_base
+    joint_penalty = -config.action_penalty_scale * config.joint_penalty_weight * joint_base
+    action_penalty = position_penalty + joint_penalty
     magnitudes = jp.linalg.norm(force, axis=-1)
     weighted_expected = jp.sum(expected * weights, axis=1)
     weighted_correct = jp.sum((magnitudes > config.contact_force_threshold) * expected * weights, axis=1)
@@ -416,7 +431,13 @@ def compute_device_reward_28(
         & termination.valid
     )
     valid = valid_inputs & jp.all(jp.isfinite(total)) & jp.all(jp.isfinite(stability))
-    return DeviceReward(total, distance_terms[:, 0], distance_terms[:, 1], distance_terms[:, 2], rotation, contact, distance_gate, stability, survival, early, termination.deviation_penalty, valid)
+    return DeviceReward(
+        total, distance_terms[:, 0], distance_terms[:, 1], distance_terms[:, 2],
+        ungated[:, 0], ungated[:, 1], ungated[:, 2], rotation,
+        position_penalty, joint_penalty, action_penalty, raw_contact, contact,
+        distance_gate, stability, speed, survival, early,
+        termination.deviation_penalty, valid,
+    )
 
 
 def advance_device_task_counters(
