@@ -2,24 +2,26 @@
 
 ## Current model
 
-The visible exact-control replay with hand friction `3 0.01 0.001` localized the object anomaly to the object inertial frame, not to torsional or rolling friction. The user's visual observation was that the grasp looked somewhat okay while the simulated object looked wrong; the object rotated/ejected during lift. The replay used exact Gym control arrays, status 0, `env=1`, `DISPLAY=:1`, and a live viewer.
+The object anomaly was caused by a wrong inertial-frame origin in the generated MuJoCo object body. The source URDF COM offset is `[0.005175592236, -0.005187185076, 0.001516276923]` m (7.48 mm from the geometry origin), while the previous scene conversion hardcoded the inertial position to zero but retained inertia values about the source COM. That displaced the physical COM relative to contact geometry and produced the observed rotation/ejection. The COM-fixed replay preserves the URDF inertial frame and confirms this mechanism.
 
-Evidence artifacts:
+## Accepted COM-fixed evidence
 
-- Trace: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_slide_visible/mujoco_control_replay_full631_handfriction3_slide_visible.npz`, SHA256 `35ba55f0...`.
-- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_slide_visible/compare_vs_gym.json`, SHA256 `9944fc01...`.
-- Validation: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_slide_visible/validation.json`, SHA256 `91dbc505...`.
+The exact-control visible trace has SHA256 prefix `a7f670f5...`; its comparison is `01ef742b...`, validation is `91dbc505...`, and metrics are `e919192c...`. It contains 631 finite rows and exact imported Gym control arrays.
 
-## What the `3 0.01 0.001` comparison establishes
+Relative to the prior `3 0.01 0.001` replay, COM correction passes every preregistered criterion:
 
-All numeric, control, and physics arrays are bit-exact to the prior `3 2 2` replay; only metadata differs. Therefore the torsional/rolling hypothesis is falsified: the contact `condim=3` means only sliding friction participates, while friction slots 2 and 3 are inactive. Rotation/ejection cannot have been caused by those coefficients.
+- Movement position RMSE: `0.2892 → 0.03736 m` (87.1% reduction), better than Gym `0.05017 m`.
+- Movement orientation RMSE: `2.7247 → 0.4723 rad` (82.7% reduction).
+- Maximum lift: `0.2859 m`, close to Gym `0.3087 m`.
+- Movement hand-contact rows: `88 → 286`, above Gym `269`.
+- Position error first exceeds 5 cm at frame `455`, versus Gym frame `422`.
 
-The ManoRL cube1 comparison rules down mesh geometry. The URDF and mesh have identical bounds, centroid, volume, and faces. The source URDF inertial origin is `[0.005175592236, -0.005187185076, 0.001516276923]` m. The Gym URDF importer and ManoRL `_link_inertial` preserve this origin. In contrast, the DexHand scene `_object_body_xml` hardcodes inertial `pos="0 0 0"` while retaining inertia values about the source COM. This displaces the physical COM by 7.48 mm from the geometry and creates an incorrect contact torque. That mechanism directly explains the observed object rotation/ejection.
+This confirms the wrong 7.48 mm COM as the dominant object anomaly and validates the ManoRL-based diagnosis. The remaining exact-control gap is orientation RMSE `0.472 rad` versus Gym `0.226 rad`; grasp, lift, and translation are close. No new physics tuning has been performed.
 
-## Next preregistered intervention
+## Production closed-loop preregistration
 
-Run one visible exact-control replay changing only object inertial-frame handling: preserve the URDF inertial origin, together with generic origin rotation and collision origin, while leaving mesh, mass, inertia, gains, substeps, solver, control arrays, and fixed friction `3 0.01 0.001` unchanged. Use `DISPLAY=:1`, `env=1`, `--no-headless`, and a viewer.
+Run the full production checkpoint closed-loop evaluation with COM fixed and hand sliding friction `3 0.01 0.001`. Do not inject or replay a control trace. Use `DISPLAY=:1`, `env=1`, and `headless=false`; retain all other defaults.
 
-Pass criteria relative to the `3 2 2` baseline are orientation movement RMSE improving at least 30%, from `2.7247` to `<=1.9073` rad; position movement RMSE improving at least 20%, from `0.2892` to `<=0.2314` m; and maximum lift remaining `>=0.10` m. If this fails, inspect ManoRL contact compliance/integrator and object friction separately; do not wholesale-copy ManoRL.
+Success requires maximum lift `>0.20 m` and movement position RMSE `<0.10 m`. Report orientation RMSE and policy/control divergence. If the run fails despite the open-loop COM-fixed success, the remaining mechanism is observation/policy closed-loop transfer rather than object contact physics.
 
 Evidence provenance: `OPS.md`.
