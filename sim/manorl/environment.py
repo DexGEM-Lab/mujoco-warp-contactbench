@@ -1109,7 +1109,7 @@ class MjxWarpPhysicalProducer:
     def device_contact_reduction(self, data: Any) -> Any:
         """Return compact JAX contact reductions without a host buffer copy."""
 
-        if self.hand_sides not in {("right",), ("right", "left")} or self.active_object_geom_ids is not None:
+        if set(self.hand_sides) not in ({"right"}, {"right", "left"}) or self.active_object_geom_ids is not None:
             raise RuntimeError(
                 "device contact reduction supports homogeneous right-policy worlds with "
                 "a right-only or right-left compiled model; per-world object sets require "
@@ -1129,7 +1129,7 @@ class MjxWarpPhysicalProducer:
         if self._device_contact_decoder is None:
             import jax
 
-            if self.hand_sides == ("right",):
+            if len(self.hand_sides) == 1:
                 self._device_contact_decoder = jax.jit(
                     lambda nacon, nefc, geom, world, dimension, addresses, friction, frame, force:
                     reduce_warp_contacts(
