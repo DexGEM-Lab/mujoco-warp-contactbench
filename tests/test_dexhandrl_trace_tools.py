@@ -18,7 +18,15 @@ from sim.dexhandrl.trace_contract import (
     validate_trace,
 )
 from tools.compare_dexhandrl_traces import compare
-from tools.trace_dexhandrl_mujoco import ControlTraceIntervention, PassiveTraceViewer, _parser, _passive_trace_viewer
+from tools.trace_dexhandrl_mujoco import (
+    ControlTraceIntervention,
+    ObservationTraceIntervention,
+    PassiveTraceViewer,
+    _parser,
+    _passive_trace_viewer,
+    _policy_observation,
+    _validate_trace_interventions,
+)
 from tools.trace_dexhandrl_gym import (_authoritative_frame, _compose_train_config, _deterministic_action,
                                       _close_env_after_trace, _filter_exact_trajectory, _patch,
                                       _is_relative_to, _pre_action_observations,
@@ -391,6 +399,82 @@ def _control_trace(tmp_path, *, metadata=None, arrays=None):
     path = tmp_path / "gym_control.npz"
     np.savez_compressed(path, metadata=np.asarray(json.dumps(source_metadata)), **source_arrays)
     return path
+
+
+def test_observation_trace_parser_accepts_repeated_components(tmp_path):
+    args = _parser().parse_args([
+        "--output", str(tmp_path / "trace.npz"), "--observation-trace", "gym.npz",
+        "--replace-observation-component", "contact_force_magnitude",
+        "--replace-observation-component", "contact_force_directions",
+    ])
+    assert args.observation_trace == Path("gym.npz")
+    assert args.replace_observation_component == ["contact_force_magnitude", "contact_force_directions"]
+
+
+@pytest.mark.parametrize(
+    ("control_trace", "observation_trace", "components", "message"),
+    [
+        (None, Path("gym.npz"), (), "required together"),
+        (None, None, ("contact_force_magnitude",), "required together"),
+        (Path("control.npz"), Path("gym.npz"), ("contact_force_magnitude",), "cannot be combined"),
+        (None, Path("gym.npz"), ("contact_force_mag",), "exact OBS_COMPONENT_SLICES"),
+    ],
+)
+def test_observation_trace_cli_pairing_fails_closed(control_trace, observation_trace, components, message):
+    with pytest.raises(ValueError, match=message):
+        _validate_trace_interventions(control_trace, observation_trace, components)
+
+
+def test_observation_trace_rejects_bad_source_component_and_frame(tmp_path):
+    metadata, arrays = _trace(backend="mujoco")
+    with pytest.raises(ValueError, match="Gym trace"):
+        ObservationTraceIntervention.load(_control_trace(tmp_path, metadata=metadata), 1, ("contact_force_magnitude",))
+    metadata, arrays = _trace(backend="gym")
+    arrays["processed_observation"][0, 0] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        ObservationTraceIntervention.load(_control_trace(tmp_path, metadata=metadata, arrays=arrays), 1, ("contact_force_magnitude",))
+    with pytest.raises(ValueError, match="exact OBS_COMPONENT_SLICES"):
+        ObservationTraceIntervention.load(_control_trace(tmp_path), 1, ("contact_force_mag",))
+    path = _control_trace(tmp_path)
+    with pytest.raises(ValueError, match="fewer than requested"):
+        ObservationTraceIntervention.load(path, 3, ("contact_force_magnitude",))
+    intervention = ObservationTraceIntervention.load(path, 1, ("contact_force_magnitude",))
+    with pytest.raises(RuntimeError, match="decision frame"):
+        intervention.apply(np.zeros(461, dtype=np.float32), RESET_DECISION_FRAME + 1)
+
+
+def test_observation_trace_replaces_exact_slices_and_preserves_normal_input(tmp_path):
+    path = _control_trace(tmp_path)
+    intervention = ObservationTraceIntervention.load(
+        path, 1, ("contact_force_magnitude", "contact_force_directions", "object_contact_force_magnitude")
+    )
+    source = intervention.source_observations[0]
+    source[:] = np.arange(461, dtype=np.float32) + 1000
+    live = np.arange(461, dtype=np.float32)
+    hybrid = _policy_observation(live, RESET_DECISION_FRAME, intervention)
+    assert intervention._row == 1
+    expected = live.copy()
+    for name in intervention.components:
+        start, end = OBS_COMPONENT_SLICES[name]
+        expected[start:end] = source[start:end]
+    np.testing.assert_array_equal(hybrid, expected)
+    untouched = np.ones(461, dtype=bool)
+    for name in intervention.components:
+        start, end = OBS_COMPONENT_SLICES[name]
+        untouched[start:end] = False
+    np.testing.assert_array_equal(hybrid[untouched], live[untouched])
+    assert _policy_observation(live, RESET_DECISION_FRAME, None) is live
+
+
+def test_observation_trace_metadata_states_policy_only_import(tmp_path):
+    record = ObservationTraceIntervention.load(
+        _control_trace(tmp_path), 1, ("contact_force_magnitude",)
+    ).metadata_record()
+    assert len(record["source_sha256"]) == 64
+    assert record["source_backend"] == "gym"
+    assert record["components"] == ["contact_force_magnitude"]
+    assert "Only named Gym processed_observation slices" in record["semantics"]
+    assert "no target, action" in record["semantics"]
 
 
 def test_control_trace_rejects_non_gym_identity_frame_and_nonfinite_sources(tmp_path):
