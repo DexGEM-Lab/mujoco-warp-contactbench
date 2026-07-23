@@ -25,6 +25,7 @@ from sim.manorl.abi import (
     early_phase_mask,
     process_residual_actions,
 )
+from sim.manorl.device_runtime import reduce_warp_contacts
 from sim.manorl.assets import (
     compile_model,
     compile_unified_model,
@@ -140,6 +141,10 @@ class EnvironmentConfig:
     point_seed: int = 42
     point_sampling_backend: str = POINT_SAMPLING_AUTO
     device_resident_controls: bool = False
+    # This removes only the private contact-buffer host transfer. It is not a
+    # device-resident rollout mode: state, observation, reward, and Gymnasium
+    # remain on their existing host contracts.
+    device_contact_decode: bool = False
     capture_transition_diagnostics: bool = True
     profile_phases: bool = False
     unified_object_batch: bool = False
@@ -184,6 +189,20 @@ class EnvironmentConfig:
             raise ValueError("torch_cuda_global point sampling requires dynamic_reset compatibility")
         if not isinstance(self.device_resident_controls, bool):
             raise TypeError("device_resident_controls must be bool")
+        if not isinstance(self.device_contact_decode, bool):
+            raise TypeError("device_contact_decode must be bool")
+        if self.device_contact_decode and self.device != "gpu":
+            raise ValueError("device_contact_decode requires device='gpu'")
+        if self.device_contact_decode and self.capture_transition_diagnostics:
+            raise ValueError(
+                "device_contact_decode requires capture_transition_diagnostics=False; "
+                "full geometry contact snapshots remain the explicit debug path"
+            )
+        if self.device_contact_decode and self.profile_phases:
+            raise ValueError(
+                "device_contact_decode cannot collect host contact phase metadata; "
+                "use the explicit debug/profile path instead"
+            )
         if not isinstance(self.capture_transition_diagnostics, bool):
             raise TypeError("capture_transition_diagnostics must be bool")
         if not isinstance(self.profile_phases, bool):
@@ -272,8 +291,10 @@ class PhysicalSnapshot:
     hand_keypoint_positions: NDArray[np.float64]
     fingertip_positions: NDArray[np.float64]
     hand_keypoint_contact_forces: NDArray[np.float64]
-    object_contact_force: NDArray[np.float64]
-    geom_contact_force_world_N: NDArray[np.float64]
+    # Full geometry diagnostics are intentionally unavailable in the opt-in
+    # device-contact-decode path. The default/debug producer still fills both.
+    object_contact_force: NDArray[np.float64] | None
+    geom_contact_force_world_N: NDArray[np.float64] | None
     hand_object_force_on_object_world_N: NDArray[np.float64]
     contact_count: NDArray[np.int64]
 
@@ -853,6 +874,7 @@ class MjxWarpPhysicalProducer:
         self.active_object_body_ids: NDArray[np.int64] | None = None
         self.active_object_qvel_addresses: NDArray[np.int64] | None = None
         self.active_object_geom_ids: NDArray[np.int64] | None = None
+        self._device_contact_decoder: Any | None = None
         self.reset_profile()
 
     def reset_profile(self) -> None:
@@ -1043,6 +1065,80 @@ class MjxWarpPhysicalProducer:
         hand_forces = np.sum([item[1] for item in decoded], axis=0)
         return geometry_forces, hand_forces, decoded[0][2]
 
+    def _device_decode_contact_buffers(
+        self, data: Any, batch: int
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
+        """Decode homogeneous single-hand contacts on JAX, then copy reductions only.
+
+        This deliberately leaves full geometry forces unavailable. Callers that
+        need Rerun or a transition snapshot use the existing host decoder.
+        """
+
+        if len(self.hand_sides) != 1 or self.active_object_geom_ids is not None:
+            raise RuntimeError(
+                "device_contact_decode supports only homogeneous single-hand worlds; "
+                "bimanual and per-world object sets require the host/debug path"
+            )
+        impl = data._impl
+        required = (
+            "nacon", "nefc", "contact__geom", "contact__worldid", "contact__dim",
+            "contact__efc_address", "contact__friction", "contact__frame", "efc__force",
+        )
+        missing = [name for name in required if not hasattr(impl, name)]
+        if missing:
+            raise RuntimeError(
+                "the installed MJX-Warp contact ABI is incompatible with device_contact_decode: "
+                + ", ".join(missing)
+            )
+        if self._device_contact_decoder is None:
+            import jax
+
+            self._device_contact_decoder = jax.jit(
+                lambda nacon, nefc, geom, world, dimension, addresses, friction, frame, force:
+                reduce_warp_contacts(
+                    nacon=nacon,
+                    nefc=nefc,
+                    geom=geom,
+                    world=world,
+                    dimension=dimension,
+                    addresses=addresses,
+                    friction=friction,
+                    frame=frame,
+                    constraint_force=force,
+                    ngeom=self.model.ngeom,
+                    keypoint_geom_ids=tuple(self.keypoint_geom_ids),
+                    object_geom_ids=tuple(sorted(self.object_geom_ids)),
+                    # Match MJX's default CUDA dtype rather than silently
+                    # enabling x64 globally in a training process.
+                    compute_dtype="float32",
+                )
+            )
+        reduction = self._device_contact_decoder(
+            impl.nacon,
+            impl.nefc,
+            impl.contact__geom,
+            impl.contact__worldid,
+            impl.contact__dim,
+            impl.contact__efc_address,
+            impl.contact__friction,
+            impl.contact__frame,
+            impl.efc__force,
+        )
+        # This scalar is the only per-step validation transfer. It must be
+        # observed before consuming the small reduced arrays, matching the
+        # host decoder's same-transition fail-closed capacity/finite checks.
+        if not bool(np.asarray(reduction.valid)):
+            raise RuntimeError(
+                "MJX-Warp device contact reduction rejected a live contact, capacity, "
+                "or non-finite force; refusing to continue with reduced contacts"
+            )
+        forces = np.asarray(reduction.keypoint_forces, dtype=np.float64)
+        hand_forces = np.asarray(reduction.hand_object_forces, dtype=np.float64)
+        counts = np.asarray(reduction.per_world_count, dtype=np.int64)
+        if forces.shape != (batch, len(KEYPOINT_NAMES), 3) or hand_forces.shape != forces.shape or counts.shape != (batch,):
+            raise RuntimeError("MJX-Warp device contact reduction returned invalid reduced shapes")
+        return forces, hand_forces, counts
+
     def extract(
         self,
         data: Any,
@@ -1050,28 +1146,40 @@ class MjxWarpPhysicalProducer:
         timings: PhaseTimings | None = None,
         synchronize: Any | None = None,
         record_profile: bool = False,
+        device_contact_decode: bool = False,
     ) -> PhysicalSnapshot:
+        if device_contact_decode and record_profile:
+            raise RuntimeError("device_contact_decode cannot materialize host contact profiling buffers")
         state_started = timings.start("state_materialization", synchronize) if timings is not None else None
         state = self.materialize_state(data)
         if timings is not None:
             timings.stop("state_materialization", state_started, synchronize)
-        contact_started = (
-            timings.start("contact_buffer_materialization", synchronize) if timings is not None else None
-        )
-        buffers = self.materialize_contact_buffers(
-            data, len(state.qpos), record_profile=record_profile
-        )
-        if timings is not None:
-            timings.stop("contact_buffer_materialization", contact_started, synchronize)
-        decode_started = timings.start("python_contact_decode", synchronize) if timings is not None else None
-        geometry_forces, hand_object_forces, per_world_count = self.decode_contact_buffers(buffers)
-        # Keypoint contact observations retain the primary-hand ABI.  The
-        # hand-object force field above is deliberately aggregated across all
-        # hands for reward computation, but summing same-index geoms from both
-        # hands here would silently double/mis-map the observation channels.
-        forces = geometry_forces[:, self.keypoint_geom_ids]
+        if device_contact_decode:
+            decode_started = timings.start("device_contact_decode", synchronize) if timings is not None else None
+            forces, hand_object_forces, per_world_count = self._device_decode_contact_buffers(data, len(state.qpos))
+            if timings is not None:
+                timings.stop("device_contact_decode", decode_started, synchronize)
+            geometry_forces = None
+        else:
+            contact_started = (
+                timings.start("contact_buffer_materialization", synchronize) if timings is not None else None
+            )
+            buffers = self.materialize_contact_buffers(
+                data, len(state.qpos), record_profile=record_profile
+            )
+            if timings is not None:
+                timings.stop("contact_buffer_materialization", contact_started, synchronize)
+            decode_started = timings.start("python_contact_decode", synchronize) if timings is not None else None
+            geometry_forces, hand_object_forces, per_world_count = self.decode_contact_buffers(buffers)
+            # Keypoint contact observations retain the primary-hand ABI. The
+            # hand-object field is aggregated across sides for reward.
+            forces = geometry_forces[:, self.keypoint_geom_ids]
         if self.active_object_geom_ids is None:
-            object_force = geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
+            object_force = (
+                None
+                if geometry_forces is None
+                else geometry_forces[:, sorted(self.object_geom_ids)].sum(axis=1)
+            )
             object_position = state.xpos[:, self.object_body_id]
             object_orientation = state.xquat[:, self.object_body_id]
             object_linear_velocity = state.qvel[:, self.object_qvel_address : self.object_qvel_address + 3]
@@ -1099,7 +1207,7 @@ class MjxWarpPhysicalProducer:
                     for index, address in enumerate(self.active_object_qvel_addresses)
                 ]
             )
-        if timings is not None:
+        if timings is not None and not device_contact_decode:
             timings.stop("python_contact_decode", decode_started, synchronize)
         return PhysicalSnapshot(
             mano_dof_pos=state.qpos[:, self.hand_qpos_slices[self.primary_hand_side]].copy(),
@@ -1112,7 +1220,7 @@ class MjxWarpPhysicalProducer:
             hand_keypoint_positions=state.keypoints,
             fingertip_positions=state.fingertips,
             hand_keypoint_contact_forces=forces,
-            object_contact_force=object_force,
+            object_contact_force=None if object_force is None else object_force.copy(),
             geom_contact_force_world_N=geometry_forces,
             hand_object_force_on_object_world_N=hand_object_forces,
             contact_count=per_world_count,
@@ -1294,6 +1402,11 @@ class MujocoManoEnvironment:
         if len(side_sets) != 1 or len(dof_dims) != 1:
             raise ValueError("all vector trajectories must share hand sides and DOF width")
         self.hand_sides = _model_hand_side_order(next(iter(side_sets)))
+        if config.device_contact_decode and len(self.hand_sides) != 1:
+            raise ValueError(
+                "device_contact_decode supports exactly one compiled hand; "
+                "bimanual contact aggregation remains on the debug path"
+            )
         # Lance metadata order is not a control-order contract.  MuJoCo XML
         # and policy/model controls always use right then left.
         self.model_hand_sides = tuple(
@@ -1329,6 +1442,11 @@ class MujocoManoEnvironment:
         if any(len(parts) != 3 or not parts[1].isdigit() for parts in identity_parts):
             raise ValueError("each trajectory identity must be object_action_sequence")
         object_types = {parts[0] for parts in identity_parts}
+        if config.device_contact_decode and len(object_types) != 1:
+            raise ValueError(
+                "device_contact_decode supports a homogeneous object batch; "
+                "unified and heterogeneous object sets remain on the debug path"
+            )
         if len(object_types) != 1:
             if config.unified_object_batch:
                 self._initialize_unified_batch(
@@ -2320,6 +2438,7 @@ class MujocoManoEnvironment:
             timings=self.phase_timings if self.phase_timings.enabled else None,
             synchronize=self._profile_sync if self.phase_timings.enabled else None,
             record_profile=self.phase_timings.enabled,
+            device_contact_decode=self.config.device_contact_decode,
         )
         self.last_observation = self._build_observation(self.last_physical)
         return self.last_observation
@@ -2449,6 +2568,7 @@ class MujocoManoEnvironment:
             timings=self.phase_timings if self.phase_timings.enabled else None,
             synchronize=self._profile_sync if self.phase_timings.enabled else None,
             record_profile=self.phase_timings.enabled,
+            device_contact_decode=self.config.device_contact_decode,
         )
         self._phase_stop("state_contact_extraction", extraction_phase)
         early = early_phase_mask(

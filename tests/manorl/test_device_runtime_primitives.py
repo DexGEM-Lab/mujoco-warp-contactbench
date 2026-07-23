@@ -12,7 +12,8 @@ from sim.manorl.device_runtime import (
     reduce_warp_contacts,
     torch_to_jax_cuda,
 )
-from sim.manorl.environment import _decode_contact_forces
+from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment, _decode_contact_forces
+from sim.manorl.trajectory import load_reference_trajectory
 
 
 def _fixture() -> dict[str, object]:
@@ -151,6 +152,38 @@ def test_nonfinite_live_floor_contact_fails_closed_like_host_decoder() -> None:
             keypoint_geom_ids=fixture["keypoint_geom_ids"],
             object_geom_ids=set(fixture["object_geom_ids"]),
         )
+
+
+def test_real_mjx_warp_private_buffers_match_host_decoder() -> None:
+    """Pin the actual DataWarp field names/shapes and reduction parity."""
+
+    if jax.config.x64_enabled:
+        pytest.skip("MJX-Warp 3.10 FFI pins its model buffers to float32")
+    environment = MujocoManoEnvironment(
+        load_reference_trajectory(),
+        EnvironmentConfig(num_envs=2, device="cpu", max_deviation_distance=1_000_000.0),
+    )
+    buffers = environment.producer.materialize_contact_buffers(environment.data, batch=2)
+    host_geometry, host_hand_object, host_counts = environment.producer.decode_contact_buffers(buffers)
+    keypoint, hand_object, counts = environment.producer._device_decode_contact_buffers(
+        environment.data, batch=2
+    )
+    assert buffers.count < buffers.capacity
+    np.testing.assert_allclose(
+        keypoint,
+        host_geometry[:, environment.producer.keypoint_geom_ids],
+        rtol=2e-6,
+        atol=2e-6,
+    )
+    np.testing.assert_allclose(hand_object, host_hand_object, rtol=2e-6, atol=2e-6)
+    np.testing.assert_array_equal(counts, host_counts)
+
+
+def test_device_contact_decode_config_fails_closed_for_cpu_and_debug_snapshots() -> None:
+    with pytest.raises(ValueError, match="requires device='gpu'"):
+        EnvironmentConfig(device="cpu", device_contact_decode=True, capture_transition_diagnostics=False)
+    with pytest.raises(ValueError, match="capture_transition_diagnostics=False"):
+        EnvironmentConfig(device="gpu", device_contact_decode=True)
 
 
 def test_float64_reducer_matches_float64_host_decoder() -> None:
