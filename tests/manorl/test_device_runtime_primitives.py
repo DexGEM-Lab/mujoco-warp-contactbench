@@ -393,7 +393,20 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
             device.reset(env_ids=ids)
         actions = rng.uniform(-0.25, 0.25, size=(batch, host.action_dim))
         host_output, host_reward, host_done, host_extras = host.step(actions)
-        device_output, device_reward, device_done, device_extras = device.step(actions)
+        device_transition = device.step_device(actions)
+        assert device_transition.observation.shape == (batch, 480)
+        assert device_transition.observation.dtype == jax.numpy.float32
+        assert device_transition.reward.shape == (batch,)
+        assert device_transition.reset.shape == (batch,)
+        assert device_transition.reason_code.shape == (batch,)
+        assert device_transition.deviation_reset.shape == (batch,)
+        assert bool(np.asarray(device_transition.valid))
+        # The public Gym method retains its NumPy ABI by materializing this
+        # exact narrow egress; parity itself deliberately uses the device seam.
+        device_output = {"obs": np.asarray(device_transition.observation, dtype=np.float32)}
+        device_reward = np.asarray(device_transition.reward, dtype=np.float32)
+        device_done = np.asarray(device_transition.reset, dtype=bool)
+        device_extras = device._device_transition_extras()
         host_physical = host.producer.extract(host.data)
         device_physical = device.producer.extract(device.data)
         for field in ("object_position", "object_orientation_xyzw", "mano_dof_pos", "object_linear_velocity"):

@@ -10,6 +10,7 @@ from gymnasium.vector.utils import batch_space
 from numpy.typing import NDArray
 
 from sim.manorl.contracts import JOINT_DOF
+from sim.manorl.device_runtime import DeviceTransitionBatch
 from sim.manorl.environment import MujocoManoEnvironment
 from sim.manorl.observations import OBSERVATION_DIM_28
 
@@ -142,6 +143,52 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
         if env_ids.size == 0:
             raise ValueError("reset_done requires at least one terminal environment")
         return self.reset(options={"env_ids": env_ids})
+
+    def step_device(self, raw_actions: np.ndarray) -> tuple[DeviceTransitionBatch, dict[str, Any]]:
+        """Run the training-only device egress without materializing policy tensors.
+
+        Terminal bookkeeping remains host-owned because delayed indexed reset is
+        an environment lifecycle operation. ``final_observation`` stays the
+        JAX terminal policy tensor; the next reset observation is the explicit
+        residual host boundary in :meth:`reset`.
+        """
+
+        if not self.environment.config.device_transition:
+            raise RuntimeError("step_device requires EnvironmentConfig.device_transition=True")
+        if not isinstance(raw_actions, np.ndarray):
+            raise TypeError("step_device raw_actions must be a NumPy array")
+        actions_array = np.asarray(raw_actions, dtype=np.float64)
+        expected_dim = int(getattr(self, "action_dim", ACTION_DIM))
+        if actions_array.shape != (self.num_envs, expected_dim) or not np.all(np.isfinite(actions_array)):
+            raise ValueError(f"actions must be finite ({self.num_envs}, {expected_dim})")
+        self._consume_pending_resets()
+        transition = self.environment.step_device(np.clip(actions_array, -1.0, 1.0))
+        termination = self.environment.last_termination
+        if termination is None:
+            raise RuntimeError("physical environment omitted termination diagnostics")
+        # This is retained per-step host telemetry, not the policy reset egress.
+        done = np.asarray(termination.reset, dtype=bool)
+        reason_code = np.asarray(termination.reason_code, dtype=np.int32)
+        success = np.asarray(termination.success, dtype=bool)
+        failure = np.asarray(termination.failure, dtype=bool)
+        deviation = np.asarray(termination.deviation_reset, dtype=bool)
+        if any(value.shape != (self.num_envs,) for value in (done, reason_code, success, failure, deviation)):
+            raise RuntimeError("termination diagnostics have an invalid vector shape")
+        infos: dict[str, Any] = {
+            "time_outs": np.zeros(self.num_envs, dtype=bool),
+            "termination_reason_code": reason_code.copy(),
+            "termination_success": success.copy(),
+            "termination_failure": failure.copy(),
+            "trajectory_complete_reset_mask": success.copy(),
+            "deviation_reset_mask": deviation.copy(),
+            "success": success.copy(),
+            "failure": failure.copy(),
+        }
+        if np.any(done):
+            infos["final_observation"] = transition.observation
+            infos["_final_observation"] = done.copy()
+        self._pending_reset_mask()[:] = done
+        return transition, infos
 
     def step(
         self, actions: NDArray[object]

@@ -19,6 +19,7 @@ from skrl.utils.spaces.torch import (
 )
 
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
+from sim.manorl.device_runtime import DeviceTransitionBatch, jax_to_torch_cuda
 from sim.manorl.environment import PhaseTimings
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
 from sim.manorl.model import ManoActorCritic
@@ -218,6 +219,61 @@ class ProfiledGymnasiumWrapper(ResettableGymnasiumWrapper):
         return observation, reward, terminated, truncated, info
 
 
+class DeviceTransitionGymnasiumWrapper(ResettableGymnasiumWrapper):
+    """skrl wrapper for the narrow JAX CUDA policy-egress contract.
+
+    Actions intentionally follow skrl's established Torch-to-NumPy path. The
+    raw sampled action handed to PPO is never clipped or replaced: clipping is
+    owned by ``ManoGymnasiumVectorEnv.step_device``. Reset/reset_done continue
+    through the ordinary host Gymnasium path, the explicit residual boundary.
+    """
+
+    def __init__(self, env: ManoGymnasiumVectorEnv) -> None:
+        if not env.environment.config.device_transition:
+            raise ValueError("device wrapper requires device_transition=True")
+        super().__init__(env)
+        if self.device.type != "cuda":
+            raise RuntimeError("device_transition requires a CUDA skrl wrapper")
+
+    @staticmethod
+    def _validate_transition(transition: DeviceTransitionBatch, num_envs: int) -> None:
+        expected = (num_envs,)
+        if transition.observation.shape != (num_envs, 480):
+            raise RuntimeError("device transition observation must be (num_envs, 480)")
+        if transition.reward.shape != expected or transition.reset.shape != expected:
+            raise RuntimeError("device transition reward/reset must be (num_envs,)")
+        if transition.reason_code.shape != expected or transition.deviation_reset.shape != expected:
+            raise RuntimeError("device transition diagnostics must be (num_envs,)")
+        if str(transition.observation.dtype) != "float32":
+            raise RuntimeError("device transition observation must be float32")
+
+    def step(
+        self, actions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+        # Do not clamp/copy ``actions``: PPO records this exact sampled tensor.
+        numpy_actions = untensorize_space(
+            self.action_space,
+            unflatten_tensorized_space(self.action_space, actions),
+            squeeze_batch_dimension=not self._vectorized,
+        )
+        if self._vectorized and isinstance(self.action_space, gymnasium.spaces.Discrete):
+            numpy_actions = numpy_actions.flatten()
+        transition, info = self._env.step_device(numpy_actions)
+        self._validate_transition(transition, self.num_envs)
+        observation = jax_to_torch_cuda(transition.observation)
+        reward = jax_to_torch_cuda(transition.reward).to(dtype=torch.float32).view(self.num_envs, 1)
+        terminated = jax_to_torch_cuda(transition.reset).to(dtype=torch.bool).view(self.num_envs, 1)
+        truncated = torch.zeros_like(terminated)
+        if observation.device != self.device or reward.device != self.device or terminated.device != self.device:
+            raise RuntimeError("JAX-to-Torch DLPack transition changed CUDA device")
+        if observation.dtype != torch.float32:
+            raise RuntimeError("JAX-to-Torch DLPack observation must be float32")
+        if self._vectorized:
+            self._observation = observation
+            self._info = info
+        return observation, reward, terminated, truncated, info
+
+
 class ManoSkrlRuntime:
     """One shared model, source-normalizers, and skrl PPO over the vector adapter."""
 
@@ -229,7 +285,9 @@ class ManoSkrlRuntime:
         self.gymnasium_env = environment
         self.config = config
         self.env = (
-            ProfiledGymnasiumWrapper(environment)
+            DeviceTransitionGymnasiumWrapper(environment)
+            if environment.environment.config.device_transition
+            else ProfiledGymnasiumWrapper(environment)
             if config.profile_phases
             else ResettableGymnasiumWrapper(environment)
         )

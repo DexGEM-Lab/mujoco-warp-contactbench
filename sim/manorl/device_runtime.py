@@ -74,6 +74,22 @@ class DeviceTaskCounters(NamedTuple):
     control_call: Any
 
 
+class DeviceTransitionBatch(NamedTuple):
+    """The training-only JAX CUDA egress from one device transition.
+
+    Policy tensors remain JAX arrays until the skrl boundary borrows them with
+    CUDA DLPack. Host reward/termination telemetry is intentionally owned by
+    the environment and is therefore not represented here.
+    """
+
+    observation: Any
+    reward: Any
+    reset: Any
+    reason_code: Any
+    deviation_reset: Any
+    valid: Any
+
+
 class DevicePhysicalFeatures(NamedTuple):
     """The source-order state fields consumed by observation/reward code."""
 

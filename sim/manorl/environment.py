@@ -27,6 +27,7 @@ from sim.manorl.abi import (
     process_residual_actions,
 )
 from sim.manorl.device_runtime import (
+    DeviceTransitionBatch,
     advance_device_task_counters,
     build_device_observation_28,
     check_device_termination,
@@ -2498,13 +2499,13 @@ class MujocoManoEnvironment:
         prior_steps: NDArray[np.int64],
         prior_returns: NDArray[np.float64],
         prior_control_call: int,
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.bool_], dict[str, NDArray[Any]]]:
-        """Complete the narrow post-physics transition without host state extraction.
+    ) -> DeviceTransitionBatch:
+        """Complete the narrow post-physics transition without host policy egress.
 
         The preceding delayed reset has already replaced physics state and reset
-        host-owned templates/residuals. Every gather below therefore consumes
-        the post-reset counters and references; only final policy/reward/done
-        arrays plus compact reason/counter telemetry cross back to NumPy.
+        host-owned templates/residuals. Policy observation, reward, and reset
+        remain JAX CUDA arrays. Compact host telemetry is deliberately retained
+        for existing callbacks and metrics, but is not reused as policy egress.
         """
 
         indices = self._target_indices()
@@ -2605,9 +2606,14 @@ class MujocoManoEnvironment:
         valid = physical.valid & contacts.valid & termination.valid & reward.valid & observation_valid
         if not bool(np.asarray(valid)):
             raise RuntimeError("device_transition rejected non-finite or invalid transition inputs")
-        observation = np.asarray(raw_observation, dtype=np.float64)
-        reward_total = np.asarray(reward.total, dtype=np.float64)
-        reset = np.asarray(termination.reset, dtype=bool)
+        policy_observation = self.jp.clip(raw_observation, -5.0, 5.0).astype(self.jp.float32)
+        policy_reward = self.jp.asarray(reward.total, dtype=self.jp.float32)
+        policy_reset = self.jp.asarray(termination.reset, dtype=bool)
+        # These compact host diagnostics remain the existing callback and
+        # metric contract. They are a residual telemetry boundary, distinct
+        # from the policy egress above.
+        reward_total = np.asarray(policy_reward, dtype=np.float64)
+        reset = np.asarray(policy_reset, dtype=bool)
         # JAX-to-NumPy conversion can yield a read-only view.  These compact
         # counters cross back into host-owned task state and are subsequently
         # updated by indexed delayed resets, so retain writable ownership.
@@ -2652,15 +2658,14 @@ class MujocoManoEnvironment:
             deviation_penalty=np.asarray(termination.deviation_penalty, dtype=np.float64),
         )
         self.last_transition = None
-        extras = {
-            "time_outs": np.zeros(self.config.num_envs, dtype=bool),
-            "termination_reason_code": self.last_termination.reason_code.copy(),
-            "termination_success": self.last_termination.success.copy(),
-            "termination_failure": self.last_termination.failure.copy(),
-            "trajectory_complete_reset_mask": self.last_termination.success.copy(),
-            "deviation_reset_mask": self.last_termination.deviation_reset.copy(),
-        }
-        return np.clip(observation, -5.0, 5.0), reward_total, reset, extras
+        return DeviceTransitionBatch(
+            observation=policy_observation,
+            reward=policy_reward,
+            reset=policy_reset,
+            reason_code=self.jp.asarray(termination.reason_code, dtype=self.jp.int32),
+            deviation_reset=self.jp.asarray(termination.deviation_reset, dtype=bool),
+            valid=self.jp.asarray(valid, dtype=bool),
+        )
 
     def _build_observation(self, physical: PhysicalSnapshot) -> ObservationResult:
         indices = self._target_indices()
@@ -2753,7 +2758,56 @@ class MujocoManoEnvironment:
         NDArray[np.bool_],
         dict[str, NDArray[Any]],
     ]:
+        """Public NumPy Gym contract, including device-transition materialization."""
+
+        if self.config.device_transition:
+            transition = self.step_device(raw_actions)
+            return (
+                {"obs": np.asarray(transition.observation, dtype=np.float32)},
+                np.asarray(transition.reward, dtype=np.float32),
+                np.asarray(transition.reset, dtype=bool),
+                self._device_transition_extras(),
+            )
+        return self._step_impl(raw_actions, return_device_batch=False)
+
+    def step_device(self, raw_actions: np.ndarray) -> DeviceTransitionBatch:
+        """Run one training-only transition with JAX CUDA policy outputs.
+
+        Action/residual/reference processing and counters stay host-owned. This
+        method is deliberately unavailable for ordinary Gym or evaluation
+        configurations; callers use the skrl DLPack egress wrapper.
+        """
+
+        if not self.config.device_transition:
+            raise RuntimeError("step_device requires EnvironmentConfig.device_transition=True")
+        if not isinstance(raw_actions, np.ndarray):
+            raise TypeError("step_device raw_actions must be a NumPy array")
+        transition = self._step_impl(raw_actions, return_device_batch=True)
+        if not isinstance(transition, DeviceTransitionBatch):
+            raise RuntimeError("device transition did not return a DeviceTransitionBatch")
+        return transition
+
+    def _device_transition_extras(self) -> dict[str, NDArray[Any]]:
+        """Return host-owned terminal telemetry retained for current callbacks."""
+
+        termination = self.last_termination
+        if termination is None:
+            raise RuntimeError("device transition omitted termination diagnostics")
+        return {
+            "time_outs": np.zeros(self.config.num_envs, dtype=bool),
+            "termination_reason_code": termination.reason_code.copy(),
+            "termination_success": termination.success.copy(),
+            "termination_failure": termination.failure.copy(),
+            "trajectory_complete_reset_mask": termination.success.copy(),
+            "deviation_reset_mask": termination.deviation_reset.copy(),
+        }
+
+    def _step_impl(
+        self, raw_actions: NDArray[object], *, return_device_batch: bool
+    ) -> Any:
         if self.is_heterogeneous:
+            if return_device_batch:
+                raise RuntimeError("device_transition does not support heterogeneous batches")
             return self._heterogeneous_step(raw_actions)
         materialization_phase = self._phase_start("action_numpy_materialization")
         actions = self.normalize_actions(raw_actions)
@@ -2856,14 +2910,15 @@ class MujocoManoEnvironment:
             self._reset_indices(np.flatnonzero(pending_reset).astype(np.int64))
         self._phase_stop("delayed_reset_application", reset_phase)
         if self.config.device_transition:
-            observation, reward_total, reset, extras = self._device_transition_outputs(
+            if not return_device_batch:
+                raise RuntimeError("device transition must use the explicit device batch boundary")
+            return self._device_transition_outputs(
                 pending_reset=pending_reset,
                 prior_progress=prior_progress,
                 prior_steps=prior_steps,
                 prior_returns=prior_returns,
                 prior_control_call=prior_control_call,
             )
-            return {"obs": observation}, reward_total, reset, extras
         extraction_phase = self._phase_start("state_contact_extraction")
         physical = self.producer.extract(
             self.data,
