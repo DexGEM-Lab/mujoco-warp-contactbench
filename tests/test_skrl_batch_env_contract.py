@@ -79,6 +79,13 @@ def test_selected_reset_rebuilds_contacts_and_preserves_unselected_worlds() -> N
     try:
         clean = env.reset_device()
         env.step_device(np.zeros((worlds, 22), dtype=np.float32))
+        before_zero = env.telemetry()
+        env.reset_done_device(np.zeros(worlds, dtype=bool))
+        after_zero = env.telemetry()
+        np.testing.assert_array_equal(after_zero["frame"], before_zero["frame"])
+        np.testing.assert_array_equal(after_zero["episode_count"], before_zero["episode_count"])
+        np.testing.assert_array_equal(after_zero["qpos"], before_zero["qpos"])
+        np.testing.assert_array_equal(after_zero["qvel"], before_zero["qvel"])
         before = np.asarray(env.state.data.qpos).copy()
         selected = np.asarray([True, False, True, False, False, False, False])
         mixed = env.reset_done_device(selected)
@@ -89,6 +96,15 @@ def test_selected_reset_rebuilds_contacts_and_preserves_unselected_worlds() -> N
         assert np.all(np.asarray(mixed.valid))
     finally:
         env.close()
+
+
+def test_zero_reset_mask_is_device_identity_without_forward() -> None:
+    source = Path("sim/dexhandrl/skrl_batch_env.py").read_text(encoding="utf-8")
+    reset_mask = source.split("    def _reset_mask(", 1)[1].split("    def _reset_observation", 1)[0]
+    # The device conditional makes the false branch an identity. Therefore a
+    # zero reset mask neither invokes Warp forward nor changes batch state.
+    assert "self.jax.lax.cond(self.jp.any(mask), reset_rows, lambda current: current, state)" in reset_mask
+    assert "data = self._forward_world(data)" in reset_mask
 
 
 def test_device_transition_source_has_no_host_conversion() -> None:

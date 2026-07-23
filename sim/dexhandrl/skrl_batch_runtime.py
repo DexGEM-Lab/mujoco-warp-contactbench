@@ -36,7 +36,7 @@ def _torch_device_ordinal(tensor: Any) -> int | None:
 def _jax_device_ordinal(value: Any) -> int | None:
     device = value.device if not callable(getattr(value, "device", None)) else value.device()
     platform = getattr(device, "platform", None)
-    return getattr(device, "id", None) if platform == "gpu" else None
+    return getattr(device, "id", None) if platform in {"gpu", "cuda"} else None
 
 
 class DLPackBridge:
@@ -62,8 +62,8 @@ class DLPackBridge:
             if str(getattr(value, "dtype", "")) != "float32":
                 raise RuntimeError("DLPack rollout arrays must be float32 JAX arrays")
         device = value.device if not callable(getattr(value, "device", None)) else value.device()
-        if self.production_gpu and getattr(device, "platform", None) != "gpu":
-            raise RuntimeError("production batch rollout requires JAX GPU arrays")
+        if self.production_gpu and getattr(device, "platform", None) not in {"gpu", "cuda"}:
+            raise RuntimeError("production batch rollout requires JAX GPU/CUDA arrays")
 
     def torch_to_jax(self, value: Any) -> Any:
         import jax
@@ -87,6 +87,32 @@ class DLPackBridge:
 
 def _scalar(value: Any) -> float:
     return float(value.detach().item())
+
+
+def _agent_parameters(agent: Any):
+    """Yield every distinct parameter exposed by skrl's model containers."""
+    seen_models: set[int] = set()
+    candidates = [getattr(agent, "models", None), getattr(agent, "policy", None), getattr(agent, "value", None)]
+    for candidate in candidates:
+        values = candidate.values() if isinstance(candidate, dict) else (candidate if isinstance(candidate, (tuple, list)) else (candidate,))
+        for model in values:
+            if model is None or id(model) in seen_models:
+                continue
+            parameters = getattr(model, "parameters", None)
+            if callable(parameters):
+                seen_models.add(id(model))
+                yield from parameters()
+
+
+def _assert_finite_agent_parameters(agent: Any, *, update: int) -> None:
+    import torch
+
+    parameters = list(_agent_parameters(agent))
+    if not parameters:
+        raise RuntimeError("skrl agent exposes no model parameters for finite validation")
+    invalid = [index for index, parameter in enumerate(parameters) if not bool(torch.isfinite(parameter).all().item())]
+    if invalid:
+        raise RuntimeError(f"non-finite agent model parameters after PPO update {update}: indices={invalid}")
 
 
 def _capacity_guard(telemetry: dict[str, Any]) -> None:
@@ -128,6 +154,11 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
     if int(cfg.timesteps) != int(cfg.updates) * int(cfg.rollouts):
         raise ValueError("batch PPO requires timesteps == updates * rollouts")
     bridge = bridge or DLPackBridge(production_gpu=cfg.device == "gpu")
+    # The explicit device loop owns initialization. The single-action
+    # SequentialTrainer remains responsible for initializing its own agent.
+    init = getattr(agent, "init", None)
+    if callable(init):
+        init()
     enable_training = getattr(agent, "enable_training_mode", None)
     if callable(enable_training):
         enable_training(True)
@@ -148,14 +179,18 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
     with log_path.open("w", encoding="utf-8") as logs:
         for timestep in range(int(cfg.timesteps)):
             if timestep:
-                # Always submit the mask: a zero mask is a JAX no-op, while a
-                # host-side `any()` would synchronize every GPU rollout step.
-                reset = env.reset_done_device(bridge.torch_to_jax(pending_done.to(dtype=torch.float32)))
+                # DLPack borrows pending_done storage. Keep that tensor alive
+                # and immutable until reset outputs have crossed back to Torch;
+                # the final assignment below then installs this step's done mask.
+                reset_mask = pending_done.to(dtype=torch.float32)
+                reset = env.reset_done_device(bridge.torch_to_jax(reset_mask))
                 observations = bridge.jax_to_torch(reset.observation)
-                pending_done.zero_()
             agent.pre_interaction(timestep=timestep, timesteps=int(cfg.timesteps))
             with torch.no_grad():
                 actions, _ = agent.act(observations, None, timestep=timestep, timesteps=int(cfg.timesteps))
+            # Distribution samples may be strided views; DLPack rollout
+            # ownership requires a contiguous action buffer.
+            actions = actions.contiguous()
             transition = env.step_device(bridge.torch_to_jax(actions))
             next_observations = bridge.jax_to_torch(transition.observation)
             rewards = bridge.jax_to_torch(transition.reward)
@@ -190,17 +225,22 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
             finite_value, valid_value = bool(finite.item()), bool(valid.item())
             if not finite_value or not valid_value:
                 raise RuntimeError(f"invalid batch transition at PPO update {completed_updates}: finite={finite_value}, valid={valid_value}")
+            _assert_finite_agent_parameters(agent, update=completed_updates)
             telemetry = env.telemetry()
             _capacity_guard(telemetry)
             elapsed = max(time.perf_counter() - started, 1e-9)
+            checkpoint_due = completed_updates % int(cfg.checkpoint_interval_updates) == 0 or completed_updates == int(cfg.updates)
             record = {"update": completed_updates, "transitions": transitions,
                       "reward_mean": _scalar(reward_sum / (int(cfg.rollouts) * int(env.num_envs))),
                       "done": _scalar(done_sum), "timeout": _scalar(timeout_sum), "elapsed": elapsed,
                       "steps_per_s": transitions / elapsed, "finite": finite_value, "transition.valid": valid_value,
+                      "contact_high_water": int(telemetry.get("contact_high_water", 0)),
+                      "constraint_high_water": int(telemetry.get("constraint_high_water", 0)),
                       "capacity": {key: telemetry[key] for key in telemetry if "capacity" in key or "buffer_shape" in key}}
-            logs.write(json.dumps(record, sort_keys=True) + "\n")
-            logs.flush()
-            if completed_updates % int(cfg.checkpoint_interval_updates) == 0 or completed_updates == int(cfg.updates):
+            if completed_updates % int(cfg.log_interval_updates) == 0 or checkpoint_due:
+                logs.write(json.dumps(record, sort_keys=True) + "\n")
+                logs.flush()
+            if checkpoint_due:
                 _checkpoint(agent, output, completed_updates, {"progress": record, "config": asdict(cfg),
                             "physics": cfg.physics.record(), "assignment": assignment, "model_config": asdict(model_config)})
             reward_sum.zero_(); done_sum.zero_(); timeout_sum.zero_(); finite.fill_(True); valid.fill_(True)

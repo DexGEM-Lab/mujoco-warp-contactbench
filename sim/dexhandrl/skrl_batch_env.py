@@ -428,13 +428,27 @@ class DexHandRLMJXBatchEnv:
 
     def _reset_mask(self, state: _BatchState, mask: Any) -> _BatchState:
         mask = self.jp.asarray(mask, dtype=bool)
-        data = self.jax.tree_util.tree_map(lambda current, cached: self._replace_rows(current, cached, mask), state.data, self._settled_data)
-        # Global Warp contact leaves are not row-owned.  Rebuild every derived
-        # field from the mixed qpos/qvel/ctrl batch before observing it.
-        data = self._forward_world(data)
-        reset_previous = self._reset_previous_active
-        return _BatchState(data=data, frame=self.jp.where(mask, 1, state.frame), episode_count=self.jp.where(mask, 0, state.episode_count),
-            previous_active=self.jp.where(mask[:, None], reset_previous, state.previous_active), base_offset=self.jp.where(mask[:, None], 0., state.base_offset), joint_offset=self.jp.where(mask[:, None], 0., state.joint_offset))
+
+        def reset_rows(current: _BatchState) -> _BatchState:
+            data = self.jax.tree_util.tree_map(
+                lambda value, cached: self._replace_rows(value, cached, mask), current.data, self._settled_data
+            )
+            # Global Warp contact leaves are not row-owned. Rebuild derived
+            # fields only when at least one world was restored.
+            data = self._forward_world(data)
+            reset_previous = self._reset_previous_active
+            return _BatchState(
+                data=data,
+                frame=self.jp.where(mask, 1, current.frame),
+                episode_count=self.jp.where(mask, 0, current.episode_count),
+                previous_active=self.jp.where(mask[:, None], reset_previous, current.previous_active),
+                base_offset=self.jp.where(mask[:, None], 0., current.base_offset),
+                joint_offset=self.jp.where(mask[:, None], 0., current.joint_offset),
+            )
+
+        # Keep this predicate on device: a host `any()` would synchronize every
+        # rollout step, while the identity branch preserves the complete state.
+        return self.jax.lax.cond(self.jp.any(mask), reset_rows, lambda current: current, state)
 
     def _reset_observation(self, state: _BatchState) -> DeviceBatchTransition:
         obs, valid = self._observe_state(state)

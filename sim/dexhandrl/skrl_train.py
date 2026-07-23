@@ -402,9 +402,9 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
         state_space=state_space,
         device=device,
     )
-    init = getattr(agent, "init", None)
-    if callable(init):
-        init()
+    # Initialization ownership differs by execution path: the explicit all-action
+    # runtime calls init immediately before its device loop, while SequentialTrainer
+    # initializes the legacy single-action agent itself.
     return agent, model_cfg
 
 
@@ -710,6 +710,8 @@ def main(argv: list[str] | None = None) -> None:
     args = build_arg_parser().parse_args(argv)
     if args.checkpoint is not None and args.rlgames_checkpoint is not None:
         raise SystemExit("use only one of --checkpoint or --rlgames-checkpoint")
+    if args.action == "all" and args.updates is None:
+        raise SystemExit("action=all requires explicit --updates")
     launcher_cfg = SkrlLauncherConfig(
         device=args.device,
         num_envs=max(int(args.num_envs), 1),
