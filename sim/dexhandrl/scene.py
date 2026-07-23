@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from itertools import combinations
+import math
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
@@ -24,25 +25,85 @@ def _object_urdf_path(object_name: str, isaac_source_root: Path) -> Path:
     return path
 
 
+def _finite_numbers(value: str | None, count: int, default: tuple[float, ...]) -> tuple[float, ...]:
+    values = default if value is None else tuple(float(item) for item in value.split())
+    if len(values) != count or not all(math.isfinite(item) for item in values):
+        raise ValueError(f"expected {count} finite values, got {value!r}")
+    return values
+
+
+def _rpy_to_wxyz(rpy: tuple[float, float, float]) -> tuple[float, float, float, float]:
+    """Convert URDF fixed-axis roll, pitch, yaw to a MuJoCo wxyz quaternion."""
+    roll, pitch, yaw = rpy
+    cr, sr = math.cos(roll / 2.0), math.sin(roll / 2.0)
+    cp, sp = math.cos(pitch / 2.0), math.sin(pitch / 2.0)
+    cy, sy = math.cos(yaw / 2.0), math.sin(yaw / 2.0)
+    return (
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    )
+
+
+def _parse_urdf_origin(origin: ET.Element | None) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    if origin is None:
+        return (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0)
+    xyz = _finite_numbers(origin.get("xyz"), 3, (0.0, 0.0, 0.0))
+    rpy = _finite_numbers(origin.get("rpy"), 3, (0.0, 0.0, 0.0))
+    return xyz, _rpy_to_wxyz(rpy)
+
+
+def _parse_finite_float(value: str | None, description: str) -> float:
+    try:
+        result = float(value) if value is not None else float("nan")
+    except ValueError as error:
+        raise ValueError(f"invalid {description}: {value!r}") from error
+    if not math.isfinite(result):
+        raise ValueError(f"invalid {description}: {value!r}")
+    return result
+
+
+def _format_numbers(values: tuple[float, ...]) -> str:
+    return " ".join(f"{value:.17g}" for value in values)
+
+
 def _parse_object_asset(object_name: str, isaac_source_root: Path) -> dict[str, object]:
     urdf = _object_urdf_path(object_name, isaac_source_root)
     root = ET.parse(urdf).getroot()
-    mesh = root.find(".//collision/geometry/mesh") or root.find(".//visual/geometry/mesh")
+    collision = root.find(".//collision")
+    mesh = None if collision is None else collision.find("geometry/mesh")
+    if mesh is None:
+        visual = root.find(".//visual")
+        mesh = None if visual is None else visual.find("geometry/mesh")
     if mesh is None:
         raise RuntimeError(f"DexHandRL object {object_name!r} currently expects mesh URDF geometry")
+    if "filename" not in mesh.attrib:
+        raise ValueError(f"DexHandRL object {object_name!r} mesh has no filename")
     mesh_path = (urdf.parent / mesh.attrib["filename"]).resolve()
     scale = mesh.attrib.get("scale", "1 1 1")
-    mass_elem = root.find(".//inertial/mass")
-    inertia_elem = root.find(".//inertial/inertia")
-    mass = float(mass_elem.attrib.get("value", "0.1")) if mass_elem is not None else 0.1
-    if inertia_elem is not None:
-        inertia = {
-            key: float(inertia_elem.attrib.get(key, "0"))
-            for key in ("ixx", "iyy", "izz", "ixy", "ixz", "iyz")
-        }
-    else:
-        inertia = {"ixx": 1e-4, "iyy": 1e-4, "izz": 1e-4, "ixy": 0.0, "ixz": 0.0, "iyz": 0.0}
-    return {"mesh_path": mesh_path, "scale": scale, "mass": mass, "inertia": inertia}
+    inertial = root.find(".//inertial")
+    mass_elem = None if inertial is None else inertial.find("mass")
+    inertia_elem = None if inertial is None else inertial.find("inertia")
+    if mass_elem is None or inertia_elem is None:
+        raise ValueError(f"DexHandRL object {object_name!r} has incomplete inertial data")
+    mass = _parse_finite_float(mass_elem.get("value"), "inertial mass")
+    inertia = {
+        key: _parse_finite_float(inertia_elem.get(key), f"inertia {key}")
+        for key in ("ixx", "iyy", "izz", "ixy", "ixz", "iyz")
+    }
+    inertial_pos, inertial_quat = _parse_urdf_origin(inertial.find("origin"))
+    collision_pos, collision_quat = _parse_urdf_origin(None if collision is None else collision.find("origin"))
+    return {
+        "mesh_path": mesh_path,
+        "scale": scale,
+        "mass": mass,
+        "inertia": inertia,
+        "inertial_pos": inertial_pos,
+        "inertial_quat": inertial_quat,
+        "collision_pos": collision_pos,
+        "collision_quat": collision_quat,
+    }
 
 
 def _replace_or_insert_option(xml: str, dt: float, substeps: int) -> str:
@@ -81,11 +142,16 @@ def _object_asset_xml(object_name: str, asset: dict[str, object]) -> str:
 
 def _object_body_xml(object_name: str, asset: dict[str, object], object_friction: str) -> str:
     inertia = asset["inertia"]
+    inertial_pos = _format_numbers(asset["inertial_pos"])
+    inertial_quat = _format_numbers(asset["inertial_quat"])
+    inertial_orientation = "" if inertial_quat == "1 0 0 0" else f' quat="{inertial_quat}"'
+    collision_pos = _format_numbers(asset["collision_pos"])
+    collision_quat = _format_numbers(asset["collision_quat"])
     return f'''
     <body name="{object_name}" pos="0 0 0">
       <freejoint name="{object_name}_free" />
-      <inertial pos="0 0 0" mass="{asset["mass"]}" fullinertia="{inertia["ixx"]} {inertia["iyy"]} {inertia["izz"]} {inertia["ixy"]} {inertia["ixz"]} {inertia["iyz"]}" />
-      <geom name="{object_name}_collision" type="mesh" mesh="{object_name}_mesh" contype="1" conaffinity="1" condim="3" friction="{object_friction}" solref="0.006 1" solimp="0.95 0.995 0.0001" rgba="0.80 0.18 0.16 1" />
+      <inertial pos="{inertial_pos}"{inertial_orientation} mass="{asset["mass"]}" fullinertia="{inertia["ixx"]} {inertia["iyy"]} {inertia["izz"]} {inertia["ixy"]} {inertia["ixz"]} {inertia["iyz"]}" />
+      <geom name="{object_name}_collision" type="mesh" mesh="{object_name}_mesh" pos="{collision_pos}" quat="{collision_quat}" contype="1" conaffinity="1" condim="3" friction="{object_friction}" solref="0.006 1" solimp="0.95 0.995 0.0001" rgba="0.80 0.18 0.16 1" />
     </body>
 '''
 

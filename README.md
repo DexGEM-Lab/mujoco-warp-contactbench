@@ -440,7 +440,9 @@ Default Lance input:
 
 The replay writes metrics under `outputs/` by default and keeps
 the generated scene XML there for PD/contact tuning. Override
-`DEXHANDRL_OUTPUT_ROOT` if you want a different location.
+`DEXHANDRL_OUTPUT_ROOT` if you want a different location. Object scenes preserve
+the source URDF inertial and collision origins (including fixed-axis RPY), so
+mass/inertia remain expressed about the source center-of-mass frame.
 
 The skrl-facing environment entry point is
 `sim.dexhandrl.skrl_env.DexHandRLMJXEnv`. It exposes the IsaacGym-compatible
