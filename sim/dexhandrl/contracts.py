@@ -143,17 +143,82 @@ class DexHandPhysicsConfig:
         return record
 
 
+# Compatibility names kept at API boundaries while production code consumes
+# DexHandPhysicsConfig exclusively. Values are intentionally normalized here so
+# scene, environment, and launcher cannot grow divergent resolution rules.
+LEGACY_PHYSICS_FIELDS = frozenset({
+    "dt", "control_dt", "substeps",
+    "base_pos_kp", "base_pos_kv", "base_pos_force",
+    "base_rot_kp", "base_rot_kv", "base_rot_force",
+    "finger_kp", "finger_kv", "finger_force",
+    "hand_friction", "object_friction", "ground_friction",
+    "hand_self_collision_mode", "collision", "naconmax", "njmax",
+})
+
+
 def legacy_physics_config(**overrides: Any) -> DexHandPhysicsConfig:
-    """Resolve historical scene keyword overrides into the immutable profile."""
+    """Resolve historical scene/runtime keyword overrides into the immutable profile."""
+    overrides = dict(overrides)
     base = DexHandPhysicsConfig()
+    aliases = {
+        "dt": "control_dt",
+        "collision": "hand_self_collision_mode",
+        "naconmax": "runtime_naconmax",
+        "njmax": "runtime_njmax",
+    }
+    for old, new in aliases.items():
+        if old in overrides:
+            if new in overrides:
+                raise TypeError(f"cannot supply both {old!r} and {new!r}")
+            overrides[new] = overrides.pop(old)
     servo_fields = set(asdict(base.servo))
     material_fields = set(asdict(base.material))
     base_fields = set(asdict(base)) - {"servo", "material"}
-    unknown = set(overrides) - servo_fields - material_fields - base_fields - {"dt"}
+    unknown = set(overrides) - servo_fields - material_fields - base_fields
     if unknown:
         raise TypeError(f"unknown legacy physics keyword(s): {sorted(unknown)}")
-    if "dt" in overrides:
-        overrides["control_dt"] = overrides.pop("dt")
     servo = DexHandServoConfig(**{**asdict(base.servo), **{k: overrides.pop(k) for k in tuple(overrides) if k in servo_fields}})
     material = DexHandMaterialConfig(**{**asdict(base.material), **{k: overrides.pop(k) for k in tuple(overrides) if k in material_fields}})
     return DexHandPhysicsConfig(**{**asdict(base), **overrides, "servo": servo, "material": material})
+
+
+def resolve_physics_config(
+    physics: DexHandPhysicsConfig | None = None, **legacy_overrides: Any
+) -> DexHandPhysicsConfig:
+    """Resolve one canonical profile or optional legacy physical overrides.
+
+    Callers pass only explicitly supplied legacy values (``None`` means absent).
+    Supplying a canonical profile and a legacy value is rejected rather than
+    silently giving one source precedence over another.
+    """
+    unknown = set(legacy_overrides) - LEGACY_PHYSICS_FIELDS
+    if unknown:
+        raise TypeError(f"unknown legacy physics keyword(s): {sorted(unknown)}")
+    supplied = {name: value for name, value in legacy_overrides.items() if value is not None}
+    if physics is not None:
+        if not isinstance(physics, DexHandPhysicsConfig):
+            raise TypeError("physics must be a DexHandPhysicsConfig")
+        if supplied:
+            raise ValueError(
+                "physics cannot be combined with legacy physical override(s): "
+                f"{sorted(supplied)}"
+            )
+        return physics
+    return legacy_physics_config(**supplied)
+
+
+def physics_legacy_aliases(physics: DexHandPhysicsConfig) -> dict[str, Any]:
+    """Compatibility attribute values derived from a canonical physics profile."""
+    return {
+        "dt": physics.control_dt,
+        "control_dt": physics.control_dt,
+        "substeps": physics.substeps,
+        **asdict(physics.servo),
+        "hand_friction": format_friction(physics.material.hand_friction),
+        "object_friction": format_friction(physics.material.object_friction),
+        "ground_friction": format_friction(physics.material.ground_friction),
+        "hand_self_collision_mode": physics.hand_self_collision_mode,
+        "collision": physics.hand_self_collision_mode,
+        "naconmax": physics.runtime_naconmax,
+        "njmax": physics.runtime_njmax,
+    }

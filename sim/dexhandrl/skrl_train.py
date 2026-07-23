@@ -12,6 +12,7 @@ from typing import Any
 import torch
 from loguru import logger
 
+from sim.dexhandrl.contracts import DexHandPhysicsConfig, physics_legacy_aliases, resolve_physics_config
 from sim.dexhandrl.lance_loader import list_trajectories
 from sim.dexhandrl.rlgames_checkpoint import RlGamesRunningMeanStd, load_rlgames_checkpoint
 from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
@@ -36,20 +37,32 @@ class SkrlLauncherConfig:
     sequence_index: int = 0
     uuid: str | None = None
     use_residual: bool = True
+    physics: DexHandPhysicsConfig | None = None
+    # Compatibility inputs are resolved into physics in __post_init__.
+    dt: float | None = None
+    control_dt: float | None = None
     early_phase_frames: int = 130
     pre_contact_frames: int = 200
     post_contact_frames: int = 250
     object_position_terminal_threshold: float = 0.1
-    substeps: int = 10
+    substeps: int | None = None
     settle_frames: int = 1
-    finger_kp: float = 15.0
-    finger_kv: float = 0.0
-    finger_force: float = 50.0
-    hand_self_collision_mode: str = "disable_within_finger"
-    hand_friction: str = "0.5 0.01 0.001"
-    object_friction: str = "0.5 0.01 0.001"
-    naconmax: int = 8192
-    njmax: int = 8192
+    base_pos_kp: float | None = None
+    base_pos_kv: float | None = None
+    base_pos_force: float | None = None
+    base_rot_kp: float | None = None
+    base_rot_kv: float | None = None
+    base_rot_force: float | None = None
+    finger_kp: float | None = None
+    finger_kv: float | None = None
+    finger_force: float | None = None
+    hand_self_collision_mode: str | None = None
+    collision: str | None = None
+    hand_friction: str | None = None
+    object_friction: str | None = None
+    ground_friction: str | None = None
+    naconmax: int | None = None
+    njmax: int | None = None
     seed: int = 0
     timesteps: int = 250_000
     rollouts: int = 48
@@ -82,6 +95,33 @@ class SkrlLauncherConfig:
     pointnet_enabled: bool = True
     film_enabled: bool = True
     separate: bool = True
+
+    def __post_init__(self) -> None:
+        physics = resolve_physics_config(
+            self.physics,
+            dt=self.dt,
+            control_dt=self.control_dt,
+            substeps=self.substeps,
+            base_pos_kp=self.base_pos_kp,
+            base_pos_kv=self.base_pos_kv,
+            base_pos_force=self.base_pos_force,
+            base_rot_kp=self.base_rot_kp,
+            base_rot_kv=self.base_rot_kv,
+            base_rot_force=self.base_rot_force,
+            finger_kp=self.finger_kp,
+            finger_kv=self.finger_kv,
+            finger_force=self.finger_force,
+            hand_self_collision_mode=self.hand_self_collision_mode,
+            collision=self.collision,
+            hand_friction=self.hand_friction,
+            object_friction=self.object_friction,
+            ground_friction=self.ground_friction,
+            naconmax=self.naconmax,
+            njmax=self.njmax,
+        )
+        object.__setattr__(self, "physics", physics)
+        for name, value in physics_legacy_aliases(physics).items():
+            object.__setattr__(self, name, value)
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -188,16 +228,8 @@ def _make_env_factory(cfg: SkrlLauncherConfig, spec: dict[str, Any], env_index: 
         pre_contact_frames=cfg.pre_contact_frames,
         post_contact_frames=cfg.post_contact_frames,
         object_position_terminal_threshold=cfg.object_position_terminal_threshold,
-        substeps=cfg.substeps,
+        physics=cfg.physics,
         settle_frames=cfg.settle_frames,
-        finger_kp=cfg.finger_kp,
-        finger_kv=cfg.finger_kv,
-        finger_force=cfg.finger_force,
-        hand_self_collision_mode=cfg.hand_self_collision_mode,
-        hand_friction=cfg.hand_friction,
-        object_friction=cfg.object_friction,
-        naconmax=cfg.naconmax,
-        njmax=cfg.njmax,
         seed=cfg.seed + env_index,
     )
 
@@ -317,6 +349,7 @@ def _build_trainer_cfg(cfg: SkrlLauncherConfig) -> dict[str, Any]:
 def _write_launcher_config(cfg: SkrlLauncherConfig, specs: list[dict[str, Any]], model_cfg: SkrlDexHandModelConfig) -> None:
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     payload = _to_jsonable(asdict(cfg))
+    payload["physics_contract"] = _to_jsonable(cfg.physics.record())
     payload["resolved_trajectories"] = _to_jsonable(specs)
     payload["model_config"] = _to_jsonable(asdict(model_cfg))
     with (cfg.output_dir / "launcher_config.json").open("w", encoding="utf-8") as handle:
@@ -514,8 +547,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pre-contact-frames", type=int, default=200)
     parser.add_argument("--post-contact-frames", type=int, default=250)
     parser.add_argument("--object-position-terminal-threshold", type=float, default=0.1)
+    parser.add_argument("--control-dt", type=float, default=None)
     parser.add_argument("--substeps", type=int, default=10)
     parser.add_argument("--settle-frames", type=int, default=1)
+    parser.add_argument("--base-pos-kp", type=float, default=5000.0)
+    parser.add_argument("--base-pos-kv", type=float, default=500.0)
+    parser.add_argument("--base-pos-force", type=float, default=500.0)
+    parser.add_argument("--base-rot-kp", type=float, default=10000.0)
+    parser.add_argument("--base-rot-kv", type=float, default=125.0)
+    parser.add_argument("--base-rot-force", type=float, default=100.0)
     parser.add_argument("--finger-kp", type=float, default=15.0)
     parser.add_argument("--finger-kv", type=float, default=0.0)
     parser.add_argument("--finger-force", type=float, default=50.0)
@@ -526,6 +566,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--hand-friction", default="0.5 0.01 0.001")
     parser.add_argument("--object-friction", default="0.5 0.01 0.001")
+    parser.add_argument("--ground-friction", default="0.5 0.5 0")
     parser.add_argument("--naconmax", type=int, default=8192)
     parser.add_argument("--njmax", type=int, default=8192)
     parser.add_argument("--seed", type=int, default=0)
@@ -599,16 +640,24 @@ def main(argv: list[str] | None = None) -> None:
         pre_contact_frames=int(args.pre_contact_frames),
         post_contact_frames=int(args.post_contact_frames),
         object_position_terminal_threshold=float(args.object_position_terminal_threshold),
-        substeps=int(args.substeps),
+        control_dt=args.control_dt,
+        substeps=args.substeps,
         settle_frames=max(int(args.settle_frames), 0),
-        finger_kp=float(args.finger_kp),
-        finger_kv=float(args.finger_kv),
-        finger_force=float(args.finger_force),
+        base_pos_kp=args.base_pos_kp,
+        base_pos_kv=args.base_pos_kv,
+        base_pos_force=args.base_pos_force,
+        base_rot_kp=args.base_rot_kp,
+        base_rot_kv=args.base_rot_kv,
+        base_rot_force=args.base_rot_force,
+        finger_kp=args.finger_kp,
+        finger_kv=args.finger_kv,
+        finger_force=args.finger_force,
         hand_self_collision_mode=str(args.hand_self_collision_mode),
-        hand_friction=str(args.hand_friction),
-        object_friction=str(args.object_friction),
-        naconmax=max(int(args.naconmax), 1),
-        njmax=max(int(args.njmax), 1),
+        hand_friction=args.hand_friction,
+        object_friction=args.object_friction,
+        ground_friction=args.ground_friction,
+        naconmax=args.naconmax,
+        njmax=args.njmax,
         seed=int(args.seed),
         timesteps=int(args.timesteps),
         rollout_max_steps=max(int(args.rollout_max_steps), 0),

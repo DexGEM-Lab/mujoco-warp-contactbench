@@ -10,6 +10,7 @@ from sim.dexhandrl.contracts import (
     format_friction,
     legacy_physics_config,
     parse_friction,
+    resolve_physics_config,
 )
 
 
@@ -52,3 +53,13 @@ def test_friction_parser_formatter_and_legacy_resolver() -> None:
     )
     with pytest.raises(ValueError):
         parse_friction("1 2")
+
+
+def test_physics_resolver_rejects_mixed_sources_and_maps_runtime_aliases() -> None:
+    custom = DexHandPhysicsConfig(runtime_naconmax=64, runtime_njmax=128)
+    assert resolve_physics_config(custom) is custom
+    assert resolve_physics_config(finger_kp=17, naconmax=64, njmax=128) == DexHandPhysicsConfig(
+        servo=DexHandServoConfig(finger_kp=17), runtime_naconmax=64, runtime_njmax=128
+    )
+    with pytest.raises(ValueError, match="legacy physical"):
+        resolve_physics_config(custom, finger_kp=17)

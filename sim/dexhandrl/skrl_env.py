@@ -18,6 +18,7 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     gym_spaces = None
 
+from sim.dexhandrl.contracts import DexHandPhysicsConfig, physics_legacy_aliases, resolve_physics_config
 from sim.dexhandrl.constants import (
     ACTION_DIM_021PRO,
     DEFAULT_ISAAC_SOURCE_ROOT,
@@ -52,7 +53,7 @@ from sim.dexhandrl.parity import (
     rotation_angle_error_deg,
     rotation_tracking_reward,
 )
-from sim.dexhandrl.scene import build_dexhandrl_scene_xml
+from sim.dexhandrl.scene import build_dexhandrl_scene_xml, validate_dexhandrl_compiled_model
 
 
 _SIMPLE_CONTACT_TO_BODY = {
@@ -105,8 +106,11 @@ class DexHandRLMJXEnvConfig:
     uuid: str | None = None
     device: str = "cpu"
     use_residual: bool = True
-    dt: float = 0.01
-    substeps: int = 10
+    # Physics is canonical. The optional legacy fields below are accepted only
+    # at construction and resolved to aliases in __post_init__.
+    physics: DexHandPhysicsConfig | None = None
+    dt: float | None = None
+    substeps: int | None = None
     # IsaacGym ActionProcessor velocity limits, in active-target units per second.
     policy_base_lin_velocity_limit: float = 3.0
     policy_base_ang_velocity_limit: float = 10.0
@@ -129,33 +133,57 @@ class DexHandRLMJXEnvConfig:
     fingertip_inside_object_min_depth: float = 0.001
     fingertip_inside_object_max_depth: float = 0.003
     max_fingertip_inside_object_penalty: float = 0.4
-    hand_friction: str = "0.5 0.01 0.001"
-    object_friction: str = "0.5 0.01 0.001"
-    ground_friction: str = "0.5 0.5 0"
-    base_pos_kp: float = 5000.0
-    base_pos_kv: float = 500.0
-    base_pos_force: float = 500.0
-    base_rot_kp: float = 10000.0
-    base_rot_kv: float = 125.0
-    base_rot_force: float = 100.0
-    finger_kp: float = 15.0
-    finger_kv: float = 0.0
-    finger_force: float = 50.0
-    hand_self_collision_mode: str = "disable_within_finger"
+    hand_friction: str | None = None
+    object_friction: str | None = None
+    ground_friction: str | None = None
+    base_pos_kp: float | None = None
+    base_pos_kv: float | None = None
+    base_pos_force: float | None = None
+    base_rot_kp: float | None = None
+    base_rot_kv: float | None = None
+    base_rot_force: float | None = None
+    finger_kp: float | None = None
+    finger_kv: float | None = None
+    finger_force: float | None = None
+    hand_self_collision_mode: str | None = None
+    collision: str | None = None
     base_position_decay: tuple[float, float, float] = (0.9, 0.9, 0.9)
     post_contact_base_position_decay: tuple[float, float, float] = (0.9, 0.9, 0.9)
     joint_decay: float = 0.9
     post_contact_joint_decay: float = 1.0
     base_position_scales: tuple[float, float, float] = (0.002, 0.002, 0.003)
     base_position_max_offset: float = 0.04
-    naconmax: int = 8192
-    njmax: int = 8192
+    naconmax: int | None = None
+    njmax: int | None = None
     seed: int | None = 0
     isaac_source_root: Path | None = None
     contact_bodies_file: Path | None = None
     task_config_path: Path | None = None
 
     def __post_init__(self) -> None:
+        self.physics = resolve_physics_config(
+            self.physics,
+            dt=self.dt,
+            substeps=self.substeps,
+            base_pos_kp=self.base_pos_kp,
+            base_pos_kv=self.base_pos_kv,
+            base_pos_force=self.base_pos_force,
+            base_rot_kp=self.base_rot_kp,
+            base_rot_kv=self.base_rot_kv,
+            base_rot_force=self.base_rot_force,
+            finger_kp=self.finger_kp,
+            finger_kv=self.finger_kv,
+            finger_force=self.finger_force,
+            hand_friction=self.hand_friction,
+            object_friction=self.object_friction,
+            ground_friction=self.ground_friction,
+            hand_self_collision_mode=self.hand_self_collision_mode,
+            collision=self.collision,
+            naconmax=self.naconmax,
+            njmax=self.njmax,
+        )
+        for name, value in physics_legacy_aliases(self.physics).items():
+            setattr(self, name, value)
         for name in (
             "dt",
             "policy_base_lin_velocity_limit",
@@ -615,23 +643,10 @@ class DexHandRLMJXEnv:
             output_path=scene_path,
             object_name=cfg.object_name,
             isaac_source_root=cfg.isaac_source_root,
-            dt=cfg.dt,
-            substeps=cfg.substeps,
-            base_pos_kp=cfg.base_pos_kp,
-            base_pos_kv=cfg.base_pos_kv,
-            base_pos_force=cfg.base_pos_force,
-            base_rot_kp=cfg.base_rot_kp,
-            base_rot_kv=cfg.base_rot_kv,
-            base_rot_force=cfg.base_rot_force,
-            finger_kp=cfg.finger_kp,
-            finger_kv=cfg.finger_kv,
-            finger_force=cfg.finger_force,
-            hand_self_collision_mode=cfg.hand_self_collision_mode,
-            hand_friction=cfg.hand_friction,
-            object_friction=cfg.object_friction,
-            ground_friction=cfg.ground_friction,
+            physics=cfg.physics,
         )
         self.model = mujoco.MjModel.from_xml_path(str(self.scene_path))
+        validate_dexhandrl_compiled_model(mujoco, self.model, cfg.physics, object_name=cfg.object_name)
         self.ids = resolve_mujoco_ids(mujoco, self.model, object_name=cfg.object_name)
         self.route_joint_upper_limits = dexhand021pro_route_joint_upper_limits(mujoco, self.model)
         self.mx = mjx.put_model(self.model, impl="warp")
@@ -803,7 +818,12 @@ class DexHandRLMJXEnv:
         )
         initial_object_pos = np.asarray(self.trajectory.object_pos[self.start_frame], dtype=np.float32).copy()
         initial_object_pos[2] += float(self.cfg.object_reset_z_offset)
-        dx = self.mjx.make_data(self.model, impl="warp", naconmax=self.cfg.naconmax, njmax=self.cfg.njmax)
+        dx = self.mjx.make_data(
+            self.model,
+            impl="warp",
+            naconmax=self.cfg.physics.runtime_naconmax,
+            njmax=self.cfg.physics.runtime_njmax,
+        )
         dx = set_hand_qpos(self.jnp, dx, self.ids, initial_full)
         dx = set_object_freejoint(self.jnp, dx, self.ids, initial_object_pos, self.trajectory.object_quat_xyzw[self.start_frame])
         ctrl = make_ctrl_vector(initial_full, self.ids.actuator_ids, self.model.nu)

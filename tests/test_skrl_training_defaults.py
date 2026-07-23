@@ -1,4 +1,10 @@
+from dataclasses import dataclass
 from types import SimpleNamespace
+
+import pytest
+
+import sim.dexhandrl.skrl_train as skrl_train
+from sim.dexhandrl.contracts import DexHandPhysicsConfig, DexHandServoConfig
 
 from sim.dexhandrl.skrl_train import (
     SkrlLauncherConfig,
@@ -45,6 +51,56 @@ def test_env_defaults_match_reference_pd_baseline() -> None:
     assert cfg.finger_kp == 15.0
     assert cfg.finger_kv == 0.0
     assert cfg.hand_friction == "0.5 0.01 0.001"
+    assert cfg.physics == DexHandPhysicsConfig()
+
+
+def test_legacy_and_canonical_physics_inputs_resolve_to_read_only_aliases() -> None:
+    legacy = DexHandRLMJXEnvConfig(dt=0.02, finger_kp=17, naconmax=64)
+    canonical_physics = DexHandPhysicsConfig(
+        control_dt=0.02, servo=DexHandServoConfig(finger_kp=17), runtime_naconmax=64
+    )
+    canonical = DexHandRLMJXEnvConfig(physics=canonical_physics)
+
+    assert legacy.physics == canonical.physics == canonical_physics
+    assert (legacy.dt, legacy.finger_kp, legacy.naconmax) == (0.02, 17, 64)
+    assert (canonical.dt, canonical.finger_kp, canonical.naconmax) == (0.02, 17, 64)
+    with pytest.raises(ValueError, match="legacy physical"):
+        DexHandRLMJXEnvConfig(physics=canonical_physics, dt=0.02)
+
+
+def test_launcher_forwards_one_physics_identity_and_serializes_contract(tmp_path, monkeypatch) -> None:
+    physics = DexHandPhysicsConfig(runtime_naconmax=64)
+    cfg = SkrlLauncherConfig(physics=physics, output_dir=tmp_path)
+    captured = {}
+
+    class FakeEnv:
+        def __init__(self, env_cfg):
+            captured["physics"] = env_cfg.physics
+
+    monkeypatch.setattr(skrl_train, "DexHandRLMJXEnv", FakeEnv)
+    skrl_train._make_env_factory(cfg, {"uuid": "x", "sequence_index": 0}, 0)()
+    assert captured["physics"] is physics
+
+    @dataclass
+    class ModelCfg:
+        enabled: bool = True
+
+    skrl_train._write_launcher_config(cfg, [], ModelCfg())
+    import json
+    payload = json.loads((tmp_path / "launcher_config.json").read_text())
+    assert payload["physics_contract"]["runtime_naconmax"] == 64
+    assert payload["physics_contract"]["physics_dt"] == 0.001
+    assert payload["physics_contract"]["servo"]["finger_kp"] == 15
+
+
+def test_parser_exposes_complete_physics_overrides() -> None:
+    args = build_arg_parser().parse_args([
+        "--control-dt", "0.02", "--ground-friction", "3 2 2",
+        "--base-pos-kp", "7", "--base-rot-force", "8",
+    ])
+    assert (args.control_dt, args.ground_friction, args.base_pos_kp, args.base_rot_force) == (
+        0.02, "3 2 2", 7.0, 8.0
+    )
 
 
 def test_experiment_output_uses_launcher_output_directory(tmp_path) -> None:
