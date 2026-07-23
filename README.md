@@ -493,17 +493,21 @@ residual correction disabled as follows:
 DISPLAY=:1 PYTHONPATH="$PWD" \
   /home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python \
   -m sim.dexhandrl.view_environment \
-  --device cpu --object-name cube1 --action 02 --sequence-index 0 \
-  --no-use-residual --no-headless
+  --device cpu --object cube1 --gesture 02 --sequence-index 0 \
+  --speed 0.25 --use_residual false --terminal true
 ```
 
-This sends zero 22D actions through `DexHandRLMJXEnv`; with residual correction
-disabled, the environment follows its reference targets through the production
-control path. The native passive viewer mirrors completed `qpos`, `qvel`,
-`ctrl`, and simulation time, calls forward kinematics only for rendering, and
-never steps physics. `--checkpoint` is rejected because this command is the
-no-checkpoint zero-action path. Add, for example, `--max-steps 500 --no-loop`
-for a bounded run.
+The standalone viewer is graphical and requires `DISPLAY`; graphical mode is
+implicit. It sends zero 22D actions through `DexHandRLMJXEnv`; with residual
+correction disabled, the environment follows its reference targets through the
+production control path. `--terminal true` uses the `0.1 m` object-position
+reset threshold after DexHandRL's task-specific 130-frame early phase; that
+130-frame grace period remains unchanged. The viewer loops through reset
+trajectories by default and runs at `0.25x` control speed by default. The native
+passive viewer mirrors completed `qpos`, `qvel`, `ctrl`, and simulation time,
+calls forward kinematics only for rendering, and never steps physics.
+`--checkpoint` is rejected because this command is the no-checkpoint zero-action
+path. Add, for example, `--max-steps 500 --no-loop` for a bounded run.
 
 The skrl-facing environment entry point is
 `sim.dexhandrl.skrl_env.DexHandRLMJXEnv`. It exposes the IsaacGym-compatible

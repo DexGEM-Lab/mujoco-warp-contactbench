@@ -5,29 +5,93 @@ import os
 import numpy as np
 import pytest
 
-from sim.dexhandrl.skrl_env import DexHandRLMJXEnv
+from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 from sim.dexhandrl.view_environment import (
     PassiveDexHandViewer,
     ZeroActionStepper,
     _parser,
+    _parse_cli_bool,
     _require_graphical_display,
+    _resolve_viewer_options,
+    _sleep_duration,
     _wait_for_passive_viewer_shutdown,
 )
 from tools.trace_dexhandrl_mujoco import PassiveTraceViewer
 
 
-def test_viewer_parser_supports_native_zero_action_command(tmp_path):
+def test_viewer_parser_accepts_canonical_manorl_style_selectors_and_defaults():
+    args = _parser().parse_args([
+        "--object", "cube1", "--gesture", "02", "--sequence-index", "0",
+        "--use_residual", "false", "--terminal", "true", "--speed", "0.25",
+    ])
+    options = _resolve_viewer_options(args)
+    assert (args.object_name, args.action, args.sequence_index) == ("cube1", "02", 0)
+    assert options.use_residual is False
+    assert options.terminal_threshold == pytest.approx(0.1)
+    assert (options.speed, options.sleep_enabled) == (0.25, True)
+    assert args.headless is False
+
+
+def test_viewer_parser_defaults_are_manorl_aligned():
+    options = _resolve_viewer_options(_parser().parse_args([]))
+    assert options.use_residual is True
+    assert options.terminal_threshold == pytest.approx(0.1)
+    assert (options.speed, options.sleep_enabled) == (0.25, True)
+
+
+def test_viewer_parser_preserves_old_command_compatibility():
     args = _parser().parse_args([
         "--object-name", "cube1", "--action", "02", "--sequence-index", "0",
-        "--device", "cpu", "--no-use-residual", "--no-headless", "--max-steps", "3",
-        "--no-loop", "--no-realtime", "--object-position-terminal-threshold", "0.2",
+        "--no-use-residual", "--no-headless", "--max-steps", "3", "--no-loop",
+        "--no-realtime", "--object-position-terminal-threshold", "0.2",
     ])
-    assert (args.object_name, args.action, args.sequence_index, args.use_residual) == ("cube1", "02", 0, False)
-    assert (args.headless, args.max_steps, args.loop, args.realtime) == (False, 3, False, False)
+    options = _resolve_viewer_options(args)
+    assert (args.object_name, args.action, args.sequence_index) == ("cube1", "02", 0)
+    assert (args.headless, args.max_steps, args.loop) == (False, 3, False)
+    assert (options.use_residual, options.terminal_threshold, options.sleep_enabled) == (False, 0.2, False)
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--use_residual", "true", "--no-use-residual"], "use_residual"),
+        (["--terminal", "false", "--object-position-terminal-threshold", "0.2"], "--terminal"),
+        (["--speed", "0.5", "--realtime"], "--speed"),
+    ],
+)
+def test_viewer_parser_rejects_conflicting_canonical_and_compatibility_forms(argv, message):
+    with pytest.raises(ValueError, match=message):
+        _resolve_viewer_options(_parser().parse_args(argv))
+
+
+def test_viewer_terminal_mapping_preserves_dex_early_phase_configuration():
+    enabled = _resolve_viewer_options(_parser().parse_args(["--terminal", "true"]))
+    disabled = _resolve_viewer_options(_parser().parse_args(["--terminal", "false"]))
+    assert enabled.terminal_threshold == pytest.approx(0.1)
+    assert disabled.terminal_threshold == pytest.approx(1_000_000.0)
+    assert DexHandRLMJXEnvConfig().early_phase_frames == 130
+
+
+def test_viewer_speed_resolution_and_sleep_target():
+    realtime = _resolve_viewer_options(_parser().parse_args(["--realtime"]))
+    no_realtime = _resolve_viewer_options(_parser().parse_args(["--no-realtime"]))
+    assert (realtime.speed, realtime.sleep_enabled) == (1.0, True)
+    assert (no_realtime.speed, no_realtime.sleep_enabled) == (0.25, False)
+    assert _sleep_duration(control_dt=0.01, speed=0.25, compute_time=0.01) == pytest.approx(0.03)
+    assert _sleep_duration(control_dt=0.01, speed=0.25, compute_time=0.05) == 0.0
+    with pytest.raises(ValueError, match="positive"):
+        _resolve_viewer_options(_parser().parse_args(["--speed", "0"]))
+
+
+def test_viewer_explicit_boolean_parser_matches_manorl_contract():
+    assert _parse_cli_bool(" TRUE ") is True
+    assert _parse_cli_bool("false") is False
+    with pytest.raises(Exception, match="expected true or false"):
+        _parse_cli_bool("yes")
 
 
 def test_graphical_viewer_rejects_headless_or_missing_display(monkeypatch):
-    with pytest.raises(ValueError, match="--no-headless"):
+    with pytest.raises(ValueError, match="--headless"):
         _require_graphical_display(headless=True)
     monkeypatch.delenv("DISPLAY", raising=False)
     with pytest.raises(RuntimeError, match="requires DISPLAY"):

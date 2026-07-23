@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import time
@@ -18,9 +19,77 @@ from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT, DEFAULT_LANCE_PAT
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, resolve_physics_config
 
 
+_TERMINAL_THRESHOLD = 0.1
+_DISABLED_TERMINAL_THRESHOLD = 1_000_000.0
+
+
+def _parse_cli_bool(value: str) -> bool:
+    """Parse the explicit true/false CLI contract used by ManoRL viewers."""
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
+
+
+class _StoreExplicit(argparse.Action):
+    """Store a CLI value and retain whether the canonical flag was supplied."""
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace, value: Any, option_string: str | None = None) -> None:
+        setattr(namespace, self.dest, value)
+        setattr(namespace, f"{self.dest}_explicit", True)
+
+
+@dataclass(frozen=True)
+class ViewerOptions:
+    use_residual: bool
+    terminal_threshold: float
+    speed: float
+    sleep_enabled: bool
+
+
+def _resolve_viewer_options(args: argparse.Namespace) -> ViewerOptions:
+    """Normalize canonical viewer flags and their deprecated compatibility aliases once."""
+    if args.use_residual_explicit and args.legacy_use_residual is not None:
+        raise ValueError("--use_residual cannot be combined with --use-residual/--no-use-residual")
+    if args.terminal_explicit and args.object_position_terminal_threshold is not None:
+        raise ValueError("--terminal cannot be combined with --object-position-terminal-threshold")
+    if args.speed_explicit and args.realtime is not None:
+        raise ValueError("--speed cannot be combined with --realtime/--no-realtime")
+
+    use_residual = args.use_residual if args.legacy_use_residual is None else args.legacy_use_residual
+    terminal_threshold = (
+        args.object_position_terminal_threshold
+        if args.object_position_terminal_threshold is not None
+        else _TERMINAL_THRESHOLD if args.terminal else _DISABLED_TERMINAL_THRESHOLD
+    )
+    if args.realtime is True:
+        speed, sleep_enabled = 1.0, True
+    elif args.realtime is False:
+        speed, sleep_enabled = args.speed, False
+    else:
+        speed, sleep_enabled = args.speed, True
+    if speed <= 0.0:
+        raise ValueError("--speed must be positive")
+    return ViewerOptions(
+        use_residual=use_residual,
+        terminal_threshold=terminal_threshold,
+        speed=speed,
+        sleep_enabled=sleep_enabled,
+    )
+
+
+def _sleep_duration(*, control_dt: float, speed: float, compute_time: float) -> float:
+    """Return the remaining wall time for one control step at ``speed``."""
+    if speed <= 0.0:
+        raise ValueError("speed must be positive")
+    return max(0.0, control_dt / speed - compute_time)
+
+
 def _require_graphical_display(*, headless: bool) -> None:
     if headless:
-        raise ValueError("the native DexHand viewer requires --no-headless")
+        raise ValueError("the standalone native DexHand viewer is inherently graphical; --headless is unsupported")
     if not os.environ.get("DISPLAY"):
         raise RuntimeError("the native DexHand viewer requires DISPLAY to name a graphical display server")
 
@@ -168,21 +237,43 @@ def _physics_from_args(args: argparse.Namespace) -> DexHandPhysicsConfig:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--object-name", default="cube1")
-    parser.add_argument("--action", default="01")
+    parser.set_defaults(
+        use_residual_explicit=False,
+        terminal_explicit=False,
+        speed_explicit=False,
+    )
+    parser.add_argument("--object-name", "--object", dest="object_name", default="cube1")
+    parser.add_argument("--action", "--gesture", dest="action", default="01")
     selector = parser.add_mutually_exclusive_group()
     selector.add_argument("--sequence-index", type=int, default=0)
     selector.add_argument("--uuid")
     parser.add_argument("--lance-path", type=Path, default=DEFAULT_LANCE_PATH)
     parser.add_argument("--isaac-source-root", type=Path, default=DEFAULT_ISAAC_SOURCE_ROOT)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
-    parser.add_argument("--use-residual", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--use_residual", type=_parse_cli_bool, default=True, action=_StoreExplicit,
+        metavar="{true,false}", help="enable 22D residual action processing (default: true)",
+    )
+    parser.add_argument(
+        "--use-residual", action=argparse.BooleanOptionalAction, dest="legacy_use_residual",
+        default=None, help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--terminal", type=_parse_cli_bool, default=True, action=_StoreExplicit,
+        metavar="{true,false}", help="use the 0.10 m object-position reset threshold (default: true)",
+    )
+    parser.add_argument(
+        "--object-position-terminal-threshold", type=float, default=None, help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--speed", type=float, default=0.25, action=_StoreExplicit,
+        help="simulation speed multiplier (default: 0.25)",
+    )
     parser.add_argument("--checkpoint", type=Path, help="unsupported here: this viewer currently runs native zero actions")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--loop", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--realtime", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--object-position-terminal-threshold", type=float, default=0.1)
+    parser.add_argument("--realtime", action=argparse.BooleanOptionalAction, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=False, help=argparse.SUPPRESS)
     parser.add_argument("--dt", type=float)
     parser.add_argument("--substeps", type=int)
     for name in ("base-pos-kp", "base-pos-kv", "base-pos-force", "base-rot-kp", "base-rot-kv", "base-rot-force", "finger-kp", "finger-kv", "finger-force"):
@@ -202,6 +293,7 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--max-steps must be positive")
     if args.checkpoint is not None:
         raise ValueError("--checkpoint is not supported by the native zero-action viewer")
+    options = _resolve_viewer_options(args)
     _require_graphical_display(headless=args.headless)
     from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 
@@ -209,15 +301,19 @@ def run(args: argparse.Namespace) -> int:
     env = DexHandRLMJXEnv(DexHandRLMJXEnvConfig(
         lance_path=args.lance_path, isaac_source_root=args.isaac_source_root,
         object_name=args.object_name, action=args.action, sequence_index=args.sequence_index,
-        uuid=args.uuid, device=args.device, use_residual=args.use_residual,
-        object_position_terminal_threshold=args.object_position_terminal_threshold, physics=physics,
+        uuid=args.uuid, device=args.device, use_residual=options.use_residual,
+        object_position_terminal_threshold=options.terminal_threshold, physics=physics,
     ))
     try:
         stepper = ZeroActionStepper(env, loop=args.loop)
-        label = "reference targets only" if not args.use_residual else "zero residual actions (no checkpoint)"
-        print(f"DexHandRL viewer: {label}; action_dim={env.num_actions}; control_dt={physics.control_dt:g}s")
+        label = "reference targets only" if not options.use_residual else "zero residual actions (no checkpoint)"
+        print(
+            f"DexHandRL viewer: {label}; action_dim={env.num_actions}; control_dt={physics.control_dt:g}s; "
+            f"speed={options.speed:g}; use_residual={options.use_residual}; "
+            f"terminal_threshold={options.terminal_threshold:g}"
+        )
         steps = 0
-        with passive_dexhand_viewer(env, headless=args.headless) as viewer:
+        with passive_dexhand_viewer(env, headless=False) as viewer:
             assert viewer is not None
             while viewer.sync(env):
                 if args.max_steps is not None and steps >= args.max_steps:
@@ -226,8 +322,12 @@ def run(args: argparse.Namespace) -> int:
                 if stepper.step() is None:
                     break
                 steps += 1
-                if args.realtime:
-                    time.sleep(max(0.0, physics.control_dt - (time.monotonic() - started)))
+                if options.sleep_enabled:
+                    time.sleep(_sleep_duration(
+                        control_dt=physics.control_dt,
+                        speed=options.speed,
+                        compute_time=time.monotonic() - started,
+                    ))
         return steps
     finally:
         env.close()
