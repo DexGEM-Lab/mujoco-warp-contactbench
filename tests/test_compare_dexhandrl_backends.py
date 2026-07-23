@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from tools.compare_dexhandrl_backends import _parser, compare_rollouts, metric, write_evidence
+from tools.compare_dexhandrl_backends import _contact_count, _parser, compare_rollouts, metric, write_evidence
 
 
 class FakeEnv:
@@ -23,9 +23,12 @@ class FakeEnv:
         self.num_actions, self.num_observations = 22, 461
         self.start_frame = start_frame
         self._current_frame = start_frame
+        contact_state = {"ncon": np.asarray(1)} if backend == "mujoco-native" else {
+            "_impl": SimpleNamespace(nacon=np.asarray([[1]]))
+        }
         self._dx = SimpleNamespace(
             qpos=np.zeros(12, dtype=np.float32), qvel=np.zeros(11, dtype=np.float32),
-            ctrl=np.zeros(26, dtype=np.float32), ncon=np.asarray(1),
+            ctrl=np.zeros(26, dtype=np.float32), **contact_state,
         )
         self._dx.qpos[5] = 1.0
         self.applied_delta, self.nan, self.closed = applied_delta, nan, False
@@ -64,6 +67,22 @@ def test_tool_import_and_defaults_are_offline_safe():
     assert result.returncode == 0, result.stderr
     args = _parser().parse_args([])
     assert (args.object_name, args.action, args.sequence_index, args.steps, args.mjx_device) == ("cube1", "02", 0, 50, "cpu")
+
+
+def test_contact_count_reads_native_and_mjx_runtime_layouts_fail_closed():
+    native = SimpleNamespace(
+        cfg=SimpleNamespace(runtime_backend="mujoco-native"),
+        _dx=SimpleNamespace(ncon=np.asarray(3)),
+    )
+    mjx = SimpleNamespace(
+        cfg=SimpleNamespace(runtime_backend="mjx-warp"),
+        _dx=SimpleNamespace(_impl=SimpleNamespace(nacon=np.asarray([[7]]))),
+    )
+    assert _contact_count(native) == 3
+    assert _contact_count(mjx) == 7
+
+    with pytest.raises(RuntimeError, match="does not expose"):
+        _contact_count(SimpleNamespace(cfg=SimpleNamespace(runtime_backend="mjx-warp"), _dx=SimpleNamespace()))
 
 
 def test_metric_reports_exactness_and_first_threshold_frame():

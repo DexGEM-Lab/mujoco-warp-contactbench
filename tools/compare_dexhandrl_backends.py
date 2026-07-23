@@ -91,12 +91,20 @@ def _object_state(env: Any) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _contact_count(env: Any) -> int:
-    # Native MjData exposes ncon. MJX-Warp names the same active-contact count
-    # nacon because its allocated contact buffer is distinct from the model cap.
-    value = getattr(env._dx, "ncon", getattr(env._dx, "nacon", None))
+    backend = env.cfg.runtime_backend
+    if backend == "mujoco-native":
+        value = getattr(env._dx, "ncon", None)
+    elif backend == "mjx-warp":
+        impl = getattr(env._dx, "_impl", None)
+        value = getattr(impl, "nacon", None)
+    else:
+        raise RuntimeError(f"unsupported runtime backend for contact count: {backend!r}")
     if value is None:
         raise RuntimeError("runtime state does not expose an active contact count")
-    return int(np.asarray(value))
+    scalar = np.asarray(value).reshape(-1)
+    if scalar.size != 1:
+        raise RuntimeError(f"active contact count must be scalar, got shape {np.asarray(value).shape}")
+    return int(scalar[0])
 
 
 def _capture_state(env: Any, obs: Any, *, reward: float) -> dict[str, np.ndarray]:
