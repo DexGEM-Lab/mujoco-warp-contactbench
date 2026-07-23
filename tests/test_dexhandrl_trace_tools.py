@@ -20,6 +20,7 @@ from sim.dexhandrl.trace_contract import (
 from tools.compare_dexhandrl_traces import compare
 import tools.trace_dexhandrl_mujoco as mujoco_trace
 from tools.trace_dexhandrl_mujoco import (
+    ActionTraceIntervention,
     ControlTraceIntervention,
     ObservationTraceIntervention,
     PassiveTraceViewer,
@@ -414,6 +415,18 @@ def _control_trace(tmp_path, *, metadata=None, arrays=None):
     return path
 
 
+def test_action_trace_parser_and_main_wiring(tmp_path, monkeypatch):
+    args = _parser().parse_args(["--output", str(tmp_path / "trace.npz"), "--action-trace", "gym.npz"])
+    assert args.action_trace == Path("gym.npz")
+
+    captured = {}
+    monkeypatch.setattr(mujoco_trace, "run", lambda *args: captured.setdefault("args", args) or Path("unused.npz"))
+    monkeypatch.setattr(sys, "argv", ["trace_dexhandrl_mujoco.py", "--output", str(tmp_path / "trace.npz"),
+                                       "--action-trace", "gym.npz"])
+    assert mujoco_trace.main() == 0
+    assert captured["args"][-1] == Path("gym.npz")
+
+
 def test_observation_trace_parser_accepts_repeated_components_and_phase_end(tmp_path):
     args = _parser().parse_args([
         "--output", str(tmp_path / "trace.npz"), "--observation-trace", "gym.npz",
@@ -427,22 +440,24 @@ def test_observation_trace_parser_accepts_repeated_components_and_phase_end(tmp_
 
 
 @pytest.mark.parametrize(
-    ("control_trace", "observation_trace", "components", "message"),
+    ("control_trace", "action_trace", "observation_trace", "components", "message"),
     [
-        (None, Path("gym.npz"), (), "required together"),
-        (None, None, ("contact_force_magnitude",), "required together"),
-        (Path("control.npz"), Path("gym.npz"), ("contact_force_magnitude",), "cannot be combined"),
-        (None, Path("gym.npz"), ("contact_force_mag",), "exact OBS_COMPONENT_SLICES"),
-        (None, None, (), "requires --observation-trace"),
-        (None, Path("gym.npz"), ("contact_force_magnitude",), f"{RESET_DECISION_FRAME}..{FINAL_STATE_FRAME}"),
+        (None, None, Path("gym.npz"), (), "required together"),
+        (None, None, None, ("contact_force_magnitude",), "required together"),
+        (Path("control.npz"), None, Path("gym.npz"), ("contact_force_magnitude",), "mutually exclusive"),
+        (Path("control.npz"), Path("action.npz"), None, (), "mutually exclusive"),
+        (None, Path("action.npz"), Path("gym.npz"), ("contact_force_magnitude",), "mutually exclusive"),
+        (None, None, Path("gym.npz"), ("contact_force_mag",), "exact OBS_COMPONENT_SLICES"),
+        (None, None, None, (), "requires --observation-trace"),
+        (None, None, Path("gym.npz"), ("contact_force_magnitude",), f"{RESET_DECISION_FRAME}..{FINAL_STATE_FRAME}"),
     ],
 )
-def test_observation_trace_cli_pairing_fails_closed(control_trace, observation_trace, components, message):
+def test_trace_intervention_cli_pairing_fails_closed(control_trace, action_trace, observation_trace, components, message):
     end = RESET_DECISION_FRAME - 1 if message == "requires --observation-trace" else (
         FINAL_STATE_FRAME + 1 if message == f"{RESET_DECISION_FRAME}..{FINAL_STATE_FRAME}" else None
     )
     with pytest.raises(ValueError, match=message):
-        _validate_trace_interventions(control_trace, observation_trace, components, end)
+        _validate_trace_interventions(control_trace, action_trace, observation_trace, components, end)
 
 
 def test_observation_trace_cli_wires_phase_end_to_run(tmp_path, monkeypatch):
@@ -453,7 +468,8 @@ def test_observation_trace_cli_wires_phase_end_to_run(tmp_path, monkeypatch):
                                        "--replace-observation-component", "contact_force_magnitude",
                                        "--observation-intervention-end-frame", "440"])
     assert mujoco_trace.main() == 0
-    assert captured["args"][-1] == 440
+    assert captured["args"][-2] == 440
+    assert captured["args"][-1] is None
 
 
 def test_observation_trace_rejects_bad_source_component_and_frame(tmp_path):
@@ -527,6 +543,51 @@ def test_observation_trace_metadata_states_policy_only_import(tmp_path):
     assert record["components"] == ["contact_force_magnitude"]
     assert "Only named Gym processed_observation slices" in record["semantics"]
     assert "no target, action" in record["semantics"]
+
+
+def test_action_trace_rejects_non_gym_identity_nonfinite_and_short_sources(tmp_path):
+    metadata, arrays = _trace(backend="mujoco")
+    with pytest.raises(ValueError, match="Gym trace"):
+        ActionTraceIntervention.load(_control_trace(tmp_path, metadata=metadata), 1)
+    metadata, arrays = _trace(backend="gym"); metadata["identity"]["row_id"] = 9
+    with pytest.raises(ValueError, match="identity"):
+        ActionTraceIntervention.load(_control_trace(tmp_path, metadata=metadata), 1)
+    metadata, arrays = _trace(backend="gym"); arrays["final_action"][0, 0] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        ActionTraceIntervention.load(_control_trace(tmp_path, metadata=metadata, arrays=arrays), 1)
+    with pytest.raises(ValueError, match="fewer than requested"):
+        ActionTraceIntervention.load(_control_trace(tmp_path), 3)
+
+
+def test_action_trace_returns_exact_rows_and_fails_closed_on_frame_or_exhaustion(tmp_path):
+    path = _control_trace(tmp_path)
+    intervention = ActionTraceIntervention.load(path, 1)
+    expected = np.arange(22, dtype=np.float32) - 0.5
+    intervention.final_actions[0] = expected
+    np.testing.assert_array_equal(intervention.action(RESET_DECISION_FRAME), expected)
+    assert intervention._row == 1
+    np.testing.assert_array_equal(intervention.action(RESET_DECISION_FRAME + 1), np.zeros(22, dtype=np.float32))
+    assert intervention._row == 2
+    with pytest.raises(RuntimeError, match="exhausted"):
+        intervention.action(RESET_DECISION_FRAME + 2)
+
+    misaligned = ActionTraceIntervention.load(path, 1)
+    with pytest.raises(RuntimeError, match="decision frame"):
+        misaligned.action(RESET_DECISION_FRAME + 1)
+
+
+def test_action_trace_metadata_and_source_keep_local_target_path(tmp_path):
+    producer = Path(__file__).resolve().parents[1] / "tools" / "trace_dexhandrl_mujoco.py"
+    source = producer.read_text(encoding="utf-8")
+    assert 'patch = intervention.patch(env) if intervention is not None else nullcontext()' in source
+    assert 'imported_action = action_intervention.action(decision_frame)' in source
+    assert 'action = imported_action if imported_action is not None else local_action' in source
+    assert 'reference_active_target=(source["reference_active_target"] if source is not None else' in source
+    record = ActionTraceIntervention.load(_control_trace(tmp_path), 1).metadata_record()
+    assert len(record["source_sha256"]) == 64
+    assert record["source_backend"] == "gym"
+    assert "Only aligned Gym final_action" in record["semantics"]
+    assert "residual/control targets" in record["semantics"]
 
 
 def test_control_trace_rejects_non_gym_identity_frame_and_nonfinite_sources(tmp_path):

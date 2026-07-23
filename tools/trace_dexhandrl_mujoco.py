@@ -123,6 +123,63 @@ class ObservationTraceIntervention:
         }
 
 
+class ActionTraceIntervention:
+    """Fail-closed injection of aligned Gym final actions into a live MuJoCo step.
+
+    The source contributes exactly one final_action vector per decision.  MuJoCo
+    retains its observation/RMS-policy computation, residual target path, and
+    physics transition.
+    """
+
+    def __init__(self, source_path: Path, metadata: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -> None:
+        if metadata.get("backend") != "gym":
+            raise ValueError("--action-trace must be a Gym trace")
+        self.source_path = source_path.resolve()
+        self.metadata = dict(metadata)
+        self.arrays = {name: np.asarray(value) for name, value in arrays.items()}
+        self.count = validate_trace(self.metadata, self.arrays)
+        self.final_actions = np.asarray(self.arrays["final_action"], dtype=np.float32)
+        if not np.all(np.isfinite(self.final_actions)):
+            raise ValueError("action trace requires finite final_action")
+        self.source_sha256 = hashlib.sha256(self.source_path.read_bytes()).hexdigest()
+        self._row = 0
+
+    @classmethod
+    def load(cls, path: Path, steps: int) -> "ActionTraceIntervention":
+        metadata, arrays = load_trace(str(path))
+        intervention = cls(path, metadata, arrays)
+        if intervention.count < steps:
+            raise ValueError(
+                f"--action-trace has {intervention.count} actions, fewer than requested --steps={steps}"
+            )
+        return intervention
+
+    def action(self, target_frame: int) -> np.ndarray:
+        """Consume and return the one source action aligned to target_frame."""
+        if self._row >= self.count:
+            raise RuntimeError("action trace exhausted before MuJoCo policy decision")
+        source_frame = int(self.arrays["decision_frame"][self._row])
+        if source_frame != target_frame:
+            raise RuntimeError(
+                f"action trace decision frame {source_frame} does not equal live target frame {target_frame}"
+            )
+        action = self.final_actions[self._row].copy()
+        self._row += 1
+        return action
+
+    def metadata_record(self) -> dict[str, Any]:
+        return {
+            "source_path": str(self.source_path),
+            "source_sha256": self.source_sha256,
+            "source_backend": "gym",
+            "semantics": (
+                "Only aligned Gym final_action vectors are imported into MuJoCo steps; "
+                "MuJoCo processed/RMS observations, checkpoint policy_mean, residual/control targets, "
+                "and post-physics state remain live."
+            ),
+        }
+
+
 class ControlTraceIntervention:
     """Fail-closed source-control injection for the preregistered Gym replay.
 
@@ -217,10 +274,12 @@ class ControlTraceIntervention:
         }
 
 
-def _validate_trace_interventions(control_trace: Path | None, observation_trace: Path | None,
-                                  components: tuple[str, ...], intervention_end_frame: int | None = None) -> None:
-    if control_trace is not None and observation_trace is not None:
-        raise ValueError("--observation-trace cannot be combined with --control-trace")
+def _validate_trace_interventions(control_trace: Path | None, action_trace: Path | None,
+                                  observation_trace: Path | None, components: tuple[str, ...],
+                                  intervention_end_frame: int | None = None) -> None:
+    traces = (control_trace, action_trace, observation_trace)
+    if sum(trace is not None for trace in traces) > 1:
+        raise ValueError("--control-trace, --action-trace, and --observation-trace are mutually exclusive")
     if (observation_trace is None) != (not bool(components)):
         raise ValueError("--observation-trace and --replace-observation-component are required together")
     invalid = [name for name in components if name not in OBS_COMPONENT_SLICES]
@@ -316,13 +375,15 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
         base_rot_kp: float = 10000.0, base_rot_kv: float = 125.0,
         base_rot_force: float = 100.0, observation_trace: Path | None = None,
         replace_observation_component: tuple[str, ...] = (),
-        observation_intervention_end_frame: int | None = None) -> Path:
+        observation_intervention_end_frame: int | None = None,
+        action_trace: Path | None = None) -> Path:
     if not 1 <= steps <= MAX_ACTIONS:
         raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
     _validate_trace_interventions(
-        control_trace, observation_trace, replace_observation_component, observation_intervention_end_frame
+        control_trace, action_trace, observation_trace, replace_observation_component, observation_intervention_end_frame
     )
     intervention = ControlTraceIntervention.load(control_trace, steps) if control_trace is not None else None
+    action_intervention = ActionTraceIntervention.load(action_trace, steps) if action_trace is not None else None
     observation_intervention = (ObservationTraceIntervention.load(
         observation_trace, steps, replace_observation_component, observation_intervention_end_frame
     ) if observation_trace is not None else None)
@@ -357,6 +418,7 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
         for _step in range(steps):
             decision_frame = int(env._current_frame)
             source = intervention.current(decision_frame) if intervention is not None else None
+            imported_action = action_intervention.action(decision_frame) if action_intervention is not None else None
             live_processed_observation = np.asarray(obs, dtype=np.float32).copy()
             policy_observation = _policy_observation(live_processed_observation, decision_frame, observation_intervention)
             tensor = torch.as_tensor(policy_observation[None], dtype=torch.float32, device=agent.policy.device)
@@ -367,7 +429,8 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
                 with torch.no_grad():
                     mean, _ = agent.policy.compute({"observations": normalized}, role="policy")
                 policy_mean = mean.detach().cpu().numpy()[0]
-                action = torch.clamp(mean, -1, 1).detach().cpu().numpy()[0]
+                local_action = torch.clamp(mean, -1, 1).detach().cpu().numpy()[0]
+                action = imported_action if imported_action is not None else local_action
             else:
                 before_base, before_joint = source["base_offset_before"], source["joint_offset_before"]
                 policy_mean, action = source["policy_mean"], source["final_action"]
@@ -400,6 +463,9 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
     if observation_intervention is not None:
         metadata["observation_trace_intervention"] = observation_intervention.metadata_record()
         metadata["policy_action_provenance"] = "MuJoCo policy evaluated hybrid processed_observation with selected Gym slices"
+    if action_intervention is not None:
+        metadata["action_trace_intervention"] = action_intervention.metadata_record()
+        metadata["policy_action_provenance"] = "MuJoCo checkpoint policy_mean evaluated from live MuJoCo RMS observation; final_action imported from Gym action trace"
     validate_trace(metadata, arrays); output.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(output, metadata=np.asarray(json.dumps(metadata)), **arrays); return output
 
 
@@ -409,6 +475,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--steps", type=int, default=3, help=f"actions to trace (1..{MAX_ACTIONS})")
     p.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     p.add_argument("--control-trace", type=Path, help="validated Gym trace whose exact control stages are injected")
+    p.add_argument("--action-trace", type=Path, help="validated Gym trace whose final_action alone is injected into live MuJoCo steps")
     p.add_argument("--observation-trace", type=Path, help="validated Gym trace supplying selected policy-observation slices")
     p.add_argument("--replace-observation-component", action="append", default=[], metavar="NAME",
                    help="exact OBS_COMPONENT_SLICES key to replace; repeat for multiple components")
@@ -428,13 +495,14 @@ def main() -> int:
     parser = _parser()
     a = parser.parse_args()
     try:
-        _validate_trace_interventions(a.control_trace, a.observation_trace, tuple(a.replace_observation_component),
-                                      a.observation_intervention_end_frame)
+        _validate_trace_interventions(a.control_trace, a.action_trace, a.observation_trace,
+                                      tuple(a.replace_observation_component), a.observation_intervention_end_frame)
     except ValueError as error:
         parser.error(str(error))
     print(run(a.output, a.steps, a.checkpoint, a.control_trace, a.hand_friction, a.headless,
               a.finger_kp, a.finger_kv, a.base_rot_kp, a.base_rot_kv, a.base_rot_force,
-              a.observation_trace, tuple(a.replace_observation_component), a.observation_intervention_end_frame))
+              a.observation_trace, tuple(a.replace_observation_component), a.observation_intervention_end_frame,
+              a.action_trace))
     return 0
 
 

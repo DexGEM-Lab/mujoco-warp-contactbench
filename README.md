@@ -581,6 +581,29 @@ above `0.15 m` with lift below `0.10 m` indicates physics/contact-dominant
 divergence; other outcomes are mixed. These are diagnostic interpretations,
 not runtime acceptance claims.
 
+#### Action-only intervention diagnosis
+
+Use this to hold the action sequence to aligned Gym `final_action` vectors while
+measuring what live MuJoCo observations, checkpoint policy means, residual targets,
+and physics do under those actions. It is mutually exclusive with control and
+observation interventions.
+
+```bash
+$MUJOCO_PYTHON tools/trace_dexhandrl_mujoco.py \
+  --checkpoint "$CHECKPOINT" --steps 631 \
+  --action-trace outputs/dexhandrl_trace/v3_full631_gym/gym_v3_full631.npz \
+  --output outputs/dexhandrl_trace/gym_actions_live_mujoco.npz
+```
+
+The source must be an exact schema-v3 Gym trace with the same row-22 identity,
+finite arrays, and aligned decisions. One source row is consumed for each live
+MuJoCo decision, and only its `final_action` is passed to the environment. The
+resulting trace records that imported action alongside a locally evaluated
+checkpoint `policy_mean`, live offsets and residual/control targets, and live
+post-physics state. This differs from full control replay: `--control-trace`
+also imports source offsets and target stages, whereas `--action-trace` leaves
+MuJoCo's complete action-to-target path live.
+
 #### Selective contact-observation diagnosis
 
 This diagnosis replaces three aligned Gym contact slices only at the MuJoCo
