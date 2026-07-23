@@ -2,26 +2,30 @@
 
 ## Current model
 
-The phase-130 checkpoint uses Gym's v3 live task clock: physical initialization is frame 61, policy decisions are frames 62–191, and post-step states are frames 63–192. The three exact artifacts are:
+The phase-130 checkpoint uses Gym's v3 live task clock: physical initialization is frame 61, policy decisions are frames 62–191, and post-step states are frames 63–192. The accepted filtered artifacts are:
 
 - Gym trace: `outputs/dexhandrl_trace/v3_phase130_gym/gym_v3_phase130.npz`, SHA256 `f04c21efff3d6e0dba55cf4cf15977906e975161ca95c74081ed53a36d4f5def`.
-- MuJoCo trace: `outputs/dexhandrl_trace/v3_phase130_mujoco/mujoco_v3_phase130.npz`, SHA256 `457df82270622391af0bc320ea6e1da03899c2aa36dceec12f9cbdbc2bad4441`.
-- Comparison: `outputs/dexhandrl_trace/v3_phase130_gym/compare_vs_mujoco.json`, SHA256 `e776bbde3562cf04ea1e9c95d8e9feb6efab8416a1883d0c6ece1f0bd723e528`.
+- Filtered MuJoCo trace: `outputs/dexhandrl_trace/v3_phase130_mujoco_filtered/mujoco_v3_phase130.npz`, SHA256 `3532925b8745af6fac11966441cdc8955598d842244ad2ef7167b7e064779821`.
+- Filtered comparison: `outputs/dexhandrl_trace/v3_phase130_mujoco_filtered/compare_vs_gym.json`, SHA256 `5047d8d92e69094424ead89a88ee70794135cacfdba089297e8587b8333e6c06`.
 
-All 130 `reference_active_target` rows (decisions 62–191) are exact across backends. Both corrected targets equal the reference through decision 190; the residual begins at decision 191, with cross-backend corrected-target maximum `0.00134665` (the measured value is `0.0013466477394104004`).
+Both filtered commands exited 0 and the traces contain 130 rows. `reference_active_target` is exact on every row. Corrected targets first diverge at decision 191 with maximum `0.00134549`. Applied targets are bit/nearly exact through decision 190: decision 108 has residual numerical error `7.3e-12`, decisions 109 and 110 are exact including Gym's filter effects, and decision 190 has `9.2e-12`. Their first divergence moved from decision 109 to decision 191; the decision-191 maximum `0.00134549` is within the preregistered `0.0013467` bound. The post-filter prediction passed, so the ordered velocity/position filter contract and reset-target initialization are accepted.
 
-## Live mechanism
+## Alignment boundary
 
-The first state-independent control-contract gap is Gym's post-filter target. Gym's corrected-to-applied active target becomes nonzero at decision 109 (row/index 47), before the residual at decision 191, and its overall corrected-to-applied maximum is `0.317322` (measured `0.3173224925994873`). MuJoCo has `applied_active_target == corrected_active_target`; therefore cross-backend applied targets first diverge at decision 109. At decision 191, Gym's filter correction reaches `0.0113177` and the cross-backend applied-target maximum is `0.0125070`.
+Identity, frame schedule, reference, episode time, RMS loading, policy execution, residual algorithm, post-filters, and mapping algorithm are aligned. Remaining shared-observation differences are physical state: active qpos, kinematics, object state/contact, and point cloud.
 
-The separate `full_target` mismatch starts at decision 62 because upstream physical/current-state-dependent routing selects different distal targets; it is not evidence that the active reference or corrected target contract is wrong. Full-target divergence must remain a separate physics/routing metric.
+`full_target` still diverges from frame 62 because physical-state-dependent routing distributes distal targets differently. This does not falsify the accepted filter contract. A physics intervention is now permitted by the task constraint, but it must follow a demonstrated mechanism rather than precede the full-trace evidence.
 
-## Live intervention
+## Full-trace preregistration
 
-Implement Gym's exact active-space ordered post-filters: `velocity_clamp` followed by `position_clamp`. Use Gym source parameters and `control_dt`: per-step maximum deltas are base xyz `0.03`, base rpy `0.1`, and fingers `0.02`; position limits are the active primary-DOF limits. Initialize the previous applied target from the reset frame-61 full target, matching Gym `reset_targets` before reset physics. This ordering and initialization are part of the control contract.
+Generate and compare complete 631-action Gym and MuJoCo traces. Before seeing the result, the required invariants and measurements are:
 
-## Pre-registered prediction
+- `reference_active_target` remains exact on all 631 rows.
+- The first corrected-target and applied-target divergence remains decision 191.
+- Quantify object position and orientation error relative to target.
+- Quantify object lift, including maximum and final lift.
+- Quantify hand target error, contact slices, and phase-local error, explicitly separating the interval before `movement_start=261` from the lift interval.
 
-After the exact filters, `applied_active_target` must be exact across backends through decision 190, moving its first divergence from 109 to 191. At decision 191, applied-target cross-backend maximum mismatch must be `<= 0.0013467`. Failure means previous-target initialization or active limits differ from Gym; trace those before changing physics. Full target is not expected to become exact because routing preserves different physical state.
+Prediction: if error stays low before decision 261 and rises during lift, grasp/contact dynamics dominate. If error exceeds `0.05` before decision 261, free-space servo/model mismatch dominates. No tuning is permitted before this result is recorded.
 
 Evidence provenance: `OPS.md`.
