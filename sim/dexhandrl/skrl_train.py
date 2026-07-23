@@ -97,6 +97,8 @@ class SkrlLauncherConfig:
     pointnet_enabled: bool = True
     film_enabled: bool = True
     separate: bool = True
+    checkpoint_interval_updates: int = 100
+    log_interval_updates: int = 1
 
     def __post_init__(self) -> None:
         physics = resolve_physics_config(
@@ -296,6 +298,41 @@ def _build_wrapped_env(cfg: SkrlLauncherConfig):
     return wrapped, specs
 
 
+class _BatchSpaces:
+    """Minimal skrl space surface; physics remains in DexHandRLMJXBatchEnv."""
+    def __init__(self, num_envs: int):
+        try:
+            from gymnasium import spaces
+        except Exception as exc:  # pragma: no cover - dependency-specific
+            raise RuntimeError("gymnasium is required for skrl batch spaces") from exc
+        import numpy as np
+        self.num_envs = int(num_envs)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(461,), dtype=np.float32)
+        self.state_space = spaces.Box(-np.inf, np.inf, shape=(461,), dtype=np.float32)
+        self.action_space = spaces.Box(-1.0, 1.0, shape=(22,), dtype=np.float32)
+
+
+def _build_batch_env(cfg: SkrlLauncherConfig, specs: list[dict[str, Any]]):
+    from sim.dexhandrl.skrl_batch_env import DexHandRLBatchConfig, DexHandRLMJXBatchEnv
+    from sim.dexhandrl.trajectory_batch import load_trajectory_batch
+
+    root = Path(cfg.isaac_source_root)
+    batch = load_trajectory_batch(
+        cfg.lance_path, specs, pre_contact_frames=cfg.pre_contact_frames,
+        post_contact_frames=cfg.post_contact_frames,
+        contact_bodies_file=root / "assets/all_assets/Assets/object_grasps_simple.yaml",
+        task_config_path=root / "dexhand_env/cfg/task/Dexhand021proReconstruction.yaml",
+    )
+    env = DexHandRLMJXBatchEnv(DexHandRLBatchConfig(
+        trajectories=batch, device=cfg.device, object_name=cfg.object_name, action="all",
+        physics=cfg.physics, settle_frames=cfg.settle_frames, use_residual=cfg.use_residual,
+        early_phase_frames=cfg.early_phase_frames,
+        object_position_terminal_threshold=cfg.object_position_terminal_threshold,
+        isaac_source_root=root,
+    ))
+    return env, _BatchSpaces(env.num_envs)
+
+
 def _build_agent(env, cfg: SkrlLauncherConfig):
     if build_skrl_models is None or SkrlDexHandModelConfig is None:  # pragma: no cover - dependency-specific failure
         raise RuntimeError(
@@ -365,6 +402,9 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
         state_space=state_space,
         device=device,
     )
+    init = getattr(agent, "init", None)
+    if callable(init):
+        init()
     return agent, model_cfg
 
 
@@ -661,6 +701,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pointnet-enabled", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--film-enabled", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--separate", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--checkpoint-interval-updates", type=int, default=100)
+    parser.add_argument("--log-interval-updates", type=int, default=1)
     return parser
 
 
@@ -733,7 +775,33 @@ def main(argv: list[str] | None = None) -> None:
         pointnet_enabled=bool(args.pointnet_enabled),
         film_enabled=bool(args.film_enabled),
         separate=bool(args.separate),
+        checkpoint_interval_updates=max(int(args.checkpoint_interval_updates), 1),
+        log_interval_updates=max(int(args.log_interval_updates), 1),
     )
+
+    specs = _resolve_trajectory_specs(launcher_cfg)
+    if launcher_cfg.action == "all":
+        if launcher_cfg.mode in {"eval", "rollout"}:
+            raise SystemExit("action=all eval/rollout requires a batch evaluation adapter; only inspect and train are available")
+        batch_env, spaces = _build_batch_env(launcher_cfg, specs)
+        agent, model_cfg = _build_agent(spaces, launcher_cfg)
+        _write_launcher_config(launcher_cfg, specs, model_cfg)
+        if launcher_cfg.rlgames_checkpoint is not None:
+            load_rlgames_checkpoint(agent, launcher_cfg.rlgames_checkpoint)
+        elif launcher_cfg.checkpoint is not None:
+            agent.load(str(launcher_cfg.checkpoint))
+        try:
+            if launcher_cfg.mode == "inspect":
+                transition = batch_env.reset_device()
+                logger.info(f"Batch reset observation shape: {tuple(transition.observation.shape)}")
+                logger.info(f"Batch worlds: {batch_env.num_envs}; action shape: {spaces.action_space.shape}")
+            else:
+                from sim.dexhandrl.skrl_batch_runtime import run_batch_ppo
+                result = run_batch_ppo(batch_env, agent, launcher_cfg, model_config=model_cfg, assignment=specs)
+                logger.info(f"Completed {result.updates} PPO updates / {result.transitions} transitions: {result.log_path}")
+        finally:
+            batch_env.close()
+        return
 
     env, specs = _build_wrapped_env(launcher_cfg)
     agent, model_cfg = _build_agent(env, launcher_cfg)
