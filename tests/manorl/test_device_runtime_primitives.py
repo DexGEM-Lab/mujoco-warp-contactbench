@@ -23,6 +23,7 @@ from sim.manorl.environment import (
     EnvironmentConfig,
     MujocoManoEnvironment,
     _decode_contact_forces,
+    _expand_legacy_hand_dofs,
     recommended_warp_contact_capacity,
 )
 from sim.manorl.abi import check_termination
@@ -346,7 +347,15 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
     if jax.default_backend() != "gpu":
         pytest.skip("configured CUDA JAX backend required")
     batch = 4
-    trajectory = load_reference_trajectory()
+    legacy_trajectory = load_reference_trajectory()
+    expanded_q_ref = _expand_legacy_hand_dofs(legacy_trajectory.q_ref)
+    trajectory = replace(
+        legacy_trajectory,
+        q_ref=expanded_q_ref,
+        q_ref_by_side={"right": expanded_q_ref},
+        hand_sides=("right",),
+        selected_hand_sides=("right",),
+    )
     compatibility = replace(SOURCE_ALIGNED_COMPATIBILITY, early_phase_steps=0)
     reward_config = replace(RewardConfig(), contact_force_threshold=-1.0)
     common = dict(
