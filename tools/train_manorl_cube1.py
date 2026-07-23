@@ -1480,6 +1480,9 @@ def _train(
                 instant_component_means[name] for name in ("distance_x", "distance_y", "distance_z")
             ),
             **{f"manorl/{name}_mean": value for name, value in component_means.items()},
+            # Preserve raw rollout component telemetry for both reference and
+            # device-transition reward diagnostics.
+            **component_means,
         }
         if grouped_telemetry is not None:
             update_metrics["grouped_metrics"] = grouped_telemetry.metrics()

@@ -523,9 +523,8 @@ def test_train_reads_device_transition_reward_and_termination_telemetry(
 
     assert transitions == 1
     assert updates[0]["reward_mean"] == 2.5
-    assert updates[0]["contact"] == pytest.approx(
-        float(tool.REWARD_UPDATE_COMPONENTS.index("contact")) + 0.25
-    )
+    for index, name in enumerate(tool.REWARD_UPDATE_COMPONENTS):
+        assert updates[0][name] == pytest.approx(float(index) + 0.25)
     assert updates[0]["success_count"] == 1.0
     assert updates[0]["episode_return_mean"] == 7.5
 
