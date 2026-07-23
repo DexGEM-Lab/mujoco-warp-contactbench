@@ -129,6 +129,7 @@ class DexHandRLMJXEnvConfig:
     fingertip_inside_object_min_depth: float = 0.001
     fingertip_inside_object_max_depth: float = 0.003
     max_fingertip_inside_object_penalty: float = 0.4
+    hand_friction: str = "0.5 0.01 0.001"
     object_friction: str = "0.5 0.01 0.001"
     ground_friction: str = "0.5 0.5 0"
     base_pos_kp: float = 5000.0
@@ -626,6 +627,7 @@ class DexHandRLMJXEnv:
             finger_kv=cfg.finger_kv,
             finger_force=cfg.finger_force,
             hand_self_collision_mode=cfg.hand_self_collision_mode,
+            hand_friction=cfg.hand_friction,
             object_friction=cfg.object_friction,
             ground_friction=cfg.ground_friction,
         )

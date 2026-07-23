@@ -26,6 +26,7 @@ def test_cli_defaults_match_isaac_ppo_configuration() -> None:
         == defaults.object_position_terminal_threshold
         == 0.1
     )
+    assert args.hand_friction == defaults.hand_friction == "0.5 0.01 0.001"
     assert args.object_friction == defaults.object_friction == "0.5 0.01 0.001"
     assert args.settle_frames == defaults.settle_frames == 1
     assert args.finger_kp == defaults.finger_kp == 15.0
@@ -43,6 +44,7 @@ def test_env_defaults_match_reference_pd_baseline() -> None:
     assert cfg.base_rot_force == 100.0
     assert cfg.finger_kp == 15.0
     assert cfg.finger_kv == 0.0
+    assert cfg.hand_friction == "0.5 0.01 0.001"
 
 
 def test_experiment_output_uses_launcher_output_directory(tmp_path) -> None:

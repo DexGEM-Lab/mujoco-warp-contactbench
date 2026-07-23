@@ -526,6 +526,12 @@ CHECKPOINT=/home/jay/dexrobot/FromSSH/dexhand_reconstruction/dexrobot_isaac/last
 
 $MUJOCO_PYTHON tools/trace_dexhandrl_mujoco.py \
   --checkpoint "$CHECKPOINT" --steps 3 --output outputs/dexhandrl_trace/mujoco.npz
+
+# Visible, single-environment friction diagnostic. The trace producer is inherently env=1.
+DISPLAY=:1 $MUJOCO_PYTHON tools/trace_dexhandrl_mujoco.py \
+  --checkpoint "$CHECKPOINT" --steps 631 --control-trace outputs/dexhandrl_trace/gym.npz \
+  --hand-friction '3 2 2' --no-headless \
+  --output outputs/dexhandrl_trace/mujoco_hand_friction_viewer.npz
 # Gym wrapper is source-read-only and requires no bytecode writes.
 PYTHONDONTWRITEBYTECODE=1 $GYM_PYTHON tools/trace_dexhandrl_gym.py \
   --checkpoint "$CHECKPOINT" --steps 3 --output outputs/dexhandrl_trace/gym.npz

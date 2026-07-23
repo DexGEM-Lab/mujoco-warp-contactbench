@@ -18,7 +18,7 @@ from sim.dexhandrl.trace_contract import (
     validate_trace,
 )
 from tools.compare_dexhandrl_traces import compare
-from tools.trace_dexhandrl_mujoco import ControlTraceIntervention
+from tools.trace_dexhandrl_mujoco import ControlTraceIntervention, PassiveTraceViewer, _passive_trace_viewer
 from tools.trace_dexhandrl_gym import (_authoritative_frame, _compose_train_config, _deterministic_action,
                                       _close_env_after_trace, _filter_exact_trajectory, _patch,
                                       _is_relative_to, _pre_action_observations,
@@ -39,6 +39,44 @@ def _fresh_python(code: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def test_passive_trace_viewer_mirrors_state_without_physics_step() -> None:
+    class Lock:
+        def __init__(self, handle): self.handle = handle
+        def __enter__(self): self.handle.lock_count += 1
+        def __exit__(self, *_): return False
+    class Handle:
+        def __init__(self): self.lock_count = self.sync_count = self.close_count = 0; self.running = True; self.cam = type("Cam", (), {"lookat": np.zeros(3), "distance": 0, "azimuth": 0, "elevation": 0})()
+        def is_running(self): return self.running
+        def lock(self): return Lock(self)
+        def sync(self): self.sync_count += 1
+        def close(self): self.close_count += 1
+    class MuJoCo:
+        def __init__(self): self.forward_count = 0
+        def mj_forward(self, _model, data): self.forward_count += 1; data.xpos[:] = [[1, 2, 3]]
+    data = type("Data", (), {"qpos": np.zeros(3), "qvel": np.zeros(2), "xpos": np.zeros((1, 3))})()
+    handle, mujoco = Handle(), MuJoCo()
+    viewer = PassiveTraceViewer(mujoco, object(), data, handle, 0)
+    dx = type("DX", (), {"qpos": np.array([1, 2, 3]), "qvel": np.array([4, 5])})()
+
+    assert viewer.sync(dx)
+    np.testing.assert_array_equal(data.qpos, dx.qpos)
+    np.testing.assert_array_equal(data.qvel, dx.qvel)
+    assert mujoco.forward_count == handle.sync_count == handle.lock_count == 1
+    assert handle.cam.lookat.tolist() == [1, 2, 3]
+    handle.running = False
+    assert not viewer.sync(dx)
+    viewer.close()
+    assert handle.close_count == 1
+
+
+def test_passive_trace_viewer_headless_and_missing_display(monkeypatch):
+    with _passive_trace_viewer(object(), headless=True) as viewer:
+        assert viewer is None
+    monkeypatch.delenv("DISPLAY", raising=False)
+    with pytest.raises(RuntimeError, match="requires DISPLAY"):
+        PassiveTraceViewer.create(object())
 
 
 def test_gym_trace_import_is_fresh_interpreter_offline_safe():

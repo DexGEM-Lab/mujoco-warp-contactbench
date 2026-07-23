@@ -6,6 +6,7 @@ import argparse
 from contextlib import contextmanager, nullcontext
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -139,7 +140,64 @@ def _append(store: dict[str, list[np.ndarray]], **items: np.ndarray) -> None:
         store[key].append(np.asarray(value))
 
 
-def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None = None) -> Path:
+class PassiveTraceViewer:
+    """Mirror MJX state into a native passive viewer; never call physics stepping."""
+
+    def __init__(self, mujoco: Any, model: Any, data: Any, handle: Any, object_body_id: int) -> None:
+        self.mujoco, self.model, self.data, self.handle = mujoco, model, data, handle
+        self.object_body_id = object_body_id
+        self._closed = False
+        self._camera_configured = False
+
+    @classmethod
+    def create(cls, env: Any) -> "PassiveTraceViewer":
+        if not os.environ.get("DISPLAY"):
+            raise RuntimeError("--no-headless requires DISPLAY to name a native display server")
+        import mujoco.viewer
+
+        data = env.mujoco.MjData(env.model)
+        handle = mujoco.viewer.launch_passive(env.model, data)
+        return cls(env.mujoco, env.model, data, handle, env.object_body_id)
+
+    def sync(self, dx: Any) -> bool:
+        if self._closed:
+            return False
+        if not self.handle.is_running():
+            self.close()
+            return False
+        with self.handle.lock():
+            np.copyto(self.data.qpos, np.asarray(dx.qpos))
+            np.copyto(self.data.qvel, np.asarray(dx.qvel))
+            self.mujoco.mj_forward(self.model, self.data)
+            if not self._camera_configured:
+                camera = getattr(self.handle, "cam", None)
+                if camera is not None:
+                    camera.lookat[:] = self.data.xpos[self.object_body_id]
+                    camera.distance, camera.azimuth, camera.elevation = 0.6, 90.0, -25.0
+                self._camera_configured = True
+            self.handle.sync()
+        return True
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self.handle.close()
+
+
+@contextmanager
+def _passive_trace_viewer(env: Any, headless: bool) -> Iterator[PassiveTraceViewer | None]:
+    if headless:
+        yield None
+        return
+    viewer = PassiveTraceViewer.create(env)
+    try:
+        yield viewer
+    finally:
+        viewer.close()
+
+
+def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None = None,
+        hand_friction: str = "0.5 0.01 0.001", headless: bool = True) -> Path:
     if not 1 <= steps <= MAX_ACTIONS:
         raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
     intervention = ControlTraceIntervention.load(control_trace, steps) if control_trace is not None else None
@@ -149,7 +207,8 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
     from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
     from sim.dexhandrl.skrl_train import SkrlLauncherConfig, _build_agent
     cfg = DexHandRLMJXEnvConfig(lance_path=LANCE, isaac_source_root=ISAAC, object_name="cube1", action="01", sequence_index=1,
-        uuid=EXACT_IDENTITY["uuid"], device="cpu", use_residual=True, seed=0, object_position_terminal_threshold=1e9)
+        uuid=EXACT_IDENTITY["uuid"], device="cpu", use_residual=True, seed=0, object_position_terminal_threshold=1e9,
+        hand_friction=hand_friction)
     env = DexHandRLMJXEnv(cfg)
     if env.trajectory.row_id != 22 or env.start_frame != 61 or env.end_frame != 693:
         raise RuntimeError(f"exact trajectory isolation failed: row={env.trajectory.row_id}, window={env.start_frame}..{env.end_frame}")
@@ -164,7 +223,9 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
     if int(env._current_frame) != RESET_DECISION_FRAME:
         raise RuntimeError(f"MuJoCo reset policy frame must be {RESET_DECISION_FRAME}, got {env._current_frame}")
     patch = intervention.patch(env) if intervention is not None else nullcontext()
-    with patch:
+    with _passive_trace_viewer(env, headless) as viewer, patch:
+        if viewer is not None:
+            viewer.sync(env._dx)
         for _step in range(steps):
             decision_frame = int(env._current_frame)
             source = intervention.current(decision_frame) if intervention is not None else None
@@ -195,11 +256,13 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
               reference_active_target=(source["reference_active_target"] if source is not None else np.asarray(trace["reference_active_target"], dtype=np.float32)), corrected_active_target=(source["corrected_active_target"] if source is not None else np.asarray(trace["corrected_active_target"], dtype=np.float32)), applied_active_target=(source["applied_active_target"] if source is not None else np.asarray(trace["applied_active_target"], dtype=np.float32)), full_target=(source["full_target"] if source is not None else np.asarray(trace["full_target"], dtype=np.float32)),
               hand_qpos=full_dof_from_qpos(np.asarray(env._dx.qpos), env.ids), hand_qvel=_ordered_qvel(env), object_position=np.asarray(info["object_position"]), object_quaternion_xyzw=np.asarray(env._dx.xquat[env.object_body_id], dtype=np.float32)[[1, 2, 3, 0]], object_linear_velocity=np.asarray(env._dx.qvel[env.ids.object_free_dof_addr:env.ids.object_free_dof_addr + 3]), target_object_position=np.asarray(info["target_object_position"]), target_object_quaternion_xyzw=np.asarray(env.trajectory.object_quat_xyzw[state_frame]))
             obs = next_obs
+            if viewer is not None:
+                viewer.sync(env._dx)
             if terminated or truncated:
                 break
     scalar_types = {"decision_frame": np.int64, "state_frame": np.int64, "reset": np.bool_, "terminated": np.bool_, "truncated": np.bool_}
     arrays = {key: np.asarray(values, dtype=scalar_types.get(key, np.float32)) for key, values in store.items()}
-    metadata: dict[str, Any] = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint)}
+    metadata: dict[str, Any] = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint), "friction": {"hand": cfg.hand_friction, "object": cfg.object_friction, "ground": cfg.ground_friction}, "viewer": {"headless": headless, "semantics": "native passive viewer mirrors completed MJX qpos/qvel via mj_forward and never advances environment physics", "env_count": 1}}
     if intervention is not None:
         metadata["control_trace_intervention"] = intervention.metadata_record()
         metadata["policy_action_provenance"] = "imported from Gym control trace; policy/action records do not arise from MuJoCo observation"
@@ -212,8 +275,10 @@ def main() -> int:
     p.add_argument("--steps", type=int, default=3, help=f"actions to trace (1..{MAX_ACTIONS})")
     p.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     p.add_argument("--control-trace", type=Path, help="validated Gym trace whose exact control stages are injected")
+    p.add_argument("--hand-friction", default="0.5 0.01 0.001")
+    p.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     a = p.parse_args()
-    print(run(a.output, a.steps, a.checkpoint, a.control_trace)); return 0
+    print(run(a.output, a.steps, a.checkpoint, a.control_trace, a.hand_friction, a.headless)); return 0
 
 
 if __name__ == "__main__":

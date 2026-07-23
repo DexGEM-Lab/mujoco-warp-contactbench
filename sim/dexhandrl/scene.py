@@ -53,11 +53,20 @@ def _replace_or_insert_option(xml: str, dt: float, substeps: int) -> str:
     return xml.replace("<compiler", f"{option}\n  <compiler", 1)
 
 
-def _patch_hand_xml(xml: str, isaac_source_root: Path, dt: float, substeps: int) -> str:
+def _patch_hand_xml(
+    xml: str, isaac_source_root: Path, dt: float, substeps: int, hand_friction: str = "0.5 0.01 0.001"
+) -> str:
+    """Patch the one canonical hand-geometry default without touching scene geoms."""
     hand_dir = (isaac_source_root / HAND_XML_RELATIVE).parent
     mesh_dir = (hand_dir / "../marvin_021pro_urdf/meshes").resolve()
     xml = re.sub(r'meshdir="[^"]+"', f'meshdir="{mesh_dir.as_posix()}"', xml, count=1)
-    xml = re.sub(r'<geom friction="[^"]+" solref=', '<geom friction="0.5 0.01 0.001" solref=', xml, count=1)
+    canonical_hand_geom = r'(<geom\s+friction=")3 2 2("(?=\s+solref=))'
+    xml, replacements = re.subn(canonical_hand_geom, rf'\g<1>{hand_friction}\g<2>', xml)
+    if replacements != 1:
+        raise RuntimeError(
+            "expected exactly one canonical hand default geom friction='3 2 2' replacement, "
+            f"found {replacements}"
+        )
     xml = re.sub(r'<size[^>]*/>', '<size njmax="2048" nconmax="8192" />', xml, count=1)
     xml = _replace_or_insert_option(xml, dt=dt, substeps=substeps)
     return xml
@@ -177,6 +186,7 @@ def build_dexhandrl_scene_xml(
     finger_kv: float = 0,
     finger_force: float = 50,
     hand_self_collision_mode: str = "disable_within_finger",
+    hand_friction: str = "0.5 0.01 0.001",
     object_friction: str = "0.5 0.01 0.001",
     ground_friction: str = "0.5 0.5 0",
 ) -> Path:
@@ -188,7 +198,9 @@ def build_dexhandrl_scene_xml(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     asset = _parse_object_asset(object_name=object_name, isaac_source_root=isaac_source_root)
     xml = hand_xml_path.read_text(encoding="utf-8")
-    xml = _patch_hand_xml(xml, isaac_source_root=isaac_source_root, dt=dt, substeps=substeps)
+    xml = _patch_hand_xml(
+        xml, isaac_source_root=isaac_source_root, dt=dt, substeps=substeps, hand_friction=hand_friction
+    )
     xml = _patch_pd_gains(
         xml,
         base_pos_kp=base_pos_kp,

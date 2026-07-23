@@ -46,6 +46,7 @@ class SkrlLauncherConfig:
     finger_kv: float = 0.0
     finger_force: float = 50.0
     hand_self_collision_mode: str = "disable_within_finger"
+    hand_friction: str = "0.5 0.01 0.001"
     object_friction: str = "0.5 0.01 0.001"
     naconmax: int = 8192
     njmax: int = 8192
@@ -193,6 +194,7 @@ def _make_env_factory(cfg: SkrlLauncherConfig, spec: dict[str, Any], env_index: 
         finger_kv=cfg.finger_kv,
         finger_force=cfg.finger_force,
         hand_self_collision_mode=cfg.hand_self_collision_mode,
+        hand_friction=cfg.hand_friction,
         object_friction=cfg.object_friction,
         naconmax=cfg.naconmax,
         njmax=cfg.njmax,
@@ -522,6 +524,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("none", "disable_within_finger", "all_disabled"),
         default="disable_within_finger",
     )
+    parser.add_argument("--hand-friction", default="0.5 0.01 0.001")
     parser.add_argument("--object-friction", default="0.5 0.01 0.001")
     parser.add_argument("--naconmax", type=int, default=8192)
     parser.add_argument("--njmax", type=int, default=8192)
@@ -602,6 +605,7 @@ def main(argv: list[str] | None = None) -> None:
         finger_kv=float(args.finger_kv),
         finger_force=float(args.finger_force),
         hand_self_collision_mode=str(args.hand_self_collision_mode),
+        hand_friction=str(args.hand_friction),
         object_friction=str(args.object_friction),
         naconmax=max(int(args.naconmax), 1),
         njmax=max(int(args.njmax), 1),
