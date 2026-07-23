@@ -44,13 +44,24 @@ def _fresh_python(code: str) -> subprocess.CompletedProcess[str]:
 def test_passive_trace_viewer_mirrors_state_without_physics_step() -> None:
     class Lock:
         def __init__(self, handle): self.handle = handle
-        def __enter__(self): self.handle.lock_count += 1
-        def __exit__(self, *_): return False
+        def __enter__(self):
+            assert not self.handle.locked
+            self.handle.locked = True
+            self.handle.lock_count += 1
+        def __exit__(self, *_):
+            self.handle.locked = False
+            return False
     class Handle:
-        def __init__(self): self.lock_count = self.sync_count = self.close_count = 0; self.running = True; self.cam = type("Cam", (), {"lookat": np.zeros(3), "distance": 0, "azimuth": 0, "elevation": 0})()
+        def __init__(self):
+            self.lock_count = self.sync_count = self.close_count = 0
+            self.locked = False
+            self.running = True
+            self.cam = type("Cam", (), {"lookat": np.zeros(3), "distance": 0, "azimuth": 0, "elevation": 0})()
         def is_running(self): return self.running
         def lock(self): return Lock(self)
-        def sync(self): self.sync_count += 1
+        def sync(self):
+            assert not self.locked
+            self.sync_count += 1
         def close(self): self.close_count += 1
     class MuJoCo:
         def __init__(self): self.forward_count = 0

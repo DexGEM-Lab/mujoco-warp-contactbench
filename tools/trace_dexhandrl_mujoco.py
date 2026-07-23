@@ -175,7 +175,7 @@ class PassiveTraceViewer:
                     camera.lookat[:] = self.data.xpos[self.object_body_id]
                     camera.distance, camera.azimuth, camera.elevation = 0.6, 90.0, -25.0
                 self._camera_configured = True
-            self.handle.sync()
+        self.handle.sync()
         return True
 
     def close(self) -> None:
