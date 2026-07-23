@@ -235,6 +235,42 @@ def test_jitted_device_reward_and_termination_match_numpy_contract() -> None:
     np.testing.assert_array_equal(np.asarray(device.early_phase), host.early_phase)
 
 
+def test_device_reward_zero_stability_speed_and_invalid_inputs_fail_closed() -> None:
+    """Host's non-positive speed guard and validation must survive JIT lowering."""
+    batch = 2
+    common = dict(
+        object_position=np.zeros((batch, 3), np.float32), target_object_position=np.zeros((batch, 3), np.float32),
+        object_orientation_xyzw=np.tile(np.asarray((0, 0, 0, 1), np.float32), (batch, 1)),
+        target_object_orientation_xyzw=np.tile(np.asarray((0, 0, 0, 1), np.float32), (batch, 1)),
+        cumulative_offset=np.zeros((batch, 3), np.float32), cumulative_joint_offset=np.zeros((batch, 22), np.float32),
+        active_joint_mask=np.zeros((batch, 22), bool), hand_object_force_on_object_world_N=np.zeros((batch, 16, 3), np.float32),
+        expected_contact_mask=np.zeros((batch, 16), np.float32), expected_contact_weights=np.ones((batch, 16), np.float32),
+        object_linear_velocity=np.zeros((batch, 3), np.float32), trajectory_steps=np.full(batch, 2, np.int64),
+        contact_start_frames=np.zeros(batch, np.int64), contact_end_frames=np.ones(batch, np.int64),
+        rotation_disabled_mask=np.zeros(batch, bool), early_phase_starts=np.zeros(batch, np.int64), early_phase_steps=0,
+    )
+    term = check_device_termination(
+        object_position=common["object_position"], target_position=common["target_object_position"],
+        progress=np.zeros(batch, np.int64), trajectory_lengths=np.full(batch, 9, np.int64),
+        early_mask=np.zeros(batch, bool), max_deviation_distance=1.0, deviation_penalty=0.0,
+    )
+    zero_speed = RewardConfig(object_stability_reference_speed=0.0)
+    actual = jax.jit(lambda: compute_device_reward_28(**common, termination=term, config=zero_speed))()
+    assert bool(actual.valid)
+    np.testing.assert_array_equal(np.asarray(actual.object_stability), np.zeros(batch))
+    invalid = dict(common, expected_contact_mask=np.full((batch, 16), 0.5, np.float32))
+    rejected = jax.jit(lambda: compute_device_reward_28(**invalid, termination=term, config=zero_speed))()
+    assert not bool(rejected.valid)
+    invalid_velocity = dict(common, object_linear_velocity=np.full((batch, 3), np.nan, np.float32))
+    assert not bool(jax.jit(lambda: compute_device_reward_28(**invalid_velocity, termination=term, config=zero_speed))().valid)
+    invalid_term = check_device_termination(
+        object_position=np.full((batch, 3), np.nan, np.float32), target_position=common["target_object_position"],
+        progress=np.zeros(batch, np.int64), trajectory_lengths=np.full(batch, 9, np.int64),
+        early_mask=np.zeros(batch, bool), max_deviation_distance=1.0, deviation_penalty=0.0,
+    )
+    assert not bool(invalid_term.valid)
+
+
 def test_device_counters_match_partial_delayed_reset_order() -> None:
     progress = np.asarray((0, 3, 8), np.int64)
     steps = np.asarray((0, 3, 8), np.int64)
@@ -418,6 +454,15 @@ def test_device_contact_decode_config_fails_closed_for_cpu_and_debug_snapshots()
         EnvironmentConfig(device="cpu", device_contact_decode=True, capture_transition_diagnostics=False)
     with pytest.raises(ValueError, match="capture_transition_diagnostics=False"):
         EnvironmentConfig(device="gpu", device_contact_decode=True)
+
+
+def test_device_transition_config_rejects_debug_cpu_and_host_controls() -> None:
+    with pytest.raises(ValueError, match="device='gpu'"):
+        EnvironmentConfig(device_transition=True, device_resident_controls=True, capture_transition_diagnostics=False)
+    with pytest.raises(ValueError, match="device_resident_controls=True"):
+        EnvironmentConfig(device="gpu", device_transition=True, capture_transition_diagnostics=False)
+    with pytest.raises(ValueError, match="capture_transition_diagnostics=False"):
+        EnvironmentConfig(device="gpu", device_transition=True, device_resident_controls=True)
 
 
 def test_float64_reducer_matches_float64_host_decoder() -> None:

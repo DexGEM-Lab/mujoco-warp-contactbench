@@ -25,16 +25,17 @@ class DeviceContactReduction(NamedTuple):
 
 
 class DeviceTermination(NamedTuple):
-    """Device equivalent of the termination ABI fields."""
+    """Device equivalent of the termination ABI fields plus fail-closed validity."""
 
     reset: Any
     deviation_reset: Any
     deviation_penalty: Any
     reason_code: Any
+    valid: Any
 
 
 class DeviceReward(NamedTuple):
-    """Device reward diagnostics in the source reward-contract order."""
+    """Device reward diagnostics in source order plus fail-closed validity."""
 
     total: Any
     distance_x: Any
@@ -47,6 +48,7 @@ class DeviceReward(NamedTuple):
     survival: Any
     early_phase: Any
     deviation_penalty: Any
+    valid: Any
 
 
 class DeviceTaskCounters(NamedTuple):
@@ -310,17 +312,21 @@ def check_device_termination(
     batch = object_position.shape[0]
     if progress.shape != (batch,) or lengths.shape != (batch,) or early.shape != (batch,):
         raise ValueError("termination vectors must be (batch,)")
-    if max_deviation_distance < 0 or deviation_penalty < 0:
-        raise ValueError("termination distances and penalty must be non-negative")
+    if (not np.isfinite(max_deviation_distance) or not np.isfinite(deviation_penalty)
+            or max_deviation_distance < 0 or deviation_penalty < 0):
+        raise ValueError("termination distances and penalty must be finite and non-negative")
     deviation = jp.linalg.norm(object_position - target_position, axis=1) > max_deviation_distance
     deviation = deviation & ~early.astype(bool)
     reset = (progress >= lengths - 1) | deviation
-    return DeviceTermination(
-        reset,
-        deviation,
-        jp.where(deviation, -deviation_penalty, 0.0),
-        jp.where(deviation, 2, jp.where(reset, 1, 0)).astype(jp.int32),
+    penalty = jp.where(deviation, -deviation_penalty, 0.0)
+    reason = jp.where(deviation, 2, jp.where(reset, 1, 0)).astype(jp.int32)
+    valid = (
+        jp.all(jp.isfinite(object_position))
+        & jp.all(jp.isfinite(target_position))
+        & jp.all(jp.isfinite(penalty))
+        & jp.all((reason >= 0) & (reason <= 2))
     )
+    return DeviceTermination(reset, deviation, penalty, reason, valid)
 
 
 def compute_device_reward_28(
@@ -356,6 +362,8 @@ def compute_device_reward_28(
         raise ValueError("device reward supports one 28-DoF hand and 22 joint residuals")
     if any(value.shape != (batch,) for value in (steps, starts, ends, disabled, early_starts)):
         raise ValueError("device reward window vectors must be (batch,)")
+    if early_phase_steps < 0:
+        raise ValueError("early_phase_steps must be non-negative")
     distance = jp.abs(obj - target)
     ungated = jp.asarray(config.distance_scales) * jp.exp(-config.distance_decay * distance)
     ax, ay, az, aw = (quat[:, i] for i in range(4))
@@ -382,11 +390,33 @@ def compute_device_reward_28(
     distance_gate = jp.where((steps > ends) & valid_window, config.max_contact_reward, distance_gate)
     distance_terms = ungated * distance_gate[:, None]
     speed = jp.linalg.norm(velocity, axis=1)
-    stability = jp.where(valid_window & (steps > ends), config.max_object_stability_reward * jp.exp(-(speed / config.object_stability_reference_speed) ** 2), 0.0)
+    # Host reward semantics deliberately disable stability for a non-positive
+    # reference speed. Use a safe denominator because both jp.where branches
+    # are evaluated and 0/0 would otherwise poison the final reduction.
+    reference_speed = jp.asarray(config.object_stability_reference_speed, dtype=obj.dtype)
+    safe_reference_speed = jp.where(reference_speed > 0, reference_speed, 1.0)
+    stability_base = config.max_object_stability_reward * jp.exp(-(speed / safe_reference_speed) ** 2)
+    stability_base = jp.where(reference_speed > 0, stability_base, 0.0)
+    stability = jp.where(valid_window & (steps > ends), stability_base, 0.0)
     survival = jp.full((batch,), config.survival_reward, dtype=obj.dtype)
     early = (steps >= early_starts) & (steps < early_starts + early_phase_steps)
     total = jp.where(early, action_penalty, distance_terms.sum(axis=1) + rotation + action_penalty + contact + stability + survival) + termination.deviation_penalty
-    return DeviceReward(total, distance_terms[:, 0], distance_terms[:, 1], distance_terms[:, 2], rotation, contact, distance_gate, stability, survival, early, termination.deviation_penalty)
+    config_values = tuple(np.asarray(value, dtype=np.float64) for value in vars(config).values())
+    valid_inputs = (
+        jp.all(jp.isfinite(obj)) & jp.all(jp.isfinite(target))
+        & jp.all(jp.isfinite(quat)) & jp.all(jp.isfinite(target_quat))
+        & jp.all(jp.isfinite(offsets)) & jp.all(jp.isfinite(joints))
+        & jp.all(jp.isfinite(force)) & jp.all(jp.isfinite(expected))
+        & jp.all(jp.isfinite(weights)) & jp.all(jp.isfinite(velocity))
+        & jp.all(jp.isfinite(steps)) & jp.all(jp.isfinite(starts)) & jp.all(jp.isfinite(ends))
+        & jp.all(jp.isfinite(early_starts))
+        & jp.all((expected == 0) | (expected == 1)) & jp.all(weights >= 0)
+        & jp.all(jp.isfinite(termination.deviation_penalty))
+        & jp.asarray(all(np.all(np.isfinite(value)) for value in config_values))
+        & termination.valid
+    )
+    valid = valid_inputs & jp.all(jp.isfinite(total)) & jp.all(jp.isfinite(stability))
+    return DeviceReward(total, distance_terms[:, 0], distance_terms[:, 1], distance_terms[:, 2], rotation, contact, distance_gate, stability, survival, early, termination.deviation_penalty, valid)
 
 
 def advance_device_task_counters(
