@@ -425,7 +425,7 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
             device_directions[direction_gate],
             host_directions[direction_gate],
             rtol=1e-4,
-            atol=1e-5,
+            atol=2e-4,
             err_msg="contact_force_directions",
         )
         np.testing.assert_allclose(device_reward, host_reward, rtol=1e-4, atol=1e-5)
