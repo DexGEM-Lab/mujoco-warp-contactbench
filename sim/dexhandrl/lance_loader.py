@@ -217,8 +217,13 @@ def load_trajectory(
     return _trajectory_from_row(path, row, row_id)
 
 
-def load_trajectories_by_row_ids(lance_path: Path | str, row_ids: list[int] | tuple[int, ...]) -> list[DexHandTrajectory]:
-    """Bulk-load unique physical Lance rows with a single indexed Lance request."""
+def load_trajectories_by_row_ids(
+    lance_path: Path | str,
+    row_ids: list[int] | tuple[int, ...],
+    *,
+    expected_uuids: dict[int, str] | None = None,
+) -> list[DexHandTrajectory]:
+    """Bulk-load unique physical Lance rows by their stable Lance row IDs."""
     unique_ids = list(dict.fromkeys(int(row_id) for row_id in row_ids))
     if not unique_ids:
         return []
@@ -227,20 +232,21 @@ def load_trajectories_by_row_ids(lance_path: Path | str, row_ids: list[int] | tu
     ds = lance.dataset(str(path))
     columns = ["index", "trajectory_metadata", "hands", "objects"]
     columns.extend(name for name in ("source", "contact") if name in set(ds.schema.names))
-    take = getattr(ds, "take", None)
-    if not callable(take):
-        raise RuntimeError("installed Lance dataset does not support bulk indexed row loading")
-    try:
-        table = take(unique_ids, columns=columns)
-    except TypeError:
-        table = take(unique_ids, columns)
+    take_rows = getattr(ds, "_take_rows", None)
+    if not callable(take_rows):
+        raise RuntimeError("installed Lance dataset does not support stable row-ID bulk loading (_take_rows)")
+    table = take_rows(unique_ids, columns=columns)
     rows = table.to_pylist()
     if len(rows) != len(unique_ids):
-        raise RuntimeError(f"bulk Lance take returned {len(rows)} rows for {len(unique_ids)} requested row ids")
+        raise RuntimeError(f"bulk Lance row-ID load returned {len(rows)} rows for {len(unique_ids)} requested row IDs")
     parsed = []
     for expected_row_id, row in zip(unique_ids, rows):
-        actual_row_id = int(row.get("_rowid", expected_row_id))
-        if actual_row_id != expected_row_id:
-            raise RuntimeError(f"bulk Lance take row identity mismatch: requested {expected_row_id}, got {actual_row_id}")
+        expected_uuid = None if expected_uuids is None else expected_uuids.get(expected_row_id)
+        actual_uuid = str((row.get("index") or {}).get("uuid"))
+        if expected_uuid is not None and actual_uuid != expected_uuid:
+            raise RuntimeError(
+                f"bulk Lance row identity mismatch for row_id={expected_row_id}: "
+                f"expected uuid={expected_uuid!r}, got {actual_uuid!r}"
+            )
         parsed.append(_trajectory_from_row(path, row, expected_row_id))
     return parsed

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import sim.dexhandrl.lance_loader as lance_loader
 import sim.dexhandrl.skrl_train as skrl_train
 from sim.dexhandrl.lance_loader import DexHandTrajectory
 from sim.dexhandrl.skrl_train import SkrlLauncherConfig, _build_wrapped_env, _resolve_trajectory_specs
@@ -21,6 +22,57 @@ def _trajectory(row_id: int, action: str, frames: int, start: int, end: int, raw
         expected_contact_mask=np.ones((frames, 16), dtype=np.float32),
         movement_start_frame=start, movement_end_frame=end, metadata={},
     )
+
+
+def test_bulk_loader_uses_stable_lance_row_ids_not_logical_offsets(monkeypatch) -> None:
+    row_id = 120_259_084_300
+
+    class FakeTable:
+        def to_pylist(self):
+            return [{"index": {"uuid": "stable-row"}}]
+
+    class FakeDataset:
+        schema = type("Schema", (), {"names": []})()
+
+        def __init__(self):
+            self.requested_row_ids = None
+
+        def _take_rows(self, row_ids, *, columns):
+            self.requested_row_ids = row_ids
+            assert columns == ["index", "trajectory_metadata", "hands", "objects"]
+            return FakeTable()
+
+        def take(self, *args, **kwargs):
+            raise AssertionError("public take interprets logical offsets and must not be called")
+
+    dataset = FakeDataset()
+    monkeypatch.setattr(lance_loader, "_import_lance", lambda: type("Lance", (), {"dataset": staticmethod(lambda _: dataset)})())
+    monkeypatch.setattr(
+        lance_loader,
+        "_trajectory_from_row",
+        lambda path, row, stable_row_id: (stable_row_id, row["index"]["uuid"]),
+    )
+
+    loaded = lance_loader.load_trajectories_by_row_ids(
+        "synthetic.lance", [row_id], expected_uuids={row_id: "stable-row"}
+    )
+
+    assert dataset.requested_row_ids == [row_id]
+    assert loaded == [(row_id, "stable-row")]
+
+
+def test_bulk_loader_fails_closed_without_stable_row_id_api(monkeypatch) -> None:
+    class FakeDataset:
+        schema = type("Schema", (), {"names": []})()
+
+    monkeypatch.setattr(
+        lance_loader,
+        "_import_lance",
+        lambda: type("Lance", (), {"dataset": staticmethod(lambda _: FakeDataset())})(),
+    )
+
+    with pytest.raises(RuntimeError, match=r"stable row-ID bulk loading \(_take_rows\)"):
+        lance_loader.load_trajectories_by_row_ids("synthetic.lance", [120_259_084_300])
 
 
 def test_all_action_assignment_is_balanced_sorted_and_deterministic(monkeypatch) -> None:

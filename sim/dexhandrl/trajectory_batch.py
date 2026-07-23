@@ -176,7 +176,13 @@ def pack_trajectory_batch(
 def load_trajectory_batch(lance_path: Path | str, assignments: Sequence[dict[str, Any]], **kwargs: Any) -> DexHandTrajectoryBatch:
     """Bulk-load unique rows once, then pack assignment-aligned windows."""
     row_ids = [int(spec["row_id"]) for spec in assignments]
-    loaded = load_trajectories_by_row_ids(lance_path, row_ids)
+    expected_uuids: dict[int, str] = {}
+    for spec, row_id in zip(assignments, row_ids):
+        uuid = str(spec["uuid"])
+        prior_uuid = expected_uuids.setdefault(row_id, uuid)
+        if prior_uuid != uuid:
+            raise RuntimeError(f"conflicting UUID assignments for Lance row_id={row_id}")
+    loaded = load_trajectories_by_row_ids(lance_path, row_ids, expected_uuids=expected_uuids)
     by_row_id = {traj.row_id: traj for traj in loaded}
     try:
         trajectories = [by_row_id[row_id] for row_id in row_ids]
