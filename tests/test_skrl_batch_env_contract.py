@@ -1,6 +1,7 @@
 """Dependency-light contract tests for the one-model DexHand MJX batch runtime."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +64,31 @@ def test_reset_target_routes_extreme_active_reference_before_storing_previous() 
     np.testing.assert_allclose(previous[0, 6 + 6], 0.75)
     assert full[0, 12] == pytest.approx(0.25)
     assert full[0, 13] == pytest.approx(0.5)
+
+
+def test_selected_reset_rebuilds_contacts_and_preserves_unselected_worlds() -> None:
+    pytest.importorskip("mujoco")
+    from sim.dexhandrl.skrl_batch_env import DexHandRLMJXBatchEnv
+
+    worlds = 7
+    batch = replace(
+        _batch(worlds),
+        object_quat_xyzw=np.tile(np.asarray([0., 0., 0., 1.], dtype=np.float32), (worlds, 3, 1)),
+    )
+    env = DexHandRLMJXBatchEnv(DexHandRLBatchConfig(trajectories=batch, device="cpu", settle_frames=0))
+    try:
+        clean = env.reset_device()
+        env.step_device(np.zeros((worlds, 22), dtype=np.float32))
+        before = np.asarray(env.state.data.qpos).copy()
+        selected = np.asarray([True, False, True, False, False, False, False])
+        mixed = env.reset_done_device(selected)
+        after = np.asarray(env.state.data.qpos)
+
+        np.testing.assert_allclose(np.asarray(mixed.observation)[selected], np.asarray(clean.observation)[selected])
+        np.testing.assert_array_equal(after[~selected], before[~selected])
+        assert np.all(np.asarray(mixed.valid))
+    finally:
+        env.close()
 
 
 def test_device_transition_source_has_no_host_conversion() -> None:
