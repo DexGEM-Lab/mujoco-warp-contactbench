@@ -8,12 +8,20 @@ import pytest
 jax = pytest.importorskip("jax")
 
 from sim.manorl.device_runtime import (
+    DevicePhysicalFeatures,
+    build_device_observation_28,
     extract_mjx_physical_features,
     jax_to_torch_cuda,
     reduce_warp_contacts,
     torch_to_jax_cuda,
 )
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment, _decode_contact_forces
+from sim.manorl.observations import (
+    CURRENT_SOURCE_COMPATIBILITY,
+    ObservationState,
+    PointCloudTemplate,
+    build_observation,
+)
 from sim.manorl.trajectory import load_reference_trajectory
 
 
@@ -74,6 +82,72 @@ def test_jitted_physical_feature_gather_normalizes_xyzw_and_keeps_only_required_
     np.testing.assert_allclose(np.asarray(actual.hand_keypoint_orientations_xyzw), expected_xyzw, atol=2e-6)
     np.testing.assert_allclose(np.linalg.norm(np.asarray(actual.object_orientation_xyzw), axis=1), 1.0, atol=2e-6)
     assert bool(actual.valid)
+
+
+def test_jitted_28dof_observation_matches_numpy_at_contact_thresholds_and_partial_rows() -> None:
+    rng = np.random.default_rng(98)
+    batch = 4
+    mano = rng.uniform(-0.7, 0.7, size=(batch, 28)).astype(np.float32)
+    lower, upper = np.full(28, -1.0, np.float32), np.full(28, 1.0, np.float32)
+    object_quat = rng.normal(size=(batch, 4)).astype(np.float32)
+    object_quat /= np.linalg.norm(object_quat, axis=1, keepdims=True)
+    hand_quat = rng.normal(size=(batch, 4)).astype(np.float32)
+    hand_quat /= np.linalg.norm(hand_quat, axis=1, keepdims=True)
+    keypoint_quat = np.broadcast_to(hand_quat[:, None], (batch, 16, 4)).copy()
+    object_pos = rng.normal(size=(batch, 3)).astype(np.float32)
+    hand_pos = rng.normal(size=(batch, 3)).astype(np.float32)
+    keypoints = rng.normal(size=(batch, 16, 3)).astype(np.float32)
+    tips = rng.normal(size=(batch, 5, 3)).astype(np.float32)
+    physical = DevicePhysicalFeatures(
+        mano, hand_pos, hand_quat, keypoint_quat, object_pos, object_quat,
+        rng.normal(size=(batch, 3)).astype(np.float32), keypoints, tips, jax.numpy.asarray(True),
+    )
+    forces = np.zeros((batch, 16, 3), dtype=np.float32)
+    forces[:, 3, 0] = np.asarray([0.199999, 0.2, 0.200001, 10.0], dtype=np.float32)
+    points = rng.normal(size=(64, 3)).astype(np.float32)
+    scale = np.asarray([0.2, 0.3, 0.4], dtype=np.float32)
+    support = rng.normal(size=(13, 3)).astype(np.float32)
+    target_pos = rng.normal(size=(batch, 3)).astype(np.float32)
+    target_quat = rng.normal(size=(batch, 4)).astype(np.float32)
+    target_quat *= 2.5  # Device path must normalize target XYZW exactly as NumPy does for support points.
+    expected = np.zeros((batch, 16), dtype=np.float32)
+    expected[:, (3, 15)] = 1.0
+    kwargs = dict(
+        physical=physical, hand_keypoint_contact_forces=forces,
+        target_object_position=target_pos, target_object_orientation_xyzw=target_quat,
+        target_object_pos_next_5=rng.normal(size=(batch, 3)).astype(np.float32),
+        cumulative_offset=rng.normal(size=(batch, 3)).astype(np.float32),
+        cumulative_joint_offset=rng.normal(size=(batch, 22)).astype(np.float32),
+        point_cloud_local=points, point_cloud_scale=scale,
+        object_geometry=rng.normal(size=(batch, 12)).astype(np.float32),
+        expected_contact_mask=expected, action_ids=np.asarray([1, 2, 49, 50], dtype=np.int32),
+        object_support_points=support, table_surface_height=-0.001,
+        mano_dof_lower=lower, mano_dof_upper=upper,
+    )
+    raw, valid = jax.jit(lambda: build_device_observation_28(**kwargs))()
+    numpy_state = ObservationState(
+        mano_dof_pos=mano, mano_dof_lower=lower, mano_dof_upper=upper,
+        hand_position=hand_pos, hand_orientation_xyzw=hand_quat,
+        object_position=object_pos, object_orientation_xyzw=object_quat,
+        target_object_position=target_pos,
+        target_object_orientation_xyzw=target_quat,
+        target_object_pos_next_5=kwargs["target_object_pos_next_5"],
+        cumulative_offset=kwargs["cumulative_offset"],
+        cumulative_joint_offset=kwargs["cumulative_joint_offset"],
+        point_cloud=PointCloudTemplate(points, mode="static_seed_42", normalized=True, scale=scale),
+        object_geometry=kwargs["object_geometry"], hand_keypoint_positions=keypoints,
+        fingertip_positions=tips, hand_keypoint_contact_forces=forces,
+        expected_contact_mask=expected, action_ids=kwargs["action_ids"],
+        object_support_points=support, table_surface_height=-0.001,
+    )
+    expected_observation = build_observation(numpy_state, compatibility=CURRENT_SOURCE_COMPATIBILITY)
+    np.testing.assert_allclose(np.asarray(raw), expected_observation.raw, rtol=0, atol=2e-6)
+    np.testing.assert_allclose(np.clip(np.asarray(raw), -5.0, 5.0), expected_observation.policy_input, rtol=0, atol=2e-6)
+    assert bool(valid)
+    # Match NumPy's strict 0.2N gate after its float32-to-float64 promotion.
+    # 28D layout shifts the fixed 26D direction slice by four finger channels.
+    assert np.linalg.norm(np.asarray(raw)[0, 416 + 3 * 3 : 416 + 3 * 4]) == 0.0
+    assert np.linalg.norm(np.asarray(raw)[1, 416 + 3 * 3 : 416 + 3 * 4]) > 0.9
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:

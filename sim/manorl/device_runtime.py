@@ -213,22 +213,26 @@ def build_device_observation_28(
     if actions.shape != (batch,):
         raise ValueError("action_ids must be batched")
     object_quat = physical.object_orientation_xyzw
-    target_quat = target_quat / jp.maximum(jp.linalg.norm(target_quat, axis=-1, keepdims=True), 1e-12)
+    target_support_quat = target_quat / jp.maximum(jp.linalg.norm(target_quat, axis=-1, keepdims=True), 1e-12)
     finger = 2.0 * (physical.mano_dof_pos[:, 6:] - lower[None, 6:]) / (upper[None, 6:] - lower[None, 6:]) - 1.0
     magnitude = jp.linalg.norm(force, axis=-1)
     direction = force / jp.maximum(magnitude[..., None], 1e-6)
-    direction = direction * (magnitude > 0.2)[..., None]
+    # NumPy promotes Warp float32 forces before comparing against the Python
+    # 0.2 threshold. Match that strict comparison in float32 JAX: its nearest
+    # representable 0.2 is slightly above the real-valued source threshold.
+    contact_gate = jp.asarray(np.nextafter(np.float32(0.2), -np.inf), dtype=force.dtype)
+    direction = direction * (magnitude > contact_gate)[..., None]
     cloud_world = _quat_rotate_xyzw(object_quat[:, None], points * scale[:, None]) + physical.object_position[:, None]
     cloud = (cloud_world - physical.hand_position[:, None]) / scale[:, None]
     object_min_z = jp.min(_quat_rotate_xyzw(object_quat[:, None], support)[..., 2] + physical.object_position[:, None, 2], axis=1)
-    target_min_z = jp.min(_quat_rotate_xyzw(target_quat[:, None], support)[..., 2] + target_pos[:, None, 2], axis=1)
+    target_min_z = jp.min(_quat_rotate_xyzw(target_support_quat[:, None], support)[..., 2] + target_pos[:, None, 2], axis=1)
     clearance = jp.stack((
-        physical.object_position[:, 2] - table_surface_height,
-        target_pos[:, 2] - table_surface_height,
         object_min_z - table_surface_height,
+        physical.object_position[:, 2] - table_surface_height,
+        jp.min(physical.hand_keypoint_positions[..., 2], axis=1) - table_surface_height,
+        jp.min(physical.fingertip_positions[..., 2], axis=1) - table_surface_height,
         target_min_z - table_surface_height,
-        object_min_z - target_min_z,
-        target_min_z - object_min_z,
+        target_pos[:, 2] - table_surface_height,
     ), axis=1)
     one_hot = jp.eye(50, dtype=physical.mano_dof_pos.dtype)[jp.clip(actions.astype(jp.int32) - 1, 0, 49)]
     raw = jp.concatenate((
