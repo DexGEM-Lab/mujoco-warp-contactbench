@@ -11,8 +11,10 @@ from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES
 from sim.dexhandrl.trace_contract import EXACT_IDENTITY, SCHEMA, VECTOR_SPECS, validate_trace
 from tools.compare_dexhandrl_traces import compare
 from tools.trace_dexhandrl_gym import (_compose_train_config, _deterministic_action,
-                                      _filter_exact_trajectory, _patch, _pre_action_observations,
-                                      _preserve_bounded_run_play, _restore_mapped_checkpoint,
+                                      _close_env_after_trace, _filter_exact_trajectory, _patch,
+                                      _is_relative_to, _pre_action_observations,
+                                      _preserve_bounded_run_play, _resolve_trace_paths,
+                                      _restore_mapped_checkpoint,
                                       _validated_component_slices)
 
 def _trace(frames=(61, 62), *, backend="mujoco"):
@@ -69,6 +71,46 @@ def test_trace_contract_rejects_wrong_state_dtype_and_filter_metadata():
 def test_trace_contract_rejects_nonfinite_values():
     metadata, arrays = _trace(); arrays["policy_mean"][0, 0] = np.nan
     with pytest.raises(ValueError, match="finite"): validate_trace(metadata, arrays)
+
+def test_gym_trace_resolves_caller_output_and_rejects_checkout_writes(tmp_path, monkeypatch):
+    caller, gym_root = tmp_path / "caller", tmp_path / "gym"
+    caller.mkdir(); gym_root.mkdir()
+    assert _is_relative_to(gym_root / "nested" / "trace.npz", gym_root)
+    assert not _is_relative_to(tmp_path / "other" / "trace.npz", gym_root)
+    monkeypatch.chdir(caller)
+    args = argparse.Namespace(output=Path("traces/gym.npz"), gym_root=gym_root)
+    resolved_root, output, runtime = _resolve_trace_paths(args)
+    assert resolved_root == gym_root.resolve()
+    assert output == (caller / "traces/gym.npz").resolve()
+    assert runtime == (caller / "traces/gym_runtime").resolve()
+    with pytest.raises(ValueError, match="must be outside Gym root"):
+        _resolve_trace_paths(argparse.Namespace(output=gym_root / "trace.npz", gym_root=gym_root))
+
+
+def test_gym_trace_closes_actual_env_once_and_preserves_trace_failure():
+    class Env:
+        def __init__(self, close_error=None): self.close_error, self.close_calls = close_error, 0
+        def close(self):
+            self.close_calls += 1
+            if self.close_error: raise self.close_error
+
+    complete = Env()
+    with _close_env_after_trace(complete):
+        pass
+    assert complete.close_calls == 1
+
+    failed = Env(RuntimeError("close failure"))
+    with pytest.raises(ValueError, match="trace failure"):
+        with _close_env_after_trace(failed):
+            raise ValueError("trace failure")
+    assert failed.close_calls == 1
+
+    close_only = Env(RuntimeError("close failure"))
+    with pytest.raises(RuntimeError, match="close failure"):
+        with _close_env_after_trace(close_only):
+            pass
+    assert close_only.close_calls == 1
+
 
 def test_gym_trace_composes_absolute_checkout_config_without_package_lookup(tmp_path):
     calls = []

@@ -93,6 +93,42 @@ def _actual_env(player: Any) -> Any:
     return env
 
 
+@contextmanager
+def _close_env_after_trace(env: Any) -> Iterator[None]:
+    """Close the live Isaac environment once without masking a trace failure."""
+    try:
+        yield
+    except BaseException:
+        try:
+            env.close()
+        except BaseException:
+            pass
+        raise
+    else:
+        env.close()
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    """Python 3.8-compatible containment predicate for resolved paths."""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_trace_paths(args: argparse.Namespace, caller_cwd: Path | None = None) -> tuple[Path, Path, Path]:
+    """Resolve trace outputs before entering the Gym checkout and reject source writes."""
+    caller_cwd = (caller_cwd or Path.cwd()).resolve()
+    gym_root = args.gym_root.resolve()
+    output = (caller_cwd / args.output).resolve() if not args.output.is_absolute() else args.output.resolve()
+    runtime = (output.parent / "gym_runtime").resolve()
+    for name, path in (("output", output), ("runtime", runtime)):
+        if _is_relative_to(path, gym_root):
+            raise ValueError(f"Gym trace {name} must be outside Gym root {gym_root}: {path}")
+    return gym_root, output, runtime
+
+
 def _validated_component_slices(runtime_slices: Any, policy_observation_keys: Any) -> dict[str, tuple[int, int]]:
     """Fail closed unless Gym's live policy layout exactly matches our contract."""
     try:
@@ -184,13 +220,13 @@ def run(args: argparse.Namespace) -> None:
         raise RuntimeError("set PYTHONDONTWRITEBYTECODE=1 before a Gym trace")
     if not 1 <= args.steps <= 632:
         raise ValueError("--steps must be in 1..632")
-    before = _git_snapshot(args.gym_root)
+    gym_root, output, runtime = _resolve_trace_paths(args)
+    before = _git_snapshot(gym_root)
     old_cwd, old_path, old_argv = Path.cwd(), list(sys.path), list(sys.argv)
-    runtime = (args.output.parent / "gym_runtime").resolve()
     runtime.mkdir(parents=True, exist_ok=True)
     try:
-        os.chdir(args.gym_root)
-        sys.path.insert(0, str(args.gym_root))
+        os.chdir(gym_root)
+        sys.path.insert(0, str(gym_root))
         import isaacgym  # noqa: F401  # Isaac Gym must precede torch/train import
         import torch
         import train
@@ -236,57 +272,59 @@ def run(args: argparse.Namespace) -> None:
 
         def run_play(runner, play_args):
             player = runner.create_player()
+            env = _actual_env(player)
             # Gym's patch exposes this for its reload machinery; preserve that compatibility.
             runner.player = player
-            _restore_mapped_checkpoint(player, play_args.get("checkpoint"), torch); _override_sigma(player, play_args)
-            env = _actual_env(player)
-            if env.num_envs != 1:
-                raise RuntimeError(f"trace requires one Gym env, got {env.num_envs}")
-            try:
-                trajectory = env.task.groups[0]["trajectories"][0]
-            except (AttributeError, IndexError, KeyError) as exc:
-                raise RuntimeError("task did not expose the allocated Lance trajectory") from exc
-            for key, expected in (("uuid", EXACT_IDENTITY["uuid"]), ("row_id", EXACT_IDENTITY["row_id"])):
-                if trajectory.get(key) != expected:
-                    raise RuntimeError(f"task loaded wrong trajectory {key}={trajectory.get(key)!r}")
-            if (int(env.task.trajectory_start_frame[0]), int(env.task.trajectory_end_frame[0])) != (61, 693):
-                raise RuntimeError("task trajectory window is not exactly 61..693")
-            obs = player.env_reset(player.env)
-            if tuple(obs.shape[-1:]) != (461,) or int(env.obs_buf.shape[-1]) != 461:
-                raise RuntimeError(f"Gym observation width is not 461: player={tuple(obs.shape)}, env={tuple(env.obs_buf.shape)}")
-            component_slices = _validated_component_slices(
-                env.observation_encoder.component_slice_indices,
-                env.observation_encoder.observation_keys,
-            )
-            for step in range(args.steps):
-                decision = 61 + step
-                preprocessed = player._preproc_obs(obs)
-                rms = player.model.norm_obs(preprocessed)
-                processed_observation, rms_observation = _pre_action_observations(preprocessed, rms)
-                input_dict = {"is_train": False, "prev_actions": None, "obs": preprocessed, "rnn_states": player.states}
-                with torch.no_grad():
-                    model_result = player.model(input_dict)
-                mus = model_result["mus"]
-                player.states = model_result["rnn_states"]
-                action = _deterministic_action(mus, player.actions_low, player.actions_high, player.clip_actions)
-                # Defer the automatic terminal reset before the terminal step, preserving its state frame.
-                env._trace_defer_reset = decision == EXACT_IDENTITY["effective_window"][1] - 1
-                # `env.step` owns the actual action boundary and our pre hook snapshots its authoritative targets.
-                next_obs, _reward, done, _info = player.env_step(player.env, action)
-                state = decision + 1
-                if not captured:
-                    raise RuntimeError("pre_physics_step did not expose action stages")
-                rb = env.rigid_body_states[0, env.task.object_local_rigid_body_index]
-                _ = done  # termination is recorded below from reset_buf after post physics.
-                values = dict(decision_frame=np.asarray(decision), state_frame=np.asarray(state), reset=np.asarray(step == 0),
-                    terminated=np.asarray(bool(env.reset_buf[0].item())), truncated=np.asarray(False), processed_observation=processed_observation, rms_observation=rms_observation, policy_mean=_as_np(mus[0]), final_action=_as_np(action[0]),
-                    base_offset_after=_as_np(env.task.task_states["base_position_offset"][0]), joint_offset_after=_as_np(env.task.task_states["joint_offset"][0]), hand_qpos=_as_np(env.dof_pos[0]), hand_qvel=_as_np(env.dof_vel[0]),
-                    object_position=_as_np(rb[:3]), object_quaternion_xyzw=_as_np(rb[3:7]), object_linear_velocity=_as_np(rb[7:10]),
-                    target_object_position=_as_np(env.obs_dict["target_object_position"][0]), target_object_quaternion_xyzw=_as_np(env.obs_dict["target_object_orientation"][0]))
-                values.update(captured)
-                for name, value in values.items(): store[name].append(value)
-                obs = next_obs
-            _write_trace(args.output, store, args.checkpoint, before[1], component_slices)
+            with _close_env_after_trace(env):
+                _restore_mapped_checkpoint(player, play_args.get("checkpoint"), torch)
+                _override_sigma(player, play_args)
+                if env.num_envs != 1:
+                    raise RuntimeError(f"trace requires one Gym env, got {env.num_envs}")
+                try:
+                    trajectory = env.task.groups[0]["trajectories"][0]
+                except (AttributeError, IndexError, KeyError) as exc:
+                    raise RuntimeError("task did not expose the allocated Lance trajectory") from exc
+                for key, expected in (("uuid", EXACT_IDENTITY["uuid"]), ("row_id", EXACT_IDENTITY["row_id"])):
+                    if trajectory.get(key) != expected:
+                        raise RuntimeError(f"task loaded wrong trajectory {key}={trajectory.get(key)!r}")
+                if (int(env.task.trajectory_start_frame[0]), int(env.task.trajectory_end_frame[0])) != (61, 693):
+                    raise RuntimeError("task trajectory window is not exactly 61..693")
+                obs = player.env_reset(player.env)
+                if tuple(obs.shape[-1:]) != (461,) or int(env.obs_buf.shape[-1]) != 461:
+                    raise RuntimeError(f"Gym observation width is not 461: player={tuple(obs.shape)}, env={tuple(env.obs_buf.shape)}")
+                component_slices = _validated_component_slices(
+                    env.observation_encoder.component_slice_indices,
+                    env.observation_encoder.observation_keys,
+                )
+                for step in range(args.steps):
+                    decision = 61 + step
+                    preprocessed = player._preproc_obs(obs)
+                    rms = player.model.norm_obs(preprocessed)
+                    processed_observation, rms_observation = _pre_action_observations(preprocessed, rms)
+                    input_dict = {"is_train": False, "prev_actions": None, "obs": preprocessed, "rnn_states": player.states}
+                    with torch.no_grad():
+                        model_result = player.model(input_dict)
+                    mus = model_result["mus"]
+                    player.states = model_result["rnn_states"]
+                    action = _deterministic_action(mus, player.actions_low, player.actions_high, player.clip_actions)
+                    # Defer the automatic terminal reset before the terminal step, preserving its state frame.
+                    env._trace_defer_reset = decision == EXACT_IDENTITY["effective_window"][1] - 1
+                    # `env.step` owns the actual action boundary and our pre hook snapshots its authoritative targets.
+                    next_obs, _reward, done, _info = player.env_step(player.env, action)
+                    state = decision + 1
+                    if not captured:
+                        raise RuntimeError("pre_physics_step did not expose action stages")
+                    rb = env.rigid_body_states[0, env.task.object_local_rigid_body_index]
+                    _ = done  # termination is recorded below from reset_buf after post physics.
+                    values = dict(decision_frame=np.asarray(decision), state_frame=np.asarray(state), reset=np.asarray(step == 0),
+                        terminated=np.asarray(bool(env.reset_buf[0].item())), truncated=np.asarray(False), processed_observation=processed_observation, rms_observation=rms_observation, policy_mean=_as_np(mus[0]), final_action=_as_np(action[0]),
+                        base_offset_after=_as_np(env.task.task_states["base_position_offset"][0]), joint_offset_after=_as_np(env.task.task_states["joint_offset"][0]), hand_qpos=_as_np(env.dof_pos[0]), hand_qvel=_as_np(env.dof_vel[0]),
+                        object_position=_as_np(rb[:3]), object_quaternion_xyzw=_as_np(rb[3:7]), object_linear_velocity=_as_np(rb[7:10]),
+                        target_object_position=_as_np(env.obs_dict["target_object_position"][0]), target_object_quaternion_xyzw=_as_np(env.obs_dict["target_object_orientation"][0]))
+                    values.update(captured)
+                    for name, value in values.items(): store[name].append(value)
+                    obs = next_obs
+                _write_trace(output, store, args.checkpoint, before[1], component_slices)
 
         with _patch(BatchMocapLoader, "_discover_minimal_lance_trajectories", discover_exact), _patch(DexHandBase, "pre_physics_step", pre_capture), _patch(DexHandBase, "post_physics_step", post_capture), _patch(DexHandBase, "reset_idx", reset_deferred), _patch(train, "create_experiment_manager", external_manager), _patch(Runner, "run_play", run_play), _preserve_bounded_run_play(train, Runner, run_play):
             cfg = _compose_train_config(args, initialize_config_dir, compose)
@@ -294,13 +332,13 @@ def run(args: argparse.Namespace) -> None:
             if train_main is None:
                 raise RuntimeError("Gym train.main must expose Hydra's undecorated body via __wrapped__")
             train_main(cfg)
-        if not args.output.exists():
+        if not output.exists():
             raise RuntimeError("patched Runner.run_play returned without writing the Gym trace")
     finally:
         sys.argv[:] = old_argv
         os.chdir(old_cwd)
         sys.path[:] = old_path
-        after = _git_snapshot(args.gym_root)
+        after = _git_snapshot(gym_root)
         if after != before:
             raise RuntimeError("Gym source checkout changed during trace wrapper execution")
 
