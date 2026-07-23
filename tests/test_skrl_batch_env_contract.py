@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from sim.dexhandrl.hand_mapping import active_to_full_dof, full_to_active_dof
 from sim.dexhandrl.skrl_batch_env import (
     DexHandRLBatchConfig,
     conservative_batch_constraint_capacity,
@@ -39,14 +40,29 @@ def test_batch_config_requires_all_actions_and_active_reference() -> None:
         DexHandRLBatchConfig(trajectories=batch, reference_joint_source="full_raw")
 
 
-def test_batch_capacity_floors_are_global_and_separate() -> None:
+def test_batch_capacity_floors_are_global_and_per_world() -> None:
     batch = _batch(7)
     assert conservative_batch_contact_capacity(7) == 3648
-    assert conservative_batch_constraint_capacity(7) == 2048
+    # efc__force is (world, capacity), so N must not inflate the second axis.
+    assert [conservative_batch_constraint_capacity(worlds) for worlds in (1, 7, 1024)] == [8192, 8192, 8192]
     with pytest.raises(ValueError, match="global 512-row-per-world floor"):
         DexHandRLBatchConfig(trajectories=batch, contact_capacity=3583)
-    with pytest.raises(ValueError, match="constraint floor"):
-        DexHandRLBatchConfig(trajectories=batch, constraint_capacity=895)
+    with pytest.raises(ValueError, match="must be positive"):
+        DexHandRLBatchConfig(trajectories=batch, per_world_constraint_capacity=0)
+
+
+def test_reset_target_routes_extreme_active_reference_before_storing_previous() -> None:
+    active = np.zeros((1, 22), dtype=np.float32)
+    # The first routed active slot is index finger's joint3 + joint4 target.
+    active[0, 6 + 6] = 100.0
+    limits = {6: (0.25, 0.5), 9: (1.2, 1.2), 12: (1.2, 1.2), 15: (1.2, 1.2)}
+
+    full = active_to_full_dof(active, route_joint_upper_limits=limits)
+    previous = full_to_active_dof(full)
+
+    np.testing.assert_allclose(previous[0, 6 + 6], 0.75)
+    assert full[0, 12] == pytest.approx(0.25)
+    assert full[0, 13] == pytest.approx(0.5)
 
 
 def test_device_transition_source_has_no_host_conversion() -> None:
@@ -56,3 +72,7 @@ def test_device_transition_source_has_no_host_conversion() -> None:
     assert "jax.vmap" in source
     assert "reduce_dexhand_contacts" in source
     assert "data._impl" in source
+    assert source.count("self.mjx.make_data(") == 1
+    assert "data = self._forward_world(data)" in source
+    assert "requested_per_world_constraint_capacity" in source
+    assert "actual_constraint_buffer_shape" in source

@@ -36,6 +36,7 @@ from sim.dexhandrl.hand_mapping import (
     DEXHAND021PRO_FULL_DOF_NAMES,
     active_to_full_dof,
     dexhand021pro_route_joint_upper_limits,
+    full_to_active_dof,
     resolve_mujoco_ids,
 )
 from sim.dexhandrl.obs_layout import OBS_DIM_021PRO
@@ -79,7 +80,7 @@ class DexHandRLBatchConfig:
     policy_base_ang_velocity_limit: float = 10.0
     policy_finger_velocity_limit: float = 2.0
     contact_capacity: int | None = None
-    constraint_capacity: int | None = None
+    per_world_constraint_capacity: int | None = None
     isaac_source_root: Path = DEFAULT_ISAAC_SOURCE_ROOT
     task_config_path: Path | None = None
 
@@ -100,8 +101,8 @@ class DexHandRLBatchConfig:
             raise ValueError("settle_frames must be non-negative")
         if self.contact_capacity is not None and self.contact_capacity < 512 * self.trajectories.num_envs:
             raise ValueError("contact_capacity is below the conservative global 512-row-per-world floor")
-        if self.constraint_capacity is not None and self.constraint_capacity < 128 * self.trajectories.num_envs:
-            raise ValueError("constraint_capacity is below the conservative per-world constraint floor")
+        if self.per_world_constraint_capacity is not None and self.per_world_constraint_capacity < 1:
+            raise ValueError("per_world_constraint_capacity must be positive")
 
 
 # Keep the launcher spelling discoverable without importing the training CLI.
@@ -139,10 +140,12 @@ def conservative_batch_contact_capacity(num_envs: int) -> int:
 
 
 def conservative_batch_constraint_capacity(num_envs: int) -> int:
-    """Per-world constraint capacity, intentionally independent of contacts."""
+    """Per-world Warp constraint capacity; never multiply it by batch size."""
     if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
         raise ValueError("num_envs must be a positive integer")
-    return max(2048, 128 * num_envs + 256)
+    # ``efc__force`` is (world, per_world_constraint_capacity).  Match the
+    # scalar MJX runtime rather than allocating an N-scaled capacity per row.
+    return 8192
 
 
 class DexHandRLMJXBatchEnv:
@@ -160,7 +163,9 @@ class DexHandRLMJXBatchEnv:
         self.batch = cfg.trajectories
         self.num_envs = self.batch.num_envs
         self.contact_capacity = cfg.contact_capacity or conservative_batch_contact_capacity(self.num_envs)
-        self.constraint_capacity = cfg.constraint_capacity or conservative_batch_constraint_capacity(self.num_envs)
+        self.per_world_constraint_capacity = (
+            cfg.per_world_constraint_capacity or conservative_batch_constraint_capacity(self.num_envs)
+        )
         if cfg.device == "cpu":
             import os
             os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -193,7 +198,6 @@ class DexHandRLMJXBatchEnv:
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
             raise RuntimeError(f"MJX did not select Warp implementation: {self.mjx_model.impl}")
-        self._assert_warp_abi()
         self._step_world = jax.jit(jax.vmap(lambda world: mjx.step(self.mjx_model, world)))
         self._forward_world = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
         self._build_static_contract(root)
@@ -203,12 +207,11 @@ class DexHandRLMJXBatchEnv:
         self._reset_observation_fn = jax.jit(self._reset_observation)
         self.state = self._initial_state
 
-    def _assert_warp_abi(self) -> None:
-        """Fail closed when the pinned global Warp contact fields are absent."""
-        probe = self.mjx.make_data(self.model, device=self.device, impl="warp", naconmax=self.contact_capacity, njmax=self.constraint_capacity)
+    def _assert_warp_abi(self, data: Any) -> None:
+        """Fail closed when the one allocated Warp data has no contact ABI."""
         # MJX's public ``Data.impl`` is an enum; Warp arrays live in the
         # explicit private implementation payload used by the pinned ABI.
-        impl = probe._impl
+        impl = data._impl
         required = ("contact__geom", "contact__worldid", "contact__dim", "contact__efc_address", "contact__friction", "contact__frame")
         missing = [name for name in required if not hasattr(impl, name)]
         if missing or not all(hasattr(impl, name) for name in ("nacon", "nefc", "efc__force")):
@@ -219,7 +222,8 @@ class DexHandRLMJXBatchEnv:
         self.qpos_ids = np.asarray([self.ids.joint_qpos_addr[name] for name in DEXHAND021PRO_FULL_DOF_NAMES], dtype=np.int32)
         self.dof_ids = np.asarray([self.ids.joint_dof_addr[name] for name in DEXHAND021PRO_FULL_DOF_NAMES], dtype=np.int32)
         self.actuator_ids = np.asarray([self.ids.actuator_ids[name] for name in DEXHAND021PRO_ACTUATOR_NAMES], dtype=np.int32)
-        self.route_upper = np.asarray([dexhand021pro_route_joint_upper_limits(mujoco, model)[index] for index in (6, 9, 12, 15)], dtype=np.float32)
+        self.route_joint_upper_limits = dexhand021pro_route_joint_upper_limits(mujoco, model)
+        self.route_upper = np.asarray([self.route_joint_upper_limits[index] for index in (6, 9, 12, 15)], dtype=np.float32)
         contact_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name) for name in DEXHAND021PRO_CONTACT_BODY_NAMES]
         tip_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name) for name in DEXHAND021PRO_FINGERTIP_BODY_NAMES]
         if min(contact_ids + tip_ids) < 0:
@@ -279,15 +283,36 @@ class DexHandRLMJXBatchEnv:
     def _build_reset_state(self) -> None:
         # This is the only make_data call.  Vmap creates independent dynamic
         # worlds while preserving one shared MJX-Warp model/contact ABI.
-        single = self.mjx.make_data(self.model, device=self.device, impl="warp", naconmax=self.contact_capacity, njmax=self.constraint_capacity)
-        template = self.jax.vmap(lambda _: single)(self.jp.arange(self.num_envs, dtype=self.jp.int32))
-        full0 = np.stack([active_to_full_dof(row[0]) for row in self.batch.hand_active]).astype(np.float32)
-        qpos = np.broadcast_to(np.asarray(single.qpos), (self.num_envs, single.qpos.shape[0])).copy()
-        qvel = np.zeros((self.num_envs, single.qvel.shape[0]), dtype=np.float32)
+        # Scalar reset routes each active reference through the model's true
+        # distal limits and then stores the resulting active target.  Starting
+        # from raw active data would make the first velocity-clamp recurrence
+        # disagree whenever a coupled target clips.
+        full0 = active_to_full_dof(
+            self.batch.hand_active[:, 0], route_joint_upper_limits=self.route_joint_upper_limits,
+        ).astype(np.float32)
+        reset_active = full_to_active_dof(full0).astype(np.float32)
+        qpos = np.broadcast_to(
+            np.asarray(self.mujoco.MjData(self.model).qpos), (self.num_envs, self.model.nq),
+        ).copy()
         qpos[:, self.qpos_ids] = full0
         qadr = self.ids.object_free_qpos_addr
         qpos[:, qadr:qadr + 3] = self.batch.object_pos[:, 0] + np.asarray([0, 0, self.cfg.object_reset_z_offset], np.float32)
         qpos[:, qadr + 3:qadr + 7] = self.batch.object_quat_xyzw[:, 0][:, [3, 0, 1, 2]]
+        self._host_initial_nefc = self._host_initial_constraint_high_water(full0, qpos)
+        self._minimum_per_world_constraint_capacity = self._host_initial_nefc + 64
+        if self.per_world_constraint_capacity < self._minimum_per_world_constraint_capacity:
+            raise ValueError(
+                "per_world_constraint_capacity is below the initial host nefc + 64 margin "
+                f"({self.per_world_constraint_capacity} < {self._minimum_per_world_constraint_capacity})"
+            )
+        single = self.mjx.make_data(
+            self.model, device=self.device, impl="warp", naconmax=self.contact_capacity,
+            njmax=self.per_world_constraint_capacity,
+        )
+        self._assert_warp_abi(single)
+        template = self.jax.vmap(lambda _: single)(self.jp.arange(self.num_envs, dtype=self.jp.int32))
+        initial_active = self.jp.asarray(reset_active)
+        qvel = np.zeros((self.num_envs, single.qvel.shape[0]), dtype=np.float32)
         ctrl = np.zeros((self.num_envs, self.model.nu), dtype=np.float32)
         ctrl[:, self.actuator_ids] = full0
         data = template.replace(qpos=self.jp.asarray(qpos), qvel=self.jp.asarray(qvel), ctrl=self.jp.asarray(ctrl))
@@ -296,13 +321,25 @@ class DexHandRLMJXBatchEnv:
             data = self._step_world(data)
         # Cached settled rows are the source of truth for indexed resets.
         self._settled_data = data
-        previous = self.jp.asarray(self.batch.hand_active[:, 0])
+        self._reset_previous_active = initial_active
+        previous = initial_active
         self._initial_state = _BatchState(
             data=data, frame=self.jp.ones((self.num_envs,), dtype=self.jp.int32),
             episode_count=self.jp.zeros((self.num_envs,), dtype=self.jp.int32), previous_active=previous,
             base_offset=self.jp.zeros((self.num_envs, 3), dtype=self.jp.float32),
             joint_offset=self.jp.zeros((self.num_envs, 16), dtype=self.jp.float32),
         )
+
+    def _host_initial_constraint_high_water(self, full0: np.ndarray, qpos: np.ndarray) -> int:
+        """Measure native initial-state constraints before accepting an override."""
+        maximum = 0
+        for world, full in enumerate(full0):
+            data = self.mujoco.MjData(self.model)
+            data.qpos[:] = qpos[world]
+            data.ctrl[self.actuator_ids] = full
+            self.mujoco.mj_forward(self.model, data)
+            maximum = max(maximum, int(data.nefc))
+        return maximum
 
     def _features(self, data: Any) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
         t = self._tables
@@ -392,7 +429,10 @@ class DexHandRLMJXBatchEnv:
     def _reset_mask(self, state: _BatchState, mask: Any) -> _BatchState:
         mask = self.jp.asarray(mask, dtype=bool)
         data = self.jax.tree_util.tree_map(lambda current, cached: self._replace_rows(current, cached, mask), state.data, self._settled_data)
-        reset_previous = self.jp.asarray(self.batch.hand_active[:, 0])
+        # Global Warp contact leaves are not row-owned.  Rebuild every derived
+        # field from the mixed qpos/qvel/ctrl batch before observing it.
+        data = self._forward_world(data)
+        reset_previous = self._reset_previous_active
         return _BatchState(data=data, frame=self.jp.where(mask, 1, state.frame), episode_count=self.jp.where(mask, 0, state.episode_count),
             previous_active=self.jp.where(mask[:, None], reset_previous, state.previous_active), base_offset=self.jp.where(mask[:, None], 0., state.base_offset), joint_offset=self.jp.where(mask[:, None], 0., state.joint_offset))
 
@@ -414,9 +454,23 @@ class DexHandRLMJXBatchEnv:
         self.state = self._reset_mask_fn(self.state, mask)
         return self._reset_observation_fn(self.state)
 
-    def telemetry(self) -> dict[str, np.ndarray]:
-        """Opt-in host snapshot; never used by the device transition path."""
-        return {"frame": np.asarray(self.state.frame), "episode_count": np.asarray(self.state.episode_count), "qpos": np.asarray(self.state.data.qpos), "qvel": np.asarray(self.state.data.qvel)}
+    def telemetry(self) -> dict[str, Any]:
+        """Opt-in host snapshot, including requested/actual Warp capacities."""
+        impl = self.state.data._impl
+        nefc = np.asarray(impl.nefc)
+        return {
+            "frame": np.asarray(self.state.frame), "episode_count": np.asarray(self.state.episode_count),
+            "qpos": np.asarray(self.state.data.qpos), "qvel": np.asarray(self.state.data.qvel),
+            "requested_global_contact_capacity": self.contact_capacity,
+            "requested_per_world_constraint_capacity": self.per_world_constraint_capacity,
+            "actual_contact_buffer_shape": tuple(np.asarray(impl.contact__geom).shape),
+            "actual_constraint_buffer_shape": tuple(np.asarray(impl.efc__force).shape),
+            "contact_high_water": int(np.asarray(impl.nacon).max(initial=0)),
+            "constraint_high_water_per_world": nefc,
+            "constraint_high_water": int(nefc.max(initial=0)),
+            "host_initial_nefc": self._host_initial_nefc,
+            "minimum_per_world_constraint_capacity": self._minimum_per_world_constraint_capacity,
+        }
 
     def close(self) -> None:
         self.state = None
