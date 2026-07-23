@@ -487,7 +487,8 @@ store the resolved contract as `physics_contract`, including parameter
 provenance and the model/runtime capacity distinction.
 
 Run the first-class production viewer with one environment, no checkpoint, and
-residual correction disabled as follows:
+residual correction disabled as follows. The canonical command is unchanged and
+uses the existing shared DexHand environment:
 
 ```bash
 DISPLAY=:1 PYTHONPATH="$PWD" \
@@ -497,6 +498,17 @@ DISPLAY=:1 PYTHONPATH="$PWD" \
   --speed 0.25 --use_residual false --terminal true
 ```
 
+The viewer defaults explicitly to the CPU-only `mujoco-native` runtime. It
+advances the same generated scene and immutable `physics_contract` through the
+same controller, reset and per-backend settling, ordered velocity/position
+filters, observation/reward/termination logic, frame schedule, reference
+targets, and state-dependent 22-to-26 target routing as the production
+environment. Viewer telemetry prints `backend=mujoco-native` or
+`backend=mjx-warp`. Training, batched execution, and exact reference traces keep
+the unchanged default and authoritative `mjx-warp` backend. Add
+`--runtime-backend mjx-warp` only when a slow, diagnostic display of that exact
+runtime is needed; it is not the interactive default.
+
 The standalone viewer is graphical and requires `DISPLAY`; graphical mode is
 implicit. It sends zero 22D actions through `DexHandRLMJXEnv`; with residual
 correction disabled, the environment follows its reference targets through the
@@ -504,10 +516,42 @@ production control path. `--terminal true` uses the `0.1 m` object-position
 reset threshold after DexHandRL's task-specific 130-frame early phase; that
 130-frame grace period remains unchanged. The viewer loops through reset
 trajectories by default and runs at `0.25x` control speed by default. The native
-passive viewer mirrors completed `qpos`, `qvel`, `ctrl`, and simulation time,
-calls forward kinematics only for rendering, and never steps physics.
-`--checkpoint` is rejected because this command is the no-checkpoint zero-action
-path. Add, for example, `--max-steps 500 --no-loop` for a bounded run.
+viewer renders the state advanced by native MuJoCo; the MJX diagnostic viewer
+passively mirrors completed `qpos`, `qvel`, `ctrl`, and simulation time without
+stepping physics itself. `--checkpoint` is rejected because this command is the
+no-checkpoint zero-action path. Add, for example, `--max-steps 500 --no-loop`
+for a bounded run.
+
+Compare the fixed cube1/action02/sequence0, residual-off native and MJX backends
+for 50 control steps with:
+
+```bash
+python tools/compare_dexhandrl_backends.py --steps 50 \
+  --output outputs/dexhandrl_backend_comparison/cube1_action02_sequence0.json
+```
+
+The command writes a human-readable JSON report and a compressed NPZ beside it.
+The JSON records identity, provenance, timing, reset and post-step metrics,
+per-observation-slice divergence, and the NPZ path/SHA256; the NPZ preserves the
+paired raw arrays for independent analysis. The comparison establishes shared
+inputs and quantifies divergence; it does not make native MuJoCo numerically
+equivalent to MJX-Warp. MJX-Warp remains the authority for training and exact
+reference traces. In the fixed v2 artifact, reference targets and frames are
+exact; state-dependent corrected/applied active targets differ by at most
+`4.66e-10`; post-step qpos RMSE/max are `3.20e-4`/`3.39e-3`; object-position
+maximum error is `3.31e-6 m`; and processed-observation RMSE/max are
+approximately `0.0287`/`0.932`, dominated by contact slices. Exact reward over
+this early reference-only phase is near-trivial and is not equivalence evidence.
+Each backend reset already performs its own configured settle before its reset
+row is captured, so reset and post-step divergence are reported separately.
+
+Measured steady full-`env.step` median latency was about `0.696 ms` for native
+MuJoCo versus `295 ms` for MJX-Warp on CPU (about `424x`). A visible 300-step
+native run at `--speed 0.25` completed at interactive speed and exited 0. The
+hand collision hulls are high-complexity (22 hulls, 9,850 vertices, 19,612
+faces), but disabling contact changed CPU step time by only about four percent;
+the primary interactive latency mechanism was the single-world MJX execution
+path.
 
 The skrl-facing environment entry point is
 `sim.dexhandrl.skrl_env.DexHandRLMJXEnv`. It exposes the IsaacGym-compatible
@@ -620,7 +664,7 @@ time. Each action adds `1/633` to policy episode time. The production
 Gym's PhysX `substeps=2` and numeric finger `300/20` gains do not transfer
 across simulator actuator semantics. MuJoCo records the authoritative raw Lance reference, pre-coupling corrected target,
 and applied target after Gym's ordered `velocity_clamp` then `position_clamp` active-space
-filters. Status: migration candidate; native behavioral parity pending (see seq1 acceptance status below).
+filters. Status: native viewer accepted for interactive visualization; numerical backend equivalence is not claimed, and checkpoint migration parity remains pending (see seq1 acceptance status below).
 
 #### Preregistered exact-Gym control replay (source-conditioned)
 
@@ -721,7 +765,7 @@ synthetic 61/62 labels are one frame early, so they are not alignment evidence.
 Fresh v3 traces use Gym's live `current_frame_idx` rather than synthesized
 frame labels.
 
-DexHandRL migration status: migration candidate; native behavioral parity pending.
+DexHandRL migration status: native viewer accepted for interactive visualization; MJX-Warp remains authoritative and native checkpoint migration parity remains pending.
 
 Acceptance: pure MuJoCo observations with no Gym trace, stable grasp-lift-place without ejection. Numerical trajectory identity is not required.
 
