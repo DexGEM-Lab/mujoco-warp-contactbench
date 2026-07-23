@@ -8,6 +8,7 @@ import pytest
 jax = pytest.importorskip("jax")
 
 from sim.manorl.device_runtime import (
+    extract_mjx_physical_features,
     jax_to_torch_cuda,
     reduce_warp_contacts,
     torch_to_jax_cuda,
@@ -47,6 +48,32 @@ def _jitted_reducer(fixture: dict[str, object], *, compute_dtype: str = "float32
     dynamic = {key: value for key, value in fixture.items() if key not in static}
     fn = jax.jit(lambda **values: reduce_warp_contacts(**values, **static))
     return fn(**dynamic)
+
+
+def test_jitted_physical_feature_gather_normalizes_xyzw_and_keeps_only_required_fields() -> None:
+    rng = np.random.default_rng(52)
+    batch, nq, nv, nbody = 3, 40, 38, 26
+    qpos = rng.normal(size=(batch, nq)).astype(np.float32)
+    qvel = rng.normal(size=(batch, nv)).astype(np.float32)
+    xpos = rng.normal(size=(batch, nbody, 3)).astype(np.float32)
+    xquat = rng.normal(size=(batch, nbody, 4)).astype(np.float32)
+    keypoint_ids = tuple(range(3, 19))
+    tips = (15, 3, 6, 9, 12)
+    offsets = rng.normal(size=(5, 3)).astype(np.float32)
+    fn = jax.jit(lambda q, v, p, r: extract_mjx_physical_features(
+        qpos=q, qvel=v, xpos=p, xquat=r,
+        hand_qpos_start=2, hand_dof=28, object_body_id=22,
+        object_qvel_address=30, keypoint_body_ids=keypoint_ids,
+        fingertip_keypoint_ids=tips, fingertip_local_offsets=offsets,
+    ))
+    actual = fn(qpos, qvel, xpos, xquat)
+    expected_xyzw = xquat[:, keypoint_ids][:, :, (1, 2, 3, 0)]
+    expected_xyzw /= np.linalg.norm(expected_xyzw, axis=-1, keepdims=True)
+    np.testing.assert_allclose(np.asarray(actual.mano_dof_pos), qpos[:, 2:30], atol=2e-6)
+    np.testing.assert_allclose(np.asarray(actual.hand_keypoint_positions), xpos[:, keypoint_ids], atol=2e-6)
+    np.testing.assert_allclose(np.asarray(actual.hand_keypoint_orientations_xyzw), expected_xyzw, atol=2e-6)
+    np.testing.assert_allclose(np.linalg.norm(np.asarray(actual.object_orientation_xyzw), axis=1), 1.0, atol=2e-6)
+    assert bool(actual.valid)
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:
