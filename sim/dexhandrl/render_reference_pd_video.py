@@ -193,7 +193,7 @@ def render_video(args: argparse.Namespace) -> None:
                 route_joint_upper_limits=route_joint_upper_limits,
             )
             dx = dx.replace(ctrl=jnp.asarray(make_ctrl_vector(full, ids.actuator_ids, model.nu), dtype=dx.ctrl.dtype))
-            for _ in range(args.substeps):
+            for _ in range(physics.substeps):
                 dx = step(mx, dx)
 
             if local_frame % args.render_every != 0:

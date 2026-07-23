@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from sim.dexhandrl.contracts import DexHandPhysicsConfig
+import pytest
+
+from sim.dexhandrl.contracts import DexHandPhysicsConfig, LEGACY_PHYSICS_FIELDS
+from sim.dexhandrl import batch_reference_pd
 from sim.dexhandrl.reference_pd_replay import _physics_from_args as replay_physics
 from sim.dexhandrl.render_reference_pd_video import _physics_from_args as render_physics
 from tools import trace_dexhandrl_mujoco as trace
@@ -67,3 +70,52 @@ def test_trace_parser_resolves_profile_and_source_validates_before_mjx_upload(tm
     source = Path(trace.__file__).read_text(encoding="utf-8")
     assert "physics=physics" in source
     assert '"physics_contract": physics.record()' in source
+
+
+def test_replay_rejects_mixed_canonical_and_legacy_namespace() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        replay_physics(_replay_args(physics=DexHandPhysicsConfig()))
+
+
+def test_batch_forwards_only_canonical_physics_to_replay(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: list[argparse.Namespace] = []
+
+    def fake_replay(replay_args: argparse.Namespace) -> dict[str, object]:
+        captured.append(replay_args)
+        return {
+            "object_tracking": {
+                "actual_lift_m": 0.0, "target_lift_m": 0.0, "max_error_m": 0.0,
+                "mean_error_m": 0.0, "first_error_gt_10cm_step": -1,
+            },
+            "row_id": 0, "uuid": "id", "object_name": "cube1", "action": "01",
+            "start_frame": 0, "end_frame": 0, "movement_start_frame": 0, "movement_end_frame": 0,
+            "hand_object_contact_frames": 0, "hand_object_contact_count_max": 0,
+        }
+
+    monkeypatch.setattr(batch_reference_pd, "replay", fake_replay)
+    args = argparse.Namespace(
+        lance=tmp_path / "input.lance", object="cube1", action="01", sequence_start=0, max_sequences=1,
+        device="cpu", max_frames=1, start_frame=None, pre_contact_frames=0, object_reset_z_offset=0.01,
+        dt=0.01, substeps=3, settle_frames=2, base_pos_kp=5000, base_pos_kv=500, base_pos_force=500,
+        base_rot_kp=10000, base_rot_kv=125, base_rot_force=100, finger_kp=15, finger_kv=0, finger_force=50,
+        hand_friction="0.5 0.01 0.001", object_friction="0.5 0.01 0.001", ground_friction="0.5 0.5 0",
+        collision="disable_within_finger", naconmax=8192, njmax=8192, reference_joint_source="active",
+        progress_interval=0, isaac_source_root=tmp_path, isaacgym_metrics=None, output_dir=tmp_path / "outputs",
+        summary=tmp_path / "summary.json", keep_trajectory=False,
+    )
+    batch_reference_pd.run_batch(args)
+
+    assert len(captured) == 1
+    forwarded = captured[0]
+    assert forwarded.physics.substeps == 3
+    assert not (set(vars(forwarded)) & LEGACY_PHYSICS_FIELDS)
+
+
+def test_canonical_substeps_own_replay_and_renderer_runtime_loops() -> None:
+    physics = DexHandPhysicsConfig(substeps=3)
+    assert replay_physics(argparse.Namespace(physics=physics)) is physics
+    replay_source = Path("sim/dexhandrl/reference_pd_replay.py").read_text(encoding="utf-8")
+    render_source = Path("sim/dexhandrl/render_reference_pd_video.py").read_text(encoding="utf-8")
+    assert "args.settle_frames * physics.substeps" in replay_source
+    assert replay_source.count("for _ in range(physics.substeps):") == 1
+    assert "for _ in range(physics.substeps):" in render_source

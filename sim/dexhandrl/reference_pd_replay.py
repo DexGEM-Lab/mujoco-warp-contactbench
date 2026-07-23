@@ -148,16 +148,15 @@ def _finger_force_from_body_force(body_force: dict[str, float]) -> dict[str, flo
 
 def _physics_from_args(args: argparse.Namespace):
     """Resolve the replay CLI's historical physical flags once at its boundary."""
-    if getattr(args, "physics", None) is not None:
-        return resolve_physics_config(args.physics)
     return resolve_physics_config(
-        dt=args.dt, substeps=args.substeps,
-        base_pos_kp=args.base_pos_kp, base_pos_kv=args.base_pos_kv, base_pos_force=args.base_pos_force,
-        base_rot_kp=args.base_rot_kp, base_rot_kv=args.base_rot_kv, base_rot_force=args.base_rot_force,
-        finger_kp=args.finger_kp, finger_kv=args.finger_kv, finger_force=args.finger_force,
-        hand_friction=args.hand_friction, object_friction=args.object_friction,
-        ground_friction=args.ground_friction, collision=args.collision,
-        naconmax=args.naconmax, njmax=args.njmax,
+        getattr(args, "physics", None),
+        dt=getattr(args, "dt", None), substeps=getattr(args, "substeps", None),
+        base_pos_kp=getattr(args, "base_pos_kp", None), base_pos_kv=getattr(args, "base_pos_kv", None), base_pos_force=getattr(args, "base_pos_force", None),
+        base_rot_kp=getattr(args, "base_rot_kp", None), base_rot_kv=getattr(args, "base_rot_kv", None), base_rot_force=getattr(args, "base_rot_force", None),
+        finger_kp=getattr(args, "finger_kp", None), finger_kv=getattr(args, "finger_kv", None), finger_force=getattr(args, "finger_force", None),
+        hand_friction=getattr(args, "hand_friction", None), object_friction=getattr(args, "object_friction", None),
+        ground_friction=getattr(args, "ground_friction", None), collision=getattr(args, "collision", None),
+        naconmax=getattr(args, "naconmax", None), njmax=getattr(args, "njmax", None),
     )
 
 
@@ -236,7 +235,7 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
     ctrl = make_ctrl_vector(initial_full, ids.actuator_ids, model.nu)
     dx = dx.replace(ctrl=jnp.asarray(ctrl, dtype=dx.ctrl.dtype))
     dx = forward(mx, dx)
-    for _ in range(args.settle_frames * args.substeps):
+    for _ in range(args.settle_frames * physics.substeps):
         dx = step(mx, dx)
     jax.block_until_ready(dx.qpos)
 
@@ -287,7 +286,7 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
         frame_body_force_max = {name: 0.0 for name in DEXHAND021PRO_CONTACT_BODY_NAMES}
         frame_object_force_sum = 0.0
         frame_object_force_max = 0.0
-        for _ in range(args.substeps):
+        for _ in range(physics.substeps):
             dx = step(mx, dx)
             substep_summary = _contact_summary(
                 jax,
