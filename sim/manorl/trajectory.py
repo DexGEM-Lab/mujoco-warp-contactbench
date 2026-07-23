@@ -303,6 +303,12 @@ class TrajectorySelection:
         ObjectActionPair(self.object_type, action_id)
         if self.selector is not None:
             parse_trajectory_selector(self.selector)
+        if self.expected_dataset_version is not None and (
+            not isinstance(self.expected_dataset_version, int)
+            or isinstance(self.expected_dataset_version, bool)
+            or self.expected_dataset_version < 1
+        ):
+            raise ValueError("expected_dataset_version must be a positive integer")
         if self.pre_padding < 0 or self.post_padding < 0:
             raise ValueError("trajectory padding must be non-negative")
         normalize_hand_side(self.hand_side)
@@ -1430,7 +1436,14 @@ def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: 
         import lance
     except ImportError as exc:
         raise RuntimeError("pylance is required to assign ManoRL trajectories") from exc
-    dataset = lance.dataset(str(selection.dataset_path))
+    dataset = lance.dataset(
+        str(selection.dataset_path),
+        **(
+            {"version": selection.expected_dataset_version}
+            if selection.expected_dataset_version is not None
+            else {}
+        ),
+    )
     version = int(getattr(dataset, "version", -1))
     if selection.expected_dataset_version is not None and version != selection.expected_dataset_version:
         raise ValueError(f"dataset version {version} != requested {selection.expected_dataset_version}")

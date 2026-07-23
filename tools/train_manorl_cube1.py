@@ -189,6 +189,7 @@ class TrainingBudget:
     gesture: str = "01"
     trajectory_selector: str | None = None
     dataset_path: str = DATASET_PATH
+    dataset_version: int | None = None
     hand_side: str = "auto"
     residual_enabled: bool = True
     use_film: bool = True
@@ -1929,6 +1930,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         gesture=budget.gesture,
         selector=budget.trajectory_selector,
         dataset_path=Path(budget.dataset_path),
+        expected_dataset_version=budget.dataset_version,
         hand_side=budget.hand_side,
     )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
@@ -2252,6 +2254,11 @@ def main(argv: list[str] | None = None) -> int:
         help="pinned Lance dataset path (default: repository contract path)",
     )
     parser.add_argument(
+        "--dataset-version",
+        type=int,
+        help="open this exact historical Lance version instead of the latest version",
+    )
+    parser.add_argument(
         "--hand-side",
         choices=("auto", "both", "right", "left"),
         default="auto",
@@ -2381,6 +2388,7 @@ def main(argv: list[str] | None = None) -> int:
             gesture=gesture,
             selector=selector,
             dataset_path=args.dataset_path,
+            expected_dataset_version=args.dataset_version,
             hand_side=args.hand_side,
         )
     except ValueError as exc:
@@ -2470,6 +2478,7 @@ def main(argv: list[str] | None = None) -> int:
                 None if selector is None else parsed_selection.canonical_selector
             ),
             dataset_path=str(args.dataset_path.resolve()),
+            dataset_version=args.dataset_version,
             hand_side=args.hand_side,
             residual_enabled=args.use_residual,
             use_film=args.film,
