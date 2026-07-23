@@ -349,6 +349,50 @@ _OBJECT_RUNTIMES = {
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
     ),
+    "mayonnaisebottle": ObjectRuntime(
+        object_type="mayonnaisebottle",
+        link_name="mayonnaisebottle_link",
+        body_name="mayonnaisebottle",
+        free_joint_name="mayonnaisebottle_free",
+        source_mesh_filename="mayonnaisebottle.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "mayonnaisebottle.urdf",
+        collision_mesh_paths=tuple(
+            ALL_ASSETS_SIM_ROOT
+            / "for_math_retaregeting"
+            / "mayonnaisebottle"
+            / "coacd"
+            / f"coacd_convex_piece_{index}.obj"
+            for index in range(2)
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 2,
+        rgba="0.90 0.85 0.25 1",
+        geometry_type="irregular",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "mayonnaisebottle.urdf",
+                "5ae0c35b959e0b06a0fff0036be90618ba26007f3a51cccc0f2c3740340c996f",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "mayonnaisebottle"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "3a3740489948281841b40fca2dc4da4e13d37033726bfe614513679ea04f2b66",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "mayonnaisebottle"
+                / "coacd"
+                / "coacd_convex_piece_1.obj",
+                "d46148d541b3754c76751c0204b8b5afb89701ad0279933a295007c3f840ae92",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
     "bowl": ObjectRuntime(
         object_type="bowl",
         link_name="bowl_link",
