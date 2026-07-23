@@ -227,6 +227,7 @@ def test_jitted_device_reward_and_termination_match_numpy_contract() -> None:
     device_term = jax.jit(lambda: check_device_termination(object_position=state["object_position"], target_position=state["target_object_position"], progress=progress, trajectory_lengths=lengths, early_mask=early, max_deviation_distance=1.2, deviation_penalty=0.7))()
     np.testing.assert_array_equal(np.asarray(device_term.reset), host_term.reset)
     np.testing.assert_array_equal(np.asarray(device_term.deviation_reset), host_term.deviation_reset)
+    np.testing.assert_array_equal(np.asarray(device_term.reason_code), host_term.reason_code)
     host = compute_rewards(RewardState(**state), compatibility=SOURCE_ALIGNED_COMPATIBILITY, termination=host_term, config=RewardConfig())
     device = jax.jit(lambda: compute_device_reward_28(**state, early_phase_steps=30, termination=device_term, config=RewardConfig()))()
     for field in ("total", "distance_x", "distance_y", "distance_z", "rotation", "contact", "distance_gate", "object_stability", "survival", "deviation_penalty"):
@@ -247,6 +248,39 @@ def test_device_counters_match_partial_delayed_reset_order() -> None:
     np.testing.assert_allclose(np.asarray(actual.episode_returns), np.asarray((1.1, 0.2, 3.3)), atol=2e-6)
     np.testing.assert_array_equal(np.asarray(actual.reset_mask), reset)
     assert int(np.asarray(actual.control_call)) == 10
+
+
+def test_device_transition_matches_numpy_across_delayed_partial_reset_cycles() -> None:
+    """Pin reset-before-next-reward boundaries over several mixed worlds."""
+    batch = 3
+    progress = np.zeros(batch, np.int64)
+    steps = np.zeros(batch, np.int64)
+    returns = np.zeros(batch, np.float32)
+    pending = np.zeros(batch, bool)
+    call = np.asarray(0, np.int64)
+    lengths = np.asarray((2, 5, 3), np.int64)
+    for cycle, positions in enumerate((
+        ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (2.0, 0.0, 0.0)),
+        ((2.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+        ((0.0, 0.0, 0.0),) * 3,
+    )):
+        pre_progress = progress + 1
+        pre_steps = steps + 1
+        pre_steps[progress == 0] = 0
+        progress_after_reset = pre_progress.copy(); progress_after_reset[pending] = 0
+        steps_after_reset = pre_steps.copy(); steps_after_reset[pending] = 0
+        host = check_termination(object_position=np.asarray(positions), target_position=np.zeros((batch, 3)), progress=progress_after_reset, trajectory_lengths=lengths, early_mask=np.zeros(batch, bool), max_deviation_distance=1.0, deviation_penalty=0.25)
+        device_term = jax.jit(lambda p=np.asarray(positions), q=progress_after_reset: check_device_termination(object_position=p, target_position=np.zeros((batch, 3)), progress=q, trajectory_lengths=lengths, early_mask=np.zeros(batch, bool), max_deviation_distance=1.0, deviation_penalty=0.25))()
+        np.testing.assert_array_equal(np.asarray(device_term.reset), host.reset)
+        np.testing.assert_array_equal(np.asarray(device_term.reason_code), host.reason_code)
+        reward = np.full(batch, cycle + 0.125, np.float32)
+        actual = jax.jit(lambda: advance_device_task_counters(progress=progress, trajectory_steps=steps, episode_returns=returns, pending_reset=pending, reward_total=reward, next_reset=device_term.reset, control_call=call))()
+        expected_returns = returns.copy(); expected_returns[pending] = 0; expected_returns += reward
+        np.testing.assert_array_equal(np.asarray(actual.progress), progress_after_reset)
+        np.testing.assert_array_equal(np.asarray(actual.trajectory_steps), steps_after_reset)
+        np.testing.assert_allclose(np.asarray(actual.episode_returns), expected_returns, atol=2e-6)
+        progress, steps, returns, pending, call = (np.asarray(actual.progress), np.asarray(actual.trajectory_steps), np.asarray(actual.episode_returns), np.asarray(actual.reset_mask), np.asarray(actual.control_call))
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:

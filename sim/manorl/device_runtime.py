@@ -30,6 +30,7 @@ class DeviceTermination(NamedTuple):
     reset: Any
     deviation_reset: Any
     deviation_penalty: Any
+    reason_code: Any
 
 
 class DeviceReward(NamedTuple):
@@ -314,7 +315,12 @@ def check_device_termination(
     deviation = jp.linalg.norm(object_position - target_position, axis=1) > max_deviation_distance
     deviation = deviation & ~early.astype(bool)
     reset = (progress >= lengths - 1) | deviation
-    return DeviceTermination(reset, deviation, jp.where(deviation, -deviation_penalty, 0.0))
+    return DeviceTermination(
+        reset,
+        deviation,
+        jp.where(deviation, -deviation_penalty, 0.0),
+        jp.where(deviation, 2, jp.where(reset, 1, 0)).astype(jp.int32),
+    )
 
 
 def compute_device_reward_28(
