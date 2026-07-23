@@ -555,9 +555,9 @@ time. Each action adds `1/633` to policy episode time. The production
 Gym's PhysX `substeps=2` and numeric finger `300/20` gains do not transfer
 across simulator actuator semantics. MuJoCo records the authoritative raw Lance reference, pre-coupling corrected target,
 and applied target after Gym's ordered `velocity_clamp` then `position_clamp` active-space
-filters. Runtime parity acceptance remains pending a fresh cross-simulator trace.
+filters. Status: migration candidate; native behavioral parity pending (see seq1 acceptance status below).
 
-#### Preregistered exact-Gym control replay
+#### Preregistered exact-Gym control replay (source-conditioned)
 
 Use a validated Gym trace as the source for a causally bounded replay; this
 injects its per-decision offsets and action stages into MuJoCo while leaving
@@ -581,7 +581,7 @@ above `0.15 m` with lift below `0.10 m` indicates physics/contact-dominant
 divergence; other outcomes are mixed. These are diagnostic interpretations,
 not runtime acceptance claims.
 
-#### Action-only intervention diagnosis
+#### Action-only intervention diagnosis (diagnostic)
 
 Use this to hold the action sequence to aligned Gym `final_action` vectors while
 measuring what live MuJoCo observations, checkpoint policy means, residual targets,
@@ -604,7 +604,7 @@ post-physics state. This differs from full control replay: `--control-trace`
 also imports source offsets and target stages, whereas `--action-trace` leaves
 MuJoCo's complete action-to-target path live.
 
-#### Selective contact-observation diagnosis
+#### Selective contact-observation diagnosis (diagnostic)
 
 This diagnosis replaces three aligned Gym contact slices only at the MuJoCo
 policy-input boundary. The residual/control path, action, targets, filters, and
@@ -656,24 +656,21 @@ synthetic 61/62 labels are one frame early, so they are not alignment evidence.
 Fresh v3 traces use Gym's live `current_frame_idx` rather than synthesized
 frame labels.
 
-Current seq1 acceptance status:
+DexHandRL migration status: migration candidate; native behavioral parity pending.
 
-- Reference PD (`use_residual=false`) is at the same object-position-error
-  scale: about 0.009 m mean in IsaacGym and 0.011 m in MuJoCo over the shared
-  pre-lift window (Lance frames 62–307). The historical 632-frame summary
-  used v2's synthetic labels and is structural-only evidence; this is
-  an error-scale comparison, not a claim that either pure-PD run completes the
-  lift.
-- The converted 461D rl-games checkpoint reproduces recorded policy actions
-  from either backend to below `1e-6`, including RunningMeanStd, PointNet, FiLM,
-  and actor weights.
-- The residual-policy physics result is not yet accepted. Historical v2
-  smoke reports labeled 632 frames with about 0.022 m mean and 0.074 m max
-  object error, but those labels are not aligned. The final MuJoCo mapping
-  still crosses the default 0.1 m threshold near frame 303. A
-  relaxed-threshold diagnostic run reported 632 synthetically labeled frames
-  and reached about 0.282 m during the lift because thumb/index contact was
-  lost.
+Acceptance: pure MuJoCo observations with no Gym trace, stable grasp-lift-place without ejection. Numerical trajectory identity is not required.
+
+Seq1 settled claims (row 22, UUID `c21d4fa5-185a-5ea7-aa22-e1d34beae42f`, frame contract: 61 reset / 62–692 decisions / 63–693 states):
+
+- Accepted runtime fixes: settle1/postfilters, source URDF COM+collision origin, local canonical point-cloud sampling/transform, checkpoint/RMS/action chain, native viewer.
+- Source-conditioned full-control replay (`--control-trace`, COM fixed, `--hand-friction '3 2 2'`): max lift 0.2859 m, movement position RMSE 0.03736 m, stable final placement (~0.0182 m final error). Validates the MuJoCo plant when full routed controls are supplied; not native policy output.
+- Native checkpoint closed-loop from MuJoCo observations (no trace): max lift 0.0261 m, movement RMSE 0.1818 m. Not accepted.
+- Contact+point-cloud observation diagnostic (`--observation-trace`, frames 421–470): policy error reduced 77.25%, lift 0.3119 m, but final error 0.205 m with ejection. Gym trace dependence confirmed; diagnostic only, not an acceptance result.
+- Action-only exact Gym `final_action` (`--action-trace`): active target applied exactly, but full finger target RMSE 0.0626 m and final error 0.5125 m. Cause: the 22→26 routed distal target depends on physical distal qpos; the same action is under-specified across plants. Mapping implementation matches Gym; this is expected simulator state feedback, not an index bug.
+- No production defaults changed to kp4000/kp7.5/source gains. Current defaults: substeps 10, finger kp/kv 15/0, base rotation 10000/125/100, hand friction 0.5. `--hand-friction '3 2 2'` remains diagnostic.
+- The converted 461D rl-games checkpoint reproduces recorded policy actions from either backend to below `1e-6`, including RunningMeanStd, PointNet, FiLM, and actor weights.
+- Reference PD (`use_residual=false`): object-position error ~0.009 m mean (IsaacGym) and ~0.011 m (MuJoCo) over the pre-lift window (frames 62–307); error-scale comparison only, not a lift claim.
+- Inertial RPY: source URDF fixed-axis RPY offsets produce non-identity inertial frames; mass/inertia remain expressed about the source COM frame.
 
 The diagnostic overrides `--hand-self-collision-mode`,
 `--object-position-terminal-threshold`, and `--object-friction` are explicit.
