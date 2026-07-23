@@ -159,6 +159,8 @@ def test_workspace_rejects_concurrent_reentry() -> None:
 
 def test_warp_device_ordinal_requires_jax_device_id() -> None:
     workspace = _fresh_workspace_module()
+    assert workspace.warp_device_ordinal(SimpleNamespace(id=0)) == 0
     assert workspace.warp_device_ordinal(SimpleNamespace(id=3)) == 3
+    assert workspace.CcdWorkspaceSpec(0, 8, 16, 1, 1).device_ordinal == 0
     with pytest.raises(RuntimeError, match="cannot derive"):
         workspace.warp_device_ordinal(SimpleNamespace(id="3"))

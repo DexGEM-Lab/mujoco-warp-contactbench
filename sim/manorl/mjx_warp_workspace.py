@@ -25,7 +25,13 @@ class CcdWorkspaceSpec:
     nmaxmeshdeg: int
 
     def __post_init__(self) -> None:
-        for name in ("device_ordinal", "naccdmax", "epa_iterations"):
+        if (
+            not isinstance(self.device_ordinal, int)
+            or isinstance(self.device_ordinal, bool)
+            or self.device_ordinal < 0
+        ):
+            raise ValueError("device_ordinal must be a non-negative integer")
+        for name in ("naccdmax", "epa_iterations"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
