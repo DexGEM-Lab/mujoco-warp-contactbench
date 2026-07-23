@@ -1,45 +1,29 @@
 # Epistemic Record
 
-## Current model
+## Final causal model
 
-Aligned Gym observation values are a major causal driver of checkpoint action divergence, but contact plus hand-frame point cloud are insufficient for stable trajectory completion. In the full visible actual-checkpoint intervention, importing those slices reduced policy-mean RMSE over decisions `421..470` from `0.313735` to `0.071386` (`77.246%`) and produced `0.311934 m` maximum lift. The rollout still became inaccurate and dynamically unstable: object-position error exceeded `0.05 m` at frame `403`, post-decision-190 angular and linear speeds reached `28.825 rad/s` and `1.1025 m/s`, and late position RMSE and final position error were both `0.2053 m`. Only two of seven preregistered criteria passed (OPS, `2026-07-23T06:08:10Z`).
+The native Gym checkpoint does not transfer behaviorally from Isaac Gym to MuJoCo by replaying its 22-dimensional action alone. The visible action-only trace imports Gym `final_action` exactly while retaining the local policy mean as a counterfactual diagnostic (RMSE `0.29145`). Its locally computed applied active targets match Gym to numerical precision (overall RMSE `2.52e-9`), yet its full 26-DoF finger targets differ by `0.06260 rad` RMSE. The resulting rollout lifts the object `0.27726 m` but fails the task: movement position RMSE is `0.31585 m`, post-decision-190 angular speed reaches `26.21 rad/s`, and late/final position error is `0.51252 m` (OPS, `2026-07-23T06:31:42Z`). Gym action is therefore an under-specified cross-simulator control interface.
 
-The causal boundary is now narrower than observation mismatch. Exact full-control replay succeeds under the same preserved object COM, hand friction, default gains, and live MuJoCo physics, with movement position RMSE `0.03736 m` and maximum lift `0.2859 m`. Thus MuJoCo can execute the Gym trajectory when given the complete applied control. The unresolved gap lies between policy output and the full applied target or in the state-dependent physical evolution downstream of that target (OPS, `2026-07-23T06:08:10Z`).
+The causal mechanism is plant-dependent distal routing. Both the Gym source and the MuJoCo implementation compute the same full-target mapping `R(active target, current physical distal qpos)`, and their mapping formulas agree. Because PhysX and MuJoCo produce different joint response and contact evolution, the current distal qpos supplied to `R` differs. The same 22-dimensional active target consequently expands into different 26-dimensional full finger targets, which then changes contact feedback and subsequent policy state. Routed-joint traces make this state difference concrete: MuJoCo often tracks middle/ring joint 3 nearly exactly while Gym lags by approximately `0.02–0.04 rad`.
 
-The next discriminating intervention imports only Gym `final_action`. MuJoCo observations and every downstream stateful transformation remain live. This separates policy-action divergence from cumulative offsets, residual correction, postfilters, full-target routing, actuators, contacts, and physics. The local policy mean remains recorded as the counterfactual diagnostic, while the imported action is the sole intervention (OPS, `2026-07-23T06:08:10Z`).
+Exact full-control, source-conditioned replay succeeds on the same corrected MuJoCo plant, with movement position RMSE `0.03736 m` and maximum lift `0.2859 m`. This demonstrates that the object/contact plant can execute the source trajectory when the missing routed target is supplied. The action-only failure is therefore caused by omitted routing state/full control rather than action indexing, target ordering, or an inability of MuJoCo to realize the grasp.
 
-## Ruled out
+Offline routing alternatives do not justify changing semantics. Using current physical state gives full-target RMSE `0.05491`; previous-target recurrence worsens it to `0.05705`; a stateless/raw-reference construction gives `0.05730`. A semantic rewrite is rejected without evidence that it represents the source controller.
 
-- Wrong object inertial origin caused the earlier open-loop rotation/ejection. Preserving the `7.48 mm` URDF COM offset corrected it and enabled successful exact-control lift.
-- Checkpoint loading, observation normalization, network mapping, and policy execution do not explain stored policy-mean divergence; offline network replay is numerically faithful.
-- Point-cloud sampling order or local geometry does not explain point-cloud mismatch; canonical Gym and MuJoCo samples agree at nanometer scale. The live difference encodes relative hand/object pose divergence.
-- Observation mismatch being incidental is ruled out. Imported contact plus point-cloud values reduce late policy-mean RMSE by `77.246%` and restore strong lift.
-- Contact plus point cloud being sufficient for trajectory stability is ruled out. Despite improved action agreement and `0.311934 m` lift, the intervention passes only two of seven criteria and ends with `0.2053 m` position error.
-- General MuJoCo inability to realize the desired trajectory is ruled out at the tested COM/friction/default-gain setting: exact full-control replay achieves `0.03736 m` movement position RMSE and `0.2859 m` lift.
-- Hidden late live contact force as the sole ejection cause, scalar finger proportional stiffness, direct Gym finger gains, direct Gym base-rotation gains, and the inverse-error `base_rot_kp=4000` estimate remain rejected by prior diagnostics.
+## Closed branches
 
-## Preregistered next intervention
+- Action/checkpoint indexing, normalization, network mapping, and policy execution.
+- Reference, residual, cumulative-offset, and active-space postfilter formulas.
+- Full-target mapping formula mismatch.
+- General MuJoCo inability to execute the trajectory.
+- Scalar finger gain transfer and scalar base-rotation gain search.
+- Blind observation-slice replay as a parity solution.
+- Previous-target recurrence and stateless routing rewrites.
 
-Run one complete 631-decision visible actual-checkpoint trace with `env=1`. Import only Gym `final_action` at aligned frames. Keep all of the following live and local to MuJoCo:
+## Repository status
 
-- observation generation;
-- cumulative base and joint offsets;
-- reference target and residual/correction processing;
-- velocity and position postfilters;
-- full-target construction and state-dependent routing;
-- actuator, contact, and physics evolution.
+**Migration candidate / behavioral parity pending.** The expected simulator gap is numerically characterized and acceptable as a known migration boundary. Exact-control source-conditioned replay is validated. Native checkpoint grasp-lift-place is not behaviorally accepted and remains a known limitation.
 
-Record local `policy_mean` alongside the imported `final_action`, with explicit metadata identifying an action-only intervention. Reject configurations that combine this mode with control-trace or observation-trace intervention.
-
-If policy-action divergence is a sufficient cause of the remaining failure, predict:
-
-1. Groupwise applied-active/full-target RMSE versus Gym is `<=0.02 rad`.
-2. Movement object-position RMSE is `<=0.08 m`.
-3. Maximum lift is `>=0.25 m`.
-4. Maximum angular speed after decision 190 is `<=10 rad/s`.
-5. Late object-position RMSE is `<=0.10 m`.
-6. Final object-position error is `<=0.05 m`.
-
-If the action-only intervention fails while exact full-control replay continues to pass, policy-action divergence is insufficient. The remaining mechanism lies in downstream state-dependent residual correction or actuator/contact evolution.
+A principled production path requires either (1) an adapter that supplies Gym-equivalent routing state/full routed targets or (2) policy adaptation/retraining against the MuJoCo plant. Neither belongs silently inside checkpoint parity because either changes the deployed control contract or the policy.
 
 Evidence provenance: `OPS.md`.
