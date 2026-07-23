@@ -2584,10 +2584,17 @@ class MujocoManoEnvironment:
         observation = np.asarray(raw_observation, dtype=np.float64)
         reward_total = np.asarray(reward.total, dtype=np.float64)
         reset = np.asarray(termination.reset, dtype=bool)
-        self.progress = np.asarray(counters.progress, dtype=np.int64)
-        self.trajectory_steps = np.asarray(counters.trajectory_steps, dtype=np.int64)
-        self.episode_returns = np.asarray(counters.episode_returns, dtype=np.float64)
-        self.reset_mask = np.asarray(counters.reset_mask, dtype=bool)
+        # JAX-to-NumPy conversion can yield a read-only view.  These compact
+        # counters cross back into host-owned task state and are subsequently
+        # updated by indexed delayed resets, so retain writable ownership.
+        self.progress = np.asarray(counters.progress, dtype=np.int64).copy()
+        self.trajectory_steps = np.asarray(counters.trajectory_steps, dtype=np.int64).copy()
+        self.episode_returns = np.asarray(counters.episode_returns, dtype=np.float64).copy()
+        self.reset_mask = np.asarray(counters.reset_mask, dtype=bool).copy()
+        if not all(array.flags.writeable for array in (
+            self.progress, self.trajectory_steps, self.episode_returns, self.reset_mask,
+        )):
+            raise RuntimeError("device transition counters must be writable host arrays")
         self.control_call = int(np.asarray(counters.control_call))
         self.last_physical = None
         self.last_observation = None
