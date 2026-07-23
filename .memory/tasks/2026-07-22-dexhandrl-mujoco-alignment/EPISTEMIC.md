@@ -2,74 +2,63 @@
 
 ## Current model
 
-The full exact-control replay resolves the main ambiguity in the failed MuJoCo
-lift. MuJoCo fails even when driven by Gym's recorded controls, so divergent
-closed-loop targets are not a sufficient explanation. The failure is
-physics/contact-dominant under the preregistered thresholds, and the strongest
-live mechanism is a direct hand-friction mismatch.
+The visible canonical-friction replay establishes that hand-object friction is
+causally important to grasp retention, but rejects the complete canonical MuJoCo
+friction vector as the production setting. Increasing hand friction from
+`0.5 0.01 0.001` to `3 2 2` substantially increases lift and contact duration,
+yet it destabilizes object rotation, ejects the object, and worsens translational
+tracking.
 
-The replay at clean HEAD `679f1ef` covers all 631 decisions 62–692 and states
-63–693, is finite, and ends in a truncated final state. All ten imported Gym
-control arrays are bit-exact: `policy_mean`, `final_action`,
-`base_offset_before`, `base_offset_after`, `joint_offset_before`,
-`joint_offset_after`, `reference_active_target`, `corrected_active_target`,
-`applied_active_target`, and `full_target`.
+The replay ran at clean HEAD `1a3932c`, with `DISPLAY=:1`, `env=1`, and headless
+disabled. `xwininfo` verified the live MuJoCo viewer. It contains 631 finite rows
+and exact imported Gym control arrays.
 
 Evidence artifacts:
 
-- Exact-control replay: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/mujoco_control_replay_full631.npz`, SHA256 `3de271d6a8d652c235d07c58bcbd10f5a76e3b8e5cfbe68b38868f36aace6bf3`.
-- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/compare_vs_gym.json`, SHA256 `7a5353101f3c6a360d5adf227fd363256199d24313d5e84585f94d075692d749`.
-- Validation: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/validation.json`, SHA256 `045291d1f15269b9d7a8b13dd3beca90399e64bdc1eab213809abb17cc924932`.
-- Metrics: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/replay_metrics.json`, SHA256 `ed473ca0a22c4e21d1ea5dd072fe95d0379ea7f669d4d09a15b00e736aee3d87`.
+- Trace: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/mujoco_control_replay_full631_handfriction3_visible.npz`, SHA256 `97a8fe12b995b3e1e4704fdcd0066f781bb7eb501b16fc7bf669471e1c4ea4b4`.
+- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/compare_vs_gym.json`, SHA256 `9944fc01e509ab92b5dba3b45176a67328c313c98b541d703a54b19f43598fab`.
+- Validation: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/validation.json`, SHA256 `6c2c461ebc7c49b4e1a1eedbb8457502f2fed25dc680553c56b80cdc1d428ee8`.
+- Metrics: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/friction_metrics.json`, SHA256 prefix `51ac2fd`.
 
-## What the exact-control replay establishes
+## What the friction-3 replay establishes
 
-With exact Gym controls, MuJoCo movement object-position RMSE is `0.1809978787
-m`, maximum lift is `0.0046744756 m`, and hand contact is active for 53 movement
-rows. Closed-loop MuJoCo produced RMSE `0.1977472621 m`, maximum lift
-`0.0317615978 m`, and 32 contact rows. Exact Gym control modestly reduces
-position RMSE and increases the count of contact rows, but reduces lift by
-`0.0270871222 m`.
+Maximum lift increased from the exact-control baseline `0.00467 m` to `0.12935
+m`, a gain of `0.12468 m`. Movement hand-contact rows increased from 53 to 88.
+These changes under identical controls establish that contact friction materially
+changes grasp retention and lift.
 
-The replay meets the preregistered physics/contact-dominant classification:
-movement RMSE is greater than `0.15 m` and maximum lift is less than `0.10 m`.
-It decisively fails the control-dominant requirements of RMSE below `0.10 m` and
-lift above `0.20 m`. The object still slips despite bit-exact imported controls;
-therefore closed-loop target divergence cannot by itself explain the failed
-lift.
+The result fails the preregistered success criteria. Movement object-position
+RMSE worsened from `0.1810 m` to `0.2892 m`, and movement orientation RMSE
+worsened from `0.119 rad` to `2.725 rad`. Object orientation first exceeded `1
+rad` at frame 300, the object reached maximum height at frame 330 while nearing
+a pi-radian flip, and it was then ejected and dropped. Lift improved but remained
+below the required `0.20 m`; position RMSE also remained above the required
+`0.10 m`.
 
-## Live grasp-retention mechanism
+## Live mechanism
 
-Gym loads the canonical hand MJCF default `<geom friction="3 2 2">`. MuJoCo
-`sim/dexhandrl/scene.py` rewrites this hand default to `0.5 0.01 0.001`.
-Object and ground friction remain separately set at `0.5`, so the mismatch is
-specific to the hand geometry rather than a global scene-friction change.
+Gym PhysX exposes scalar surface friction, whereas MuJoCo represents friction as
+sliding, torsional, and rolling components. Setting MuJoCo to the canonical
+`3 2 2` therefore changes three contact mechanisms at once. The increased lift
+and contact count identify stronger sliding resistance as beneficial. The large,
+early pi-radian rotation followed by ejection identifies excessive contact moment
+as the dominant failure introduced by the large torsional and rolling terms.
+The complete `3 2 2` vector is rejected as a production default.
 
-The rewrite greatly reduces hand-object sliding friction. Its causal prediction
-matches the observed failure: contact can form, but the object slips as the hand
-target rises, contact is lost near frame 300, and lift stays negligible even
-under the exact Gym target sequence. This source mismatch is now the principal
-mechanism to test.
+## Next experiment preregistration
 
-## Hand-friction experiment preregistration
+Run one exact-control experiment relative to `3 2 2`. Keep hand sliding friction
+at `3`, and restore only torsional and rolling friction to the prior small values:
+`3 0.01 0.001`. Hold the complete imported Gym control trace and every other
+simulation setting fixed. Run visibly with `DISPLAY=:1`, `env=1`, and headless
+disabled.
 
-Run one single-variable exact-control experiment. Restore only hand-geometry
-friction to the canonical `3 2 2`. Hold object and ground friction, actuator
-gains, substeps, contact settings, and the complete imported Gym control trace
-fixed.
-
-The friction mechanism is sufficient only if all three predictions hold:
-
-1. hand contact is retained past frame 300;
-2. maximum lift exceeds `0.20 m`;
-3. movement object-position RMSE falls below `0.10 m`.
-
-If maximum lift remains below `0.10 m`, hand friction alone is insufficient.
-The next investigation must inspect collision geometry and contact compliance;
-do not tune additional parameters.
-
-The next visible run must use `DISPLAY=:1`, `--no-headless`, and `env=1`. The
-viewer must mirror the simulation state without stepping physics, so enabling
-visualization cannot change the replay trajectory.
+If torsional/rolling overconstraint caused the ejection, the replay must retain
+maximum lift `>=0.10 m`, reduce movement orientation RMSE below `0.5 rad`, and
+improve movement position RMSE below `0.18 m`. Lift below `0.10 m` means sliding
+friction alone is insufficient. Orientation remaining above `1 rad` means the
+destabilizing torque arises from collision geometry or normal forces rather than
+MuJoCo's torsional/rolling friction dimensions. Do not tune any parameter after
+the result until the anomaly is inspected.
 
 Evidence provenance: `OPS.md`.
