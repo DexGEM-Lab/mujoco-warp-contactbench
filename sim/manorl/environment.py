@@ -2606,14 +2606,14 @@ class MujocoManoEnvironment:
         valid = physical.valid & contacts.valid & termination.valid & reward.valid & observation_valid
         if not bool(np.asarray(valid)):
             raise RuntimeError("device_transition rejected non-finite or invalid transition inputs")
+        # These compact host diagnostics remain the existing callback and
+        # metric contract. They are a residual telemetry boundary, distinct
+        # from the policy egress below.
+        reward_total = np.asarray(reward.total, dtype=np.float64)
+        reset = np.asarray(termination.reset, dtype=bool)
         policy_observation = self.jp.clip(raw_observation, -5.0, 5.0).astype(self.jp.float32)
         policy_reward = self.jp.asarray(reward.total, dtype=self.jp.float32)
         policy_reset = self.jp.asarray(termination.reset, dtype=bool)
-        # These compact host diagnostics remain the existing callback and
-        # metric contract. They are a residual telemetry boundary, distinct
-        # from the policy egress above.
-        reward_total = np.asarray(policy_reward, dtype=np.float64)
-        reset = np.asarray(policy_reset, dtype=bool)
         # JAX-to-NumPy conversion can yield a read-only view.  These compact
         # counters cross back into host-owned task state and are subsequently
         # updated by indexed delayed resets, so retain writable ownership.
