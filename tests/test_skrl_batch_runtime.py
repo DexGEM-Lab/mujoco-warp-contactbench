@@ -55,7 +55,9 @@ class _Env:
         return result
 
     def telemetry(self):
-        return {"actual_contact_buffer_shape": (100, 4), "contact_high_water": 2,
+        return {"requested_global_contact_capacity": 320,
+                "requested_per_world_constraint_capacity": 512,
+                "actual_contact_buffer_shape": (100, 4), "contact_high_water": 2,
                 "actual_constraint_buffer_shape": (2, 100), "constraint_high_water": 2}
 
 
@@ -191,6 +193,8 @@ def test_progress_honors_log_cadence_but_emits_checkpoint_boundary(tmp_path):
     records = [__import__("json").loads(line) for line in (tmp_path / "progress.jsonl").read_text().splitlines()]
     assert [record["update"] for record in records] == [2, 3]
     assert all(record["contact_high_water"] == 2 and record["constraint_high_water"] == 2 for record in records)
+    assert all(record["capacity"]["requested_global_contact_capacity"] == 320 for record in records)
+    assert all(record["capacity"]["requested_per_world_constraint_capacity"] == 512 for record in records)
 
 
 def test_parser_accepts_action_all_and_batch_checkpoint_options():

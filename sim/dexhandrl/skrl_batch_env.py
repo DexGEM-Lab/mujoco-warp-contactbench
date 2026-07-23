@@ -99,8 +99,8 @@ class DexHandRLBatchConfig:
             raise ValueError("batched DexHandRL pins exactly 10 MJX steps per control transition")
         if self.settle_frames < 0:
             raise ValueError("settle_frames must be non-negative")
-        if self.contact_capacity is not None and self.contact_capacity < 512 * self.trajectories.num_envs:
-            raise ValueError("contact_capacity is below the conservative global 512-row-per-world floor")
+        if self.contact_capacity is not None and self.contact_capacity < 128 * self.trajectories.num_envs:
+            raise ValueError("contact_capacity is below the conservative global 128-row-per-world floor")
         if self.per_world_constraint_capacity is not None and self.per_world_constraint_capacity < 1:
             raise ValueError("per_world_constraint_capacity must be positive")
 
@@ -133,19 +133,27 @@ class _BatchState(NamedTuple):
 
 
 def conservative_batch_contact_capacity(num_envs: int) -> int:
-    """Global Warp contact capacity: a conservative 512 rows per world + margin."""
+    """Global Warp contact capacity: preregistered 128 rows per world + 64.
+
+    This is an allocation bound, not a physics parameter. Server2's 256-world
+    run peaked at 1,377 global contacts (about 5.4/world), leaving roughly 24x
+    headroom at this floor while avoiding the previous graph-sized excess.
+    """
     if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
         raise ValueError("num_envs must be a positive integer")
-    return max(512, 512 * num_envs + 64)
+    return 128 * num_envs + 64
 
 
 def conservative_batch_constraint_capacity(num_envs: int) -> int:
-    """Per-world Warp constraint capacity; never multiply it by batch size."""
+    """Per-world Warp constraint capacity: 512, independent of batch size.
+
+    ``efc__force`` is shaped ``(world, capacity)``. Construction also measures
+    the native initial state and rejects any capacity below ``nefc + 64``;
+    capacity guards still fail at 80% utilization during rollout.
+    """
     if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
         raise ValueError("num_envs must be a positive integer")
-    # ``efc__force`` is (world, per_world_constraint_capacity).  Match the
-    # scalar MJX runtime rather than allocating an N-scaled capacity per row.
-    return 8192
+    return 512
 
 
 class DexHandRLMJXBatchEnv:
@@ -469,7 +477,11 @@ class DexHandRLMJXBatchEnv:
         return self._reset_observation_fn(self.state)
 
     def telemetry(self) -> dict[str, Any]:
-        """Opt-in host snapshot, including requested/actual Warp capacities."""
+        """Opt-in host snapshot of requested/actual capacities and high water.
+
+        Callers must judge saturation against the actual Warp buffer shapes;
+        the runtime rejects either contact or constraint utilization at 80%.
+        """
         impl = self.state.data._impl
         nefc = np.asarray(impl.nefc)
         return {

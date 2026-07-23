@@ -464,6 +464,13 @@ names, and model capacities. Compiler/model capacity and MJX-Warp runtime capaci
 the model keeps `njmax=2048` and `nconmax=8192`, while runtime allocation uses
 `njmax=8192` and `naconmax=8192`.
 
+The separate all-action device-batch runtime sizes only its Warp allocation as
+`naconmax = 128 * num_envs + 64` globally and `njmax = 512` per world. These
+are not physics or solver settings: at 256 worlds, Server2 measured 1,377
+contacts globally and a 56-constraint per-world high water. Construction still
+rejects a per-world capacity below measured initial `nefc + 64`, and training
+retains fail-closed 80%-utilization guards on the actual Warp buffers.
+
 Current production defaults are:
 
 | Contract group | `legacy_port_v1` default |

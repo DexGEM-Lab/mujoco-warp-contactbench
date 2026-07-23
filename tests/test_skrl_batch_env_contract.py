@@ -43,13 +43,32 @@ def test_batch_config_requires_all_actions_and_active_reference() -> None:
 
 def test_batch_capacity_floors_are_global_and_per_world() -> None:
     batch = _batch(7)
-    assert conservative_batch_contact_capacity(7) == 3648
+    assert conservative_batch_contact_capacity(7) == 960
     # efc__force is (world, capacity), so N must not inflate the second axis.
-    assert [conservative_batch_constraint_capacity(worlds) for worlds in (1, 7, 1024)] == [8192, 8192, 8192]
-    with pytest.raises(ValueError, match="global 512-row-per-world floor"):
-        DexHandRLBatchConfig(trajectories=batch, contact_capacity=3583)
+    assert [conservative_batch_constraint_capacity(worlds) for worlds in (1, 7, 1024)] == [512, 512, 512]
+    with pytest.raises(ValueError, match="global 128-row-per-world floor"):
+        DexHandRLBatchConfig(trajectories=batch, contact_capacity=895)
     with pytest.raises(ValueError, match="must be positive"):
         DexHandRLBatchConfig(trajectories=batch, per_world_constraint_capacity=0)
+
+
+def test_batch_capacity_sizing_matches_measured_256_world_high_water() -> None:
+    """Preserve the Server2 sizing rationale without changing physics limits."""
+    worlds = 256
+    observed_global_contacts = 1377
+    observed_max_constraints_per_world = 56
+    measured_initial_nefc = 146
+
+    contact_capacity = conservative_batch_contact_capacity(worlds)
+    constraint_capacity = conservative_batch_constraint_capacity(worlds)
+
+    assert contact_capacity == 128 * worlds + 64 == 32832
+    assert contact_capacity / observed_global_contacts > 23
+    assert constraint_capacity == 512
+    assert constraint_capacity >= measured_initial_nefc + 64
+    # The production runtime retains fail-closed 80% high-water guards.
+    assert observed_global_contacts / contact_capacity < 0.8
+    assert observed_max_constraints_per_world / constraint_capacity < 0.8
 
 
 def test_reset_target_routes_extreme_active_reference_before_storing_previous() -> None:

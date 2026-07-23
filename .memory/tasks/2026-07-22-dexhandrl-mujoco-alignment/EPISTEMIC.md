@@ -8,6 +8,12 @@ The target is one action-conditioned policy for `cube1`, trained with 1,024 envi
 
 Server2 is ready in dependencies, data, and source inputs, but it does not yet contain this feature mirror or a `sim/dexhandrl` checkout. Existing Unison configuration covers only the primary `dev` root and is stopped, so it cannot be treated as feature synchronization. GPU 1 currently has the two existing processes, approximately 21.5 GiB free, and 0% utilization in the sampled observation. Free memory is encouraging but does not establish training headroom; the finite full-scale preflight is the required evidence.
 
+## Batch allocation claim
+
+N7 and N256 batch runs succeeded. At N256, the global contact high water was 1,377 against a 131,136-row actual Warp contact buffer; per-world constraints peaked at 56 against 8,192 rows, and native initial-state `nefc` measured 146. The old N1024 request therefore did not reveal a physical capacity limit: it requested 524,352 contacts and 8,192 constraints per world, reached 24,080 MiB during Warp graph creation, and OOMed before the first transition.
+
+The runtime-only allocation is now `128 * N + 64` global contact rows and 512 per-world constraint rows. At N1024 this makes the contact request 131,136 rows, while construction still rejects a constraint capacity below measured initial `nefc + 64` (210 at the N256 measurement) and rollout still fails at 80% utilization of actual buffers. No physics, solver, substep, geometry, reward, or task parameter changed. The causal prediction is that the 4x smaller contact allocation and 16x smaller per-world constraint allocation reduce Warp graph memory enough for the preflight. If it still OOMs, the next discriminating test changes contact versus constraint capacity one at a time; do not reduce physics. See OPS capacity entries dated 2026-07-24.
+
 Production acceptance additionally requires observing the first training progress from the 3,000-update run and recording the concrete progress and checkpoint output paths. Existing GPU jobs must not be killed to make the launch fit.
 
 ## Accepted viewer claim
