@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 import inspect
 import time
+import warnings
 from typing import Any, Sequence
 
 import numpy as np
@@ -160,6 +161,11 @@ class EnvironmentConfig:
     capture_transition_diagnostics: bool = True
     profile_phases: bool = False
     unified_object_batch: bool = False
+    # Experimental Warp-only CCD allocation. Both values are opt-in so the
+    # established put_data capacity contract remains the default.
+    # warp_ccd_contacts_per_world scales only GJK scratch, never naconmax.
+    warp_ccd_iterations: int | None = None
+    warp_ccd_contacts_per_world: int | None = None
     hand_side: str = "auto"
 
     def __post_init__(self) -> None:
@@ -231,7 +237,19 @@ class EnvironmentConfig:
             raise TypeError("profile_phases must be bool")
         if not isinstance(self.unified_object_batch, bool):
             raise TypeError("unified_object_batch must be bool")
+        for name, value in (
+            ("warp_ccd_iterations", self.warp_ccd_iterations),
+            ("warp_ccd_contacts_per_world", self.warp_ccd_contacts_per_world),
+        ):
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+                raise ValueError(f"{name} must be a positive integer when provided")
+        if self.warp_ccd_explicit and self.unified_object_batch:
+            raise ValueError("explicit Warp CCD capacity does not support unified object batches")
         normalize_hand_side(self.hand_side)
+
+    @property
+    def warp_ccd_explicit(self) -> bool:
+        return self.warp_ccd_iterations is not None or self.warp_ccd_contacts_per_world is not None
 
 
 @dataclass
@@ -1412,6 +1430,8 @@ class MujocoManoEnvironment:
         if len(side_sets) != 1 or len(dof_dims) != 1:
             raise ValueError("all vector trajectories must share hand sides and DOF width")
         self.hand_sides = _model_hand_side_order(next(iter(side_sets)))
+        if config.warp_ccd_explicit and config.device != "gpu":
+            raise ValueError("explicit Warp CCD capacity requires device='gpu'")
         if config.device_transition and (self.hand_sides != ("right",) or next(iter(dof_dims)) != JOINT_DOF):
             raise ValueError("device_transition supports exactly one right-hand 28-DoF model")
         if config.device_contact_decode and len(self.hand_sides) != 1:
@@ -1462,6 +1482,11 @@ class MujocoManoEnvironment:
                 "unified and heterogeneous object sets remain on the debug path"
             )
         if len(object_types) != 1:
+            if config.warp_ccd_explicit:
+                raise ValueError(
+                    "explicit Warp CCD capacity supports homogeneous object batches only; "
+                    "unified and heterogeneous routes are intentionally unsupported"
+                )
             if config.unified_object_batch:
                 self._initialize_unified_batch(
                     trajectories, identity_parts, object_types, config
@@ -1502,6 +1527,8 @@ class MujocoManoEnvironment:
             hand_sides=self.hand_sides,
             primary_hand_side=self.primary_hand_side,
         )
+        if config.warp_ccd_iterations is not None:
+            self.model.opt.ccd_iterations = config.warp_ccd_iterations
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
             raise RuntimeError(f"MJX did not select Warp: {self.mjx_model.impl}")
@@ -1525,20 +1552,30 @@ class MujocoManoEnvironment:
         # Revised 28-DoF hands add joint-limit/contact constraints.  The
         # historical default ``constraint_capacity`` was sufficient for the
         # 26-DoF pose but can be smaller than the initial reference state's
-        # solved ``nefc``.  Grow the Warp buffers from the native probe while
+        # solved ``nefc``. Grow the Warp buffers from the native probe while
         # retaining user-provided larger capacities.
         warp_contact_capacity = max(config.contact_capacity, int(initial_host_data.ncon) + 1)
         warp_constraint_capacity = max(config.constraint_capacity, int(initial_host_data.nefc) + 1)
-        single_data = mjx.put_data(
-            self.model,
-            initial_host_data,
-            device=self.device,
-            impl="warp",
-            naconmax=warp_contact_capacity,
-            njmax=warp_constraint_capacity,
+        self.warp_ccd_naccdmax = (
+            None if config.warp_ccd_contacts_per_world is None
+            else config.warp_ccd_contacts_per_world * config.num_envs
         )
+        if self.warp_ccd_naccdmax is None:
+            single_data = mjx.put_data(
+                self.model, initial_host_data, device=self.device, impl="warp",
+                naconmax=warp_contact_capacity, njmax=warp_constraint_capacity,
+            )
+        else:
+            # Public make_data allocates independent GJK scratch. The normal
+            # reset below writes qpos/qvel/ctrl then runs forward.
+            single_data = mjx.make_data(
+                self.model, device=self.device, impl="warp",
+                naconmax=warp_contact_capacity, naccdmax=self.warp_ccd_naccdmax,
+                njmax=warp_constraint_capacity,
+            )
         batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
         self.data = jax.vmap(lambda _: single_data)(batch_index)
+        self._configure_warp_ccd_overflow_guard()
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
         self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)
         self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
@@ -2348,6 +2385,42 @@ class MujocoManoEnvironment:
         self.phase_timings.reset()
         self.producer.reset_profile()
 
+    def _configure_warp_ccd_overflow_guard(self) -> None:
+        self._warp_ccd_overflow_guard_available = False
+        self._warp_ccd_overflow_guard_limitation: str | None = None
+        if self.warp_ccd_naccdmax is None:
+            return
+        impl = self.data._impl
+        if hasattr(impl, "naccd") and hasattr(impl, "naccdmax"):
+            self._warp_ccd_overflow_guard_available = True
+            return
+        self._warp_ccd_overflow_guard_limitation = (
+            "Pinned MJX-Warp DataWarp exposes naccdmax but no live naccd count; "
+            "same-step CCD-overflow detection is unavailable for this experimental allocation."
+        )
+        warnings.warn(self._warp_ccd_overflow_guard_limitation, RuntimeWarning, stacklevel=2)
+
+    def _check_warp_ccd_overflow(self) -> None:
+        if not self._warp_ccd_overflow_guard_available:
+            return
+        count = np.asarray(self.data._impl.naccd, dtype=np.int64).reshape(-1)
+        if count.shape != (1,) or not 0 <= int(count[0]) < self.warp_ccd_naccdmax:
+            raise RuntimeError(
+                "MJX-Warp CCD capacity saturated or ABI-incompatible on this physics substep; "
+                "refusing to continue with truncated convex contacts"
+            )
+
+    def warp_ccd_metadata(self) -> dict[str, object]:
+        return {
+            "ccd_iterations": self.config.warp_ccd_iterations,
+            "contacts_per_world": self.config.warp_ccd_contacts_per_world,
+            "naccdmax": self.warp_ccd_naccdmax,
+            "overflow_guard": "available" if self._warp_ccd_overflow_guard_available else (
+                "unavailable" if self.warp_ccd_naccdmax is not None else "not_requested"
+            ),
+            "overflow_guard_limitation": self._warp_ccd_overflow_guard_limitation,
+        }
+
     def _target_indices(self) -> NDArray[np.int64]:
         return np.minimum(np.maximum(self.trajectory_steps, 0), self.trajectory_lengths - 1)
 
@@ -2741,6 +2814,7 @@ class MujocoManoEnvironment:
         physics_phase = self._phase_start("mjx_physics")
         for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
             self.data = self._step_fn(self.data)
+            self._check_warp_ccd_overflow()
         self._phase_stop("mjx_physics", physics_phase)
         self.progress += 1
         pending_reset = self.reset_mask.copy()

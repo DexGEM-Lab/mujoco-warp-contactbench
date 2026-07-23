@@ -25,6 +25,7 @@ _ENVIRONMENT_SIGNATURE_FIELDS = (
     "action_dim",
     "observation_dim",
     "model_action_dim",
+    "warp_ccd",
 )
 _ENVIRONMENT_SIDE_SEQUENCE_FIELDS = frozenset(
     {

@@ -211,6 +211,8 @@ class TrainingBudget:
     profile_phases: bool = False
     capture_transition_diagnostics: bool | None = None
     unified_object_batch: bool = False
+    warp_ccd_iterations: int | None = None
+    warp_ccd_contacts_per_world: int | None = None
 
     @property
     def transitions(self) -> int:
@@ -1961,6 +1963,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             capture_transition_diagnostics=budget.resolved_capture_transition_diagnostics,
             profile_phases=budget.profile_phases,
             unified_object_batch=budget.unified_object_batch,
+            warp_ccd_iterations=budget.warp_ccd_iterations,
+            warp_ccd_contacts_per_world=budget.warp_ccd_contacts_per_world,
             hand_side=budget.hand_side,
         ),
     )
@@ -2114,6 +2118,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "device_resident_controls": physical.config.device_resident_controls,
             "device_transition": physical.config.device_transition,
             "capture_transition_diagnostics": physical.config.capture_transition_diagnostics,
+            "warp_ccd": physical.warp_ccd_metadata(),
         }
         learning_starts = runtime.agent.cfg.learning_starts
         phase_profile = {
@@ -2345,6 +2350,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use one fixed-topology MJX model for mixed-object batches",
     )
+    parser.add_argument("--warp-ccd-iterations", type=int, help="experimental Warp CCD iteration limit")
+    parser.add_argument(
+        "--warp-ccd-contacts-per-world", type=int,
+        help="experimental independent Warp GJK scratch contacts per world",
+    )
     parser.add_argument("--wandb", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--wandb-project", default="one_policy")
     parser.add_argument("--wandb-group", default="s02")
@@ -2377,6 +2387,16 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
+    for name, value in (
+        ("warp-ccd-iterations", args.warp_ccd_iterations),
+        ("warp-ccd-contacts-per-world", args.warp_ccd_contacts_per_world),
+    ):
+        if value is not None and value < 1:
+            parser.error(f"--{name} must be positive when provided")
+    if args.unified_object_batch and (
+        args.warp_ccd_iterations is not None or args.warp_ccd_contacts_per_world is not None
+    ):
+        parser.error("explicit Warp CCD capacity does not support unified object batches")
     evaluation_num_envs_maximum = min(args.num_envs, 128)
     if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
         parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")
@@ -2474,6 +2494,8 @@ def main(argv: list[str] | None = None) -> int:
             profile_phases=args.profile_phases,
             capture_transition_diagnostics=args.capture_transition_diagnostics,
             unified_object_batch=args.unified_object_batch,
+            warp_ccd_iterations=args.warp_ccd_iterations,
+            warp_ccd_contacts_per_world=args.warp_ccd_contacts_per_world,
         ),
     )
     if args.console_format == "json":

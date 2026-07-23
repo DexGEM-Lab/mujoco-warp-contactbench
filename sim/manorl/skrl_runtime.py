@@ -308,6 +308,7 @@ class ManoSkrlRuntime:
             "action_dim": int(physical.action_dim),
             "observation_dim": int(physical.observation_dim),
             "model_action_dim": int(physical.model_action_dim),
+            "warp_ccd": physical.warp_ccd_metadata(),
         }
 
     def checkpoint_metadata(self) -> dict[str, object]:
