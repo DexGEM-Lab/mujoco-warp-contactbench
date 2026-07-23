@@ -195,6 +195,31 @@ def build_device_observation(
     return observation, valid
 
 
+def fingertip_inside_object_penalty(
+    *, fingertips_world: Any, object_position: Any, object_quat_xyzw: Any,
+    primitive_type: Any, primitive_params: Any, active_fingertip_mask: Any,
+    min_depth: float, max_depth: float, max_penalty: float,
+) -> Any:
+    """Device equivalent of DexHand's cube/cylinder/sphere penetration term."""
+    import jax.numpy as jp
+    tips, position, quat = jp.asarray(fingertips_world), jp.asarray(object_position), jp.asarray(object_quat_xyzw)
+    batch = tips.shape[0]
+    if tips.shape != (batch, 5, 3) or position.shape != (batch, 3) or quat.shape != (batch, 4):
+        raise ValueError("fingertip/object tensors must be (batch,5,3)/(batch,3)/(batch,4)")
+    params, mask, kind = jp.asarray(primitive_params), jp.asarray(active_fingertip_mask), jp.asarray(primitive_type)
+    if params.shape != (batch, 3) or mask.shape != (batch, 5) or kind.shape != (batch,) or max_depth <= min_depth:
+        raise ValueError("primitive/mask/penetration contract is invalid")
+    inverse = jp.concatenate((-quat[:, :3], quat[:, 3:]), axis=1)
+    local = _quat_rotate(inverse[:, None], tips - position[:, None])
+    box_depth = jp.minimum(jp.minimum(params[:, None, 0] * .5 - jp.abs(local[..., 0]), params[:, None, 1] * .5 - jp.abs(local[..., 1])), params[:, None, 2] * .5 - jp.abs(local[..., 2]))
+    radial = jp.sqrt(jp.sum(local[..., :2] ** 2, axis=-1))
+    cylinder_depth = jp.minimum(params[:, None, 0] - radial, params[:, None, 1] * .5 - jp.abs(local[..., 2]))
+    sphere_depth = params[:, None, 0] - jp.linalg.norm(local, axis=-1)
+    depth = jp.where(kind[:, None] == 0, box_depth, jp.where(kind[:, None] == 1, cylinder_depth, jp.where(kind[:, None] == 2, sphere_depth, 0.)))
+    ramp = jp.clip((jp.maximum(depth, 0.) - min_depth) / (max_depth - min_depth), 0., 1.)
+    return -max_penalty * jp.sum(ramp * mask, axis=1) / jp.maximum(jp.sum(mask, axis=1), 1.)
+
+
 def compute_device_reward_done(
     *, frame: Any, start_frame: Any, last_contact_frame: Any, lengths: Any,
     object_position: Any, target_position: Any, object_quat_xyzw: Any,

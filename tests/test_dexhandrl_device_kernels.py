@@ -12,6 +12,7 @@ from sim.dexhandrl.device_task import (
     apply_device_control,
     build_device_observation,
     compute_device_reward_done,
+    fingertip_inside_object_penalty,
     gather_trajectory,
     route_active_to_full,
 )
@@ -92,6 +93,17 @@ def test_device_observation_matches_scalar_layout_and_gather_bounds() -> None:
     scalar = build_minimal_observation(action="01", object_name="cube1", geometry={"type":"box","size":[0,0,0]}, active_finger_dof_pos=np.zeros(16), hand_pose=np.asarray([0,0,0,0,0,0,1]), fingertip_positions_world=np.zeros(15), body16_positions_world=np.zeros(48), episode_time=0., object_position=np.zeros(3), object_orientation=np.asarray([0,0,0,1]), object_linear_velocity=np.zeros(3), target_object_position=np.zeros(3), target_object_orientation=np.asarray([0,0,0,1]), target_object_pos_next_5=np.zeros(3), expected_contact_mask=np.zeros(16), contact_force_magnitude=np.zeros(16), contact_force_directions=np.zeros(48), object_contact_force_magnitude=0.)
     np.testing.assert_allclose(np.asarray(obs)[0], scalar); assert bool(valid)
     gathered=gather_trajectory(values=jnp.arange(7*3*2).reshape(7,3,2),frame=jnp.full(7,99),lengths=jnp.asarray([1,2,3,1,2,3,1])); np.testing.assert_array_equal(np.asarray(gathered),np.asarray(jnp.arange(7*3*2).reshape(7,3,2))[np.arange(7),[0,1,2,0,1,2,0]])
+
+
+def test_device_fingertip_cube_penalty_matches_depth_ramp() -> None:
+    penalty = fingertip_inside_object_penalty(
+        fingertips_world=jnp.asarray([[[.046,0,0],[1,0,0],[1,0,0],[1,0,0],[1,0,0]]]),
+        object_position=jnp.zeros((1,3)), object_quat_xyzw=jnp.asarray([[0,0,0,1.]]),
+        primitive_type=jnp.asarray([0]), primitive_params=jnp.asarray([[.1,.1,.1]]),
+        active_fingertip_mask=jnp.asarray([[1,0,0,0,0.]]), min_depth=.001, max_depth=.003,
+        max_penalty=.4,
+    )
+    np.testing.assert_allclose(np.asarray(penalty), [-.4])
 
 
 def test_device_reward_done_is_finite_and_early_gated() -> None:
