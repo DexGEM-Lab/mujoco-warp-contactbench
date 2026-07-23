@@ -292,7 +292,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     a = _parser().parse_args()
     print(run(a.output, a.steps, a.checkpoint, a.control_trace, a.hand_friction, a.headless,
-              a.finger_kp, a.finger_kv)); return 0
+              a.finger_kp, a.finger_kv, a.base_rot_kp, a.base_rot_kv, a.base_rot_force)); return 0
 
 
 if __name__ == "__main__":
