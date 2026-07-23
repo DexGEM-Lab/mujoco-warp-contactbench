@@ -33,6 +33,7 @@ from sim.manorl.device_runtime import (
     compute_device_reward_28,
     extract_mjx_physical_features,
     reduce_warp_contacts,
+    reduce_warp_contacts_for_right_policy,
 )
 from sim.manorl.assets import (
     compile_model,
@@ -1108,10 +1109,11 @@ class MjxWarpPhysicalProducer:
     def device_contact_reduction(self, data: Any) -> Any:
         """Return compact JAX contact reductions without a host buffer copy."""
 
-        if len(self.hand_sides) != 1 or self.active_object_geom_ids is not None:
+        if self.hand_sides not in {("right",), ("right", "left")} or self.active_object_geom_ids is not None:
             raise RuntimeError(
-                "device contact reduction supports only homogeneous single-hand worlds; "
-                "bimanual and per-world object sets require the host/debug path"
+                "device contact reduction supports homogeneous right-policy worlds with "
+                "a right-only or right-left compiled model; per-world object sets require "
+                "the host/debug path"
             )
         impl = data._impl
         required = (
@@ -1127,15 +1129,28 @@ class MjxWarpPhysicalProducer:
         if self._device_contact_decoder is None:
             import jax
 
-            self._device_contact_decoder = jax.jit(
-                lambda nacon, nefc, geom, world, dimension, addresses, friction, frame, force:
-                reduce_warp_contacts(
-                    nacon=nacon, nefc=nefc, geom=geom, world=world, dimension=dimension,
-                    addresses=addresses, friction=friction, frame=frame, constraint_force=force,
-                    ngeom=self.model.ngeom, keypoint_geom_ids=tuple(self.keypoint_geom_ids),
-                    object_geom_ids=tuple(sorted(self.object_geom_ids)), compute_dtype="float32",
+            if self.hand_sides == ("right",):
+                self._device_contact_decoder = jax.jit(
+                    lambda nacon, nefc, geom, world, dimension, addresses, friction, frame, force:
+                    reduce_warp_contacts(
+                        nacon=nacon, nefc=nefc, geom=geom, world=world, dimension=dimension,
+                        addresses=addresses, friction=friction, frame=frame, constraint_force=force,
+                        ngeom=self.model.ngeom, keypoint_geom_ids=tuple(self.keypoint_geom_ids),
+                        object_geom_ids=tuple(sorted(self.object_geom_ids)), compute_dtype="float32",
+                    )
                 )
-            )
+            else:
+                self._device_contact_decoder = jax.jit(
+                    lambda nacon, nefc, geom, world, dimension, addresses, friction, frame, force:
+                    reduce_warp_contacts_for_right_policy(
+                        nacon=nacon, nefc=nefc, geom=geom, world=world, dimension=dimension,
+                        addresses=addresses, friction=friction, frame=frame, constraint_force=force,
+                        ngeom=self.model.ngeom,
+                        right_keypoint_geom_ids=tuple(self.keypoint_geom_ids_by_side["right"]),
+                        left_keypoint_geom_ids=tuple(self.keypoint_geom_ids_by_side["left"]),
+                        object_geom_ids=tuple(sorted(self.object_geom_ids)), compute_dtype="float32",
+                    )
+                )
         return self._device_contact_decoder(
             impl.nacon, impl.nefc, impl.contact__geom, impl.contact__worldid,
             impl.contact__dim, impl.contact__efc_address, impl.contact__friction,
@@ -1432,8 +1447,10 @@ class MujocoManoEnvironment:
         self.hand_sides = _model_hand_side_order(next(iter(side_sets)))
         if config.warp_ccd_explicit and config.device != "gpu":
             raise ValueError("explicit Warp CCD capacity requires device='gpu'")
-        if config.device_transition and (self.hand_sides != ("right",) or next(iter(dof_dims)) != JOINT_DOF):
-            raise ValueError("device_transition supports exactly one right-hand 28-DoF model")
+        if config.device_transition and (
+            self.hand_sides not in {("right",), ("right", "left")} or next(iter(dof_dims)) != JOINT_DOF
+        ):
+            raise ValueError("device_transition supports a right-policy 28-DoF model with optional passive left hand")
         if config.device_contact_decode and len(self.hand_sides) != 1:
             raise ValueError(
                 "device_contact_decode supports exactly one compiled hand; "
@@ -1474,8 +1491,15 @@ class MujocoManoEnvironment:
         if any(len(parts) != 3 or not parts[1].isdigit() for parts in identity_parts):
             raise ValueError("each trajectory identity must be object_action_sequence")
         object_types = {parts[0] for parts in identity_parts}
-        if config.device_transition and (self.hand_layout.controlled_sides != ("right",) or len(object_types) != 1):
-            raise ValueError("device_transition supports a homogeneous single-right-hand batch only")
+        if config.device_transition and (
+            self.hand_layout.controlled_sides != ("right",)
+            or len(object_types) != 1
+            or self.action_dim != JOINT_DOF
+            or self.observation_dim != 480
+        ):
+            raise ValueError(
+                "device_transition supports a homogeneous right-policy batch with 28D actions and 480D observations"
+            )
         if config.device_contact_decode and len(object_types) != 1:
             raise ValueError(
                 "device_contact_decode supports a homogeneous object batch; "

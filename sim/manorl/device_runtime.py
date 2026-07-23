@@ -567,3 +567,27 @@ def reduce_warp_contacts(
     counts = jp.zeros((batch,), dtype=jp.int32).at[safe_world].add(contribution.astype(jp.int32))
     valid = valid & jp.all(jp.isfinite(keypoint_forces)) & jp.all(jp.isfinite(hand_object))
     return DeviceContactReduction(keypoint_forces, hand_object, counts, valid)
+
+
+def reduce_warp_contacts_for_right_policy(
+    *, right_keypoint_geom_ids: Sequence[int], left_keypoint_geom_ids: Sequence[int], **kwargs: Any,
+) -> DeviceContactReduction:
+    """Reduce a dual-hand scene while exposing a right-hand policy interface.
+
+    Both reducers inspect the same global buffer.  The right forces are the
+    policy observation; forces delivered to the object are summed for reward.
+    Contact counts describe global buffer occupancy, so the equal independent
+    scans are checked and one count is retained rather than added.
+    """
+
+    import jax.numpy as jp
+
+    right = reduce_warp_contacts(keypoint_geom_ids=right_keypoint_geom_ids, **kwargs)
+    left = reduce_warp_contacts(keypoint_geom_ids=left_keypoint_geom_ids, **kwargs)
+    counts_match = jp.all(right.per_world_count == left.per_world_count)
+    return DeviceContactReduction(
+        right.keypoint_forces,
+        right.hand_object_forces + left.hand_object_forces,
+        right.per_world_count,
+        right.valid & left.valid & counts_match,
+    )

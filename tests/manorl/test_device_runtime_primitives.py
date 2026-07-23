@@ -17,6 +17,7 @@ from sim.manorl.device_runtime import (
     extract_mjx_physical_features,
     jax_to_torch_cuda,
     reduce_warp_contacts,
+    reduce_warp_contacts_for_right_policy,
     torch_to_jax_cuda,
 )
 from sim.manorl.environment import (
@@ -348,14 +349,16 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
         pytest.skip("configured CUDA JAX backend required")
     batch = 4
     legacy_trajectory = load_reference_trajectory()
-    expanded_q_ref = _expand_legacy_hand_dofs(legacy_trajectory.q_ref)
+    right_q_ref = _expand_legacy_hand_dofs(legacy_trajectory.q_ref)
+    left_q_ref = right_q_ref + 1e-3
     trajectory = replace(
         legacy_trajectory,
-        q_ref=expanded_q_ref,
-        q_ref_by_side={"right": expanded_q_ref},
-        hand_sides=("right",),
+        q_ref=right_q_ref,
+        q_ref_by_side={"right": right_q_ref, "left": left_q_ref},
+        hand_sides=("right", "left"),
         selected_hand_sides=("right",),
     )
+    assert not np.array_equal(trajectory.q_ref_by_side["right"], trajectory.q_ref_by_side["left"])
     compatibility = replace(SOURCE_ALIGNED_COMPATIBILITY, early_phase_steps=0)
     reward_config = replace(RewardConfig(), contact_force_threshold=-1.0)
     common = dict(
@@ -367,6 +370,10 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
     )
     host = MujocoManoEnvironment(trajectory, EnvironmentConfig(**common))
     device = MujocoManoEnvironment(trajectory, EnvironmentConfig(**common, device_transition=True))
+    for environment in (host, device):
+        assert environment.model_action_dim == 56
+        assert environment.action_dim == 28
+        assert environment.observation_dim == 480
     # Mutate before the device branch retains its immutable tables.  This makes
     # each requested boundary deterministic rather than relying on a contact
     # realization from the random action trace.
@@ -393,6 +400,15 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
             np.testing.assert_allclose(
                 getattr(device_physical, field), getattr(host_physical, field), rtol=1e-4, atol=1e-5
             )
+        np.testing.assert_allclose(np.asarray(device.data.qpos), np.asarray(host.data.qpos), rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(device.data.qvel), np.asarray(host.data.qvel), rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(device.data.ctrl), np.asarray(host.data.ctrl), rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(
+            np.asarray(device.data.qpos)[:, 28:56], np.asarray(host.data.qpos)[:, 28:56], rtol=1e-4, atol=1e-5
+        )
+        np.testing.assert_allclose(
+            np.asarray(device.data.ctrl)[:, 28:56], np.asarray(host.data.ctrl)[:, 28:56], rtol=1e-4, atol=1e-5
+        )
         np.testing.assert_allclose(device._target_indices(), host._target_indices(), rtol=0, atol=0)
         np.testing.assert_allclose(device.reference_object_pos, host.reference_object_pos, rtol=0, atol=0)
         np.testing.assert_array_equal(device_done, host_done)
@@ -439,6 +455,44 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
         saw_contact |= bool(np.any(device.last_reward.raw_contact > 0.0))
         saw_post_window |= bool(np.any(device.trajectory_steps > device.contact_end_frames))
     assert saw_terminal and saw_deviation and saw_contact and saw_post_window
+
+
+def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_force() -> None:
+    fixture = _fixture()
+    fixture["ngeom"] = 48
+    fixture["keypoint_geom_ids"] = tuple(range(16))
+    fixture["object_geom_ids"] = (40,)
+    fixture["nacon"] = np.asarray([2], dtype=np.int32)
+    fixture["geom"] = np.asarray(
+        [(0, 40), (24, 40)] + [(0, 0)] * 15, dtype=np.int32
+    )
+    fixture["world"] = np.zeros(17, dtype=np.int32)
+    fixture["addresses"] = np.zeros((17, 4), dtype=np.int32)
+    fixture["friction"] = np.zeros((17, 5), dtype=np.float32)
+    fixture["frame"] = np.broadcast_to(np.eye(3, dtype=np.float32), (17, 3, 3)).copy()
+    constraint_force = np.zeros((4, 64), dtype=np.float32)
+    constraint_force[0, 0] = 2.0
+    fixture["constraint_force"] = constraint_force
+    static = {
+        key: fixture[key]
+        for key in ("ngeom", "object_geom_ids")
+    }
+    dynamic = {
+        key: value for key, value in fixture.items()
+        if key not in static and key != "keypoint_geom_ids"
+    }
+    actual = jax.jit(lambda **values: reduce_warp_contacts_for_right_policy(
+        **values,
+        **static,
+        right_keypoint_geom_ids=tuple(range(16)),
+        left_keypoint_geom_ids=tuple(range(24, 40)),
+    ))(**dynamic)
+    right = _jitted_reducer(fixture)
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces), np.asarray(right.keypoint_forces))
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces)[0, 0], (-2.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[0, 0], (4.0, 0.0, 0.0))
+    np.testing.assert_array_equal(np.asarray(actual.per_world_count), (2, 0, 0, 0))
+    assert bool(actual.valid) is True
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:
