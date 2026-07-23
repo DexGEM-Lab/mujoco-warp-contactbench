@@ -197,7 +197,8 @@ def _passive_trace_viewer(env: Any, headless: bool) -> Iterator[PassiveTraceView
 
 
 def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None = None,
-        hand_friction: str = "0.5 0.01 0.001", headless: bool = True) -> Path:
+        hand_friction: str = "0.5 0.01 0.001", headless: bool = True,
+        finger_kp: float = 15.0, finger_kv: float = 0.0) -> Path:
     if not 1 <= steps <= MAX_ACTIONS:
         raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
     intervention = ControlTraceIntervention.load(control_trace, steps) if control_trace is not None else None
@@ -208,7 +209,7 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
     from sim.dexhandrl.skrl_train import SkrlLauncherConfig, _build_agent
     cfg = DexHandRLMJXEnvConfig(lance_path=LANCE, isaac_source_root=ISAAC, object_name="cube1", action="01", sequence_index=1,
         uuid=EXACT_IDENTITY["uuid"], device="cpu", use_residual=True, seed=0, object_position_terminal_threshold=1e9,
-        hand_friction=hand_friction)
+        hand_friction=hand_friction, finger_kp=finger_kp, finger_kv=finger_kv)
     env = DexHandRLMJXEnv(cfg)
     if env.trajectory.row_id != 22 or env.start_frame != 61 or env.end_frame != 693:
         raise RuntimeError(f"exact trajectory isolation failed: row={env.trajectory.row_id}, window={env.start_frame}..{env.end_frame}")
@@ -262,23 +263,30 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
                 break
     scalar_types = {"decision_frame": np.int64, "state_frame": np.int64, "reset": np.bool_, "terminated": np.bool_, "truncated": np.bool_}
     arrays = {key: np.asarray(values, dtype=scalar_types.get(key, np.float32)) for key, values in store.items()}
-    metadata: dict[str, Any] = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint), "friction": {"hand": cfg.hand_friction, "object": cfg.object_friction, "ground": cfg.ground_friction}, "viewer": {"headless": headless, "semantics": "native passive viewer mirrors completed MJX qpos/qvel via mj_forward and never advances environment physics", "env_count": 1}}
+    metadata: dict[str, Any] = {"schema": SCHEMA, "backend": "mujoco", "identity": EXACT_IDENTITY, "post_filters": ["velocity_clamp", "position_clamp"], "raw_policy_observation": "processed 461D only; component schema is obs_layout.py", "checkpoint": str(checkpoint), "friction": {"hand": cfg.hand_friction, "object": cfg.object_friction, "ground": cfg.ground_friction}, "finger_pd": {"kp": cfg.finger_kp, "kv": cfg.finger_kv, "force": cfg.finger_force}, "viewer": {"headless": headless, "semantics": "native passive viewer mirrors completed MJX qpos/qvel via mj_forward and never advances environment physics", "env_count": 1}}
     if intervention is not None:
         metadata["control_trace_intervention"] = intervention.metadata_record()
         metadata["policy_action_provenance"] = "imported from Gym control trace; policy/action records do not arise from MuJoCo observation"
     validate_trace(metadata, arrays); output.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(output, metadata=np.asarray(json.dumps(metadata)), **arrays); return output
 
 
-def main() -> int:
+def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--steps", type=int, default=3, help=f"actions to trace (1..{MAX_ACTIONS})")
     p.add_argument("--checkpoint", type=Path, default=CHECKPOINT)
     p.add_argument("--control-trace", type=Path, help="validated Gym trace whose exact control stages are injected")
     p.add_argument("--hand-friction", default="0.5 0.01 0.001")
+    p.add_argument("--finger-kp", type=float, default=15.0)
+    p.add_argument("--finger-kv", type=float, default=0.0)
     p.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
-    a = p.parse_args()
-    print(run(a.output, a.steps, a.checkpoint, a.control_trace, a.hand_friction, a.headless)); return 0
+    return p
+
+
+def main() -> int:
+    a = _parser().parse_args()
+    print(run(a.output, a.steps, a.checkpoint, a.control_trace, a.hand_friction, a.headless,
+              a.finger_kp, a.finger_kv)); return 0
 
 
 if __name__ == "__main__":

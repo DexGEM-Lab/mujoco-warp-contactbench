@@ -18,7 +18,7 @@ from sim.dexhandrl.trace_contract import (
     validate_trace,
 )
 from tools.compare_dexhandrl_traces import compare
-from tools.trace_dexhandrl_mujoco import ControlTraceIntervention, PassiveTraceViewer, _passive_trace_viewer
+from tools.trace_dexhandrl_mujoco import ControlTraceIntervention, PassiveTraceViewer, _parser, _passive_trace_viewer
 from tools.trace_dexhandrl_gym import (_authoritative_frame, _compose_train_config, _deterministic_action,
                                       _close_env_after_trace, _filter_exact_trajectory, _patch,
                                       _is_relative_to, _pre_action_observations,
@@ -112,6 +112,18 @@ def test_offline_safe_imports_do_not_load_runtime_modules():
     for module in ("tools.trace_dexhandrl_gym", "tools.trace_dexhandrl_mujoco", "tools.compare_dexhandrl_traces"):
         importlib.import_module(module)
     assert "isaacgym" not in sys.modules and "lance" not in sys.modules
+
+
+def test_mujoco_trace_parser_exposes_finger_gains_with_production_defaults(tmp_path):
+    args = _parser().parse_args(["--output", str(tmp_path / "trace.npz")])
+    assert args.finger_kp == 15.0
+    assert args.finger_kv == 0.0
+
+    args = _parser().parse_args([
+        "--output", str(tmp_path / "trace.npz"), "--finger-kp", "7.5", "--finger-kv", "2.0",
+    ])
+    assert args.finger_kp == 7.5
+    assert args.finger_kv == 2.0
 
 @pytest.mark.parametrize("frames", [(61, 62), (62, 64)])
 def test_trace_contract_rejects_invalid_decision_schedule(frames):
@@ -443,6 +455,7 @@ def test_mujoco_trace_producer_declares_and_records_post_filters() -> None:
     assert '"post_filters": ["velocity_clamp", "position_clamp"]' in source
     assert "class ControlTraceIntervention" in source
     assert '"applied_active_target": source["applied_active_target"].copy()' in source
+    assert '"finger_pd": {"kp": cfg.finger_kp, "kv": cfg.finger_kv, "force": cfg.finger_force}' in source
 
 
 def test_comparator_reports_both_observation_slices_and_control_contract(tmp_path):
