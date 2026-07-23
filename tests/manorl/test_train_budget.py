@@ -265,6 +265,10 @@ def test_training_budget_supports_four_way_controls_diagnostics_cross(
     assert tool.TrainingBudget(
         device_resident_controls=controls
     ).resolved_capture_transition_diagnostics is (not controls)
+    assert tool.TrainingBudget().device_transition is False
+    assert tool.TrainingBudget(
+        device_transition=True, capture_transition_diagnostics=True
+    ).resolved_capture_transition_diagnostics is False
 
 
 def test_training_cli_parses_independent_diagnostics_switch(
@@ -281,8 +285,59 @@ def test_training_cli_parses_independent_diagnostics_switch(
     ]) == 0
     budget = captured[0]
     assert budget.device_resident_controls is True
+    assert budget.device_transition is False
     assert budget.capture_transition_diagnostics is True
     assert budget.resolved_capture_transition_diagnostics is True
+
+
+def test_training_cli_enables_narrow_device_transition(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured: list[object] = []
+    monkeypatch.setattr(tool, "run", lambda _output, budget: captured.append(budget) or {})
+
+    assert tool.main([
+        "--output", str(tmp_path / "training"),
+        "--device-resident-controls", "true",
+        "--device-transition", "true",
+    ]) == 0
+    budget = captured[0]
+    assert budget.device_transition is True
+    assert budget.resolved_capture_transition_diagnostics is False
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"device_resident_controls": False}, "device_resident_controls=True"),
+        ({"capture_transition_diagnostics": True}, "capture_transition_diagnostics=False"),
+        ({"headless": False}, "headless GPU training"),
+        ({"rerun_output": "episode.rrd"}, "without Rerun recording"),
+    ],
+)
+def test_device_transition_budget_rejects_incompatible_training_modes(
+    overrides: dict[str, object], message: str
+) -> None:
+    tool = _load_tool()
+    values: dict[str, object] = {
+        "device_transition": True,
+        "device_resident_controls": True,
+        "capture_transition_diagnostics": False,
+        "headless": True,
+    }
+    values.update(overrides)
+    with pytest.raises(ValueError, match=message):
+        tool._validate_device_transition_budget(tool.TrainingBudget(**values))
+
+
+def test_training_cli_rejects_device_transition_without_controls(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    with pytest.raises(SystemExit, match="2"):
+        tool.main(["--output", str(tmp_path / "training"), "--device-transition", "true"])
+    assert "device_resident_controls=True" in capsys.readouterr().err
 
 
 def test_training_observer_never_owns_steps_and_close_finishes_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -428,6 +483,51 @@ def test_train_batches_same_step_completed_episode_returns(monkeypatch: pytest.M
     tool._write_episode_record(episode_file, records[0])
     assert json.loads(episode_file.getvalue()) == records[0]
     assert tool._episode_records_path(Path("outputs/manorl/run")) == Path("outputs/manorl/run.episodes.jsonl")
+
+
+def test_train_reads_device_transition_reward_and_termination_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = _load_tool()
+    runtime = _runtime()
+    runtime.config.rollouts = 1
+    environment = runtime.gymnasium_env.environment
+    environment.config.device_transition = True
+
+    def step(actions: torch.Tensor):
+        environment.last_reward = SimpleNamespace(**{
+            name: np.asarray([index + 0.25], dtype=np.float64)
+            for index, name in enumerate(tool.REWARD_UPDATE_COMPONENTS)
+        })
+        environment.last_termination = SimpleNamespace(
+            reset=np.asarray([True]),
+            success=np.asarray([True]),
+            failure=np.asarray([False]),
+            reason_code=np.asarray([1], dtype=np.int32),
+        )
+        environment.episode_returns = np.asarray([7.5], dtype=np.float64)
+        environment.last_transition = None
+        return (
+            torch.zeros_like(actions),
+            torch.full((1, 1), 2.5),
+            torch.ones((1, 1), dtype=torch.bool),
+            torch.zeros((1, 1), dtype=torch.bool),
+            {},
+        )
+
+    runtime.env.step = step
+    monkeypatch.setattr(tool.time, "monotonic", FakeClock([0.0, 1.0, 2.0, 3.0]))
+    updates, transitions, _ = tool._train(
+        runtime, tool.TrainingBudget(num_envs=1, updates=1)
+    )
+
+    assert transitions == 1
+    assert updates[0]["reward_mean"] == 2.5
+    assert updates[0]["contact"] == pytest.approx(
+        float(tool.REWARD_UPDATE_COMPONENTS.index("contact")) + 0.25
+    )
+    assert updates[0]["success_count"] == 1.0
+    assert updates[0]["episode_return_mean"] == 7.5
 
 
 def test_train_emits_gym_style_object_and_pair_telemetry(
@@ -1167,7 +1267,7 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tool = _load_tool()
-    constructions: list[tuple[str, int, int]] = []
+    constructions: list[tuple[str, int, int, bool]] = []
     loads: list[tuple[str, str]] = []
     modes: list[tuple[str, str]] = []
     initial_runtime_ref: list[weakref.ReferenceType[object]] = []
@@ -1206,7 +1306,12 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
 
     def build_runtime(physical: Physical, config: object) -> Runtime:
         name = "training" if not constructions else f"evaluation-{len(constructions)}"
-        constructions.append((name, physical.config.num_envs, config.minibatch_size))
+        constructions.append((
+            name,
+            physical.config.num_envs,
+            config.minibatch_size,
+            physical.config.device_transition,
+        ))
         runtime = Runtime(name, config)
         if name == "training":
             training_runtime_ref.append(weakref.ref(runtime))
@@ -1251,17 +1356,25 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
             updates=1,
             minibatch_size=4096,
             evaluation_num_envs=128,
+            device_resident_controls=True,
+            device_transition=True,
+            capture_transition_diagnostics=False,
             wandb=tool.WandbOptions(enabled=False),
         ),
     )
 
-    assert constructions == [("training", 4096, 4096), ("evaluation-1", 128, 2048)]
+    assert constructions == [
+        ("training", 4096, 4096, True),
+        ("evaluation-1", 128, 2048, False),
+    ]
     assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-1", "trained")]
     assert loads[0][0] == "evaluation-1" and loads[1][0] == "training"
     assert loads[0][1] == loads[1][1] and loads[0][1].startswith(".initial-")
     assert loads[2] == ("evaluation-1", "run.pt")
     assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
     assert result["budget"]["evaluation_num_envs"] == 128
+    assert result["budget"]["device_transition"] is True
+    assert result["environment"]["device_transition"] is True
     assert result["learning_starts"] == 0
     assert not list((tmp_path / "run").glob(".initial-*"))
 

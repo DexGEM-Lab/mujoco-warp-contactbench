@@ -205,6 +205,9 @@ class TrainingBudget:
     viewer_stride: int = 1
     console_format: Literal["human", "json"] = "human"
     device_resident_controls: bool = False
+    # Opt in to the narrow device-side post-physics transition for training.
+    # Evaluation deliberately retains its physical-snapshot reference runtime.
+    device_transition: bool = False
     profile_phases: bool = False
     capture_transition_diagnostics: bool | None = None
     unified_object_batch: bool = False
@@ -222,6 +225,8 @@ class TrainingBudget:
 
     @property
     def resolved_capture_transition_diagnostics(self) -> bool:
+        if self.device_transition:
+            return False
         if self.capture_transition_diagnostics is None:
             return not self.device_resident_controls
         return self.capture_transition_diagnostics
@@ -1698,6 +1703,32 @@ def _build_training_observer(
     )
 
 
+def _validate_device_transition_budget(budget: TrainingBudget) -> None:
+    """Reject training-mode combinations incompatible with the narrow runtime.
+
+    Homogeneous right-hand/28-DoF eligibility belongs to ``MujocoManoEnvironment``:
+    it is the only layer that owns resolved trajectory metadata.
+    """
+    if not budget.device_transition:
+        return
+    if not budget.device_resident_controls:
+        raise ValueError("device-transition requires device_resident_controls=True")
+    if (
+        budget.resolved_capture_transition_diagnostics
+        or budget.capture_transition_diagnostics is True
+    ):
+        raise ValueError("device-transition requires capture_transition_diagnostics=False")
+    if not budget.headless:
+        raise ValueError("device-transition requires headless GPU training")
+    if any((
+        budget.rerun_output is not None,
+        budget.rerun_grpc_url is not None,
+        budget.rerun_high_return_dir is not None,
+        budget.rerun_high_return_threshold is not None,
+    )):
+        raise ValueError("device-transition requires training without Rerun recording")
+
+
 def _build_evaluation_runtime(
     *,
     selection: TrajectorySelection,
@@ -1839,6 +1870,7 @@ def _maybe_save_periodic_checkpoint(
 
 def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     _assert_cuda_runtime()
+    _validate_device_transition_budget(budget)
     if output.suffix:
         raise ValueError("--output must be a prefix without a suffix")
     if budget.rerun_output is not None and budget.rerun_grpc_url is not None:
@@ -1922,6 +1954,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
             contact_capacity=contact_capacity,
             device_resident_controls=budget.device_resident_controls,
+            device_transition=budget.device_transition,
             capture_transition_diagnostics=budget.resolved_capture_transition_diagnostics,
             profile_phases=budget.profile_phases,
             unified_object_batch=budget.unified_object_batch,
@@ -2076,6 +2109,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             "residual_action": asdict(physical.config.residual_action),
             "max_deviation_distance": physical.config.max_deviation_distance,
             "device_resident_controls": physical.config.device_resident_controls,
+            "device_transition": physical.config.device_transition,
             "capture_transition_diagnostics": physical.config.capture_transition_diagnostics,
         }
         learning_starts = runtime.agent.cfg.learning_starts
@@ -2285,6 +2319,13 @@ def main(argv: list[str] | None = None) -> int:
         help="keep controller targets and delayed reset writes on the MJX device",
     )
     parser.add_argument(
+        "--device-transition",
+        type=parse_cli_bool,
+        default=False,
+        metavar="{true,false}",
+        help="use the narrow device-side transition during training only",
+    )
+    parser.add_argument(
         "--capture-transition-diagnostics",
         type=parse_cli_bool,
         default=None,
@@ -2367,6 +2408,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("viewer-envs must be within num-envs")
     if args.viewer_stride < 1:
         parser.error("viewer-stride must be positive")
+    try:
+        _validate_device_transition_budget(
+            TrainingBudget(
+                device_resident_controls=args.device_resident_controls,
+                device_transition=args.device_transition,
+                capture_transition_diagnostics=args.capture_transition_diagnostics,
+                headless=args.headless,
+                rerun_output=None if args.rerun_output is None else str(args.rerun_output),
+                rerun_grpc_url=args.rerun_grpc_url,
+                rerun_high_return_dir=(
+                    None if args.rerun_high_return_dir is None else str(args.rerun_high_return_dir)
+                ),
+                rerun_high_return_threshold=args.rerun_high_return_threshold,
+            )
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     result = run(
         args.output,
         TrainingBudget(
@@ -2409,6 +2467,7 @@ def main(argv: list[str] | None = None) -> int:
             viewer_stride=args.viewer_stride,
             console_format=args.console_format,
             device_resident_controls=args.device_resident_controls,
+            device_transition=args.device_transition,
             profile_phases=args.profile_phases,
             capture_transition_diagnostics=args.capture_transition_diagnostics,
             unified_object_batch=args.unified_object_batch,
