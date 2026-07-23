@@ -2408,8 +2408,25 @@ class MujocoManoEnvironment:
 
         indices = self._target_indices()
         next_indices = np.minimum(indices + 5, self.trajectory_lengths - 1)
-        reference_pos = self.jax.device_put(self.reference_object_pos, self.device)
-        reference_quat = self.jax.device_put(self.reference_object_quat_xyzw, self.device)
+        # Reference tables are immutable for this homogeneous environment.
+        # Keep their sole device copy across transitions; reset changes indices,
+        # never the source trajectories.
+        if not hasattr(self, "_device_reference_object_pos"):
+            self._device_reference_object_pos = self.jax.device_put(self.reference_object_pos, self.device)
+            self._device_reference_object_quat = self.jax.device_put(self.reference_object_quat_xyzw, self.device)
+            self._device_trajectory_lengths = self.jax.device_put(self.trajectory_lengths, self.device)
+            self._device_contact_start_frames = self.jax.device_put(self.contact_start_frames, self.device)
+            self._device_contact_end_frames = self.jax.device_put(self.contact_end_frames, self.device)
+            self._device_expected_contact_mask = self.jax.device_put(self.expected_contact_mask, self.device)
+            self._device_expected_contact_weights = self.jax.device_put(self.expected_contact_weights, self.device)
+            self._device_active_joint_mask = self.jax.device_put(self.active_joint_mask, self.device)
+            self._device_action_ids = self.jax.device_put(self.action_ids, self.device)
+            self._device_object_geometry = self.jax.device_put(
+                np.broadcast_to(self.object_geometry, (self.config.num_envs, 12)), self.device
+            )
+            self._device_object_support_points = self.jax.device_put(self.object_support_points, self.device)
+        reference_pos = self._device_reference_object_pos
+        reference_quat = self._device_reference_object_quat
         device_indices = self.jax.device_put(indices, self.device)
         device_next_indices = self.jax.device_put(next_indices, self.device)
         world = self.jp.arange(self.config.num_envs)
@@ -2428,7 +2445,7 @@ class MujocoManoEnvironment:
         termination = check_device_termination(
             object_position=physical.object_position, target_position=target_pos,
             progress=self.jax.device_put(self.progress, self.device),
-            trajectory_lengths=self.jax.device_put(self.trajectory_lengths, self.device),
+            trajectory_lengths=self._device_trajectory_lengths,
             early_mask=self.jax.device_put(early_phase_mask(
                 self.trajectory_steps, starts=np.zeros(self.config.num_envs, dtype=np.int64),
                 steps=self.config.compatibility.early_phase_steps,
@@ -2442,14 +2459,14 @@ class MujocoManoEnvironment:
             target_object_orientation_xyzw=target_quat,
             cumulative_offset=self.jax.device_put(self.cumulative_offset, self.device),
             cumulative_joint_offset=self.jax.device_put(self.cumulative_joint_offset, self.device),
-            active_joint_mask=self.jax.device_put(self.active_joint_mask, self.device),
+            active_joint_mask=self._device_active_joint_mask,
             hand_object_force_on_object_world_N=contacts.hand_object_forces,
-            expected_contact_mask=self.jax.device_put(self.expected_contact_mask, self.device),
-            expected_contact_weights=self.jax.device_put(self.expected_contact_weights, self.device),
+            expected_contact_mask=self._device_expected_contact_mask,
+            expected_contact_weights=self._device_expected_contact_weights,
             object_linear_velocity=physical.object_linear_velocity,
             trajectory_steps=self.jax.device_put(self.trajectory_steps, self.device),
-            contact_start_frames=self.jax.device_put(self.contact_start_frames, self.device),
-            contact_end_frames=self.jax.device_put(self.contact_end_frames, self.device),
+            contact_start_frames=self._device_contact_start_frames,
+            contact_end_frames=self._device_contact_end_frames,
             rotation_disabled_mask=self.jp.zeros(self.config.num_envs, dtype=bool),
             early_phase_starts=self.jp.zeros(self.config.num_envs, dtype=np.int64),
             early_phase_steps=self.config.compatibility.early_phase_steps,
@@ -2470,10 +2487,10 @@ class MujocoManoEnvironment:
             cumulative_joint_offset=self.jax.device_put(self.cumulative_joint_offset, self.device),
             point_cloud_local=self.jax.device_put(point_cloud, self.device),
             point_cloud_scale=self.jax.device_put(point_scale, self.device),
-            object_geometry=self.jax.device_put(np.broadcast_to(self.object_geometry, (self.config.num_envs, 12)), self.device),
-            expected_contact_mask=self.jax.device_put(self.expected_contact_mask, self.device),
-            action_ids=self.jax.device_put(self.action_ids, self.device),
-            object_support_points=self.jax.device_put(self.object_support_points, self.device),
+            object_geometry=self._device_object_geometry,
+            expected_contact_mask=self._device_expected_contact_mask,
+            action_ids=self._device_action_ids,
+            object_support_points=self._device_object_support_points,
             table_surface_height=FLOOR_TOP_Z,
             mano_dof_lower=self._joint_lower_device[:JOINT_DOF], mano_dof_upper=self._joint_upper_device[:JOINT_DOF],
         )
