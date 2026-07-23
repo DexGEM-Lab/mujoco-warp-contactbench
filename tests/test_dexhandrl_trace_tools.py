@@ -317,6 +317,14 @@ def test_gym_apply_patch_reinstalls_bounded_run_play_and_restores_after_error():
     assert FakeRunner.run_play is original_run_play
 
 
+def test_mujoco_trace_producer_declares_and_records_post_filters() -> None:
+    producer = Path(__file__).resolve().parents[1] / "tools" / "trace_dexhandrl_mujoco.py"
+    source = producer.read_text(encoding="utf-8")
+    assert 'applied = np.asarray(trace["applied_active_target"], dtype=np.float32)' in source
+    assert 'applied_active_target=applied' in source
+    assert '"post_filters": ["velocity_clamp", "position_clamp"]' in source
+
+
 def test_comparator_reports_both_observation_slices_and_control_contract(tmp_path):
     meta, left = _trace(backend="gym"); _, right = _trace()
     right["processed_observation"][1, 62] = 1e-3; right["rms_observation"][1, 62] = 1e-3; right["applied_active_target"][0, 0] = 2e-3

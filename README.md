@@ -545,9 +545,9 @@ states 63–693. MuJoCo follows this same split: reset initializes frame 61, adv
 time. Each action adds `1/633` to policy episode time. The production
 `substeps=10` and finger `kp/kv=15/0` remain evidence-backed MuJoCo defaults:
 Gym's PhysX `substeps=2` and numeric finger `300/20` gains do not transfer
-across simulator actuator semantics. MuJoCo records the authoritative raw Lance reference and
-pre-coupling corrected target, then declares
-`applied_active_target == corrected_active_target` with `post_filters: []`.
+across simulator actuator semantics. MuJoCo records the authoritative raw Lance reference, pre-coupling corrected target,
+and applied target after Gym's ordered `velocity_clamp` then `position_clamp` active-space
+filters. Runtime parity acceptance remains pending a fresh cross-simulator trace.
 
 Existing v2 smoke NPZ artifacts remain structural evidence only: their
 synthetic 61/62 labels are one frame early, so they are not alignment evidence.

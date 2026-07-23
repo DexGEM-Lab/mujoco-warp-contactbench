@@ -18,7 +18,15 @@ from sim.dexhandrl.skrl_env import (
     _decode_contact_force_world,
     _mask_contact_vectors,
     _normalize_active_positions,
+    apply_active_target_post_filters,
 )
+
+
+def _set_active_target_filter_state(task) -> None:
+    task.active_prev_targets = np.zeros(22, dtype=np.float32)
+    task.active_max_deltas = np.full(22, 100.0, dtype=np.float32)
+    task.active_lower = np.full(22, -100.0, dtype=np.float32)
+    task.active_upper = np.full(22, 100.0, dtype=np.float32)
 from sim.dexhandrl.skrl_env import _farthest_point_sample
 
 
@@ -83,7 +91,7 @@ def test_default_reset_settles_one_control_frame_before_policy_frame() -> None:
         "ctrl": skrl_env_module.make_ctrl_vector,
     }
     try:
-        skrl_env_module._reference_full_targets = lambda *args, **kwargs: np.zeros(1, dtype=np.float32)
+        skrl_env_module._reference_full_targets = lambda *args, **kwargs: np.zeros(26, dtype=np.float32)
         skrl_env_module.set_hand_qpos = lambda _jnp, dx, _ids, _full: dx
         skrl_env_module.set_object_freejoint = lambda _jnp, dx, _ids, _pos, _quat: dx
         skrl_env_module.make_ctrl_vector = lambda _full, _ids, _nu: np.zeros(1, dtype=np.float32)
@@ -96,6 +104,7 @@ def test_default_reset_settles_one_control_frame_before_policy_frame() -> None:
 
     assert task.cfg.settle_frames == 1
     assert len(step_calls) == task.cfg.substeps == 10
+    np.testing.assert_array_equal(task.active_prev_targets, np.zeros(22, dtype=np.float32))
 
 
 def test_active_position_normalization_matches_unclipped_gym_affine_contract() -> None:
@@ -105,6 +114,78 @@ def test_active_position_normalization_matches_unclipped_gym_affine_contract() -
     normalized = _normalize_active_positions(np.asarray([-1.0, 3.0], dtype=np.float32), lower, upper)
 
     np.testing.assert_allclose(normalized, np.asarray([-2.0, 1.5], dtype=np.float32))
+
+
+def test_active_target_post_filters_apply_velocity_before_position() -> None:
+    previous = np.asarray([0.0, 0.95], dtype=np.float32)
+    corrected = np.asarray([10.0, 10.0], dtype=np.float32)
+    max_deltas = np.asarray([0.25, 0.25], dtype=np.float32)
+    lower = np.asarray([-1.0, -1.0], dtype=np.float32)
+    upper = np.asarray([1.0, 1.0], dtype=np.float32)
+
+    applied = apply_active_target_post_filters(previous, corrected, max_deltas, lower, upper)
+
+    # The second coordinate reaches 1.20 after the velocity clamp, then position-clamps.
+    np.testing.assert_array_equal(applied, np.asarray([0.25, 1.0], dtype=np.float32))
+    assert applied.dtype == np.float32
+
+
+def test_active_target_limits_use_model_base_then_primary_finger_order() -> None:
+    task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
+    names = list(skrl_env_module.DEXHAND021PRO_FULL_DOF_NAMES[:6]) + ["finger_a", "finger_b"]
+    task.active_control_primary_joint_names = names[6:]
+    task.mujoco = SimpleNamespace(
+        mjtObj=SimpleNamespace(mjOBJ_JOINT=object()),
+        mj_name2id=lambda _model, _kind, name: names.index(name),
+    )
+    task.model = SimpleNamespace(jnt_range=np.asarray([[index, index + 0.5] for index in range(len(names))], dtype=np.float32))
+    task.active_finger_lower, task.active_finger_upper = task._build_active_finger_limits()
+
+    lower, upper = task._build_active_target_limits()
+
+    np.testing.assert_array_equal(lower, np.arange(8, dtype=np.float32))
+    np.testing.assert_array_equal(upper, np.arange(8, dtype=np.float32) + 0.5)
+
+
+def test_active_target_filter_recurrence_and_exact_max_deltas() -> None:
+    task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
+    task.cfg = DexHandRLMJXEnvConfig(dt=0.01)
+    expected = np.asarray([0.03] * 3 + [0.1] * 3 + [0.02] * 16, dtype=np.float32)
+    np.testing.assert_array_equal(task._build_active_max_deltas(), expected)
+
+    lower = np.full(22, -10.0, dtype=np.float32)
+    upper = np.full(22, 10.0, dtype=np.float32)
+    first = apply_active_target_post_filters(np.zeros(22, dtype=np.float32), np.ones(22, dtype=np.float32), expected, lower, upper)
+    second = apply_active_target_post_filters(first, np.ones(22, dtype=np.float32), expected, lower, upper)
+    np.testing.assert_array_equal(first, expected)
+    np.testing.assert_array_equal(second, expected * 2.0)
+
+
+@pytest.mark.parametrize("use_residual,early_phase_frames", [(False, 0), (True, 2), (True, 0)])
+def test_all_action_branches_trace_applied_active_target(monkeypatch, use_residual, early_phase_frames) -> None:
+    task = DexHandRLMJXEnv.__new__(DexHandRLMJXEnv)
+    task.cfg = SimpleNamespace(
+        use_residual=use_residual, early_phase_frames=early_phase_frames,
+        post_contact_base_position_decay=(0.9, 0.9, 0.9), base_position_decay=(0.9, 0.9, 0.9),
+        post_contact_joint_decay=1.0, joint_decay=0.9, base_position_scales=(0.002, 0.002, 0.003),
+        base_position_max_offset=0.04, reference_joint_source="active",
+    )
+    task.start_frame, task.last_contact_frame, task.num_actions = 0, 100, 22
+    task.base_position_offset = np.zeros(3, dtype=np.float32)
+    task.joint_offset = np.zeros(16, dtype=np.float32)
+    task.active_joint_mask = np.ones(16, dtype=np.float32)
+    task.route_joint_upper_limits = {}
+    task.trajectory = SimpleNamespace(hand_dof=np.zeros((2, 22), dtype=np.float32))
+    _set_active_target_filter_state(task)
+    task.active_max_deltas[:] = 0.02
+    monkeypatch.setattr(skrl_env_module, "_reference_full_targets", lambda *args, **kwargs: np.ones(26, dtype=np.float32))
+
+    task._apply_residual_action(np.ones(22, dtype=np.float32), target_frame=1, current_full=np.zeros(26, dtype=np.float32))
+
+    trace = task._last_action_trace
+    assert trace is not None
+    assert set(("reference_active_target", "corrected_active_target", "applied_active_target", "full_target")) <= trace.keys()
+    np.testing.assert_array_equal(task.active_prev_targets, trace["applied_active_target"])
 
 
 def test_episode_time_uses_action_count_not_logical_frame() -> None:
@@ -155,6 +236,7 @@ def test_residual_action_masks_inactive_finger_joints(monkeypatch) -> None:
     task.base_position_offset = np.zeros(3, dtype=np.float32)
     task.joint_offset = np.zeros(16, dtype=np.float32)
     task.active_joint_mask = np.asarray([1.0, 0.0] + [1.0] * 14, dtype=np.float32)
+    _set_active_target_filter_state(task)
     raw_reference = np.linspace(-0.2, 0.2, 22, dtype=np.float32)
     task.trajectory = SimpleNamespace(hand_dof=np.stack([raw_reference, raw_reference]))
     task.route_joint_upper_limits = {}
@@ -178,6 +260,7 @@ def test_residual_action_masks_inactive_finger_joints(monkeypatch) -> None:
     assert task._last_action_trace["decision_frame"] == 1
     np.testing.assert_array_equal(task._last_action_trace["reference_active_target"], raw_reference)
     assert task._last_action_trace["corrected_active_target"].shape == (22,)
+    assert task._last_action_trace["applied_active_target"].shape == (22,)
     np.testing.assert_array_equal(task._last_action_trace["full_target"], corrected)
 
 
@@ -201,6 +284,7 @@ def test_residual_action_uses_active_to_full_joint_mapping(monkeypatch) -> None:
     task.joint_offset = np.zeros(16, dtype=np.float32)
     task.active_joint_mask = np.zeros(16, dtype=np.float32)
     task.active_joint_mask[7] = 1.0
+    _set_active_target_filter_state(task)
     task.trajectory = object()
     task.route_joint_upper_limits = {}
     monkeypatch.setattr(
@@ -241,6 +325,7 @@ def test_routed_residual_preserves_current_distal_distribution(monkeypatch) -> N
     task.joint_offset = np.zeros(16, dtype=np.float32)
     task.active_joint_mask = np.zeros(16, dtype=np.float32)
     task.active_joint_mask[6] = 1.0
+    _set_active_target_filter_state(task)
     task.trajectory = object()
     task.route_joint_upper_limits = {}
     monkeypatch.setattr(

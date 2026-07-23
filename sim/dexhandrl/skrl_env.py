@@ -107,6 +107,10 @@ class DexHandRLMJXEnvConfig:
     use_residual: bool = True
     dt: float = 0.01
     substeps: int = 10
+    # IsaacGym ActionProcessor velocity limits, in active-target units per second.
+    policy_base_lin_velocity_limit: float = 3.0
+    policy_base_ang_velocity_limit: float = 10.0
+    policy_finger_velocity_limit: float = 2.0
     # Gym advances one 0.01 s control frame during reset before policy frame 62.
     settle_frames: int = 1
     pre_contact_frames: int = 200
@@ -151,6 +155,15 @@ class DexHandRLMJXEnvConfig:
     task_config_path: Path | None = None
 
     def __post_init__(self) -> None:
+        for name in (
+            "dt",
+            "policy_base_lin_velocity_limit",
+            "policy_base_ang_velocity_limit",
+            "policy_finger_velocity_limit",
+        ):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
         root = Path(self.isaac_source_root or DEFAULT_ISAAC_SOURCE_ROOT)
         self.isaac_source_root = root
         if self.contact_bodies_file is None:
@@ -444,6 +457,31 @@ def _normalize_active_positions(values: np.ndarray, lower: np.ndarray, upper: np
     return 2.0 * (np.asarray(values, dtype=np.float32) - lower) / denom - 1.0
 
 
+def apply_active_target_post_filters(
+    previous: np.ndarray,
+    corrected: np.ndarray,
+    max_deltas: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> np.ndarray:
+    """Apply Gym's ordered active-target velocity then position clamps."""
+    previous = np.asarray(previous, dtype=np.float32)
+    corrected = np.asarray(corrected, dtype=np.float32)
+    max_deltas = np.asarray(max_deltas, dtype=np.float32)
+    lower = np.asarray(lower, dtype=np.float32)
+    upper = np.asarray(upper, dtype=np.float32)
+    if not (previous.shape == corrected.shape == max_deltas.shape == lower.shape == upper.shape):
+        raise ValueError("active target filters require identically shaped vectors")
+    if not (np.all(np.isfinite(previous)) and np.all(np.isfinite(corrected))
+            and np.all(np.isfinite(max_deltas)) and np.all(np.isfinite(lower))
+            and np.all(np.isfinite(upper))):
+        raise ValueError("active target filters require finite vectors")
+    if np.any(max_deltas <= 0.0) or np.any(lower > upper):
+        raise ValueError("active target filter limits are invalid")
+    velocity_clamped = previous + np.clip(corrected - previous, -max_deltas, max_deltas)
+    return np.asarray(np.clip(velocity_clamped, lower, upper), dtype=np.float32)
+
+
 def _mask_contact_vectors(vectors: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Apply IsaacGym's per-action contact-body mask to force vectors."""
 
@@ -640,6 +678,8 @@ class DexHandRLMJXEnv:
             DEXHAND021PRO_FULL_DOF_NAMES[idx] for idx in _ACTIVATED_CONTROL_PRIMARY_DOF_INDICES
         ]
         self.active_finger_lower, self.active_finger_upper = self._build_active_finger_limits()
+        self.active_lower, self.active_upper = self._build_active_target_limits()
+        self.active_max_deltas = self._build_active_max_deltas()
 
         self.observation_space = _make_box_space(-np.inf, np.inf, (self.num_observations,), dtype=np.float32)
         self.action_space = _make_box_space(-1.0, 1.0, (self.num_actions,), dtype=np.float32)
@@ -654,6 +694,8 @@ class DexHandRLMJXEnv:
         self.base_position_offset = np.zeros(3, dtype=np.float32)
         self.joint_offset = np.zeros(16, dtype=np.float32)
         self._last_full_targets: np.ndarray | None = None
+        # Gym ActionProcessor state: the last target after both post-filters.
+        self.active_prev_targets = np.zeros((self.num_actions,), dtype=np.float32)
         # Trace-only diagnostic: captures the exact control decision before coupling.
         self._last_action_trace: dict[str, np.ndarray | int] | None = None
         self._last_obs = np.zeros((self.num_observations,), dtype=np.float32)
@@ -715,6 +757,29 @@ class DexHandRLMJXEnv:
             upper.append(float(joint_range[1]))
         return np.asarray(lower, dtype=np.float32), np.asarray(upper, dtype=np.float32)
 
+    def _build_active_target_limits(self) -> tuple[np.ndarray, np.ndarray]:
+        base_lower = []
+        base_upper = []
+        for joint_name in DEXHAND021PRO_FULL_DOF_NAMES[:6]:
+            joint_id = self.mujoco.mj_name2id(self.model, self.mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            if joint_id < 0:
+                raise RuntimeError(f"MuJoCo model is missing joint {joint_name!r}")
+            joint_range = np.asarray(self.model.jnt_range[joint_id], dtype=np.float32)
+            base_lower.append(float(joint_range[0]))
+            base_upper.append(float(joint_range[1]))
+        return (
+            np.asarray(base_lower + self.active_finger_lower.tolist(), dtype=np.float32),
+            np.asarray(base_upper + self.active_finger_upper.tolist(), dtype=np.float32),
+        )
+
+    def _build_active_max_deltas(self) -> np.ndarray:
+        return np.asarray(
+            [self.cfg.dt * self.cfg.policy_base_lin_velocity_limit] * 3
+            + [self.cfg.dt * self.cfg.policy_base_ang_velocity_limit] * 3
+            + [self.cfg.dt * self.cfg.policy_finger_velocity_limit] * 16,
+            dtype=np.float32,
+        )
+
     def _infer_object_primitive(self) -> tuple[int, np.ndarray]:
         geom_type = str(self.geometry["type"])
         size = np.asarray(self.geometry["size"], dtype=np.float32)
@@ -747,6 +812,8 @@ class DexHandRLMJXEnv:
         self.jax.block_until_ready(dx.qpos)
         self._dx = dx
         self._last_full_targets = initial_full.copy()
+        # Match Gym reset_targets(frame-61 full reset target) before reset settling.
+        self.active_prev_targets = full_to_active_dof(initial_full).astype(np.float32)
 
     def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[np.ndarray, dict[str, Any]]:
         if seed is not None:
@@ -780,37 +847,43 @@ class DexHandRLMJXEnv:
         # Lance hand_dof is the authoritative 22D active-space reference, before
         # any active→full coupling. Keep this diagnostic separate from control.
         raw_hand_dof = getattr(self.trajectory, "hand_dof", None)
-        # Minimal unit-test doubles do not carry Lance payloads; real environments
-        # always do, and the producer requires that authoritative value.
         reference_active = (np.asarray(raw_hand_dof[target_frame], dtype=np.float32).copy()
                             if raw_hand_dof is not None else np.zeros(self.num_actions, dtype=np.float32))
-        if not self.cfg.use_residual:
-            self.base_position_offset[:] = 0.0
-            self.joint_offset[:] = 0.0
-            full_targets = _reference_full_targets(
-                self.trajectory, frame=target_frame, source=self.cfg.reference_joint_source,
-                current_full=current_full, route_joint_upper_limits=self.route_joint_upper_limits,
-            )
-            self._last_action_trace = {"decision_frame": target_frame, "reference_active_target": reference_active,
-                                       "corrected_active_target": full_to_active_dof(full_targets).astype(np.float32),
-                                       "full_target": full_targets.copy()}
-            return full_targets
-
+        reference_full = _reference_full_targets(
+            self.trajectory, frame=target_frame, source=self.cfg.reference_joint_source,
+            current_full=current_full, route_joint_upper_limits=self.route_joint_upper_limits,
+        ).copy()
+        corrected_active = full_to_active_dof(reference_full).astype(np.float32)
         in_early_phase = (target_frame - self.start_frame) < self.cfg.early_phase_frames
-        if in_early_phase:
+        if not self.cfg.use_residual or in_early_phase:
             self.base_position_offset[:] = 0.0
             self.joint_offset[:] = 0.0
-        action = np.asarray(action, dtype=np.float32).reshape(self.num_actions)
-        action = np.clip(action, -1.0, 1.0)
-        if in_early_phase:
-            full_targets = _reference_full_targets(
-                self.trajectory, frame=target_frame, source=self.cfg.reference_joint_source,
-                current_full=current_full, route_joint_upper_limits=self.route_joint_upper_limits,
-            )
-            self._last_action_trace = {"decision_frame": target_frame, "reference_active_target": reference_active,
-                                       "corrected_active_target": reference_active.copy(), "full_target": full_targets.copy()}
-            return full_targets
+        else:
+            action = np.asarray(action, dtype=np.float32).reshape(self.num_actions)
+            action = np.clip(action, -1.0, 1.0)
+            corrected_active = self._apply_active_residual(action, target_frame, corrected_active)
 
+        applied_active = apply_active_target_post_filters(
+            self.active_prev_targets, corrected_active,
+            self.active_max_deltas, self.active_lower, self.active_upper,
+        )
+        self.active_prev_targets = applied_active.copy()
+        full_targets = active_to_full_dof(
+            applied_active,
+            current_full=current_full if current_full is not None else reference_full,
+            route_joint_upper_limits=self.route_joint_upper_limits,
+        )
+        self._last_action_trace = {
+            "decision_frame": target_frame,
+            "reference_active_target": reference_active,
+            "corrected_active_target": corrected_active.copy(),
+            "applied_active_target": applied_active.copy(),
+            "full_target": full_targets.copy(),
+        }
+        return full_targets
+
+    def _apply_active_residual(self, action: np.ndarray, target_frame: int, corrected_active: np.ndarray) -> np.ndarray:
+        """Apply residual offsets in active space; post-filters apply afterwards."""
         after_last_contact = target_frame > self.last_contact_frame
         base_decay = np.asarray(
             self.cfg.post_contact_base_position_decay if after_last_contact else self.cfg.base_position_decay,
@@ -872,24 +945,10 @@ class DexHandRLMJXEnv:
         self.joint_offset = np.clip(self.joint_offset, -joint_max, joint_max)
         self.joint_offset *= self.active_joint_mask
 
-        reference_full = _reference_full_targets(
-            self.trajectory,
-            frame=target_frame,
-            source=self.cfg.reference_joint_source,
-            current_full=current_full,
-            route_joint_upper_limits=self.route_joint_upper_limits,
-        ).copy()
-        corrected_active = full_to_active_dof(reference_full)
+        corrected_active = np.asarray(corrected_active, dtype=np.float32).copy()
         corrected_active[0:3] += self.base_position_offset
         corrected_active[6:] += self.joint_offset
-        full_targets = active_to_full_dof(
-            corrected_active,
-            current_full=current_full if current_full is not None else reference_full,
-            route_joint_upper_limits=self.route_joint_upper_limits,
-        )
-        self._last_action_trace = {"decision_frame": target_frame, "reference_active_target": reference_active,
-                                   "corrected_active_target": corrected_active.copy(), "full_target": full_targets.copy()}
-        return full_targets
+        return corrected_active
 
     def _collect_contacts(self) -> dict[str, Any]:
         dx = self._dx
