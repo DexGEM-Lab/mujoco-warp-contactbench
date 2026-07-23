@@ -2,68 +2,74 @@
 
 ## Current model
 
-The complete paired rollout covers 631 policy decisions 62–692 and post-step
-states 63–693. Both artifacts are finite and end in a truncated final state:
+The full exact-control replay resolves the main ambiguity in the failed MuJoCo
+lift. MuJoCo fails even when driven by Gym's recorded controls, so divergent
+closed-loop targets are not a sufficient explanation. The failure is
+physics/contact-dominant under the preregistered thresholds, and the strongest
+live mechanism is a direct hand-friction mismatch.
 
-- Gym: `outputs/dexhandrl_trace/v3_full631_gym/gym_v3_full631.npz`, SHA256
-  `3fa200902b689f20664136c7988ab645a827b3f2cd6d32f79250ea657ca436ac`.
-- MuJoCo: `outputs/dexhandrl_trace/v3_full631_mujoco/mujoco_v3_full631.npz`,
-  SHA256 `c7fe9b357c7005eb4e74e915ff55e4ae77c5706a3e86cf443ee07542aaf136d4`.
-- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco/compare_vs_gym.json`,
-  SHA256 `7399bc9ffb3f5d24e9a236580ab240b430c90696ba6c6d3378df9c675ca6c150`.
-- Metrics: `outputs/dexhandrl_trace/v3_full631_mujoco/full_metrics.json`,
-  SHA256 `c385e7755fa65ee00a99065928ce0e5672c3bef34b000269b48a8a651e6c4e3c`.
+The replay at clean HEAD `679f1ef` covers all 631 decisions 62–692 and states
+63–693, is finite, and ends in a truncated final state. All ten imported Gym
+control arrays are bit-exact: `policy_mean`, `final_action`,
+`base_offset_before`, `base_offset_after`, `joint_offset_before`,
+`joint_offset_after`, `reference_active_target`, `corrected_active_target`,
+`applied_active_target`, and `full_target`.
 
-The MuJoCo trace, comparison, and metrics exited 0. The Gym artifact and runner
-completed, the environment closed, and the source checkout remained unchanged.
-Python then segfaulted during Isaac Gym interpreter teardown. The artifact is
-valid evidence, but a reproducible successful Gym CLI exit remains unresolved.
+Evidence artifacts:
 
-## What the full rollout establishes
+- Exact-control replay: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/mujoco_control_replay_full631.npz`, SHA256 `3de271d6a8d652c235d07c58bcbd10f5a76e3b8e5cfbe68b38868f36aace6bf3`.
+- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/compare_vs_gym.json`, SHA256 `7a5353101f3c6a360d5adf227fd363256199d24313d5e84585f94d075692d749`.
+- Validation: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/validation.json`, SHA256 `045291d1f15269b9d7a8b13dd3beca90399e64bdc1eab213809abb17cc924932`.
+- Metrics: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control/replay_metrics.json`, SHA256 `ed473ca0a22c4e21d1ea5dd072fe95d0379ea7f669d4d09a15b00e736aee3d87`.
 
-`reference_active_target` is exact across all 631 decisions. Corrected and
-applied active targets first diverge at decision 191, preserving the accepted
-filter boundary.
+## What the exact-control replay establishes
 
-MuJoCo tracks the free-space object trajectory adequately before movement:
-states 63–260 have maximum object position error `0.008136 m` (8.14 mm), below
-the preregistered `0.05 m` threshold. The failure begins with grasp and lift:
+With exact Gym controls, MuJoCo movement object-position RMSE is `0.1809978787
+m`, maximum lift is `0.0046744756 m`, and hand contact is active for 53 movement
+rows. Closed-loop MuJoCo produced RMSE `0.1977472621 m`, maximum lift
+`0.0317615978 m`, and 32 contact rows. Exact Gym control modestly reduces
+position RMSE and increases the count of contact rows, but reduces lift by
+`0.0270871222 m`.
 
-- During movement, MuJoCo object position RMSE/max are `0.197747/0.293853 m`,
-  versus Gym `0.050173/0.087589 m`.
-- MuJoCo maximum lift is `0.031762 m`, versus Gym `0.308728 m`.
-- MuJoCo overall hand active-target RMSE is better at `0.030404 rad`, versus
-  Gym `0.088467 rad`, despite MuJoCo failing to lift the object.
-- During movement, hand-contact magnitude is active for 32 MuJoCo rows versus
-  269 Gym rows. MuJoCo loses hand contact around frame 300 while the target
-  continues rising.
+The replay meets the preregistered physics/contact-dominant classification:
+movement RMSE is greater than `0.15 m` and maximum lift is less than `0.10 m`.
+It decisively fails the control-dominant requirements of RMSE below `0.10 m` and
+lift above `0.20 m`. The object still slips despite bit-exact imported controls;
+therefore closed-loop target divergence cannot by itself explain the failed
+lift.
 
-The evidence rules out generic servo inability as the principal explanation.
-The live mechanisms are grasp formation/retention in MuJoCo and closed-loop
-policy/control divergence after decision 191. The current paired rollout cannot
-separate them because each simulator follows its own state-conditioned policy,
-offsets, and control targets after divergence.
+## Live grasp-retention mechanism
 
-## Exact-control replay preregistration
+Gym loads the canonical hand MJCF default `<geom friction="3 2 2">`. MuJoCo
+`sim/dexhandrl/scene.py` rewrites this hand default to `0.5 0.01 0.001`.
+Object and ground friction remain separately set at `0.5`, so the mismatch is
+specific to the hand geometry rather than a global scene-friction change.
 
-Run one no-tuning replay that forces all 631 Gym `full_target` rows and the Gym
-offset/action-stage records into MuJoCo while MuJoCo physics evolves. Exact
-reference and control arrays are required; approximation or regenerated policy
-outputs would invalidate the discrimination.
+The rewrite greatly reduces hand-object sliding friction. Its causal prediction
+matches the observed failure: contact can form, but the object slips as the hand
+target rises, contact is lost near frame 300, and lift stays negligible even
+under the exact Gym target sequence. This source mismatch is now the principal
+mechanism to test.
 
-Classify using MuJoCo's movement interval:
+## Hand-friction experiment preregistration
 
-- **Control-dominant:** object RMSE `<0.10 m` and maximum lift `>0.20 m`.
-- **Physics/contact-dominant:** object RMSE `>0.15 m` and maximum lift `<0.10 m`.
-- **Mixed:** every other outcome.
+Run one single-variable exact-control experiment. Restore only hand-geometry
+friction to the canonical `3 2 2`. Hold object and ground friction, actuator
+gains, substeps, contact settings, and the complete imported Gym control trace
+fixed.
 
-A successful replay would show that divergent closed-loop policy/targets cause
-the failed lift. Failure under the exact Gym control sequence would localize the
-remaining gap to MuJoCo grasp/contact response. The mixed region preserves cases
-where both mechanisms contribute.
+The friction mechanism is sufficient only if all three predictions hold:
 
-All visual tests and final rollouts must use `env=1`, export `DISPLAY=:1`, and
-run explicitly non-headless with the viewer enabled when supported. Numerical
-trace collection may remain headless.
+1. hand contact is retained past frame 300;
+2. maximum lift exceeds `0.20 m`;
+3. movement object-position RMSE falls below `0.10 m`.
+
+If maximum lift remains below `0.10 m`, hand friction alone is insufficient.
+The next investigation must inspect collision geometry and contact compliance;
+do not tune additional parameters.
+
+The next visible run must use `DISPLAY=:1`, `--no-headless`, and `env=1`. The
+viewer must mirror the simulation state without stepping physics, so enabling
+visualization cannot change the replay trajectory.
 
 Evidence provenance: `OPS.md`.
