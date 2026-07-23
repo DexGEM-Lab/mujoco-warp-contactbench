@@ -2,63 +2,24 @@
 
 ## Current model
 
-The visible canonical-friction replay establishes that hand-object friction is
-causally important to grasp retention, but rejects the complete canonical MuJoCo
-friction vector as the production setting. Increasing hand friction from
-`0.5 0.01 0.001` to `3 2 2` substantially increases lift and contact duration,
-yet it destabilizes object rotation, ejects the object, and worsens translational
-tracking.
-
-The replay ran at clean HEAD `1a3932c`, with `DISPLAY=:1`, `env=1`, and headless
-disabled. `xwininfo` verified the live MuJoCo viewer. It contains 631 finite rows
-and exact imported Gym control arrays.
+The visible exact-control replay with hand friction `3 0.01 0.001` localized the object anomaly to the object inertial frame, not to torsional or rolling friction. The user's visual observation was that the grasp looked somewhat okay while the simulated object looked wrong; the object rotated/ejected during lift. The replay used exact Gym control arrays, status 0, `env=1`, `DISPLAY=:1`, and a live viewer.
 
 Evidence artifacts:
 
-- Trace: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/mujoco_control_replay_full631_handfriction3_visible.npz`, SHA256 `97a8fe12b995b3e1e4704fdcd0066f781bb7eb501b16fc7bf669471e1c4ea4b4`.
-- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/compare_vs_gym.json`, SHA256 `9944fc01e509ab92b5dba3b45176a67328c313c98b541d703a54b19f43598fab`.
-- Validation: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/validation.json`, SHA256 `6c2c461ebc7c49b4e1a1eedbb8457502f2fed25dc680553c56b80cdc1d428ee8`.
-- Metrics: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_visible/friction_metrics.json`, SHA256 prefix `51ac2fd`.
+- Trace: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_slide_visible/mujoco_control_replay_full631_handfriction3_slide_visible.npz`, SHA256 `35ba55f0...`.
+- Comparison: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_slide_visible/compare_vs_gym.json`, SHA256 `9944fc01...`.
+- Validation: `outputs/dexhandrl_trace/v3_full631_mujoco_gym_control_handfriction3_slide_visible/validation.json`, SHA256 `91dbc505...`.
 
-## What the friction-3 replay establishes
+## What the `3 0.01 0.001` comparison establishes
 
-Maximum lift increased from the exact-control baseline `0.00467 m` to `0.12935
-m`, a gain of `0.12468 m`. Movement hand-contact rows increased from 53 to 88.
-These changes under identical controls establish that contact friction materially
-changes grasp retention and lift.
+All numeric, control, and physics arrays are bit-exact to the prior `3 2 2` replay; only metadata differs. Therefore the torsional/rolling hypothesis is falsified: the contact `condim=3` means only sliding friction participates, while friction slots 2 and 3 are inactive. Rotation/ejection cannot have been caused by those coefficients.
 
-The result fails the preregistered success criteria. Movement object-position
-RMSE worsened from `0.1810 m` to `0.2892 m`, and movement orientation RMSE
-worsened from `0.119 rad` to `2.725 rad`. Object orientation first exceeded `1
-rad` at frame 300, the object reached maximum height at frame 330 while nearing
-a pi-radian flip, and it was then ejected and dropped. Lift improved but remained
-below the required `0.20 m`; position RMSE also remained above the required
-`0.10 m`.
+The ManoRL cube1 comparison rules down mesh geometry. The URDF and mesh have identical bounds, centroid, volume, and faces. The source URDF inertial origin is `[0.005175592236, -0.005187185076, 0.001516276923]` m. The Gym URDF importer and ManoRL `_link_inertial` preserve this origin. In contrast, the DexHand scene `_object_body_xml` hardcodes inertial `pos="0 0 0"` while retaining inertia values about the source COM. This displaces the physical COM by 7.48 mm from the geometry and creates an incorrect contact torque. That mechanism directly explains the observed object rotation/ejection.
 
-## Live mechanism
+## Next preregistered intervention
 
-Gym PhysX exposes scalar surface friction, whereas MuJoCo represents friction as
-sliding, torsional, and rolling components. Setting MuJoCo to the canonical
-`3 2 2` therefore changes three contact mechanisms at once. The increased lift
-and contact count identify stronger sliding resistance as beneficial. The large,
-early pi-radian rotation followed by ejection identifies excessive contact moment
-as the dominant failure introduced by the large torsional and rolling terms.
-The complete `3 2 2` vector is rejected as a production default.
+Run one visible exact-control replay changing only object inertial-frame handling: preserve the URDF inertial origin, together with generic origin rotation and collision origin, while leaving mesh, mass, inertia, gains, substeps, solver, control arrays, and fixed friction `3 0.01 0.001` unchanged. Use `DISPLAY=:1`, `env=1`, `--no-headless`, and a viewer.
 
-## Next experiment preregistration
-
-Run one exact-control experiment relative to `3 2 2`. Keep hand sliding friction
-at `3`, and restore only torsional and rolling friction to the prior small values:
-`3 0.01 0.001`. Hold the complete imported Gym control trace and every other
-simulation setting fixed. Run visibly with `DISPLAY=:1`, `env=1`, and headless
-disabled.
-
-If torsional/rolling overconstraint caused the ejection, the replay must retain
-maximum lift `>=0.10 m`, reduce movement orientation RMSE below `0.5 rad`, and
-improve movement position RMSE below `0.18 m`. Lift below `0.10 m` means sliding
-friction alone is insufficient. Orientation remaining above `1 rad` means the
-destabilizing torque arises from collision geometry or normal forces rather than
-MuJoCo's torsional/rolling friction dimensions. Do not tune any parameter after
-the result until the anomaly is inspected.
+Pass criteria relative to the `3 2 2` baseline are orientation movement RMSE improving at least 30%, from `2.7247` to `<=1.9073` rad; position movement RMSE improving at least 20%, from `0.2892` to `<=0.2314` m; and maximum lift remaining `>=0.10` m. If this fails, inspect ManoRL contact compliance/integrator and object friction separately; do not wholesale-copy ManoRL.
 
 Evidence provenance: `OPS.md`.
