@@ -19,7 +19,12 @@ from sim.manorl.device_runtime import (
     reduce_warp_contacts,
     torch_to_jax_cuda,
 )
-from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment, _decode_contact_forces
+from sim.manorl.environment import (
+    EnvironmentConfig,
+    MujocoManoEnvironment,
+    _decode_contact_forces,
+    recommended_warp_contact_capacity,
+)
 from sim.manorl.abi import check_termination
 from sim.manorl.rewards import RewardConfig, RewardState, compute_rewards
 from sim.manorl.observations import (
@@ -346,6 +351,7 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
     reward_config = replace(RewardConfig(), contact_force_threshold=-1.0)
     common = dict(
         num_envs=batch, device="gpu", device_resident_controls=True,
+        contact_capacity=recommended_warp_contact_capacity(batch, trajectory.hand_sides),
         capture_transition_diagnostics=False, compatibility=compatibility,
         point_sampling_backend="numpy_per_env", reward_config=reward_config,
         max_deviation_distance=0.05,
@@ -506,6 +512,10 @@ def test_real_mjx_warp_private_buffers_match_host_decoder() -> None:
 
     if jax.config.x64_enabled:
         pytest.skip("MJX-Warp 3.10 FFI pins its model buffers to float32")
+    try:
+        jax.devices("cpu")
+    except RuntimeError as error:
+        pytest.skip(f"JAX CPU backend is unavailable: {error}")
     environment = MujocoManoEnvironment(
         load_reference_trajectory(),
         EnvironmentConfig(num_envs=2, device="cpu", max_deviation_distance=1_000_000.0),
@@ -579,6 +589,7 @@ def test_cuda_dlpack_round_trip_retains_device_and_storage() -> None:
     source = torch.arange(12, device="cuda", dtype=torch.float32).reshape(3, 4)
     jax_array = torch_to_jax_cuda(source)
     round_trip = jax_to_torch_cuda(jax_array)
-    assert jax_array.device.platform == "cuda"
+    assert jax_array.device.platform in {"gpu", "cuda"}
     assert round_trip.is_cuda
+    assert round_trip.device.index == source.device.index
     np.testing.assert_array_equal(round_trip.detach().cpu().numpy(), source.detach().cpu().numpy())

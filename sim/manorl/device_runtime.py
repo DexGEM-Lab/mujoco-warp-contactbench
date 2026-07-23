@@ -89,6 +89,41 @@ class DevicePhysicalFeatures(NamedTuple):
     valid: Any
 
 
+def _device_ordinal(device: Any) -> int | None:
+    """Return a runtime device ordinal when its backend exposes one."""
+
+    for attribute in ("local_hardware_id", "id", "index"):
+        value = getattr(device, attribute, None)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _is_nvidia_jax_cuda_device(device: Any) -> bool:
+    """Recognize CUDA-backed JAX GPU devices without accepting ROCm."""
+
+    if getattr(device, "platform", None) not in {"gpu", "cuda"}:
+        return False
+    device_kind = getattr(device, "device_kind", None)
+    return device_kind is None or "nvidia" in str(device_kind).casefold()
+
+
+def _require_matching_cuda_devices(
+    *, jax_device: Any, torch_device: Any, direction: str, error_type: type[Exception]
+) -> None:
+    if not _is_nvidia_jax_cuda_device(jax_device):
+        raise error_type(f"{direction} requires an NVIDIA CUDA JAX device")
+    jax_ordinal = _device_ordinal(jax_device)
+    torch_ordinal = _device_ordinal(torch_device)
+    if jax_ordinal is not None and torch_ordinal is not None and jax_ordinal != torch_ordinal:
+        raise error_type(
+            f"{direction} changed CUDA device ordinal from {torch_ordinal} to {jax_ordinal}"
+        )
+
+
 def torch_to_jax_cuda(tensor: Any) -> Any:
     """Borrow a CUDA Torch tensor in JAX through same-device DLPack only."""
 
@@ -97,8 +132,12 @@ def torch_to_jax_cuda(tensor: Any) -> Any:
     if not getattr(tensor, "is_cuda", False):
         raise ValueError("device runtime accepts CUDA Torch tensors only")
     array = jax.dlpack.from_dlpack(tensor)
-    if array.device.platform != "cuda":
-        raise RuntimeError("Torch-to-JAX DLPack conversion did not retain CUDA placement")
+    _require_matching_cuda_devices(
+        jax_device=array.device,
+        torch_device=tensor.device,
+        direction="Torch-to-JAX DLPack conversion",
+        error_type=RuntimeError,
+    )
     return array
 
 
@@ -107,11 +146,17 @@ def jax_to_torch_cuda(array: Any) -> Any:
 
     import torch
 
-    if getattr(array.device, "platform", None) != "cuda":
-        raise ValueError("device runtime returns CUDA JAX arrays only")
+    if not _is_nvidia_jax_cuda_device(array.device):
+        raise ValueError("device runtime returns NVIDIA CUDA JAX arrays only")
     tensor = torch.from_dlpack(array)
     if not tensor.is_cuda:
         raise RuntimeError("JAX-to-Torch DLPack conversion did not retain CUDA placement")
+    _require_matching_cuda_devices(
+        jax_device=array.device,
+        torch_device=tensor.device,
+        direction="JAX-to-Torch DLPack conversion",
+        error_type=RuntimeError,
+    )
     return tensor
 
 
