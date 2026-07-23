@@ -1364,7 +1364,7 @@ class UnifiedMjxWarpPhysicalProducer(MjxWarpPhysicalProducer):
 
 
 def _scatter_routed_value(
-    routed: list[tuple[NDArray[np.int64], Any]], total: int
+    routed: list[tuple[NDArray[np.int64], Any]], total: int, *, _allow_ragged_geometry: bool = False
 ) -> Any:
     """Scatter matching route-local arrays/dataclasses into global env order."""
 
@@ -1381,6 +1381,8 @@ def _scatter_routed_value(
                 item.name: _scatter_routed_value(
                     [(indices, getattr(value, item.name)) for indices, value in non_null],
                     total,
+                    _allow_ragged_geometry=item.name
+                    in {"object_contact_force", "geom_contact_force_world_N"},
                 )
                 for item in fields(sample)
             }
@@ -1392,6 +1394,8 @@ def _scatter_routed_value(
         for indices, value in non_null:
             array = np.asarray(value)
             if array.shape[0] != len(indices) or array.shape[1:] != sample.shape[1:]:
+                if _allow_ragged_geometry:
+                    return None
                 raise RuntimeError("heterogeneous routes produced incompatible array shapes")
             result[indices] = array
         return result

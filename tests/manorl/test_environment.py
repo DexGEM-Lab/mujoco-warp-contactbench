@@ -17,6 +17,7 @@ from sim.manorl.environment import (
     _model_hand_side_order,
     _aggregate_geometry_contact_forces,
     _decode_contact_forces,
+    _scatter_routed_value,
 )
 from sim.manorl.mjx_sim import MujocoCpuReplay
 from sim.manorl.observations import (
@@ -48,6 +49,57 @@ def _environment(trajectory, *, num_envs: int = 1, residual_enabled: bool = Fals
             max_deviation_distance=1_000_000.0,
         ),
     )
+
+def _physical_snapshot(*, batch: int, ngeom: int, marker: float) -> PhysicalSnapshot:
+    return PhysicalSnapshot(
+        mano_dof_pos=np.full((batch, 2), marker),
+        hand_position=np.full((batch, 3), marker),
+        hand_orientation_xyzw=np.full((batch, 4), marker),
+        hand_keypoint_orientations_xyzw=np.full((batch, 2, 4), marker),
+        object_position=np.full((batch, 3), marker),
+        object_orientation_xyzw=np.full((batch, 4), marker),
+        object_linear_velocity=np.full((batch, 3), marker),
+        hand_keypoint_positions=np.full((batch, 2, 3), marker),
+        fingertip_positions=np.full((batch, 1, 3), marker),
+        hand_keypoint_contact_forces=np.full((batch, 2, 3), marker),
+        object_contact_force=np.full((batch, ngeom, 3), marker),
+        geom_contact_force_world_N=np.full((batch, ngeom, 3), marker),
+        hand_object_force_on_object_world_N=np.full((batch, 2, 3), marker),
+        contact_count=np.full(batch, int(marker), dtype=np.int64),
+    )
+
+
+def test_scatter_routed_physical_snapshots_drops_only_ragged_geometry_diagnostics() -> None:
+    scattered = _scatter_routed_value(
+        [
+            (np.asarray([0], dtype=np.int64), _physical_snapshot(batch=1, ngeom=1, marker=1.0)),
+            (np.asarray([1], dtype=np.int64), _physical_snapshot(batch=1, ngeom=3, marker=2.0)),
+        ],
+        total=2,
+    )
+
+    assert isinstance(scattered, PhysicalSnapshot)
+    np.testing.assert_array_equal(scattered.hand_position[:, 0], [1.0, 2.0])
+    np.testing.assert_array_equal(scattered.contact_count, [1, 2])
+    assert scattered.object_contact_force is None
+    assert scattered.geom_contact_force_world_N is None
+
+
+def test_scatter_routed_physical_snapshot_rejects_unrelated_ragged_arrays() -> None:
+    with pytest.raises(RuntimeError, match="incompatible array shapes"):
+        _scatter_routed_value(
+            [
+                (np.asarray([0], dtype=np.int64), _physical_snapshot(batch=1, ngeom=1, marker=1.0)),
+                (
+                    np.asarray([1], dtype=np.int64),
+                    replace(
+                        _physical_snapshot(batch=1, ngeom=1, marker=2.0),
+                        hand_position=np.zeros((1, 4), dtype=np.float64),
+                    ),
+                ),
+            ],
+            total=2,
+        )
 
 
 def test_bimanual_reference_tables_use_compiled_right_left_order() -> None:
