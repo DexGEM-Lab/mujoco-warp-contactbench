@@ -102,6 +102,17 @@ def test_scatter_routed_physical_snapshot_rejects_unrelated_ragged_arrays() -> N
         )
 
 
+def test_environment_config_accepts_unified_batch_with_explicit_ccd() -> None:
+    config = EnvironmentConfig(
+        unified_object_batch=True,
+        warp_ccd_iterations=8,
+        warp_ccd_contacts_per_world=12,
+    )
+
+    assert config.unified_object_batch is True
+    assert config.warp_ccd_explicit is True
+
+
 def test_bimanual_reference_tables_use_compiled_right_left_order() -> None:
     """Metadata lookup may be left/right, but model qpos/ctrl slots are right/left."""
 

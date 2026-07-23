@@ -986,6 +986,26 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert captured[-1][1].resolved_minibatch_size == 4096
 
 
+def test_cli_accepts_unified_batch_with_explicit_ccd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured = []
+    monkeypatch.setattr(tool, "run", lambda output, budget: captured.append((output, budget)) or {})
+
+    assert tool.main([
+        "--output", str(tmp_path / "unified-ccd"),
+        "--unified-object-batch",
+        "--warp-ccd-iterations", "8",
+        "--warp-ccd-contacts-per-world", "12",
+    ]) == 0
+
+    budget = captured[-1][1]
+    assert budget.unified_object_batch is True
+    assert budget.warp_ccd_iterations == 8
+    assert budget.warp_ccd_contacts_per_world == 12
+
+
 def test_cli_parses_all_and_exact_pair_selection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -264,10 +264,6 @@ class EnvironmentConfig:
         ):
             if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
                 raise ValueError(f"{name} must be a positive integer when provided")
-        if self.warp_ccd_explicit and self.unified_object_batch:
-            # Unified batch now supports explicit CCD; the naconmax/naccdmax
-            # split applies globally to the single superset model.
-            pass
         normalize_hand_side(self.hand_side)
 
     @property
