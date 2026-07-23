@@ -250,6 +250,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--lance-path", type=Path, default=DEFAULT_LANCE_PATH)
     parser.add_argument("--isaac-source-root", type=Path, default=DEFAULT_ISAAC_SOURCE_ROOT)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
+    parser.add_argument("--runtime-backend", choices=("mujoco-native", "mjx-warp"), default="mujoco-native")
     parser.add_argument(
         "--use_residual", type=_parse_cli_bool, default=True, action=_StoreExplicit,
         metavar="{true,false}", help="enable 22D residual action processing (default: true)",
@@ -293,6 +294,8 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--max-steps must be positive")
     if args.checkpoint is not None:
         raise ValueError("--checkpoint is not supported by the native zero-action viewer")
+    if args.runtime_backend == "mujoco-native" and args.device != "cpu":
+        raise ValueError("--runtime-backend mujoco-native requires --device cpu")
     options = _resolve_viewer_options(args)
     _require_graphical_display(headless=args.headless)
     from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
@@ -301,14 +304,14 @@ def run(args: argparse.Namespace) -> int:
     env = DexHandRLMJXEnv(DexHandRLMJXEnvConfig(
         lance_path=args.lance_path, isaac_source_root=args.isaac_source_root,
         object_name=args.object_name, action=args.action, sequence_index=args.sequence_index,
-        uuid=args.uuid, device=args.device, use_residual=options.use_residual,
+        uuid=args.uuid, device=args.device, runtime_backend=args.runtime_backend, use_residual=options.use_residual,
         object_position_terminal_threshold=options.terminal_threshold, physics=physics,
     ))
     try:
         stepper = ZeroActionStepper(env, loop=args.loop)
         label = "reference targets only" if not options.use_residual else "zero residual actions (no checkpoint)"
         print(
-            f"DexHandRL viewer: {label}; action_dim={env.num_actions}; control_dt={physics.control_dt:g}s; "
+            f"DexHandRL viewer: backend={env.cfg.runtime_backend}; {label}; action_dim={env.num_actions}; control_dt={physics.control_dt:g}s; "
             f"speed={options.speed:g}; use_residual={options.use_residual}; "
             f"terminal_threshold={options.terminal_threshold:g}"
         )

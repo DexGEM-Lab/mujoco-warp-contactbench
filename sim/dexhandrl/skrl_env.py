@@ -105,6 +105,7 @@ class DexHandRLMJXEnvConfig:
     sequence_index: int = 0
     uuid: str | None = None
     device: str = "cpu"
+    runtime_backend: str = "mjx-warp"
     use_residual: bool = True
     # Physics is canonical. The optional legacy fields below are accepted only
     # at construction and resolved to aliases in __post_init__.
@@ -161,6 +162,10 @@ class DexHandRLMJXEnvConfig:
     task_config_path: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.runtime_backend not in {"mjx-warp", "mujoco-native"}:
+            raise ValueError(f"unsupported runtime_backend: {self.runtime_backend!r}")
+        if self.runtime_backend == "mujoco-native" and self.device != "cpu":
+            raise ValueError("mujoco-native runtime_backend requires device='cpu'")
         self.physics = resolve_physics_config(
             self.physics,
             dt=self.dt,
@@ -587,29 +592,33 @@ class DexHandRLMJXEnv:
                 "MuJoCo reward parity does not implement enabled IsaacGym terms: "
                 f"{unsupported}"
             )
-        if cfg.device == "cpu":
-            os.environ.setdefault("JAX_PLATFORMS", "cpu")
-        elif cfg.device == "gpu":
-            os.environ.setdefault("JAX_PLATFORMS", "cuda,cpu")
-            os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-        else:
+        if cfg.device not in {"cpu", "gpu"}:
             raise ValueError(f"unsupported MJX device: {cfg.device!r}")
+        if cfg.runtime_backend == "mujoco-native" and cfg.device != "cpu":
+            raise ValueError("mujoco-native runtime_backend requires device='cpu'")
 
-        import jax
-        import jax.numpy as jnp
+        # The native viewer path deliberately does not import JAX/MJX: importing
+        # it initializes an unnecessary accelerator runtime for one CPU MjData.
         import mujoco
-        from mujoco import mjx
-
-        self.jax = jax
-        self.jnp = jnp
         self.mujoco = mujoco
-        self.mjx = mjx
+        self.jax = self.jnp = self.mjx = None
+        self.mx = self.forward = self.step_fn = None
+        if cfg.runtime_backend == "mjx-warp":
+            if cfg.device == "cpu":
+                os.environ.setdefault("JAX_PLATFORMS", "cpu")
+            else:
+                os.environ.setdefault("JAX_PLATFORMS", "cuda,cpu")
+                os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+            import jax
+            import jax.numpy as jnp
+            from mujoco import mjx
 
-        actual_backend = jax.default_backend()
-        if cfg.device == "cpu" and actual_backend != "cpu":
-            raise RuntimeError(f"expected JAX CPU backend, got {actual_backend}; devices={jax.devices()}")
-        if cfg.device == "gpu" and actual_backend != "gpu":
-            raise RuntimeError(f"expected JAX GPU backend, got {actual_backend}; devices={jax.devices()}")
+            self.jax, self.jnp, self.mjx = jax, jnp, mjx
+            actual_backend = jax.default_backend()
+            if cfg.device == "cpu" and actual_backend != "cpu":
+                raise RuntimeError(f"expected JAX CPU backend, got {actual_backend}; devices={jax.devices()}")
+            if cfg.device == "gpu" and actual_backend != "gpu":
+                raise RuntimeError(f"expected JAX GPU backend, got {actual_backend}; devices={jax.devices()}")
 
         self.trajectory = load_trajectory(
             lance_path=cfg.lance_path,
@@ -649,9 +658,10 @@ class DexHandRLMJXEnv:
         validate_dexhandrl_compiled_model(mujoco, self.model, cfg.physics, object_name=cfg.object_name)
         self.ids = resolve_mujoco_ids(mujoco, self.model, object_name=cfg.object_name)
         self.route_joint_upper_limits = dexhand021pro_route_joint_upper_limits(mujoco, self.model)
-        self.mx = mjx.put_model(self.model, impl="warp")
-        self.forward = jax.jit(mjx.forward)
-        self.step_fn = jax.jit(mjx.step)
+        if cfg.runtime_backend == "mjx-warp":
+            self.mx = self.mjx.put_model(self.model, impl="warp")
+            self.forward = self.jax.jit(self.mjx.forward)
+            self.step_fn = self.jax.jit(self.mjx.step)
 
         self.geom_body_names = {
             geom_id: mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, int(self.model.geom_bodyid[geom_id]))
@@ -818,20 +828,39 @@ class DexHandRLMJXEnv:
         )
         initial_object_pos = np.asarray(self.trajectory.object_pos[self.start_frame], dtype=np.float32).copy()
         initial_object_pos[2] += float(self.cfg.object_reset_z_offset)
-        dx = self.mjx.make_data(
-            self.model,
-            impl="warp",
-            naconmax=self.cfg.physics.runtime_naconmax,
-            njmax=self.cfg.physics.runtime_njmax,
-        )
-        dx = set_hand_qpos(self.jnp, dx, self.ids, initial_full)
-        dx = set_object_freejoint(self.jnp, dx, self.ids, initial_object_pos, self.trajectory.object_quat_xyzw[self.start_frame])
-        ctrl = make_ctrl_vector(initial_full, self.ids.actuator_ids, self.model.nu)
-        dx = dx.replace(ctrl=self.jnp.asarray(ctrl, dtype=dx.ctrl.dtype))
-        dx = self.forward(self.mx, dx)
-        for _ in range(max(self.cfg.settle_frames, 0) * max(self.cfg.physics.substeps, 1)):
-            dx = self.step_fn(self.mx, dx)
-        self.jax.block_until_ready(dx.qpos)
+        if self.cfg.runtime_backend == "mujoco-native":
+            dx = self.mujoco.MjData(self.model)
+            for index, name in enumerate(DEXHAND021PRO_FULL_DOF_NAMES):
+                dx.qpos[self.ids.joint_qpos_addr[name]] = initial_full[index]
+                dx.qvel[self.ids.joint_dof_addr[name]] = 0.0
+                dx.qacc[self.ids.joint_dof_addr[name]] = 0.0
+            qadr, dadr = self.ids.object_free_qpos_addr, self.ids.object_free_dof_addr
+            dx.qpos[qadr:qadr + 3] = initial_object_pos
+            dx.qpos[qadr + 3:qadr + 7] = np.asarray(
+                [self.trajectory.object_quat_xyzw[self.start_frame][3], *self.trajectory.object_quat_xyzw[self.start_frame][:3]],
+                dtype=dx.qpos.dtype,
+            )
+            dx.qvel[dadr:dadr + 6] = 0.0
+            dx.qacc[dadr:dadr + 6] = 0.0
+            dx.ctrl[:] = make_ctrl_vector(initial_full, self.ids.actuator_ids, self.model.nu)
+            self.mujoco.mj_forward(self.model, dx)
+            for _ in range(max(self.cfg.settle_frames, 0) * max(self.cfg.physics.substeps, 1)):
+                self.mujoco.mj_step(self.model, dx)
+        else:
+            dx = self.mjx.make_data(
+                self.model,
+                impl="warp",
+                naconmax=self.cfg.physics.runtime_naconmax,
+                njmax=self.cfg.physics.runtime_njmax,
+            )
+            dx = set_hand_qpos(self.jnp, dx, self.ids, initial_full)
+            dx = set_object_freejoint(self.jnp, dx, self.ids, initial_object_pos, self.trajectory.object_quat_xyzw[self.start_frame])
+            ctrl = make_ctrl_vector(initial_full, self.ids.actuator_ids, self.model.nu)
+            dx = dx.replace(ctrl=self.jnp.asarray(ctrl, dtype=dx.ctrl.dtype))
+            dx = self.forward(self.mx, dx)
+            for _ in range(max(self.cfg.settle_frames, 0) * max(self.cfg.physics.substeps, 1)):
+                dx = self.step_fn(self.mx, dx)
+            self.jax.block_until_ready(dx.qpos)
         self._dx = dx
         self._last_full_targets = initial_full.copy()
         # Match Gym reset_targets(frame-61 full reset target) before reset settling.
@@ -976,21 +1005,37 @@ class DexHandRLMJXEnv:
         dx = self._dx
         if dx is None:
             raise RuntimeError("environment is not initialized")
-        impl = dx._impl
-        nacon = np.asarray(impl.nacon)
-        active_contacts = int(nacon[0]) if nacon.shape else int(nacon)
-        if active_contacts >= self.cfg.physics.runtime_naconmax:
-            raise RuntimeError(
-                f"MJX contact buffer reached naconmax={self.cfg.physics.runtime_naconmax}; "
-                "increase naconmax to avoid contact truncation"
-            )
-
-        contact_geom = np.asarray(impl.contact__geom)[:active_contacts]
-        contact_frame = np.asarray(impl.contact__frame)[:active_contacts]
-        contact_friction = np.asarray(impl.contact__friction)[:active_contacts]
-        contact_dim = np.asarray(impl.contact__dim)[:active_contacts]
-        contact_efc_address = np.asarray(impl.contact__efc_address)[:active_contacts]
-        efc_force = np.asarray(impl.efc__force)
+        if self.cfg.runtime_backend == "mujoco-native":
+            active_contacts = int(dx.ncon)
+            capacity = int(self.model.nconmax)
+            if capacity > 0 and active_contacts >= capacity:
+                raise RuntimeError(
+                    f"native MuJoCo contact buffer reached nconmax={capacity}; increase nconmax to avoid contact truncation"
+                )
+            contacts = [dx.contact[index] for index in range(active_contacts)]
+            contact_geom = np.asarray([[contact.geom1, contact.geom2] for contact in contacts], dtype=np.int32)
+            contact_frame = np.asarray([contact.frame for contact in contacts], dtype=np.float32).reshape(active_contacts, 9)
+            contact_friction = np.asarray([contact.friction for contact in contacts], dtype=np.float32).reshape(active_contacts, 5)
+            contact_dim = np.asarray([contact.dim for contact in contacts], dtype=np.int32)
+            contact_efc_address = np.asarray(
+                [[contact.efc_address + offset for offset in range(6)] for contact in contacts], dtype=np.int32
+            ).reshape(active_contacts, 6)
+            efc_force = np.asarray(dx.efc_force)
+        else:
+            impl = dx._impl
+            nacon = np.asarray(impl.nacon)
+            active_contacts = int(nacon[0]) if nacon.shape else int(nacon)
+            if active_contacts >= self.cfg.physics.runtime_naconmax:
+                raise RuntimeError(
+                    f"MJX contact buffer reached naconmax={self.cfg.physics.runtime_naconmax}; "
+                    "increase naconmax to avoid contact truncation"
+                )
+            contact_geom = np.asarray(impl.contact__geom)[:active_contacts]
+            contact_frame = np.asarray(impl.contact__frame)[:active_contacts]
+            contact_friction = np.asarray(impl.contact__friction)[:active_contacts]
+            contact_dim = np.asarray(impl.contact__dim)[:active_contacts]
+            contact_efc_address = np.asarray(impl.contact__efc_address)[:active_contacts]
+            efc_force = np.asarray(impl.efc__force)
         pyramidal = int(self.model.opt.cone) == int(self.mujoco.mjtCone.mjCONE_PYRAMIDAL)
         return collect_contact_summary(
             active_contacts=active_contacts,
@@ -1163,6 +1208,7 @@ class DexHandRLMJXEnv:
             "reward_terms": reward_terms,
             "rotation_disabled": bool(self.rotation_disabled),
             "use_residual": bool(self.cfg.use_residual),
+            "runtime_backend": self.cfg.runtime_backend,
         }
         return obs, info
 
@@ -1268,11 +1314,17 @@ class DexHandRLMJXEnv:
         full_targets = self._apply_residual_action(action, target_frame_before, current_full)
         self._last_full_targets = full_targets.copy()
         ctrl = make_ctrl_vector(full_targets, self.ids.actuator_ids, self.model.nu)
-        self._dx = self._dx.replace(ctrl=self.jnp.asarray(ctrl, dtype=self._dx.ctrl.dtype))
-        self._dx = self.forward(self.mx, self._dx)
-        for _ in range(max(self.cfg.physics.substeps, 1)):
-            self._dx = self.step_fn(self.mx, self._dx)
-        self.jax.block_until_ready(self._dx.qpos)
+        if self.cfg.runtime_backend == "mujoco-native":
+            self._dx.ctrl[:] = ctrl
+            self.mujoco.mj_forward(self.model, self._dx)
+            for _ in range(max(self.cfg.physics.substeps, 1)):
+                self.mujoco.mj_step(self.model, self._dx)
+        else:
+            self._dx = self._dx.replace(ctrl=self.jnp.asarray(ctrl, dtype=self._dx.ctrl.dtype))
+            self._dx = self.forward(self.mx, self._dx)
+            for _ in range(max(self.cfg.physics.substeps, 1)):
+                self._dx = self.step_fn(self.mx, self._dx)
+            self.jax.block_until_ready(self._dx.qpos)
 
         self._episode_step_count += 1
         self._current_frame = min(self._current_frame + 1, self.end_frame)
@@ -1310,7 +1362,7 @@ class DexHandRLMJXEnv:
         return obs, reward, terminated, truncated, info
 
     def copy_state_to_mjdata(self, data: Any) -> None:
-        """Copy the current MJX dynamic state into native ``MjData`` for passive rendering.
+        """Copy the current runtime state into native ``MjData`` for passive rendering.
 
         This is a narrow observer boundary: it performs no forward dynamics or
         stepping, leaving native transform derivation to the viewer.

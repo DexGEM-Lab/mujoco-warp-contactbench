@@ -30,6 +30,7 @@ def test_viewer_parser_accepts_canonical_manorl_style_selectors_and_defaults():
     assert options.terminal_threshold == pytest.approx(0.1)
     assert (options.speed, options.sleep_enabled) == (0.25, True)
     assert args.headless is False
+    assert args.runtime_backend == "mujoco-native"
 
 
 def test_viewer_parser_defaults_are_manorl_aligned():
@@ -37,6 +38,11 @@ def test_viewer_parser_defaults_are_manorl_aligned():
     assert options.use_residual is True
     assert options.terminal_threshold == pytest.approx(0.1)
     assert (options.speed, options.sleep_enabled) == (0.25, True)
+
+
+def test_viewer_parser_allows_explicit_mjx_warp_selection():
+    args = _parser().parse_args(["--runtime-backend", "mjx-warp", "--device", "gpu"])
+    assert (args.runtime_backend, args.device) == ("mjx-warp", "gpu")
 
 
 def test_viewer_parser_preserves_old_command_compatibility():
@@ -112,6 +118,19 @@ def test_zero_action_stepper_steps_production_shaped_environment_and_resets_when
     assert stepper.step() is not None
     assert env.resets == 2 and len(env.actions) == 1
     assert env.actions[0].shape == (22,) and not env.actions[0].any()
+
+
+def test_native_contact_collection_decodes_actual_zero_contact_state():
+    env = object.__new__(DexHandRLMJXEnv)
+    env.cfg = type("Cfg", (), {"runtime_backend": "mujoco-native", "object_name": "cube1"})()
+    env._dx = type("Data", (), {"ncon": 0, "efc_force": np.zeros(0)})()
+    env.model = type("Model", (), {"nconmax": 8, "opt": type("Opt", (), {"cone": 0})()})()
+    env.mujoco = type("MuJoCo", (), {"mjtCone": type("Cone", (), {"mjCONE_PYRAMIDAL": 1})})()
+    env.geom_body_names, env.geom_names = {}, {}
+    env.contact_body_names = ["RFH1"]
+    summary = env._collect_contacts()
+    assert summary["active_contact_count"] == 0
+    np.testing.assert_array_equal(summary["contact_force_vectors"], np.zeros((1, 3), dtype=np.float32))
 
 
 def test_environment_public_mirror_copies_all_dynamic_viewer_fields():
