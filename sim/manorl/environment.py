@@ -1829,16 +1829,26 @@ class MujocoManoEnvironment:
         if config.warp_persistent_ccd_workspace:
             from sim.manorl.mjx_warp_workspace import (
                 install_persistent_ccd_workspace,
+                install_persistent_solver_workspace,
                 warp_device_ordinal,
             )
 
             impl = self.mjx_model._impl
+            device_ordinal = warp_device_ordinal(self.device)
             self.warp_persistent_ccd_workspace = install_persistent_ccd_workspace(
-                device_ordinal=warp_device_ordinal(self.device),
+                device_ordinal=device_ordinal,
                 naccdmax=self.warp_ccd_naccdmax,
                 epa_iterations=int(self.model.opt.ccd_iterations),
                 nmaxpolygon=int(impl.nmaxpolygon),
                 nmaxmeshdeg=int(impl.nmaxmeshdeg),
+            )
+            self.warp_persistent_solver_workspace = install_persistent_solver_workspace(
+                device_ordinal=device_ordinal,
+                nworld=config.num_envs,
+                nv=int(self.model.nv),
+                nv_pad=int(impl.nv_pad),
+                njmax=int(self.data._impl.njmax),
+                solver_type=int(self.model.opt.solver),
             )
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
         self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)

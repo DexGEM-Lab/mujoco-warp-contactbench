@@ -239,3 +239,132 @@ def warp_device_ordinal(device: Any) -> int:
     if isinstance(ordinal, int) and not isinstance(ordinal, bool) and ordinal >= 0:
         return ordinal
     raise RuntimeError(f"cannot derive a non-negative CUDA device ordinal from {device!r}")
+
+
+@dataclass(frozen=True)
+class SolverWorkspaceSpec:
+    """Static allocation contract for the monolithic bundled Warp solver."""
+
+    device_ordinal: int
+    nworld: int
+    nv: int
+    nv_pad: int
+    njmax: int
+    solver_type: int
+
+    def __post_init__(self) -> None:
+        for name in ("device_ordinal", "solver_type"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        for name in ("nworld", "nv", "nv_pad", "njmax"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.nv_pad < self.nv:
+            raise ValueError("nv_pad must be greater than or equal to nv")
+
+
+@dataclass(frozen=True)
+class PersistentSolverWorkspace:
+    spec: SolverWorkspaceSpec
+    context: Any
+
+
+_solver_install_lock = threading.Lock()
+_solver_installation: tuple[ModuleType, SolverWorkspaceSpec, PersistentSolverWorkspace, Any] | None = None
+
+
+def install_persistent_solver_workspace(
+    *,
+    device_ordinal: int,
+    nworld: int,
+    nv: int,
+    nv_pad: int,
+    njmax: int,
+    solver_type: int,
+    solver_module: ModuleType | None = None,
+) -> PersistentSolverWorkspace:
+    """Preallocate and reuse the bundled monolithic Warp solver context."""
+
+    global _solver_installation
+    spec = SolverWorkspaceSpec(device_ordinal, nworld, nv, nv_pad, njmax, solver_type)
+    if solver_module is None:
+        from mujoco.mjx.third_party.mujoco_warp._src import solver as solver_module
+
+    with _solver_install_lock:
+        if _solver_installation is not None:
+            installed_module, installed_spec, workspace, _ = _solver_installation
+            if installed_module is not solver_module or installed_spec != spec:
+                raise RuntimeError(
+                    "persistent solver workspace is already installed with an incompatible module or static shape"
+                )
+            return workspace
+
+        wp = solver_module.wp
+        device = f"cuda:{spec.device_ordinal}"
+        alloc_h = spec.solver_type == int(solver_module.types.SolverType.NEWTON)
+        alloc_hfactor = alloc_h and spec.nv > int(solver_module._BLOCK_CHOLESKY_DIM)
+        context = solver_module.SolverContext(
+            Jaref=wp.empty(shape=(spec.nworld, spec.njmax), dtype=float, device=device),
+            search_dot=wp.empty(shape=(spec.nworld,), dtype=float, device=device),
+            done=wp.empty(shape=(spec.nworld,), dtype=bool, device=device),
+            grad=wp.zeros(shape=(spec.nworld, spec.nv_pad), dtype=float, device=device),
+            grad_dot=wp.empty(shape=(spec.nworld,), dtype=float, device=device),
+            Mgrad=wp.empty(shape=(spec.nworld, spec.nv_pad), dtype=float, device=device),
+            search=wp.empty(shape=(spec.nworld, spec.nv), dtype=float, device=device),
+            mv=wp.empty(shape=(spec.nworld, spec.nv), dtype=float, device=device),
+            jv=wp.empty(shape=(spec.nworld, spec.njmax), dtype=float, device=device),
+            quad=wp.empty(shape=(spec.nworld, spec.njmax), dtype=wp.vec3, device=device),
+            alpha=wp.empty(shape=(spec.nworld,), dtype=float, device=device),
+            improvement=wp.empty(shape=(spec.nworld,), dtype=float, device=device),
+            prev_grad=wp.empty(shape=(spec.nworld, spec.nv), dtype=float, device=device),
+            prev_Mgrad=wp.empty(shape=(spec.nworld, spec.nv), dtype=float, device=device),
+            beta=wp.empty(shape=(spec.nworld,), dtype=float, device=device),
+            beta_den=wp.empty(shape=(spec.nworld,), dtype=float, device=device),
+            h=wp.empty(
+                shape=(spec.nworld, spec.nv_pad, spec.nv_pad) if alloc_h else (spec.nworld, 0, 0),
+                dtype=float,
+                device=device,
+            ),
+            hfactor=wp.empty(
+                shape=(spec.nworld, spec.nv_pad, spec.nv_pad)
+                if alloc_hfactor
+                else (spec.nworld, 0, 0),
+                dtype=float,
+                device=device,
+            ),
+            changed_efc_ids=wp.empty(
+                shape=(spec.nworld, spec.njmax) if alloc_h else (spec.nworld, 0),
+                dtype=int,
+                device=device,
+            ),
+            changed_efc_count=wp.empty(
+                shape=(spec.nworld,) if alloc_h else (0,),
+                dtype=int,
+                device=device,
+            ),
+        )
+        workspace = PersistentSolverWorkspace(spec, context)
+        original = solver_module._create_solver_context
+
+        @wraps(original)
+        def wrapped(m: Any, d: Any) -> Any:
+            actual = SolverWorkspaceSpec(
+                device_ordinal=spec.device_ordinal,
+                nworld=int(d.nworld),
+                nv=int(m.nv),
+                nv_pad=int(m.nv_pad),
+                njmax=int(d.njmax),
+                solver_type=int(m.opt.solver),
+            )
+            if actual != spec:
+                raise RuntimeError(
+                    "persistent solver workspace request mismatch: "
+                    f"expected {spec!r}; received {actual!r}"
+                )
+            return context
+
+        solver_module._create_solver_context = wrapped
+        _solver_installation = (solver_module, spec, workspace, original)
+        return workspace

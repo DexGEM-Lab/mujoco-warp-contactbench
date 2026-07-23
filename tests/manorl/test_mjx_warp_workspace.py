@@ -26,6 +26,10 @@ class _FakeWarp:
         self.allocations.append((tuple(shape), dtype, device))
         return _FakeArray(tuple(shape), dtype)
 
+    def zeros(self, *, shape: tuple[int, ...], dtype: object, device: str) -> _FakeArray:
+        self.allocations.append((tuple(shape), dtype, device))
+        return _FakeArray(tuple(shape), dtype)
+
 
 def _fresh_workspace_module():
     import sim.manorl.mjx_warp_workspace as workspace
@@ -68,6 +72,20 @@ def _collision(*, malformed: bool = False) -> ModuleType:
             wp.empty(shape=shape, dtype=dtype)
 
     module.convex_narrowphase = narrowphase
+    return module
+
+
+def _solver_module() -> ModuleType:
+    module = ModuleType("fake_solver")
+    module.wp = _FakeWarp()
+    module.types = SimpleNamespace(SolverType=SimpleNamespace(NEWTON=2))
+    module._BLOCK_CHOLESKY_DIM = 32
+    module.SolverContext = lambda **kwargs: SimpleNamespace(**kwargs)
+
+    def create(_model, _data):
+        raise AssertionError("dynamic solver context allocator should be patched")
+
+    module._create_solver_context = create
     return module
 
 
@@ -169,6 +187,30 @@ def test_workspace_rejects_concurrent_reentry() -> None:
             original()
     finally:
         workspace._active = False
+
+
+def test_solver_workspace_preallocates_hfactor_and_reuses_context() -> None:
+    workspace = _fresh_workspace_module()
+    solver = _solver_module()
+    installed = workspace.install_persistent_solver_workspace(
+        device_ordinal=0,
+        nworld=4,
+        nv=40,
+        nv_pad=64,
+        njmax=12,
+        solver_type=2,
+        solver_module=solver,
+    )
+    model = SimpleNamespace(nv=40, nv_pad=64, opt=SimpleNamespace(solver=2))
+    data = SimpleNamespace(nworld=4, njmax=12)
+
+    assert solver._create_solver_context(model, data) is installed.context
+    assert solver._create_solver_context(model, data) is installed.context
+    assert installed.context.hfactor.shape == (4, 64, 64)
+    assert all(device == "cuda:0" for _, _, device in solver.wp.allocations)
+
+    with pytest.raises(RuntimeError, match="request mismatch"):
+        solver._create_solver_context(model, SimpleNamespace(nworld=8, njmax=12))
 
 
 def test_warp_device_ordinal_requires_jax_device_id() -> None:
