@@ -1,0 +1,214 @@
+"""Native passive viewer for one production DexHandRL MJX environment.
+
+The viewer is an observer: environment ``step`` owns every physics transition;
+this module mirrors the resulting MJX state into native ``MjData`` for display.
+"""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager, nullcontext
+import os
+from pathlib import Path
+import time
+from typing import Any, Iterator
+
+import numpy as np
+
+from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT, DEFAULT_LANCE_PATH
+from sim.dexhandrl.contracts import DexHandPhysicsConfig, resolve_physics_config
+
+
+def _require_graphical_display(*, headless: bool) -> None:
+    if headless:
+        raise ValueError("the native DexHand viewer requires --no-headless")
+    if not os.environ.get("DISPLAY"):
+        raise RuntimeError("the native DexHand viewer requires DISPLAY to name a graphical display server")
+
+
+def mirror_mjx_state_to_mjdata(data: Any, state: Any) -> None:
+    """Copy the render-relevant dynamic state without advancing simulation."""
+    for name in ("qpos", "qvel", "ctrl"):
+        # Older trace callers passed a minimal qpos/qvel fixture. Production
+        # DexHand state always supplies ctrl and time, which are mirrored too.
+        if not hasattr(state, name) or not hasattr(data, name):
+            continue
+        destination = getattr(data, name)
+        source = np.asarray(getattr(state, name))
+        if destination.shape != source.shape:
+            raise ValueError(f"native viewer {name} shape mismatch: {source.shape} -> {destination.shape}")
+        np.copyto(destination, source)
+    if hasattr(state, "time") and hasattr(data, "time"):
+        data.time = float(np.asarray(state.time))
+
+
+class PassiveDexHandViewer:
+    """Native passive observer with a camera centered on the tracked object."""
+
+    def __init__(self, mujoco: Any, model: Any, data: Any, handle: Any, object_body_id: int) -> None:
+        self.mujoco, self.model, self.data, self.handle = mujoco, model, data, handle
+        self.object_body_id = object_body_id
+        self._closed = False
+        self._camera_configured = False
+
+    @classmethod
+    def create(cls, env: Any) -> "PassiveDexHandViewer":
+        _require_graphical_display(headless=False)
+        import mujoco.viewer
+
+        data = env.mujoco.MjData(env.model)
+        return cls(env.mujoco, env.model, data, mujoco.viewer.launch_passive(env.model, data), env.object_body_id)
+
+    def sync(self, source: Any) -> bool:
+        """Mirror ``source`` and redraw; this method never calls a step primitive."""
+        if self._closed:
+            return False
+        if not self.handle.is_running():
+            self.close()
+            return False
+        with self.handle.lock():
+            copier = getattr(source, "copy_state_to_mjdata", None)
+            if callable(copier):
+                copier(self.data)
+            else:  # Compatibility for trace callers that pass MJX data directly.
+                mirror_mjx_state_to_mjdata(self.data, source)
+            self.mujoco.mj_forward(self.model, self.data)
+            if not self._camera_configured:
+                camera = getattr(self.handle, "cam", None)
+                if camera is not None:
+                    camera.lookat[:] = self.data.xpos[self.object_body_id]
+                    camera.distance, camera.azimuth, camera.elevation = 0.6, 90.0, -25.0
+                self._camera_configured = True
+        self.handle.sync()
+        return True
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self.handle.close()
+
+
+@contextmanager
+def passive_dexhand_viewer(env: Any, *, headless: bool) -> Iterator[PassiveDexHandViewer | None]:
+    if headless:
+        yield None
+        return
+    viewer = PassiveDexHandViewer.create(env)
+    try:
+        yield viewer
+    finally:
+        viewer.close()
+
+
+class ZeroActionStepper:
+    """Production stepper that supplies zero 22D policy actions each control step."""
+
+    def __init__(self, environment: Any, *, loop: bool) -> None:
+        self.environment = environment
+        self.loop = loop
+        self.actions = np.zeros((environment.num_actions,), dtype=np.float32)
+        self.finished = False
+        self.environment.reset()
+
+    def step(self) -> tuple[Any, float, bool, bool, dict[str, Any]] | None:
+        if self.finished:
+            return None
+        transition = self.environment.step(self.actions)
+        if transition[2] or transition[3]:
+            if self.loop:
+                self.environment.reset()
+            else:
+                self.finished = True
+        return transition
+
+
+def _physics_from_args(args: argparse.Namespace) -> DexHandPhysicsConfig:
+    return resolve_physics_config(
+        dt=args.dt, substeps=args.substeps,
+        base_pos_kp=args.base_pos_kp, base_pos_kv=args.base_pos_kv, base_pos_force=args.base_pos_force,
+        base_rot_kp=args.base_rot_kp, base_rot_kv=args.base_rot_kv, base_rot_force=args.base_rot_force,
+        finger_kp=args.finger_kp, finger_kv=args.finger_kv, finger_force=args.finger_force,
+        hand_friction=args.hand_friction, object_friction=args.object_friction,
+        ground_friction=args.ground_friction, hand_self_collision_mode=args.hand_self_collision_mode,
+        collision=args.collision, naconmax=args.naconmax, njmax=args.njmax,
+    )
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--object-name", default="cube1")
+    parser.add_argument("--action", default="01")
+    selector = parser.add_mutually_exclusive_group()
+    selector.add_argument("--sequence-index", type=int, default=0)
+    selector.add_argument("--uuid")
+    parser.add_argument("--lance-path", type=Path, default=DEFAULT_LANCE_PATH)
+    parser.add_argument("--isaac-source-root", type=Path, default=DEFAULT_ISAAC_SOURCE_ROOT)
+    parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
+    parser.add_argument("--use-residual", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--checkpoint", type=Path, help="unsupported here: this viewer currently runs native zero actions")
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--loop", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--realtime", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--object-position-terminal-threshold", type=float, default=0.1)
+    parser.add_argument("--dt", type=float)
+    parser.add_argument("--substeps", type=int)
+    for name in ("base-pos-kp", "base-pos-kv", "base-pos-force", "base-rot-kp", "base-rot-kv", "base-rot-force", "finger-kp", "finger-kv", "finger-force"):
+        parser.add_argument(f"--{name}", type=float)
+    parser.add_argument("--hand-friction")
+    parser.add_argument("--object-friction")
+    parser.add_argument("--ground-friction")
+    parser.add_argument("--hand-self-collision-mode", choices=("none", "disable_within_finger", "all_disabled"))
+    parser.add_argument("--collision", choices=("none", "disable_within_finger", "all_disabled"))
+    parser.add_argument("--naconmax", type=int)
+    parser.add_argument("--njmax", type=int)
+    return parser
+
+
+def run(args: argparse.Namespace) -> int:
+    if args.max_steps is not None and args.max_steps < 1:
+        raise ValueError("--max-steps must be positive")
+    if args.checkpoint is not None:
+        raise ValueError("--checkpoint is not supported by the native zero-action viewer")
+    _require_graphical_display(headless=args.headless)
+    from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
+
+    physics = _physics_from_args(args)
+    env = DexHandRLMJXEnv(DexHandRLMJXEnvConfig(
+        lance_path=args.lance_path, isaac_source_root=args.isaac_source_root,
+        object_name=args.object_name, action=args.action, sequence_index=args.sequence_index,
+        uuid=args.uuid, device=args.device, use_residual=args.use_residual,
+        object_position_terminal_threshold=args.object_position_terminal_threshold, physics=physics,
+    ))
+    try:
+        stepper = ZeroActionStepper(env, loop=args.loop)
+        label = "reference targets only" if not args.use_residual else "zero residual actions (no checkpoint)"
+        print(f"DexHandRL viewer: {label}; action_dim={env.num_actions}; control_dt={physics.control_dt:g}s")
+        steps = 0
+        with passive_dexhand_viewer(env, headless=args.headless) as viewer:
+            assert viewer is not None
+            while viewer.sync(env):
+                if args.max_steps is not None and steps >= args.max_steps:
+                    break
+                started = time.monotonic()
+                if stepper.step() is None:
+                    break
+                steps += 1
+                if args.realtime:
+                    time.sleep(max(0.0, physics.control_dt - (time.monotonic() - started)))
+        return steps
+    finally:
+        env.close()
+
+
+def main() -> int:
+    parser = _parser()
+    args = parser.parse_args()
+    try:
+        run(args)
+    except (ValueError, RuntimeError) as error:
+        parser.error(str(error))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

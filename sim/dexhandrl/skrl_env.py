@@ -1309,6 +1309,24 @@ class DexHandRLMJXEnv:
         info["joint_offset"] = self.joint_offset.copy()
         return obs, reward, terminated, truncated, info
 
+    def copy_state_to_mjdata(self, data: Any) -> None:
+        """Copy the current MJX dynamic state into native ``MjData`` for passive rendering.
+
+        This is a narrow observer boundary: it performs no forward dynamics or
+        stepping, leaving native transform derivation to the viewer.
+        """
+        if self._dx is None:
+            raise RuntimeError("environment has no state; call reset() before mirroring")
+        for name in ("qpos", "qvel", "ctrl"):
+            destination = getattr(data, name)
+            source = np.asarray(getattr(self._dx, name))
+            if destination.shape != source.shape:
+                raise ValueError(
+                    f"native viewer {name} shape mismatch: {source.shape} -> {destination.shape}"
+                )
+            np.copyto(destination, source)
+        data.time = float(np.asarray(self._dx.time))
+
     def close(self) -> None:
         self._dx = None
 

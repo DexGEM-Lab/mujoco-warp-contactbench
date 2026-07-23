@@ -6,7 +6,6 @@ import argparse
 from contextlib import contextmanager, nullcontext
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -18,6 +17,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, resolve_physics_config
 from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES, OBS_DIM_021PRO
+from sim.dexhandrl.view_environment import (
+    PassiveDexHandViewer as PassiveTraceViewer,
+    passive_dexhand_viewer as _passive_trace_viewer,
+)
 from sim.dexhandrl.trace_contract import (
     EXACT_IDENTITY,
     FINAL_STATE_FRAME,
@@ -314,62 +317,6 @@ def _append(store: dict[str, list[np.ndarray]], **items: np.ndarray) -> None:
         store[key].append(np.asarray(value))
 
 
-class PassiveTraceViewer:
-    """Mirror MJX state into a native passive viewer; never call physics stepping."""
-
-    def __init__(self, mujoco: Any, model: Any, data: Any, handle: Any, object_body_id: int) -> None:
-        self.mujoco, self.model, self.data, self.handle = mujoco, model, data, handle
-        self.object_body_id = object_body_id
-        self._closed = False
-        self._camera_configured = False
-
-    @classmethod
-    def create(cls, env: Any) -> "PassiveTraceViewer":
-        if not os.environ.get("DISPLAY"):
-            raise RuntimeError("--no-headless requires DISPLAY to name a native display server")
-        import mujoco.viewer
-
-        data = env.mujoco.MjData(env.model)
-        handle = mujoco.viewer.launch_passive(env.model, data)
-        return cls(env.mujoco, env.model, data, handle, env.object_body_id)
-
-    def sync(self, dx: Any) -> bool:
-        if self._closed:
-            return False
-        if not self.handle.is_running():
-            self.close()
-            return False
-        with self.handle.lock():
-            np.copyto(self.data.qpos, np.asarray(dx.qpos))
-            np.copyto(self.data.qvel, np.asarray(dx.qvel))
-            self.mujoco.mj_forward(self.model, self.data)
-            if not self._camera_configured:
-                camera = getattr(self.handle, "cam", None)
-                if camera is not None:
-                    camera.lookat[:] = self.data.xpos[self.object_body_id]
-                    camera.distance, camera.azimuth, camera.elevation = 0.6, 90.0, -25.0
-                self._camera_configured = True
-        self.handle.sync()
-        return True
-
-    def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            self.handle.close()
-
-
-@contextmanager
-def _passive_trace_viewer(env: Any, headless: bool) -> Iterator[PassiveTraceViewer | None]:
-    if headless:
-        yield None
-        return
-    viewer = PassiveTraceViewer.create(env)
-    try:
-        yield viewer
-    finally:
-        viewer.close()
-
-
 def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None = None,
         hand_friction: str | None = None, headless: bool = True,
         finger_kp: float | None = None, finger_kv: float | None = None,
@@ -425,9 +372,9 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
     if int(env._current_frame) != RESET_DECISION_FRAME:
         raise RuntimeError(f"MuJoCo reset policy frame must be {RESET_DECISION_FRAME}, got {env._current_frame}")
     patch = intervention.patch(env) if intervention is not None else nullcontext()
-    with _passive_trace_viewer(env, headless) as viewer, patch:
+    with _passive_trace_viewer(env, headless=headless) as viewer, patch:
         if viewer is not None:
-            viewer.sync(env._dx)
+            viewer.sync(env)
         for _step in range(steps):
             decision_frame = int(env._current_frame)
             source = intervention.current(decision_frame) if intervention is not None else None
@@ -464,7 +411,7 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
               hand_qpos=full_dof_from_qpos(np.asarray(env._dx.qpos), env.ids), hand_qvel=_ordered_qvel(env), object_position=np.asarray(info["object_position"]), object_quaternion_xyzw=np.asarray(env._dx.xquat[env.object_body_id], dtype=np.float32)[[1, 2, 3, 0]], object_linear_velocity=np.asarray(env._dx.qvel[env.ids.object_free_dof_addr:env.ids.object_free_dof_addr + 3]), target_object_position=np.asarray(info["target_object_position"]), target_object_quaternion_xyzw=np.asarray(env.trajectory.object_quat_xyzw[state_frame]))
             obs = next_obs
             if viewer is not None:
-                viewer.sync(env._dx)
+                viewer.sync(env)
             if terminated or truncated:
                 break
     scalar_types = {"decision_frame": np.int64, "state_frame": np.int64, "reset": np.bool_, "terminated": np.bool_, "truncated": np.bool_}
