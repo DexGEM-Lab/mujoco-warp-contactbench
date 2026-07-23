@@ -1507,11 +1507,6 @@ class MujocoManoEnvironment:
                 "unified and heterogeneous object sets remain on the debug path"
             )
         if len(object_types) != 1:
-            if config.warp_ccd_explicit:
-                raise ValueError(
-                    "explicit Warp CCD capacity supports homogeneous object batches only; "
-                    "unified and heterogeneous routes are intentionally unsupported"
-                )
             if config.unified_object_batch:
                 self._initialize_unified_batch(
                     trajectories, identity_parts, object_types, config
