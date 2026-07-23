@@ -265,11 +265,36 @@ _OBJECT_RUNTIMES = {
         collision_sha256="da32bee52e7841bb2e1313ed9752623c351f34e0023d0f7a7a276c5323835601",
         rgba="0.46 0.68 0.18 1",
     ),
-    "cuboid3": _all_assets_runtime(
-        "cuboid3",
-        urdf_sha256="abaad82b63c72fae8df11bfec35c0d4462d55f809f503d9477184c3868a58273",
-        collision_sha256="6a8e186b9c6be97b0681815ce58a79e7e6b7414a3ecdf5033dc5fec1dc24cc74",
-        rgba="0.88 0.34 0.20 1",
+    "cuboid3": ObjectRuntime(
+        object_type="cuboid3",
+        link_name="cuboid3_link",
+        body_name="cuboid3",
+        free_joint_name="cuboid3_free",
+        source_mesh_filename="cuboid3.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "cuboid3" / "cuboid3.urdf",
+        collision_mesh_paths=(
+            ALL_ASSETS_SIM_ROOT / "decomposed" / "cuboid3" / "coacd" / "coacd_convex_piece_0.obj",
+        ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        rgba="0.40 0.70 0.35 1",
+        geometry_type="box",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "cuboid3" / "cuboid3.urdf",
+                "beab747890abce39b9f0c75c76256b1069c7f6d7deb56021e729f79ad03d497a",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "cuboid3"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "6a8e186b9c6be97b0681815ce58a79e7e6b7414a3ecdf5033dc5fec1dc24cc74",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
     ),
     "iphone": ObjectRuntime(
         object_type="iphone",
@@ -277,26 +302,23 @@ _OBJECT_RUNTIMES = {
         body_name="iphone",
         free_joint_name="iphone_free",
         source_mesh_filename="iphone.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "iphone.urdf",
         collision_mesh_paths=(
-            ALL_ASSETS_SIM_ROOT
-            / "for_math_retaregeting"
-            / "iphone"
-            / "coacd"
-            / "coacd_convex_piece_0.obj",
+            ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "coacd" / "coacd_convex_piece_0.obj",
         ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),),
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((1.0, 1.0, 1.0),),
-        rgba="0.12 0.18 0.30 1",
+        rgba="0.20 0.20 0.25 1",
+        geometry_type="box",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
-                "b6cf7a4bc57db9b6733a3d13c981366a49836f2d850f921ff8066ead0d95ff5d",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "iphone.urdf",
+                "b037cbfa6da891dc7cb84b6d2c0c5bfae5b24fa7cc8362d8b437a811955f4ccb",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "iphone"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
@@ -311,28 +333,28 @@ _OBJECT_RUNTIMES = {
         body_name="bottlewithcap",
         free_joint_name="bottlewithcap_free",
         source_mesh_filename="bottlewithcap.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bottlewithcap.urdf",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "bottlewithcap" / "bottlewithcap.urdf",
         collision_mesh_paths=tuple(
             ALL_ASSETS_SIM_ROOT
-            / "for_math_retaregeting"
+            / "decomposed"
             / "bottlewithcap"
             / "coacd"
             / f"coacd_convex_piece_{index}.obj"
             for index in range(2)
         ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 2,
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((1.0, 1.0, 1.0),) * 2,
         rgba="0.32 0.78 0.74 1",
         geometry_type="irregular",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bottlewithcap.urdf",
-                "2fd73b7d8a36c33b4ef516905fab6ce0049e419ccc4b65c9b33d044a9bdc3f9a",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "bottlewithcap" / "bottlewithcap.urdf",
+                "ac23ee51dbd0a03cb0cc84895eeb78c2d7bcc3fd032671c92e36b7bd3396f191",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bottlewithcap"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
@@ -340,7 +362,7 @@ _OBJECT_RUNTIMES = {
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bottlewithcap"
                 / "coacd"
                 / "coacd_convex_piece_1.obj",
@@ -355,40 +377,40 @@ _OBJECT_RUNTIMES = {
         body_name="mayonnaisebottle",
         free_joint_name="mayonnaisebottle_free",
         source_mesh_filename="mayonnaisebottle.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "mayonnaisebottle.urdf",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "mayonnaisebottle" / "mayonnaisebottle.urdf",
         collision_mesh_paths=tuple(
             ALL_ASSETS_SIM_ROOT
-            / "for_math_retaregeting"
+            / "decomposed"
             / "mayonnaisebottle"
             / "coacd"
             / f"coacd_convex_piece_{index}.obj"
             for index in range(2)
         ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 2,
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((1.0, 1.0, 1.0),) * 2,
         rgba="0.90 0.85 0.25 1",
         geometry_type="irregular",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "mayonnaisebottle.urdf",
-                "5ae0c35b959e0b06a0fff0036be90618ba26007f3a51cccc0f2c3740340c996f",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "mayonnaisebottle" / "mayonnaisebottle.urdf",
+                "d9de5ce1455d359e6ccbe3f1078d6e70058a1c788dd8c05251be54e2656f7032",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "mayonnaisebottle"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
-                "3a3740489948281841b40fca2dc4da4e13d37033726bfe614513679ea04f2b66",
+                "d4de932b65ca9dc76d101cf58d00e90e562ef183b9f34096bb44b44813e3d048",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "mayonnaisebottle"
                 / "coacd"
                 / "coacd_convex_piece_1.obj",
-                "d46148d541b3754c76751c0204b8b5afb89701ad0279933a295007c3f840ae92",
+                "5c76fee70df8d3776e828e88cc443498a8cb77dd8582b5c7e0114c949a1e0f6e",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
@@ -399,248 +421,272 @@ _OBJECT_RUNTIMES = {
         body_name="bowl",
         free_joint_name="bowl_free",
         source_mesh_filename="bowl.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bowl.urdf",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "bowl" / "bowl.urdf",
         collision_mesh_paths=tuple(
             ALL_ASSETS_SIM_ROOT
-            / "for_math_retaregeting"
+            / "decomposed"
             / "bowl"
             / "coacd"
             / f"coacd_convex_piece_{index}.obj"
-            for index in range(28)
+            for index in range(31)
         ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 31,
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((1.0, 1.0, 1.0),) * 28,
         rgba="0.68 0.30 0.82 1",
         geometry_type="irregular",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bowl.urdf",
-                "36b3e0ead99bf62669ae2618a75e7f14497dabb12c5323dc0fe8a0e415b2d7ff",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "bowl" / "bowl.urdf",
+                "5453bfab834666a0c08ffc1dfb0c261af7f0715ee58448cbb68e4b6672397951",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
-                "22d286fd17044aa89b75cde59907377ac3161a77cabd61c8f6ed14e769cb9154",
+                "373c973b33d023cf5596f496465cb573e12d7fdbc9657b1e8f174a46bac22781",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_1.obj",
-                "3bf4afc4c31a207a1c1960e8b6703885e6e25cefe11264c9331900ce54b1dfcc",
+                "00d994d5ca63f464ffcd355e03140d441486da18bc27e30f361673dde3dceca2",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_2.obj",
-                "2a85639e8ef1743fb35f87794f8b1d2ea7462bfac5a012d2de716634ba891a9d",
+                "a36e5446e0325582bd78950bde5ae1a17111d11a526f9f256143d457efa2bc3b",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_3.obj",
-                "7f24b172bc02b2c942182f45eca7f850deabe3ff2ed8b5d3e939acff816d9d33",
+                "75d046fd44cb0ff5c9468f2ebf89590626dfe2fea4c428d6e02d317386135c46",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_4.obj",
-                "0e76c8affd5a12b2317a74f4a48acc73956f1a8c0b2c663f61bd4e141a15baa6",
+                "d7f230e9f659aad87f514a707da8f38012650b3acd7154a1852e7c157324224d",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_5.obj",
-                "038cacb591e818edea2db7728ae34f291eb2580fbe27db04536434ea8ea915c3",
+                "3fbb77ba74c2d958dceb18294238dec5398f1f68df94739cb9a04755b8e25fea",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_6.obj",
-                "a7ef87145dd5a1462a04c26a10ac6ffcf1369129a3e75dbd8a4e603bbb82144e",
+                "103680b0e40bf35dc21b1bad887563dcc3f4a5daea9f7533f071410f1811a1ff",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_7.obj",
-                "bf257d629e1eff9ce5454a4ebe9d03edd1d6ea6e9c376d3ceb7b67055f6142a3",
+                "72cf2357be8b3266f7ff9695ad6378f045a1b6b633b392c68cd8cc9e53ae5bdd",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_8.obj",
-                "db4f018b320f1a65357010f071ad89e2223a83e524af33a90be696e0ea4f5aee",
+                "5f00884c09c6299dddfa264e39899aa688fc26842d2ab05254d0662abe46851e",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_9.obj",
-                "d2de97ba87f3055182586b745face9575b21d440159cb0927afc907a1cd15dae",
+                "75394c491d3aa917c625df30b3e588e7d3a0adb01e8890c2a5430466019d355e",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_10.obj",
-                "5d26956bfcf4a23cdaaa004567709f76539754f7b53e65adff6c3af103289319",
+                "2434c4b7a507ee75bd08544718a2fea805eb95d82854374e15e0c63a734014eb",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_11.obj",
-                "22c95c956bcd37e90ce89782173be74adfb8f46ebd07976079e63808e79fcd11",
+                "4e5e49bc810675127f94f0c7ebeb3762b336c91d2e0cf4dbc6250438dfc51b69",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_12.obj",
-                "18b0f78e88c2d5b8e6a9f110be3bcff8b7c924ebcdd7b2d0f0fe4dca3a3e01ae",
+                "e50f8bff5363290350e0a9836a7ce39c0946fbba5b0e75900d0c655b7b07d807",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_13.obj",
-                "0657ee476213eb569f3fb1ce7b8ef8a8a6e1cd8d986112438d1ac56def70f768",
+                "327b76cc82cab21980d9243c6821d0ec34906c079e3247aa4754c9b5f7461b5a",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_14.obj",
-                "769a7ad15affa1fc04bb00e5560986f78a41bf2d94fb7325d15dfe67aec27196",
+                "c7268f85e055dcd812301a0d6ddabbabf298d316c8b46994ee7eee1e5c584e3d",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_15.obj",
-                "d786550327ecb9f6582ccc7fddc43ee37e12466312ef72b299daf92336d35586",
+                "e11103afdc8386fd684a4e318e04df26cf0a26e581e1f8305d4156478afd9dfa",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_16.obj",
-                "e6fd0a6790e567f051027d417a349f98e9192507f3a9dca958748b4e09e61ccd",
+                "45438630dbce10b36a09bee4b53cfd9a29e6477fac10df9c6049c99b901c65be",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_17.obj",
-                "3d92cd610ddd61d11114c0167e1429ac597f82fc3784b4ad4d2e88f223403e5e",
+                "32b1d7c48299fd2189bc876ca093f36aa8b854278bc98a8eb1d040984ef692b5",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_18.obj",
-                "df020c722ece9f1c1147e2b9b6d246be6890e495cc19cb28e6e0fd95c614a7ba",
+                "f827bcae04eb95b2b0e43223d1a3e9c280993501c37ae7e312d36d650ab25926",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_19.obj",
-                "4483ae3f36a7463d17c8617fe7998d03862c45938f96227884188e594948bfd8",
+                "9c6f2a0d1928655cef42e3a4b0b81fd1f80565ce37f51c306fa4fda602e15764",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_20.obj",
-                "aa8d9af06277d7a8edb5da656f3c026b2000fb70b99342db37e0a575d9c7a84e",
+                "0442d430e1ef5b0ada7f6c17d36e0e0ab0cca64a2ff8f9cc50e74fe737396641",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_21.obj",
-                "e8d12c6e8fb94ccd84fd5b76a3b04908928b3c6de7c7259cc0fd653967bb4fcc",
+                "8d5206900e3a60d69f82693050614a772e47c623def4fa825312dc8b9a9ec93e",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_22.obj",
-                "a9e4ef9dab34f042557d8e669c4682de04c946dc07cf2f37de8163afa63d5884",
+                "d81ca325ae9afd2080d59c7361999557d4a30f5058864b0f1414f4c8b6b8ae41",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_23.obj",
-                "4ef5187b8ff5b07842ecc69cd9080ad7352c0bf2075006bd60de101e0b5ebdae",
+                "cd5e9c6e868abbb2c8e6d8f5ddcaf116f82011bbdf3c3012af90ce11833d38f3",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_24.obj",
-                "31b2e54eed17af18f343611e5cbdf3b67307b483e78dbd69aab4f51cceb999cc",
+                "93c836c66445e296bf0e301477e959e64ac026029900b0d04113c082586c4f40",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_25.obj",
-                "74fb073a2fe25f91fbd1740990428845166fb78c6acd66aa7697768539a921d6",
+                "45a0e4e9770391ead795e9ebd2b8e0c0d6a3a135077b4b40e64e4ac8c4bdb051",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_26.obj",
-                "d499f7fa02613219d9ed1615f399c7542694a6e8d5fd3efd0ed630879c2ecfc2",
+                "91d7d0c67eca7acf8a67f41d6417150158f468be5db758d33e1033cd6e01ce29",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "bowl"
                 / "coacd"
                 / "coacd_convex_piece_27.obj",
-                "ee3234805bb8ee22bb4a7739043c6da3bedabc9e3086c8298309f26203b2a5ed",
+                "79c5b17843225e6b3838e20393792cb9501818aff4d1cf8f73cd8cc3cacb4209",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_28.obj",
+                "1b49de1f38e532da0ce06157fe1031bc6239355e118cd3333129307567ec64c0",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_29.obj",
+                "cda865e33ebe6f4d72dd85f093f0bef32917528f1f4f748b9147caa856744e9d",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_30.obj",
+                "cca91a8b5a25d0ca3619c32463b469a930ddc4a1ab89a869984d1b022904a927",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
@@ -651,264 +697,264 @@ _OBJECT_RUNTIMES = {
         body_name="largeclamp",
         free_joint_name="largeclamp_free",
         source_mesh_filename="largeclamp.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "largeclamp.urdf",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "largeclamp" / "largeclamp.urdf",
         collision_mesh_paths=tuple(
             ALL_ASSETS_SIM_ROOT
-            / "for_math_retaregeting"
+            / "decomposed"
             / "largeclamp"
             / "coacd"
             / f"coacd_convex_piece_{index}.obj"
             for index in range(30)
         ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 30,
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((1.0, 1.0, 1.0),) * 30,
-        rgba="0.84 0.56 0.16 1",
+        rgba="0.85 0.35 0.20 1",
         geometry_type="irregular",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "largeclamp.urdf",
-                "5241ce579d395a8969b62800d53d7adb37c7f9deeb983fb2626f647a349f31eb",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "largeclamp" / "largeclamp.urdf",
+                "3f8286e375e040ff2f7bc94f392c6614ecba9d1dd76e840c3859e540d5c5cc00",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
-                "45222f3b97e244a00f8e9f8ddc3f8b4789d511e488252500e8983d5814bdbe89",
+                "9dd65950c8595804cf7d2366b3cecc94ad3631fc5875a95d5edd7a5040477f06",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_1.obj",
-                "e09d5f992f0c3cacb83a655e0826df419a4606a776ba0b44e04a86d640c33bdb",
+                "8647fe0168774bcb965d26e87881bd3582c655d11769129085627eceec4944aa",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_2.obj",
-                "5bd3a07e3c7578911cb6e89d0f58b135bff11633c193708a77235e93c931694c",
+                "72855d260a3dedceb4cbdc33a1aee3d4ae17d35d66a9962cc718c6e819ee142d",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_3.obj",
-                "40dc242ae2a46fe865b80311fa2fc3974950f6adcc765e73d658717b5d46728b",
+                "176e045fd7877efb2f6925dccdaa0a489ed83f86abc2ada91abb5387dac0bc17",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_4.obj",
-                "5bce284491f050ecb004cc5bfb4cefb57f231a3d2a22cf0dfe3747aef1595c30",
+                "03b90b20aea1a407dfb9f835c6bf1d9e5ff851d4cd029baee466ded0749c682f",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_5.obj",
-                "9828cd6b0de1b3167f7f458789aa681fd910b4b63972f2d0b8b247ae66b73a51",
+                "5b6fe2fb054d20ca176e53607c1fc9744c4b20aca003ac1497d536846359564e",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_6.obj",
-                "0aecb224b78afd557f64f098ab686353908d63d1f02f49e95618a6928083c09d",
+                "b6b174d212e1d20f8bca0ad2461ae81e1dcfefb2d242c2abc86b185362135c6c",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_7.obj",
-                "b37dcc9cea299eee7c18f56d5d270ea02dc419863a7c14c8c1e608b162bdfb75",
+                "8ecb92fc36319dea3e87967179794c4362ba9578f720e27c5f3884a046592dd7",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_8.obj",
-                "a5b075ea58a09af079fa74a211ff37eedb5056818bedd16491eee703207f439a",
+                "906015e698e822332810062b221cf5f717073d8a84b9cebf503f7c115e8b8269",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_9.obj",
-                "2d59ef7cd8fa8399b4b134a53c4e5d2de2980c83caa4cbbbce84905f5c3de3f6",
+                "a6bda64dd53545404b14b521703317a6b796e977748e610f498539d19147349d",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_10.obj",
-                "e63f2b811faf31e7bb302fb4749490feb51ae2a9e12ab4f567c35a2f8ff3f3b8",
+                "00848951014e1caf349ae9e817e639722538e39f2a49e8b690ccb1a5e9a63a1a",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_11.obj",
-                "192ff3e86011f7f7ef14680793ab052e3e93a08913061521804427b783d6ad88",
+                "9c54b78e9a5fdbac2b0f2c8fd0cf712adacd08f991d46cce011f7ac2d26cf528",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_12.obj",
-                "d44b17529f1364a6407b1961779f8ae289ca24d209140b45ef6fcefa4b2c50be",
+                "81d5c191631d4d959bd424875b8fdc377d59ff25a76102d8742b541f411c2d7d",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_13.obj",
-                "3acd2d7f656c2d7b37b5c17eaa9733a65a34ab151be9c6096f545c7aef993cf5",
+                "25e6c3d420cdd2040ee2d9f13a8a392c497616913f49da0e87ed5a0dc60c365e",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_14.obj",
-                "14350aa6e6cfea068f46355ae3ef7c57c306cd0aab4ea3352be3453d93fa4980",
+                "799e33697a8d8019d606d40df5148e7e7ad696d7e9a44e877293348c112bafa5",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_15.obj",
-                "2015197b5fff29594c10dc3c9af934bbf64301332a19aba2a56f0082fd483613",
+                "57ea2b5870f390cf6e472fea143646175c9d48c2c0f7e6dde90255de88dd1747",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_16.obj",
-                "bb944fd654f4526d755188c1ce5978578e186128a6052feb942b9bf7a68eb518",
+                "ae36a041969dd564e1a1c8fbf8073d649c65d847461683a1ca2bd92c149d8dc1",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_17.obj",
-                "712e05d5476fe7caad0f9fe6465ad75c3079a0bd5373820ea4898253dfce73e3",
+                "c81749e71a3c3668d348734fcaacf60b7e1f7a493e914fd76988a6fee6e81321",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_18.obj",
-                "055dfd3d9a1cf70775676ffd769d738d54a5bec1bf77a6a5baac575877040789",
+                "d79a3046854fbbe33c2fa0d751a0af9a7dac9891b2ec72448d65a51f0a8a683d",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_19.obj",
-                "cd92091700f73bf2394a18f6fbca4f9c4de27b5f6a53307fe6d4bef3cb7d1f1c",
+                "2ec60921880111afed15261edf7b8101f76975fa1740ec595b9b31e701800a19",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_20.obj",
-                "de160122b0c67e5d9ea88498779c9c8e6d95433e923768f2ae1234b019507e62",
+                "903ece086332918a8240f6a0098a1ed1e74a1bdf2f6ffd86ff8ce28005007b06",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_21.obj",
-                "d7da1ecc2bcdb1b39af5146f8f78166a793b94af950fbb14474a2f9ea9019c4e",
+                "e733c387e9a60a8c3a7acd04cf6a9a8ff0dab4fcddab3cc8f27603efc415f255",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_22.obj",
-                "dc590c601780f2b921d3e3f7925ce69583ba7ff676ecc230c660d96b773a8559",
+                "ea80b78712049777409596e5e021d62ab2699b09f5d7d5358788bee5e47076de",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_23.obj",
-                "9662f479b8077873dfa172bfb63bc403c203e16f565b8e7828f39534639bd6f8",
+                "4fc2accb357af94a600af731ae407efc38361d14074302cbd059b19a92bc8b75",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_24.obj",
-                "dc99b4d7a30ddc5758091c2317a8870f6484874b8ed085232daf67bbbb7f4bf8",
+                "baf8679c2fe508c4a80dff7262a0aba370db1179b1274c9f57df1c0e070877cb",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_25.obj",
-                "7223f8267c033acbbf52c9bd5201211b143828f39d23e4f94cb3982a73ed3450",
+                "4c80ab86ff03b68af57334047b5d111eefc9f92da28b38d9dc3a946fbe3bb205",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_26.obj",
-                "5173183b088268f18176b22ff3e1598f65c85324c7e449b0f7662911cfdeeecd",
+                "3765b5fca411fd22398874751a738b2bdb00109e2279287e5f3e1b0e2d3511c6",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_27.obj",
-                "83df2c23963ca5cc1a13f4d79cdbd5ecef07a04929255ef04792d819ba37981c",
+                "d612ea0994f5270622f092c4176fe244407a2091ea43197514572c35a7afdffd",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_28.obj",
-                "6e6255ef4a29f03bfac649ebef6f2f04ff0a5d8e60b133a97731cdc05d90761f",
+                "4ccc0f0b3c40b88f5ca75e6dd78fd5b84d18507f88c5e4441936871509694bc6",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "largeclamp"
                 / "coacd"
                 / "coacd_convex_piece_29.obj",
-                "8c9e478b831708b64879b03beb2e1609bdc5a2bc91fb41d7a36cfdf6d88ea57e",
+                "71791a816ea21b889bc8b725d977ea5ec16a3eb9f26328ec22c2f335ab59919d",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
@@ -919,64 +965,64 @@ _OBJECT_RUNTIMES = {
         body_name="powerdrill",
         free_joint_name="powerdrill_free",
         source_mesh_filename="powerdrill.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "powerdrill.urdf",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "powerdrill" / "powerdrill.urdf",
         collision_mesh_paths=tuple(
             ALL_ASSETS_SIM_ROOT
-            / "for_math_retaregeting"
+            / "decomposed"
             / "powerdrill"
             / "coacd"
             / f"coacd_convex_piece_{index}.obj"
             for index in range(5)
         ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 5,
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((1.0, 1.0, 1.0),) * 5,
-        rgba="0.78 0.20 0.34 1",
+        rgba="0.25 0.35 0.75 1",
         geometry_type="irregular",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "powerdrill.urdf",
-                "2e72a94f121126a52a4a4c25acaa92697c7db6803cdb9f40a770c2419ad64859",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "powerdrill" / "powerdrill.urdf",
+                "34f22cfcb519e342715d349b5184cb0b6a1ec4e440c793347762e25313a36105",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "powerdrill"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
-                "6411561864e54e2e55db22d3f56b25469b961e3e627938000c1e124014d11fd2",
+                "a413634662c84599566012de30198ed27e2bbc423319e87bd9dca0d80f427bac",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "powerdrill"
                 / "coacd"
                 / "coacd_convex_piece_1.obj",
-                "d3efec8efa7236aa7cea31ec7afd1c00a4220024ee36e1d7639f0361f0a04108",
+                "116aa7a9d602dbeb24b03aee4b51872ba91bbc822b713ac1a870dcc5b1ddf42e",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "powerdrill"
                 / "coacd"
                 / "coacd_convex_piece_2.obj",
-                "e6e47cd0d5fe5c9ae100d0d105fb204f26f9e1219ca02e8f2503fe91390410ca",
+                "0b06e92975f0558941069674ea0140ca5f406e9bd8f43f9d58a36589330b648d",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "powerdrill"
                 / "coacd"
                 / "coacd_convex_piece_3.obj",
-                "40a98cc42bb688a2a116ed2cd0b08363224d935e5245b850bd4ca0270d520ae8",
+                "4d89292d56a7bae8ee3404cc766ade0101705d8bffca6013ea4dd0f39fd861be",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "powerdrill"
                 / "coacd"
                 / "coacd_convex_piece_4.obj",
-                "908f315c524a4c23af618ead8e8553c5b938a04cba7d1971753c49a134ed5caa",
+                "a7e8aaf43df5bca66a011825bbe545c8d09c93174758a09a57263befb0dd9c99",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
@@ -987,96 +1033,104 @@ _OBJECT_RUNTIMES = {
         body_name="scissor",
         free_joint_name="scissor_free",
         source_mesh_filename="scissor.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "scissor.urdf",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "scissor" / "scissor.urdf",
         collision_mesh_paths=tuple(
             ALL_ASSETS_SIM_ROOT
-            / "for_math_retaregeting"
+            / "decomposed"
             / "scissor"
             / "coacd"
             / f"coacd_convex_piece_{index}.obj"
-            for index in range(9)
+            for index in range(10)
         ),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 10,
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((1.0, 1.0, 1.0),) * 9,
-        rgba="0.36 0.68 0.24 1",
+        rgba="0.55 0.60 0.65 1",
         geometry_type="irregular",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "scissor.urdf",
-                "9a96f5d2ddaf2b1f79c5f83c241efd94c231205d299ad03697f1bac2f2cb7da6",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "scissor" / "scissor.urdf",
+                "1424dda0213c9db6eb6126c05418bf0a9fe7eb86bd8a0cbe5aca2c706665c7b1",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
-                "e7bd654a3515e0f9d799393b9f6f9005a09dcadb701cd5a7c17a205715017710",
+                "cad021d3b1908c5e046b7a4acec18edc8d23b215e1acdbbc84e5a0303569dca8",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_1.obj",
-                "fb582ff179f04aec8b780fa6d6d6fb717f61d3dfacdb42d8119bf30bb209424b",
+                "11bee1702a33c92f415b3b534725454ed09a73aad8ccc6e6b93c92bd0fd56bd5",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_2.obj",
-                "170373ed324a37d1011e6d210215015f7476d024e2e8b47789dfbb6a78385e50",
+                "e50972881605956aaae64af3ea721c43328aa265aea1bf1eea1d56cf72cf6dae",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_3.obj",
-                "0fb9698be029aca59d44d172a9413f87c20b1ca0b709407f92083304c73651b8",
+                "f39bc4875f90d4a9f6405304e8b71b24d2798b35e4ffa782ac026a99bdfc5a0c",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_4.obj",
-                "d08c25cd00280dc984e3bc85dbfac7cafa432bd8d8fdb63bd6434e04d95ad21b",
+                "32b639fba69f36d4d306c2c5029d26dc16d17d505f138dc8c8b7a9008c962d4a",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_5.obj",
-                "d796db438531a48dce3496a0ebf65f2b5148a7fe4edb10c53a6068dbc8f2c0ba",
+                "c6e97652f4c300a60c9fadefa1ee20ecde83de250d87ba1b33c9dccb7d1c6348",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_6.obj",
-                "8efcd7dd94a3cdf6df0128e21d1c86a0aa8f04d8b16966128b6832ef3488c68b",
+                "710455f5dc4746242879a48d61749fcec6a3efd1d6ce3fe9ea26cbc110844721",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_7.obj",
-                "59d69f7a1785315152cdbdbaa36e03995f0078be792979b2e25bdfa9eec0c45a",
+                "1700fae791cca1526bdbe586544a2f94d3b00b2e8b217bc5a993b0af5a377264",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
-                / "for_math_retaregeting"
+                / "decomposed"
                 / "scissor"
                 / "coacd"
                 / "coacd_convex_piece_8.obj",
-                "f6c1a88395f62be299dad78098a717a310ffec6d2e176c180554877bf495ad18",
+                "21c2a22564ba0cf799e5bdaa9e9ad1f7c94165e41c09e2bdf66c93d6e015f430",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "decomposed"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_9.obj",
+                "53bebf7c6ec1f1955c89e93f4e38d85b41e91ba7bbf677780e0e334258f20c18",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
