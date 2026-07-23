@@ -2,26 +2,31 @@
 
 ## Current model
 
-The object anomaly was caused by a wrong inertial-frame origin in the generated MuJoCo object body. The source URDF COM offset is `[0.005175592236, -0.005187185076, 0.001516276923]` m (7.48 mm from the geometry origin), while the previous scene conversion hardcoded the inertial position to zero but retained inertia values about the source COM. That displaced the physical COM relative to contact geometry and produced the observed rotation/ejection. The COM-fixed replay preserves the URDF inertial frame and confirms this mechanism.
+The COM-fixed object physics is sufficient for successful lift under exact Gym control, but the production policy fails in closed loop. On identical COM-fixed, hand-friction-3 physics, exact Gym control reaches `0.2859 m` lift with `0.03736 m` movement position RMSE, while the production closed loop reaches only `0.0261 m` with `0.1818 m` position RMSE and `1.526 rad` orientation RMSE. The remaining failure is therefore observation→policy feedback, not an inability of the object/contact physics to execute a successful trajectory (OPS, `2026-07-23T04:44:18Z`).
 
-## Accepted COM-fixed evidence
+The network and checkpoint mapping are correct: offline replay matches stored means at approximately `1.5e-7` RMSE. Counterfactual slice replacement localizes policy divergence to physical feedback. Point cloud explains `53.7%` of policy error at residual onset (decisions 191–220); contact explains `65.4%` before movement (191–260), including `31.7%` from contact magnitude; during early lift, point cloud and object state explain `24.7%` and `21.0%`. These channels encode contact and relative hand/object pose (OPS, slice SHA `442c4dc...`).
 
-The exact-control visible trace has SHA256 prefix `a7f670f5...`; its comparison is `01ef742b...`, validation is `91dbc505...`, and metrics are `e919192c...`. It contains 631 finite rows and exact imported Gym control arrays.
+Point-cloud generation itself is ruled out. Canonical Gym and MuJoCo local samples agree within `6.46e-9 m` nearest-neighbor and `3.73e-9 m` indexwise. Policy-visible point-cloud divergence is caused by different physical hand/object poses upstream of sampling (OPS, diagnostic SHA `c6fca588...`).
 
-Relative to the prior `3 0.01 0.001` replay, COM correction passes every preregistered criterion:
+The live upstream mechanism is hand-response mismatch. Under the same exact Gym controls, MuJoCo tracks finger targets substantially more tightly than Gym: full finger target RMSE `0.0432` versus `0.0920 rad`, and movement RMSE `0.0530` versus `0.1171 rad`. Early-lift cross-backend finger qpos RMSE is `0.0473 rad`, with the thumb dominant. MuJoCo is too stiff relative to Gym, so fingers occupy different poses, engage different contact bodies and forces, and generate a different hand-frame point cloud; those observations then drive the policy onto a failing trajectory (OPS, hand-response SHA `58c3f480...`).
 
-- Movement position RMSE: `0.2892 → 0.03736 m` (87.1% reduction), better than Gym `0.05017 m`.
-- Movement orientation RMSE: `2.7247 → 0.4723 rad` (82.7% reduction).
-- Maximum lift: `0.2859 m`, close to Gym `0.3087 m`.
-- Movement hand-contact rows: `88 → 286`, above Gym `269`.
-- Position error first exceeds 5 cm at frame `455`, versus Gym frame `422`.
+## Ruled out
 
-This confirms the wrong 7.48 mm COM as the dominant object anomaly and validates the ManoRL-based diagnosis. The remaining exact-control gap is orientation RMSE `0.472 rad` versus Gym `0.226 rad`; grasp, lift, and translation are close. No new physics tuning has been performed.
+- Wrong object inertial origin caused the earlier open-loop rotation/ejection, but preserving the 7.48 mm URDF COM offset corrected it and enabled the successful exact-control lift.
+- Checkpoint loading, observation normalization, network mapping, and policy execution do not explain current policy-mean divergence; offline replay is numerically exact.
+- Point-cloud sampling order or geometry does not explain the mismatch; the canonical local sampling contract is effectively exact.
+- Weak MuJoCo finger actuation is contradicted by its lower target-tracking error. The relevant mismatch is excess proportional response or another mechanism that produces similarly over-tight tracking.
 
-## Production closed-loop preregistration
+## Preregistered next intervention
 
-Run the full production checkpoint closed-loop evaluation with COM fixed and hand sliding friction `3 0.01 0.001`. Do not inject or replay a control trace. Use `DISPLAY=:1`, `env=1`, and `headless=false`; retain all other defaults.
+Run exact Gym control, COM fixed, hand friction `3 0.01 0.001`, `substeps=10`, and `finger_kv=0`; change only `finger_kp` from `15` to `7.5`. Evaluate decisions 62–330 in the visible `env=1` run.
 
-Success requires maximum lift `>0.20 m` and movement position RMSE `<0.10 m`. Report orientation RMSE and policy/control divergence. If the run fails despite the open-loop COM-fixed success, the remaining mechanism is observation/policy closed-loop transfer rather than object contact physics.
+Accept proportional stiffness as the mechanism only if all three predictions hold:
+
+1. Early-lift MuJoCo finger target RMSE enters `[0.06, 0.10] rad`.
+2. Early-lift cross-backend finger qpos RMSE improves at least 25%, from `0.0473` to `<=0.0355 rad`.
+3. Maximum lift through frame 330 remains `>=0.10 m`.
+
+If target tracking worsens without cross-backend qpos improvement, reject proportional stiffness and investigate damping/contact compliance as the mechanism. The decisive quantity is cross-backend pose alignment, not target-tracking error alone.
 
 Evidence provenance: `OPS.md`.
