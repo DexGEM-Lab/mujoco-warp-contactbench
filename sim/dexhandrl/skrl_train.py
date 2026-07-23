@@ -14,6 +14,7 @@ from loguru import logger
 
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, physics_legacy_aliases, resolve_physics_config
 from sim.dexhandrl.lance_loader import list_trajectories
+from sim.dexhandrl.trajectory_batch import DEXHAND_ALL_ACTIONS
 from sim.dexhandrl.rlgames_checkpoint import RlGamesRunningMeanStd, load_rlgames_checkpoint
 from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT, DEFAULT_OUTPUT_ROOT
@@ -64,7 +65,8 @@ class SkrlLauncherConfig:
     naconmax: int | None = None
     njmax: int | None = None
     seed: int = 0
-    timesteps: int = 250_000
+    timesteps: int | None = None
+    updates: int | None = None
     rollouts: int = 48
     learning_epochs: int = 3
     mini_batches: int = 48
@@ -120,6 +122,18 @@ class SkrlLauncherConfig:
             njmax=self.njmax,
         )
         object.__setattr__(self, "physics", physics)
+        updates = self.updates
+        timesteps = self.timesteps
+        if updates is not None and int(updates) <= 0:
+            raise ValueError("updates must be positive")
+        if timesteps is not None and int(timesteps) <= 0:
+            raise ValueError("timesteps must be positive")
+        if updates is not None and timesteps is not None and int(timesteps) != int(updates) * int(self.rollouts):
+            raise ValueError("timesteps must equal updates * rollouts when both are explicit")
+        resolved_updates = 3000 if updates is None else int(updates)
+        resolved_timesteps = int(timesteps) if timesteps is not None else resolved_updates * int(self.rollouts)
+        object.__setattr__(self, "updates", resolved_updates)
+        object.__setattr__(self, "timesteps", resolved_timesteps)
         for name, value in physics_legacy_aliases(physics).items():
             object.__setattr__(self, name, value)
 
@@ -188,31 +202,39 @@ def _require_skrl() -> tuple[Any, Any, Any, Any, Any]:
 
 def _resolve_trajectory_specs(cfg: SkrlLauncherConfig) -> list[dict[str, Any]]:
     rows = list_trajectories(cfg.lance_path, limit=None)
+    num_envs = max(cfg.num_envs, 1)
+    if cfg.action == "all":
+        if cfg.uuid is not None:
+            raise RuntimeError("--uuid cannot be combined with --action all")
+        routes: dict[str, list[dict[str, Any]]] = {}
+        for action in DEXHAND_ALL_ACTIONS:
+            selected = [row for row in rows if row["object_name"] == cfg.object_name and row["action"] == action]
+            selected.sort(key=lambda row: (int(row["row_id"]), str(row["uuid"])))
+            if not selected:
+                raise RuntimeError(
+                    f"no trajectories found for required action={action!r} object={cfg.object_name!r} in {cfg.lance_path}"
+                )
+            routes[action] = selected
+        specs = []
+        for env_id in range(num_envs):
+            action = DEXHAND_ALL_ACTIONS[env_id % len(DEXHAND_ALL_ACTIONS)]
+            route = routes[action]
+            sequence_index = (cfg.sequence_index + env_id // len(DEXHAND_ALL_ACTIONS)) % len(route)
+            specs.append({**route[sequence_index], "sequence_index": sequence_index})
+        return specs
+
     selected = [row for row in rows if row["object_name"] == cfg.object_name and row["action"] == cfg.action]
     if not selected:
         raise RuntimeError(
             f"no trajectories found for object={cfg.object_name!r}, action={cfg.action!r} in {cfg.lance_path}"
         )
     if cfg.uuid:
-        matching = [
-            {**row, "sequence_index": index}
-            for index, row in enumerate(selected)
-            if row["uuid"] == cfg.uuid
-        ]
+        matching = [{**row, "sequence_index": index} for index, row in enumerate(selected) if row["uuid"] == cfg.uuid]
         if not matching:
             raise RuntimeError(f"trajectory uuid {cfg.uuid!r} not found for {cfg.object_name}/{cfg.action}")
-        return [dict(matching[0]) for _ in range(max(cfg.num_envs, 1))]
-
+        return [dict(matching[0]) for _ in range(num_envs)]
     start = cfg.sequence_index % len(selected)
-    sequence_indices = [
-        (start + env_index) % len(selected)
-        for env_index in range(max(cfg.num_envs, 1))
-    ]
-    return [
-        {**selected[sequence_index], "sequence_index": sequence_index}
-        for sequence_index in sequence_indices
-    ]
-
+    return [{**selected[(start + env_id) % len(selected)], "sequence_index": (start + env_id) % len(selected)} for env_id in range(num_envs)]
 
 def _make_env_factory(cfg: SkrlLauncherConfig, spec: dict[str, Any], env_index: int):
     env_cfg = DexHandRLMJXEnvConfig(
@@ -240,6 +262,11 @@ def _make_env_factory(cfg: SkrlLauncherConfig, spec: dict[str, Any], env_index: 
 
 
 def _build_wrapped_env(cfg: SkrlLauncherConfig):
+    if cfg.action == "all":
+        raise RuntimeError(
+            "action=all requires the device-resident DexHand trajectory-batch runtime; "
+            "SyncVectorEnv training is intentionally unavailable"
+        )
     _, _, wrap_env, _, _ = _require_skrl()
     try:
         from gymnasium.vector import SyncVectorEnv
@@ -351,6 +378,13 @@ def _write_launcher_config(cfg: SkrlLauncherConfig, specs: list[dict[str, Any]],
     payload = _to_jsonable(asdict(cfg))
     payload["physics_contract"] = _to_jsonable(cfg.physics.record())
     payload["resolved_trajectories"] = _to_jsonable(specs)
+    payload["trajectory_assignment_counts"] = {
+        action: sum(spec.get("action") == action for spec in specs) for action in DEXHAND_ALL_ACTIONS
+    }
+    payload["trajectory_assignment_manifest"] = [
+        {"env_id": index, "action": spec["action"], "row_id": spec["row_id"], "uuid": spec["uuid"]}
+        for index, spec in enumerate(specs)
+    ]
     payload["model_config"] = _to_jsonable(asdict(model_cfg))
     with (cfg.output_dir / "launcher_config.json").open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
@@ -539,7 +573,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--isaac-source-root", type=Path, default=DEFAULT_ISAAC_SOURCE_ROOT)
     parser.add_argument("--object-name", default="cube1")
-    parser.add_argument("--action", default="01")
+    parser.add_argument("--action", default="01", help="source action ID or all")
     parser.add_argument("--sequence-index", type=int, default=0)
     parser.add_argument("--uuid", default=None)
     parser.add_argument("--use-residual", action=argparse.BooleanOptionalAction, default=True)
@@ -570,7 +604,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--naconmax", type=int, default=8192)
     parser.add_argument("--njmax", type=int, default=8192)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--timesteps", type=int, default=250_000)
+    parser.add_argument("--timesteps", type=int, default=None)
+    parser.add_argument("--updates", type=int, default=None, help="PPO updates; derives timesteps as updates * rollouts")
     parser.add_argument(
         "--rollout-max-steps",
         type=int,
@@ -659,7 +694,8 @@ def main(argv: list[str] | None = None) -> None:
         naconmax=args.naconmax,
         njmax=args.njmax,
         seed=int(args.seed),
-        timesteps=int(args.timesteps),
+        timesteps=None if args.timesteps is None else int(args.timesteps),
+        updates=None if args.updates is None else int(args.updates),
         rollout_max_steps=max(int(args.rollout_max_steps), 0),
         rollout_keep_observation=bool(args.rollout_keep_observation),
         rollouts=int(args.rollouts),

@@ -111,6 +111,41 @@ def _contact_mask_from_row(row: dict[str, Any], frames: int) -> np.ndarray:
     return mask
 
 
+def _trajectory_from_row(path: Path, row: dict[str, Any], row_id: int) -> DexHandTrajectory:
+    """Parse one full Lance row; shared by scalar and bulk loaders."""
+    _validate_row(row)
+    index = row["index"] or {}
+    metadata = row["trajectory_metadata"] or {}
+    actual_object = str(index["scene"])
+    actual_action = str(index["gesture"])
+    total_frames = int(metadata["total_frames"])
+    movement_start, movement_end = _movement_range(str(index["uuid"]), actual_object, total_frames, metadata["trajectory_info"])
+    hands, objects = row.get("hands") or [], row.get("objects") or []
+    if len(hands) != 1 or len(objects) != 1:
+        raise RuntimeError("DexHandRL minimal Lance row must contain one hand and one object")
+    hand_dof = np.asarray(hands[0]["dexhand_dof"], dtype=np.float32)
+    raw_values = hands[0].get("dexhand_joint_angles_full_raw")
+    raw = None if raw_values is None else np.asarray(raw_values, dtype=np.float32)
+    object_pos = np.asarray(objects[0]["pos"], dtype=np.float32)
+    object_quat = np.asarray(objects[0]["rot_quat_xyzw"], dtype=np.float32)
+    if hand_dof.shape != (total_frames, len(DEXHAND021PRO_ACTIVE_DOF_NAMES)):
+        raise RuntimeError(f"invalid hand_dof shape {hand_dof.shape}")
+    if raw is not None and raw.shape != (total_frames, 20):
+        raise RuntimeError(f"invalid dexhand_joint_angles_full_raw shape {raw.shape}")
+    if object_pos.shape != (total_frames, 3):
+        raise RuntimeError(f"invalid object_pos shape {object_pos.shape}")
+    if object_quat.shape != (total_frames, 4):
+        raise RuntimeError(f"invalid object_quat shape {object_quat.shape}")
+    return DexHandTrajectory(
+        lance_path=path, uuid=str(index["uuid"]), row_id=row_id, object_name=actual_object,
+        action=actual_action, hand_dof=_unwrap_columns(hand_dof, 3, 6), hand_finger_dof_full_raw=raw,
+        object_pos=object_pos, object_quat_xyzw=object_quat,
+        expected_contact_mask=_contact_mask_from_row(row, total_frames),
+        movement_start_frame=movement_start, movement_end_frame=movement_end,
+        metadata={"index": index, "trajectory_metadata": metadata, "source": row.get("source") or {}},
+    )
+
+
 def list_trajectories(lance_path: Path | str = DEFAULT_LANCE_PATH, limit: int | None = 20) -> list[dict[str, Any]]:
     """Return lightweight trajectory index rows from the DexHandRL Lance dataset."""
 
@@ -179,56 +214,33 @@ def load_trajectory(
         row = rows[sequence_index]
         row_id = int(row.get("_rowid", sequence_index))
 
-    _validate_row(row)
-    index = row["index"] or {}
-    metadata = row["trajectory_metadata"] or {}
-    actual_object = str(index["scene"])
-    actual_action = str(index["gesture"])
-    total_frames = int(metadata["total_frames"])
-    movement_start, movement_end = _movement_range(
-        uuid=str(index["uuid"]),
-        object_name=actual_object,
-        total_frames=total_frames,
-        trajectory_info=metadata["trajectory_info"],
-    )
+    return _trajectory_from_row(path, row, row_id)
 
-    hands = row.get("hands") or []
-    objects = row.get("objects") or []
-    if len(hands) != 1 or len(objects) != 1:
-        raise RuntimeError("DexHandRL minimal Lance row must contain one hand and one object")
-    hand_dof = np.asarray(hands[0]["dexhand_dof"], dtype=np.float32)
-    raw_finger_dof = hands[0].get("dexhand_joint_angles_full_raw")
-    hand_finger_dof_full_raw = (
-        None if raw_finger_dof is None else np.asarray(raw_finger_dof, dtype=np.float32)
-    )
-    object_pos = np.asarray(objects[0]["pos"], dtype=np.float32)
-    object_quat_xyzw = np.asarray(objects[0]["rot_quat_xyzw"], dtype=np.float32)
-    if hand_dof.shape != (total_frames, len(DEXHAND021PRO_ACTIVE_DOF_NAMES)):
-        raise RuntimeError(f"invalid hand_dof shape {hand_dof.shape}")
-    if (
-        hand_finger_dof_full_raw is not None
-        and hand_finger_dof_full_raw.shape != (total_frames, 20)
-    ):
-        raise RuntimeError(f"invalid dexhand_joint_angles_full_raw shape {hand_finger_dof_full_raw.shape}")
-    if object_pos.shape != (total_frames, 3):
-        raise RuntimeError(f"invalid object_pos shape {object_pos.shape}")
-    if object_quat_xyzw.shape != (total_frames, 4):
-        raise RuntimeError(f"invalid object_quat shape {object_quat_xyzw.shape}")
 
-    hand_dof = _unwrap_columns(hand_dof, 3, 6)
-    expected_contact_mask = _contact_mask_from_row(row, frames=total_frames)
-    return DexHandTrajectory(
-        lance_path=path,
-        uuid=str(index["uuid"]),
-        row_id=row_id,
-        object_name=actual_object,
-        action=actual_action,
-        hand_dof=hand_dof,
-        hand_finger_dof_full_raw=hand_finger_dof_full_raw,
-        object_pos=object_pos,
-        object_quat_xyzw=object_quat_xyzw,
-        expected_contact_mask=expected_contact_mask,
-        movement_start_frame=movement_start,
-        movement_end_frame=movement_end,
-        metadata={"index": index, "trajectory_metadata": metadata, "source": row.get("source") or {}},
-    )
+def load_trajectories_by_row_ids(lance_path: Path | str, row_ids: list[int] | tuple[int, ...]) -> list[DexHandTrajectory]:
+    """Bulk-load unique physical Lance rows with a single indexed Lance request."""
+    unique_ids = list(dict.fromkeys(int(row_id) for row_id in row_ids))
+    if not unique_ids:
+        return []
+    lance = _import_lance()
+    path = Path(lance_path)
+    ds = lance.dataset(str(path))
+    columns = ["index", "trajectory_metadata", "hands", "objects"]
+    columns.extend(name for name in ("source", "contact") if name in set(ds.schema.names))
+    take = getattr(ds, "take", None)
+    if not callable(take):
+        raise RuntimeError("installed Lance dataset does not support bulk indexed row loading")
+    try:
+        table = take(unique_ids, columns=columns)
+    except TypeError:
+        table = take(unique_ids, columns)
+    rows = table.to_pylist()
+    if len(rows) != len(unique_ids):
+        raise RuntimeError(f"bulk Lance take returned {len(rows)} rows for {len(unique_ids)} requested row ids")
+    parsed = []
+    for expected_row_id, row in zip(unique_ids, rows):
+        actual_row_id = int(row.get("_rowid", expected_row_id))
+        if actual_row_id != expected_row_id:
+            raise RuntimeError(f"bulk Lance take row identity mismatch: requested {expected_row_id}, got {actual_row_id}")
+        parsed.append(_trajectory_from_row(path, row, expected_row_id))
+    return parsed
