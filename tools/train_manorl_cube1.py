@@ -2401,10 +2401,6 @@ def main(argv: list[str] | None = None) -> int:
     ):
         if value is not None and value < 1:
             parser.error(f"--{name} must be positive when provided")
-    if args.unified_object_batch and (
-        args.warp_ccd_iterations is not None or args.warp_ccd_contacts_per_world is not None
-    ):
-        parser.error("explicit Warp CCD capacity does not support unified object batches")
     evaluation_num_envs_maximum = min(args.num_envs, 128)
     if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
         parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")

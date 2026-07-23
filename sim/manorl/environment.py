@@ -265,7 +265,9 @@ class EnvironmentConfig:
             if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
                 raise ValueError(f"{name} must be a positive integer when provided")
         if self.warp_ccd_explicit and self.unified_object_batch:
-            raise ValueError("explicit Warp CCD capacity does not support unified object batches")
+            # Unified batch now supports explicit CCD; the naconmax/naccdmax
+            # split applies globally to the single superset model.
+            pass
         normalize_hand_side(self.hand_side)
 
     @property
@@ -1739,6 +1741,8 @@ class MujocoManoEnvironment:
             object_types=names,
             hand_side=self.model_hand_side,
         )
+        if config.warp_ccd_iterations is not None:
+            self.model.opt.ccd_iterations = config.warp_ccd_iterations
         minimum_contact_capacity = minimum_warp_contact_capacity(
             config.num_envs, self.hand_sides
         )
@@ -1785,16 +1789,35 @@ class MujocoManoEnvironment:
         initial_host_data = self._initial_host_data(0)
         warp_contact_capacity = max(config.contact_capacity, int(initial_host_data.ncon) + 1)
         warp_constraint_capacity = max(config.constraint_capacity, int(initial_host_data.nefc) + 1)
-        single_data = mjx.put_data(
-            self.model,
-            initial_host_data,
-            device=self.device,
-            impl="warp",
-            naconmax=warp_contact_capacity,
-            njmax=warp_constraint_capacity,
+        # A unified superset model shares one CCD scratch pool for every object.
+        # Bind naccdmax to the requested per-world contacts so the most complex
+        # convex object (bowl/largeclamp) allocates independent GJK scratch
+        # instead of defaulting naccdmax to the full naconmax.
+        self.warp_ccd_naccdmax = (
+            None if config.warp_ccd_contacts_per_world is None
+            else config.warp_ccd_contacts_per_world * config.num_envs
         )
+        if self.warp_ccd_naccdmax is None:
+            single_data = mjx.put_data(
+                self.model,
+                initial_host_data,
+                device=self.device,
+                impl="warp",
+                naconmax=warp_contact_capacity,
+                njmax=warp_constraint_capacity,
+            )
+        else:
+            single_data = mjx.make_data(
+                self.model,
+                device=self.device,
+                impl="warp",
+                naconmax=warp_contact_capacity,
+                naccdmax=self.warp_ccd_naccdmax,
+                njmax=warp_constraint_capacity,
+            )
         batch_index = jax.device_put(self.jp.arange(config.num_envs), self.device)
         self.data = jax.vmap(lambda _: single_data)(batch_index)
+        self._configure_warp_ccd_overflow_guard()
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
         self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)
         self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
