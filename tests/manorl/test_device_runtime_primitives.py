@@ -18,6 +18,7 @@ from sim.manorl.device_runtime import (
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment, _decode_contact_forces
 from sim.manorl.observations import (
     CURRENT_SOURCE_COMPATIBILITY,
+    SOURCE_ALIGNED_COMPATIBILITY,
     ObservationState,
     PointCloudTemplate,
     build_observation,
@@ -104,8 +105,10 @@ def test_jitted_28dof_observation_matches_numpy_at_contact_thresholds_and_partia
     )
     forces = np.zeros((batch, 16, 3), dtype=np.float32)
     forces[:, 3, 0] = np.asarray([0.199999, 0.2, 0.200001, 10.0], dtype=np.float32)
-    points = rng.normal(size=(64, 3)).astype(np.float32)
-    scale = np.asarray([0.2, 0.3, 0.4], dtype=np.float32)
+    # Dynamic reset templates are per-environment; this pins that device
+    # broadcasting does not accidentally reuse environment zero's cloud.
+    points = rng.normal(size=(batch, 64, 3)).astype(np.float32)
+    scale = rng.uniform(0.2, 0.4, size=(batch, 3)).astype(np.float32)
     support = rng.normal(size=(13, 3)).astype(np.float32)
     target_pos = rng.normal(size=(batch, 3)).astype(np.float32)
     target_quat = rng.normal(size=(batch, 4)).astype(np.float32)
@@ -134,13 +137,13 @@ def test_jitted_28dof_observation_matches_numpy_at_contact_thresholds_and_partia
         target_object_pos_next_5=kwargs["target_object_pos_next_5"],
         cumulative_offset=kwargs["cumulative_offset"],
         cumulative_joint_offset=kwargs["cumulative_joint_offset"],
-        point_cloud=PointCloudTemplate(points, mode="static_seed_42", normalized=True, scale=scale),
+        point_cloud=PointCloudTemplate(points, mode="dynamic_reset", normalized=True, scale=scale),
         object_geometry=kwargs["object_geometry"], hand_keypoint_positions=keypoints,
         fingertip_positions=tips, hand_keypoint_contact_forces=forces,
         expected_contact_mask=expected, action_ids=kwargs["action_ids"],
         object_support_points=support, table_surface_height=-0.001,
     )
-    expected_observation = build_observation(numpy_state, compatibility=CURRENT_SOURCE_COMPATIBILITY)
+    expected_observation = build_observation(numpy_state, compatibility=SOURCE_ALIGNED_COMPATIBILITY)
     np.testing.assert_allclose(np.asarray(raw), expected_observation.raw, rtol=0, atol=2e-6)
     np.testing.assert_allclose(np.clip(np.asarray(raw), -5.0, 5.0), expected_observation.policy_input, rtol=0, atol=2e-6)
     assert bool(valid)
@@ -148,6 +151,52 @@ def test_jitted_28dof_observation_matches_numpy_at_contact_thresholds_and_partia
     # 28D layout shifts the fixed 26D direction slice by four finger channels.
     assert np.linalg.norm(np.asarray(raw)[0, 416 + 3 * 3 : 416 + 3 * 4]) == 0.0
     assert np.linalg.norm(np.asarray(raw)[1, 416 + 3 * 3 : 416 + 3 * 4]) > 0.9
+
+
+def test_builder_rejects_unordered_limits_and_nonfinite_table_height() -> None:
+    """Mirror the host encoder's fail-closed limit/table validation."""
+    rng = np.random.default_rng(11)
+    batch = 2
+    physical = DevicePhysicalFeatures(
+        rng.normal(size=(batch, 28)).astype(np.float32), rng.normal(size=(batch, 3)).astype(np.float32),
+        np.tile(np.asarray((0, 0, 0, 1), np.float32), (batch, 1)),
+        np.tile(np.asarray((0, 0, 0, 1), np.float32), (batch, 16, 1)),
+        rng.normal(size=(batch, 3)).astype(np.float32), np.tile(np.asarray((0, 0, 0, 1), np.float32), (batch, 1)),
+        rng.normal(size=(batch, 3)).astype(np.float32), rng.normal(size=(batch, 16, 3)).astype(np.float32),
+        rng.normal(size=(batch, 5, 3)).astype(np.float32), jax.numpy.asarray(True),
+    )
+    kwargs = dict(
+        physical=physical, hand_keypoint_contact_forces=np.zeros((batch, 16, 3), np.float32),
+        target_object_position=np.zeros((batch, 3), np.float32), target_object_orientation_xyzw=np.tile(np.asarray((0, 0, 0, 1), np.float32), (batch, 1)),
+        target_object_pos_next_5=np.zeros((batch, 3), np.float32), cumulative_offset=np.zeros((batch, 3), np.float32),
+        cumulative_joint_offset=np.zeros((batch, 22), np.float32), point_cloud_local=np.zeros((64, 3), np.float32),
+        point_cloud_scale=np.ones(3, np.float32), object_geometry=np.zeros((batch, 12), np.float32),
+        expected_contact_mask=np.zeros((batch, 16), np.float32), action_ids=np.ones(batch, np.int32),
+        object_support_points=np.zeros((1, 3), np.float32), mano_dof_lower=np.zeros(28, np.float32),
+        mano_dof_upper=np.ones(28, np.float32), table_surface_height=0.0,
+    )
+    invalid_limits = dict(kwargs, mano_dof_upper=np.zeros(28, np.float32))
+    assert not bool(jax.jit(lambda: build_device_observation_28(**invalid_limits))()[1])
+    invalid_table = dict(kwargs, table_surface_height=np.nan)
+    assert not bool(jax.jit(lambda: build_device_observation_28(**invalid_table))()[1])
+
+
+def test_physical_feature_offsets_preserve_left_handedness_flip() -> None:
+    """The caller owns the left-side X flip exactly as materialize_state does."""
+    qpos = np.zeros((1, 32), np.float32)
+    qvel = np.zeros((1, 32), np.float32)
+    xpos = np.zeros((1, 20, 3), np.float32)
+    xquat = np.zeros((1, 20, 4), np.float32)
+    xquat[..., 0] = 1.0  # identity in source wxyz order
+    offsets = np.asarray(((0.1, 0.2, 0.3),) * 5, np.float32)
+    common = dict(qpos=qpos, qvel=qvel, xpos=xpos, xquat=xquat, hand_qpos_start=0, hand_dof=28,
+                  object_body_id=19, object_qvel_address=0, keypoint_body_ids=tuple(range(16)),
+                  fingertip_keypoint_ids=(0, 1, 2, 3, 4))
+    right = extract_mjx_physical_features(**common, fingertip_local_offsets=offsets)
+    left_offsets = offsets.copy(); left_offsets[:, 0] *= -1
+    left = extract_mjx_physical_features(**common, fingertip_local_offsets=left_offsets)
+    np.testing.assert_allclose(np.asarray(right.fingertip_positions)[..., 1:], np.asarray(left.fingertip_positions)[..., 1:])
+    np.testing.assert_allclose(np.asarray(right.fingertip_positions)[..., 0], -np.asarray(left.fingertip_positions)[..., 0])
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:

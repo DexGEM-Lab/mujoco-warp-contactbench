@@ -247,7 +247,15 @@ def build_device_observation_28(
     ), axis=1)
     if raw.shape != (batch, 480):
         raise RuntimeError(f"device observation layout drifted to {raw.shape}")
-    valid = physical.valid & jp.all(jp.isfinite(raw)) & jp.all(scale > 0) & jp.all((expected == 0) | (expected == 1)) & jp.all((actions >= 1) & (actions <= 50))
+    valid = (
+        physical.valid
+        & jp.all(jp.isfinite(raw))
+        & jp.all(scale > 0)
+        & jp.all(upper > lower)
+        & jp.isfinite(jp.asarray(table_surface_height))
+        & jp.all((expected == 0) | (expected == 1))
+        & jp.all((actions >= 1) & (actions <= 50))
+    )
     return raw, valid
 
 
