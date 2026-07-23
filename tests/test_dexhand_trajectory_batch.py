@@ -85,7 +85,18 @@ def test_all_action_sync_vector_route_is_explicitly_rejected() -> None:
         _build_wrapped_env(SkrlLauncherConfig(action="all"))
 
 
-def test_updates_derive_timesteps_and_explicit_conflicts_fail() -> None:
-    assert SkrlLauncherConfig(updates=3000, rollouts=48).timesteps == 144000
+def test_launcher_preserves_legacy_timestep_default_and_resolves_updates_explicitly() -> None:
+    defaults = SkrlLauncherConfig()
+    assert (defaults.timesteps, defaults.updates) == (250_000, None)
+
+    divisible_timesteps = SkrlLauncherConfig(timesteps=144_000, rollouts=48)
+    assert (divisible_timesteps.timesteps, divisible_timesteps.updates) == (144_000, 3000)
+
+    args = skrl_train.build_arg_parser().parse_args(["--updates", "3000"])
+    explicit_updates = SkrlLauncherConfig(
+        timesteps=args.timesteps, updates=args.updates, rollouts=args.rollouts
+    )
+    assert (explicit_updates.updates, explicit_updates.timesteps) == (3000, 144_000)
+
     with pytest.raises(ValueError, match=r"updates \* rollouts"):
         SkrlLauncherConfig(updates=3, rollouts=48, timesteps=100)

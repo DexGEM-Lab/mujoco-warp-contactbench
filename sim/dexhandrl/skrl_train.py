@@ -124,14 +124,21 @@ class SkrlLauncherConfig:
         object.__setattr__(self, "physics", physics)
         updates = self.updates
         timesteps = self.timesteps
+        rollouts = int(self.rollouts)
+        if rollouts <= 0:
+            raise ValueError("rollouts must be positive")
         if updates is not None and int(updates) <= 0:
             raise ValueError("updates must be positive")
         if timesteps is not None and int(timesteps) <= 0:
             raise ValueError("timesteps must be positive")
-        if updates is not None and timesteps is not None and int(timesteps) != int(updates) * int(self.rollouts):
+        if updates is not None and timesteps is not None and int(timesteps) != int(updates) * rollouts:
             raise ValueError("timesteps must equal updates * rollouts when both are explicit")
-        resolved_updates = 3000 if updates is None else int(updates)
-        resolved_timesteps = int(timesteps) if timesteps is not None else resolved_updates * int(self.rollouts)
+        if updates is not None:
+            resolved_updates = int(updates)
+            resolved_timesteps = resolved_updates * rollouts
+        else:
+            resolved_timesteps = 250_000 if timesteps is None else int(timesteps)
+            resolved_updates = resolved_timesteps // rollouts if resolved_timesteps % rollouts == 0 else None
         object.__setattr__(self, "updates", resolved_updates)
         object.__setattr__(self, "timesteps", resolved_timesteps)
         for name, value in physics_legacy_aliases(physics).items():
