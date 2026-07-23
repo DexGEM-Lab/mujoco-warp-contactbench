@@ -265,64 +265,35 @@ _OBJECT_RUNTIMES = {
         collision_sha256="da32bee52e7841bb2e1313ed9752623c351f34e0023d0f7a7a276c5323835601",
         rgba="0.46 0.68 0.18 1",
     ),
-    "cuboid3": ObjectRuntime(
-        object_type="cuboid3",
-        link_name="cuboid3_link",
-        body_name="cuboid3",
-        free_joint_name="cuboid3_free",
-        source_mesh_filename="cuboid3.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "cuboid3" / "cuboid3.urdf",
-        collision_mesh_paths=(
-            ALL_ASSETS_SIM_ROOT / "decomposed" / "cuboid3" / "coacd" / "coacd_convex_piece_0.obj",
-        ),
-        collision_mesh_scales=((1.0, 1.0, 1.0),),
-        grasp_mapping_path=ALL_OBJECT_GRASPS,
-        source_mesh_scale=(0.001, 0.001, 0.001),
+    "cuboid3": _all_assets_runtime(
+        "cuboid3",
+        urdf_sha256="abaad82b63c72fae8df11bfec35c0d4462d55f809f503d9477184c3868a58273",
+        collision_sha256="6a8e186b9c6be97b0681815ce58a79e7e6b7414a3ecdf5033dc5fec1dc24cc74",
         rgba="0.40 0.70 0.35 1",
-        geometry_type="box",
-        expected_sha256=(
-            (
-                ALL_ASSETS_SIM_ROOT / "decomposed" / "cuboid3" / "cuboid3.urdf",
-                "beab747890abce39b9f0c75c76256b1069c7f6d7deb56021e729f79ad03d497a",
-            ),
-            (
-                ALL_ASSETS_SIM_ROOT
-                / "decomposed"
-                / "cuboid3"
-                / "coacd"
-                / "coacd_convex_piece_0.obj",
-                "6a8e186b9c6be97b0681815ce58a79e7e6b7414a3ecdf5033dc5fec1dc24cc74",
-            ),
-            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
-        ),
     ),
     "iphone": ObjectRuntime(
         object_type="iphone",
-        link_name="iphone_link",
-        body_name="iphone",
-        free_joint_name="iphone_free",
-        source_mesh_filename="iphone.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "iphone.urdf",
+        link_name="iphone17_link",
+        body_name="iphone17",
+        free_joint_name="iphone17_free",
+        source_mesh_filename="iphone17.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
         collision_mesh_paths=(
-            ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "coacd" / "coacd_convex_piece_0.obj",
+            ALL_ASSETS_SIM_ROOT / "for_math_retaregeting" / "iphone17" / "coacd" / "coacd_convex_piece_0.obj",
         ),
-        collision_mesh_scales=((1.0, 1.0, 1.0),),
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),),
         rgba="0.20 0.20 0.25 1",
         geometry_type="box",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "iphone.urdf",
-                "b037cbfa6da891dc7cb84b6d2c0c5bfae5b24fa7cc8362d8b437a811955f4ccb",
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
+                "b6cf7a4bc57db9b6733a3d13c981366a49836f2d850f921ff8066ead0d95ff5d",
             ),
             (
-                ALL_ASSETS_SIM_ROOT
-                / "decomposed"
-                / "iphone"
-                / "coacd"
-                / "coacd_convex_piece_0.obj",
-                "d39ca0703a30f473e81ad2e4fb5f262ba1d8e6241effb66f0abde0cc4891943e",
+                ALL_ASSETS_SIM_ROOT / "for_math_retaregeting" / "iphone17" / "coacd" / "coacd_convex_piece_0.obj",
+                "1643c316fa319b34af9849c2db6250d6d08f2d47c2b30ebc4ea852b19a72a605",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
