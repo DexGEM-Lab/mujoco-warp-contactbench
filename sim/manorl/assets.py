@@ -34,7 +34,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 ALL_ASSETS_ROOT = REPOSITORY_ROOT / "assets" / "all_assets"
 ALL_ASSETS_SIM_ROOT = ALL_ASSETS_ROOT / "Assets" / "sim"
 ALL_OBJECT_GRASPS = ALL_ASSETS_ROOT / "Assets" / "object_grasps_simple.yaml"
-ALL_OBJECT_GRASPS_SHA256 = "97293b96a3015173bf2fa875d165b04c925953147ebc0f4c0935ed1215558a9d"
+ALL_OBJECT_GRASPS_SHA256 = (
+    "97293b96a3015173bf2fa875d165b04c925953147ebc0f4c0935ed1215558a9d"
+)
 HAND_URDF = ASSET_ROOT / "hand" / "mano_hand.urdf"
 HAND_LEFT_ROOT = ASSET_ROOT / "hand_left"
 HAND_URDF_BY_SIDE = {
@@ -58,7 +60,9 @@ def hand_asset_root(hand_side: str = "right") -> Path:
     side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
     root = ASSET_ROOT / ("hand" if side == "right" else "hand_left")
     if not root.is_dir():
-        raise FileNotFoundError(f"curated {side}-hand runtime assets are absent: {root}")
+        raise FileNotFoundError(
+            f"curated {side}-hand runtime assets are absent: {root}"
+        )
     return root
 
 
@@ -81,7 +85,9 @@ def hand_joint_names(hand_side: str = "right") -> tuple[str, ...]:
         raise ValueError(f"invalid {hand_side} hand metadata: {metadata_path}") from exc
     names = tuple(payload.get("joint_names", ()))
     if len(names) != JOINT_DOF or len(set(names)) != JOINT_DOF:
-        raise ValueError(f"{hand_side} hand metadata must declare {JOINT_DOF} unique joints")
+        raise ValueError(
+            f"{hand_side} hand metadata must declare {JOINT_DOF} unique joints"
+        )
     return names
 
 
@@ -259,6 +265,778 @@ _OBJECT_RUNTIMES = {
         collision_sha256="da32bee52e7841bb2e1313ed9752623c351f34e0023d0f7a7a276c5323835601",
         rgba="0.46 0.68 0.18 1",
     ),
+    "cuboid3": _all_assets_runtime(
+        "cuboid3",
+        urdf_sha256="abaad82b63c72fae8df11bfec35c0d4462d55f809f503d9477184c3868a58273",
+        collision_sha256="6a8e186b9c6be97b0681815ce58a79e7e6b7414a3ecdf5033dc5fec1dc24cc74",
+        rgba="0.88 0.34 0.20 1",
+    ),
+    "iphone": ObjectRuntime(
+        object_type="iphone",
+        link_name="iphone_link",
+        body_name="iphone",
+        free_joint_name="iphone_free",
+        source_mesh_filename="iphone.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
+        collision_mesh_paths=(
+            ALL_ASSETS_SIM_ROOT
+            / "for_math_retaregeting"
+            / "iphone"
+            / "coacd"
+            / "coacd_convex_piece_0.obj",
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),),
+        rgba="0.12 0.18 0.30 1",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
+                "b6cf7a4bc57db9b6733a3d13c981366a49836f2d850f921ff8066ead0d95ff5d",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "iphone"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "d39ca0703a30f473e81ad2e4fb5f262ba1d8e6241effb66f0abde0cc4891943e",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
+    "bottlewithcap": ObjectRuntime(
+        object_type="bottlewithcap",
+        link_name="bottlewithcap_link",
+        body_name="bottlewithcap",
+        free_joint_name="bottlewithcap_free",
+        source_mesh_filename="bottlewithcap.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bottlewithcap.urdf",
+        collision_mesh_paths=tuple(
+            ALL_ASSETS_SIM_ROOT
+            / "for_math_retaregeting"
+            / "bottlewithcap"
+            / "coacd"
+            / f"coacd_convex_piece_{index}.obj"
+            for index in range(2)
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 2,
+        rgba="0.32 0.78 0.74 1",
+        geometry_type="irregular",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bottlewithcap.urdf",
+                "2fd73b7d8a36c33b4ef516905fab6ce0049e419ccc4b65c9b33d044a9bdc3f9a",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bottlewithcap"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "bec56e9e7984db51cf91b3d73154dcbf7c58ac20aa53a921da45f641ae3abd85",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bottlewithcap"
+                / "coacd"
+                / "coacd_convex_piece_1.obj",
+                "8575fd39eb2969cdf9c67bc54a2702de77efcc4900a6766afe58e5266b3da424",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
+    "bowl": ObjectRuntime(
+        object_type="bowl",
+        link_name="bowl_link",
+        body_name="bowl",
+        free_joint_name="bowl_free",
+        source_mesh_filename="bowl.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bowl.urdf",
+        collision_mesh_paths=tuple(
+            ALL_ASSETS_SIM_ROOT
+            / "for_math_retaregeting"
+            / "bowl"
+            / "coacd"
+            / f"coacd_convex_piece_{index}.obj"
+            for index in range(28)
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 28,
+        rgba="0.68 0.30 0.82 1",
+        geometry_type="irregular",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "bowl.urdf",
+                "36b3e0ead99bf62669ae2618a75e7f14497dabb12c5323dc0fe8a0e415b2d7ff",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "22d286fd17044aa89b75cde59907377ac3161a77cabd61c8f6ed14e769cb9154",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_1.obj",
+                "3bf4afc4c31a207a1c1960e8b6703885e6e25cefe11264c9331900ce54b1dfcc",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_2.obj",
+                "2a85639e8ef1743fb35f87794f8b1d2ea7462bfac5a012d2de716634ba891a9d",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_3.obj",
+                "7f24b172bc02b2c942182f45eca7f850deabe3ff2ed8b5d3e939acff816d9d33",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_4.obj",
+                "0e76c8affd5a12b2317a74f4a48acc73956f1a8c0b2c663f61bd4e141a15baa6",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_5.obj",
+                "038cacb591e818edea2db7728ae34f291eb2580fbe27db04536434ea8ea915c3",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_6.obj",
+                "a7ef87145dd5a1462a04c26a10ac6ffcf1369129a3e75dbd8a4e603bbb82144e",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_7.obj",
+                "bf257d629e1eff9ce5454a4ebe9d03edd1d6ea6e9c376d3ceb7b67055f6142a3",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_8.obj",
+                "db4f018b320f1a65357010f071ad89e2223a83e524af33a90be696e0ea4f5aee",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_9.obj",
+                "d2de97ba87f3055182586b745face9575b21d440159cb0927afc907a1cd15dae",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_10.obj",
+                "5d26956bfcf4a23cdaaa004567709f76539754f7b53e65adff6c3af103289319",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_11.obj",
+                "22c95c956bcd37e90ce89782173be74adfb8f46ebd07976079e63808e79fcd11",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_12.obj",
+                "18b0f78e88c2d5b8e6a9f110be3bcff8b7c924ebcdd7b2d0f0fe4dca3a3e01ae",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_13.obj",
+                "0657ee476213eb569f3fb1ce7b8ef8a8a6e1cd8d986112438d1ac56def70f768",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_14.obj",
+                "769a7ad15affa1fc04bb00e5560986f78a41bf2d94fb7325d15dfe67aec27196",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_15.obj",
+                "d786550327ecb9f6582ccc7fddc43ee37e12466312ef72b299daf92336d35586",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_16.obj",
+                "e6fd0a6790e567f051027d417a349f98e9192507f3a9dca958748b4e09e61ccd",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_17.obj",
+                "3d92cd610ddd61d11114c0167e1429ac597f82fc3784b4ad4d2e88f223403e5e",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_18.obj",
+                "df020c722ece9f1c1147e2b9b6d246be6890e495cc19cb28e6e0fd95c614a7ba",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_19.obj",
+                "4483ae3f36a7463d17c8617fe7998d03862c45938f96227884188e594948bfd8",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_20.obj",
+                "aa8d9af06277d7a8edb5da656f3c026b2000fb70b99342db37e0a575d9c7a84e",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_21.obj",
+                "e8d12c6e8fb94ccd84fd5b76a3b04908928b3c6de7c7259cc0fd653967bb4fcc",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_22.obj",
+                "a9e4ef9dab34f042557d8e669c4682de04c946dc07cf2f37de8163afa63d5884",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_23.obj",
+                "4ef5187b8ff5b07842ecc69cd9080ad7352c0bf2075006bd60de101e0b5ebdae",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_24.obj",
+                "31b2e54eed17af18f343611e5cbdf3b67307b483e78dbd69aab4f51cceb999cc",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_25.obj",
+                "74fb073a2fe25f91fbd1740990428845166fb78c6acd66aa7697768539a921d6",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_26.obj",
+                "d499f7fa02613219d9ed1615f399c7542694a6e8d5fd3efd0ed630879c2ecfc2",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "bowl"
+                / "coacd"
+                / "coacd_convex_piece_27.obj",
+                "ee3234805bb8ee22bb4a7739043c6da3bedabc9e3086c8298309f26203b2a5ed",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
+    "largeclamp": ObjectRuntime(
+        object_type="largeclamp",
+        link_name="largeclamp_link",
+        body_name="largeclamp",
+        free_joint_name="largeclamp_free",
+        source_mesh_filename="largeclamp.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "largeclamp.urdf",
+        collision_mesh_paths=tuple(
+            ALL_ASSETS_SIM_ROOT
+            / "for_math_retaregeting"
+            / "largeclamp"
+            / "coacd"
+            / f"coacd_convex_piece_{index}.obj"
+            for index in range(30)
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 30,
+        rgba="0.84 0.56 0.16 1",
+        geometry_type="irregular",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "largeclamp.urdf",
+                "5241ce579d395a8969b62800d53d7adb37c7f9deeb983fb2626f647a349f31eb",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "45222f3b97e244a00f8e9f8ddc3f8b4789d511e488252500e8983d5814bdbe89",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_1.obj",
+                "e09d5f992f0c3cacb83a655e0826df419a4606a776ba0b44e04a86d640c33bdb",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_2.obj",
+                "5bd3a07e3c7578911cb6e89d0f58b135bff11633c193708a77235e93c931694c",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_3.obj",
+                "40dc242ae2a46fe865b80311fa2fc3974950f6adcc765e73d658717b5d46728b",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_4.obj",
+                "5bce284491f050ecb004cc5bfb4cefb57f231a3d2a22cf0dfe3747aef1595c30",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_5.obj",
+                "9828cd6b0de1b3167f7f458789aa681fd910b4b63972f2d0b8b247ae66b73a51",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_6.obj",
+                "0aecb224b78afd557f64f098ab686353908d63d1f02f49e95618a6928083c09d",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_7.obj",
+                "b37dcc9cea299eee7c18f56d5d270ea02dc419863a7c14c8c1e608b162bdfb75",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_8.obj",
+                "a5b075ea58a09af079fa74a211ff37eedb5056818bedd16491eee703207f439a",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_9.obj",
+                "2d59ef7cd8fa8399b4b134a53c4e5d2de2980c83caa4cbbbce84905f5c3de3f6",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_10.obj",
+                "e63f2b811faf31e7bb302fb4749490feb51ae2a9e12ab4f567c35a2f8ff3f3b8",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_11.obj",
+                "192ff3e86011f7f7ef14680793ab052e3e93a08913061521804427b783d6ad88",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_12.obj",
+                "d44b17529f1364a6407b1961779f8ae289ca24d209140b45ef6fcefa4b2c50be",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_13.obj",
+                "3acd2d7f656c2d7b37b5c17eaa9733a65a34ab151be9c6096f545c7aef993cf5",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_14.obj",
+                "14350aa6e6cfea068f46355ae3ef7c57c306cd0aab4ea3352be3453d93fa4980",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_15.obj",
+                "2015197b5fff29594c10dc3c9af934bbf64301332a19aba2a56f0082fd483613",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_16.obj",
+                "bb944fd654f4526d755188c1ce5978578e186128a6052feb942b9bf7a68eb518",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_17.obj",
+                "712e05d5476fe7caad0f9fe6465ad75c3079a0bd5373820ea4898253dfce73e3",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_18.obj",
+                "055dfd3d9a1cf70775676ffd769d738d54a5bec1bf77a6a5baac575877040789",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_19.obj",
+                "cd92091700f73bf2394a18f6fbca4f9c4de27b5f6a53307fe6d4bef3cb7d1f1c",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_20.obj",
+                "de160122b0c67e5d9ea88498779c9c8e6d95433e923768f2ae1234b019507e62",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_21.obj",
+                "d7da1ecc2bcdb1b39af5146f8f78166a793b94af950fbb14474a2f9ea9019c4e",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_22.obj",
+                "dc590c601780f2b921d3e3f7925ce69583ba7ff676ecc230c660d96b773a8559",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_23.obj",
+                "9662f479b8077873dfa172bfb63bc403c203e16f565b8e7828f39534639bd6f8",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_24.obj",
+                "dc99b4d7a30ddc5758091c2317a8870f6484874b8ed085232daf67bbbb7f4bf8",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_25.obj",
+                "7223f8267c033acbbf52c9bd5201211b143828f39d23e4f94cb3982a73ed3450",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_26.obj",
+                "5173183b088268f18176b22ff3e1598f65c85324c7e449b0f7662911cfdeeecd",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_27.obj",
+                "83df2c23963ca5cc1a13f4d79cdbd5ecef07a04929255ef04792d819ba37981c",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_28.obj",
+                "6e6255ef4a29f03bfac649ebef6f2f04ff0a5d8e60b133a97731cdc05d90761f",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "largeclamp"
+                / "coacd"
+                / "coacd_convex_piece_29.obj",
+                "8c9e478b831708b64879b03beb2e1609bdc5a2bc91fb41d7a36cfdf6d88ea57e",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
+    "powerdrill": ObjectRuntime(
+        object_type="powerdrill",
+        link_name="powerdrill_link",
+        body_name="powerdrill",
+        free_joint_name="powerdrill_free",
+        source_mesh_filename="powerdrill.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "powerdrill.urdf",
+        collision_mesh_paths=tuple(
+            ALL_ASSETS_SIM_ROOT
+            / "for_math_retaregeting"
+            / "powerdrill"
+            / "coacd"
+            / f"coacd_convex_piece_{index}.obj"
+            for index in range(5)
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 5,
+        rgba="0.78 0.20 0.34 1",
+        geometry_type="irregular",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "powerdrill.urdf",
+                "2e72a94f121126a52a4a4c25acaa92697c7db6803cdb9f40a770c2419ad64859",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "powerdrill"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "6411561864e54e2e55db22d3f56b25469b961e3e627938000c1e124014d11fd2",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "powerdrill"
+                / "coacd"
+                / "coacd_convex_piece_1.obj",
+                "d3efec8efa7236aa7cea31ec7afd1c00a4220024ee36e1d7639f0361f0a04108",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "powerdrill"
+                / "coacd"
+                / "coacd_convex_piece_2.obj",
+                "e6e47cd0d5fe5c9ae100d0d105fb204f26f9e1219ca02e8f2503fe91390410ca",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "powerdrill"
+                / "coacd"
+                / "coacd_convex_piece_3.obj",
+                "40a98cc42bb688a2a116ed2cd0b08363224d935e5245b850bd4ca0270d520ae8",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "powerdrill"
+                / "coacd"
+                / "coacd_convex_piece_4.obj",
+                "908f315c524a4c23af618ead8e8553c5b938a04cba7d1971753c49a134ed5caa",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
+    "scissor": ObjectRuntime(
+        object_type="scissor",
+        link_name="scissor_link",
+        body_name="scissor",
+        free_joint_name="scissor_free",
+        source_mesh_filename="scissor.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "scissor.urdf",
+        collision_mesh_paths=tuple(
+            ALL_ASSETS_SIM_ROOT
+            / "for_math_retaregeting"
+            / "scissor"
+            / "coacd"
+            / f"coacd_convex_piece_{index}.obj"
+            for index in range(9)
+        ),
+        grasp_mapping_path=ALL_OBJECT_GRASPS,
+        source_mesh_scale=(0.001, 0.001, 0.001),
+        collision_mesh_scales=((1.0, 1.0, 1.0),) * 9,
+        rgba="0.36 0.68 0.24 1",
+        geometry_type="irregular",
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "scissor.urdf",
+                "9a96f5d2ddaf2b1f79c5f83c241efd94c231205d299ad03697f1bac2f2cb7da6",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_0.obj",
+                "e7bd654a3515e0f9d799393b9f6f9005a09dcadb701cd5a7c17a205715017710",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_1.obj",
+                "fb582ff179f04aec8b780fa6d6d6fb717f61d3dfacdb42d8119bf30bb209424b",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_2.obj",
+                "170373ed324a37d1011e6d210215015f7476d024e2e8b47789dfbb6a78385e50",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_3.obj",
+                "0fb9698be029aca59d44d172a9413f87c20b1ca0b709407f92083304c73651b8",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_4.obj",
+                "d08c25cd00280dc984e3bc85dbfac7cafa432bd8d8fdb63bd6434e04d95ad21b",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_5.obj",
+                "d796db438531a48dce3496a0ebf65f2b5148a7fe4edb10c53a6068dbc8f2c0ba",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_6.obj",
+                "8efcd7dd94a3cdf6df0128e21d1c86a0aa8f04d8b16966128b6832ef3488c68b",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_7.obj",
+                "59d69f7a1785315152cdbdbaa36e03995f0078be792979b2e25bdfa9eec0c45a",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT
+                / "for_math_retaregeting"
+                / "scissor"
+                / "coacd"
+                / "coacd_convex_piece_8.obj",
+                "f6c1a88395f62be299dad78098a717a310ffec6d2e176c180554877bf495ad18",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
+    ),
     "banana": ObjectRuntime(
         object_type="banana",
         link_name="banana_link",
@@ -285,7 +1063,11 @@ _OBJECT_RUNTIMES = {
                 "9e57e199b7a8815f267a9e08ee7665e3f87dea4392a782d369ca43bd333be70b",
             ),
             (
-                ALL_ASSETS_SIM_ROOT / "mano_assets" / "objects" / "banana" / "banana.obj",
+                ALL_ASSETS_SIM_ROOT
+                / "mano_assets"
+                / "objects"
+                / "banana"
+                / "banana.obj",
                 "2a1eb42fe4ff1330cad77b79453894a3c9d36c30b44ec36fc17fdeb92e13e8bb",
             ),
             (
@@ -352,6 +1134,8 @@ def object_runtime(object_type: str = OBJECT_TYPE) -> ObjectRuntime:
             f"ManoRL object runtime {object_type!r} is registered but not materialized: {missing}"
         )
     return runtime
+
+
 # Source shape groups name four rigid bodies per finger, but each abduction
 # body has no collision shape in the authoritative URDF. These are the three
 # actual collision-bearing bodies selected for each source filter group.
@@ -364,8 +1148,14 @@ HAND_SELF_COLLISION_GROUPS = {
 }
 
 
-def _numbers(value: str | None, count: int, default: Iterable[float]) -> tuple[float, ...]:
-    values = tuple(default) if value is None else tuple(float(item) for item in value.split())
+def _numbers(
+    value: str | None, count: int, default: Iterable[float]
+) -> tuple[float, ...]:
+    values = (
+        tuple(default)
+        if value is None
+        else tuple(float(item) for item in value.split())
+    )
     if len(values) != count or not np.all(np.isfinite(values)):
         raise ValueError(f"expected {count} finite values, got {value!r}")
     return values
@@ -428,18 +1218,23 @@ def _visual_rgba(
     return global_materials.get(material_name or "", fallback)
 
 
-def _required_paths(object_type: str | None = None, *, hand_side: str = "right") -> tuple[Path, ...]:
+def _required_paths(
+    object_type: str | None = None, *, hand_side: str = "right"
+) -> tuple[Path, ...]:
     hand_root = hand_asset_root(hand_side)
     hand_meshes = tuple(
-        path for path in (hand_root / "meshes").glob("*.stl")
+        path
+        for path in (hand_root / "meshes").glob("*.stl")
         if not path.name.startswith("visual_")
     )
     if len(hand_meshes) != 16:
         raise FileNotFoundError(
             f"expected exactly 16 curated {hand_side}-hand collision meshes, got {len(hand_meshes)}"
         )
-    runtimes = (object_runtime(object_type),) if object_type is not None else tuple(
-        object_runtime(name) for name in supported_object_types()
+    runtimes = (
+        (object_runtime(object_type),)
+        if object_type is not None
+        else tuple(object_runtime(name) for name in supported_object_types())
     )
     object_paths = tuple(
         path
@@ -451,14 +1246,22 @@ def _required_paths(object_type: str | None = None, *, hand_side: str = "right")
             *(path for path, _ in runtime.expected_sha256),
         )
     )
-    paths = (hand_urdf_path(hand_side), hand_root / "metadata.json", *hand_meshes, ASSET_MANIFEST, *object_paths)
+    paths = (
+        hand_urdf_path(hand_side),
+        hand_root / "metadata.json",
+        *hand_meshes,
+        ASSET_MANIFEST,
+        *object_paths,
+    )
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"curated ManoRL assets are incomplete: {missing}")
     return tuple(paths)
 
 
-def validate_asset_manifest(object_type: str | None = None, *, hand_side: str = "right") -> dict[str, Any]:
+def validate_asset_manifest(
+    object_type: str | None = None, *, hand_side: str = "right"
+) -> dict[str, Any]:
     """Verify every curated file against its committed provenance digest."""
 
     side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
@@ -472,7 +1275,10 @@ def validate_asset_manifest(object_type: str | None = None, *, hand_side: str = 
     digests_by_path = {entry.get("curated_path"): entry for entry in entries}
     bundles = manifest.get("hand_bundles", {})
     bundle = bundles.get(side) if isinstance(bundles, dict) else None
-    if not isinstance(bundle, dict) or bundle.get("curated_root") != hand_asset_root(side).name:
+    if (
+        not isinstance(bundle, dict)
+        or bundle.get("curated_root") != hand_asset_root(side).name
+    ):
         raise ValueError(f"asset manifest has no integrity bundle for {side} hand")
     bundle_rows: list[str] = []
     for bundle_path in sorted(hand_asset_root(side).rglob("*")):
@@ -483,8 +1289,10 @@ def validate_asset_manifest(object_type: str | None = None, *, hand_side: str = 
     bundle_digest = hashlib.sha256("\n".join(bundle_rows).encode()).hexdigest()
     if bundle_digest != bundle.get("sha256"):
         raise ValueError(f"{side} hand asset bundle digest mismatch: {bundle_digest}")
-    runtimes = (object_runtime(object_type),) if object_type is not None else tuple(
-        object_runtime(name) for name in supported_object_types()
+    runtimes = (
+        (object_runtime(object_type),)
+        if object_type is not None
+        else tuple(object_runtime(name) for name in supported_object_types())
     )
     external_digests = {
         path.resolve(): digest
@@ -502,13 +1310,17 @@ def validate_asset_manifest(object_type: str | None = None, *, hand_side: str = 
                 raise ValueError(f"unpinned runtime asset outside curated root: {path}")
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if digest != expected_digest:
-                raise ValueError(f"pinned all_assets digest mismatch for {path}: {digest}")
+                raise ValueError(
+                    f"pinned all_assets digest mismatch for {path}: {digest}"
+                )
         else:
             # Side-specific runtime files are checked against the manifest when
             # entries are present.  Older manifests intentionally omitted the
             # left-hand bundle; its metadata/URDF/mesh digests are still
             # verified by the explicit side manifest entries below.
-            if relative not in digests_by_path and not relative.startswith("hand_left/"):
+            if relative not in digests_by_path and not relative.startswith(
+                "hand_left/"
+            ):
                 raise ValueError(f"asset manifest has no digest entry for {relative}")
     for entry in entries:
         path = ASSET_ROOT / entry["curated_path"]
@@ -526,11 +1338,15 @@ def _link_inertial(body: ET.Element, link: ET.Element) -> None:
         raise ValueError(f"authoritative link {link.get('name')} has no inertial")
     position, quaternion = _origin(inertial.find("origin"))
     if not np.allclose(quaternion, (1.0, 0.0, 0.0, 0.0), atol=1e-15, rtol=0):
-        raise ValueError(f"rotated full inertia is unsupported for link {link.get('name')}")
+        raise ValueError(
+            f"rotated full inertia is unsupported for link {link.get('name')}"
+        )
     mass_element = inertial.find("mass")
     inertia = inertial.find("inertia")
     if mass_element is None or inertia is None:
-        raise ValueError(f"authoritative link {link.get('name')} has incomplete inertial")
+        raise ValueError(
+            f"authoritative link {link.get('name')} has incomplete inertial"
+        )
     full_inertia = (
         float(inertia.get("ixx", "nan")),
         float(inertia.get("iyy", "nan")),
@@ -560,7 +1376,9 @@ def _link_collision(
 ) -> None:
     collisions = link.findall("collision")
     if len(collisions) > 1:
-        raise ValueError(f"hand link {link.get('name')} unexpectedly has multiple collisions")
+        raise ValueError(
+            f"hand link {link.get('name')} unexpectedly has multiple collisions"
+        )
     if not collisions:
         return
     collision = collisions[0]
@@ -609,7 +1427,8 @@ def _link_visuals(
         sphere = None if geometry is None else geometry.find("sphere")
         position, quaternion = _origin(visual.find("origin"))
         attributes = {
-            "name": f"{name_prefix}{link.get('name')}_visual" + (f"_{index}" if index else ""),
+            "name": f"{name_prefix}{link.get('name')}_visual"
+            + (f"_{index}" if index else ""),
             "pos": _format(position),
             "quat": _format(quaternion),
             "rgba": _visual_rgba(visual, global_materials, "0.88 0.58 0.46 1"),
@@ -665,7 +1484,9 @@ def _hand_tree(
         if collision is not None:
             mesh_files.append(Path(collision.get("filename", "")).name)
     if len(mesh_files) != 16 or len(set(mesh_files)) != 16:
-        raise ValueError("authoritative hand URDF must reference 16 unique collision meshes")
+        raise ValueError(
+            "authoritative hand URDF must reference 16 unique collision meshes"
+        )
     for filename in mesh_files:
         attributes = {
             "name": f"{asset_prefix}hand_{Path(filename).stem}",
@@ -675,7 +1496,8 @@ def _hand_tree(
             link.find("collision/geometry/mesh")
             for link in links.values()
             if link.find("collision/geometry/mesh") is not None
-            and Path(link.find("collision/geometry/mesh").get("filename", "")).name == filename
+            and Path(link.find("collision/geometry/mesh").get("filename", "")).name
+            == filename
         )
         scale = source_mesh.get("scale")
         if scale is not None:
@@ -698,7 +1520,9 @@ def _hand_tree(
                     )
                 visual_meshes_by_filename[filename] = visual_mesh
         if len(visual_meshes_by_filename) != 16:
-            raise ValueError("authoritative hand URDF must reference 16 unique visual meshes")
+            raise ValueError(
+                "authoritative hand URDF must reference 16 unique visual meshes"
+            )
         for filename, source_mesh in visual_meshes_by_filename.items():
             attributes = {
                 "name": f"{asset_prefix}hand_{Path(filename).stem}_visual",
@@ -715,7 +1539,9 @@ def _hand_tree(
                 attributes["scale"] = scale
             ET.SubElement(asset, "mesh", attributes)
 
-    def append_link(parent_xml: ET.Element, link_name: str, source_joint: ET.Element | None) -> None:
+    def append_link(
+        parent_xml: ET.Element, link_name: str, source_joint: ET.Element | None
+    ) -> None:
         attributes = {"name": f"{name_prefix}{link_name}", "gravcomp": "1"}
         if source_joint is not None:
             position, quaternion = _origin(source_joint.find("origin"))
@@ -728,7 +1554,9 @@ def _hand_tree(
             axis = source_joint.find("axis")
             limit = source_joint.find("limit")
             if axis is None or limit is None:
-                raise ValueError(f"joint {source_joint.get('name')} has no axis or limit")
+                raise ValueError(
+                    f"joint {source_joint.get('name')} has no axis or limit"
+                )
             ET.SubElement(
                 body,
                 "joint",
@@ -767,7 +1595,9 @@ def _hand_tree(
     append_link(worldbody, "base_link", None)
 
 
-def _add_hand_self_collision_excludes(contact: ET.Element, *, name_prefix: str = "") -> None:
+def _add_hand_self_collision_excludes(
+    contact: ET.Element, *, name_prefix: str = ""
+) -> None:
     for group_name, body_names in HAND_SELF_COLLISION_GROUPS.items():
         for pair_index, (first, second) in enumerate(combinations(body_names, 2)):
             ET.SubElement(
@@ -882,7 +1712,9 @@ def _object_body(
     if visual_meshes:
         visuals = object_link.findall("visual")
         if len(visuals) != 1:
-            raise ValueError(f"{runtime.object_type} URDF must contain exactly one visual mesh")
+            raise ValueError(
+                f"{runtime.object_type} URDF must contain exactly one visual mesh"
+            )
         visual = visuals[0]
         visual_mesh = visual.find("geometry/mesh")
         if visual_mesh is None:
@@ -1130,8 +1962,12 @@ def build_unified_scene_xml(
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
 
-def _model_names(mujoco: Any, model: Any, object_type: Any, count: int) -> tuple[str, ...]:
-    return tuple(mujoco.mj_id2name(model, object_type, index) or "" for index in range(count))
+def _model_names(
+    mujoco: Any, model: Any, object_type: Any, count: int
+) -> tuple[str, ...]:
+    return tuple(
+        mujoco.mj_id2name(model, object_type, index) or "" for index in range(count)
+    )
 
 
 def _is_collision_geom(mujoco: Any, model: Any, geom_id: int) -> bool:
@@ -1156,16 +1992,22 @@ def validate_compiled_model(
         for name in hand_joint_names(scene_side)
     )
     joint_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, model.njnt)
-    if joint_names[: len(expected_joint_names)] != expected_joint_names or joint_names[len(expected_joint_names) :] != (
-        runtime.free_joint_name,
-    ):
+    if joint_names[: len(expected_joint_names)] != expected_joint_names or joint_names[
+        len(expected_joint_names) :
+    ] != (runtime.free_joint_name,):
         raise ValueError(f"compiled joint order mismatch: {joint_names}")
     actuator_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu)
     if actuator_names != expected_joint_names:
         raise ValueError(f"compiled actuator order mismatch: {actuator_names}")
     expected_dof = len(expected_joint_names)
-    if model.nu != expected_dof or model.nq != expected_dof + 7 or model.nv != expected_dof + 6:
-        raise ValueError(f"compiled dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}")
+    if (
+        model.nu != expected_dof
+        or model.nq != expected_dof + 7
+        or model.nv != expected_dof + 6
+    ):
+        raise ValueError(
+            f"compiled dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}"
+        )
     if not np.isclose(model.opt.timestep, PHYSICS_TIMESTEP):
         raise ValueError(f"compiled timestep mismatch: {model.opt.timestep}")
     for actuator_id, (name, effort, kp, dampratio) in enumerate(
@@ -1201,7 +2043,9 @@ def validate_compiled_model(
             raise ValueError(f"compiled position bias mismatch for {name}")
         kv = -float(model.actuator_biasprm[actuator_id, 2])
         if not np.isfinite(kv) or kv <= 0:
-            raise ValueError(f"compiled dampratio did not produce positive damping for {name}")
+            raise ValueError(
+                f"compiled dampratio did not produce positive damping for {name}"
+            )
     object_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name)
     if object_id < 0:
         raise ValueError(f"compiled object body is absent: {runtime.body_name}")
@@ -1221,7 +2065,9 @@ def validate_compiled_model(
     if not np.all(model.geom_contype[object_geom_ids] == 2) or not np.all(
         model.geom_conaffinity[object_geom_ids] == 5
     ):
-        raise ValueError("compiled object collision masks mismatch source configuration")
+        raise ValueError(
+            "compiled object collision masks mismatch source configuration"
+        )
     hand_geom_ids = [
         geom_id
         for geom_id in range(model.ngeom)
@@ -1233,9 +2079,9 @@ def validate_compiled_model(
             f"expected {16 * len(scene_sides)} hand collision geoms, got {len(hand_geom_ids)}"
         )
     expected_hand_bits = (1, 7) if servo.hand_contacts_enabled else (0, 0)
-    if not np.all(model.geom_contype[hand_geom_ids] == expected_hand_bits[0]) or not np.all(
-        model.geom_conaffinity[hand_geom_ids] == expected_hand_bits[1]
-    ):
+    if not np.all(
+        model.geom_contype[hand_geom_ids] == expected_hand_bits[0]
+    ) or not np.all(model.geom_conaffinity[hand_geom_ids] == expected_hand_bits[1]):
         raise ValueError("compiled hand collision masks mismatch servo configuration")
     expected_exclude_signatures = {
         (min(first_id, second_id) << 16) + max(first_id, second_id)
@@ -1245,14 +2091,20 @@ def validate_compiled_model(
         for first_name, second_name in combinations(body_names, 2)
         for first_id, second_id in [
             (
-                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{prefix}{first_name}"),
-                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, f"{prefix}{second_name}"),
+                mujoco.mj_name2id(
+                    model, mujoco.mjtObj.mjOBJ_BODY, f"{prefix}{first_name}"
+                ),
+                mujoco.mj_name2id(
+                    model, mujoco.mjtObj.mjOBJ_BODY, f"{prefix}{second_name}"
+                ),
             )
         ]
     }
     actual_exclude_signatures = {int(value) for value in model.exclude_signature}
     if actual_exclude_signatures != expected_exclude_signatures:
-        raise ValueError("compiled within-finger collision excludes mismatch source groups")
+        raise ValueError(
+            "compiled within-finger collision excludes mismatch source groups"
+        )
     for body_id in range(1, model.nbody):
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
         if name != runtime.body_name and model.body_gravcomp[body_id] != 1:
@@ -1309,7 +2161,9 @@ def validate_unified_compiled_model(
         for name in hand_joint_names(scene_side)
     )
     joint_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_JOINT, model.njnt)
-    expected_joints = expected_hand_joint_names + tuple(runtime.free_joint_name for runtime in runtimes)
+    expected_joints = expected_hand_joint_names + tuple(
+        runtime.free_joint_name for runtime in runtimes
+    )
     if joint_names != expected_joints:
         raise ValueError(f"unified joint order mismatch: {joint_names}")
     actuator_names = _model_names(mujoco, model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu)
@@ -1356,7 +2210,9 @@ def validate_unified_compiled_model(
             raise ValueError(f"compiled position bias mismatch for {name}")
         kv = -float(model.actuator_biasprm[actuator_id, 2])
         if not np.isfinite(kv) or kv <= 0:
-            raise ValueError(f"compiled dampratio did not produce positive damping for {name}")
+            raise ValueError(
+                f"compiled dampratio did not produce positive damping for {name}"
+            )
     hand_geom_ids = [
         geom_id
         for geom_id in range(model.ngeom)
@@ -1375,17 +2231,23 @@ def validate_unified_compiled_model(
             f"expected {16 * len(scene_sides)} hand collision geoms, got {len(hand_geom_ids)}"
         )
     expected_hand_bits = (1, 7) if servo.hand_contacts_enabled else (0, 0)
-    if not np.all(model.geom_contype[hand_geom_ids] == expected_hand_bits[0]) or not np.all(
-        model.geom_conaffinity[hand_geom_ids] == expected_hand_bits[1]
-    ):
+    if not np.all(
+        model.geom_contype[hand_geom_ids] == expected_hand_bits[0]
+    ) or not np.all(model.geom_conaffinity[hand_geom_ids] == expected_hand_bits[1]):
         raise ValueError("compiled hand collision masks mismatch servo configuration")
     for runtime in runtimes:
         body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, runtime.body_name)
-        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, runtime.free_joint_name)
+        joint_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_JOINT, runtime.free_joint_name
+        )
         if body_id < 0 or joint_id < 0:
-            raise ValueError(f"compiled unified object is absent: {runtime.object_type}")
+            raise ValueError(
+                f"compiled unified object is absent: {runtime.object_type}"
+            )
         if model.body_gravcomp[body_id] != 0:
-            raise ValueError(f"unified object {runtime.object_type} must retain native gravity")
+            raise ValueError(
+                f"unified object {runtime.object_type} must retain native gravity"
+            )
         object_geom_ids = [
             geom_id
             for geom_id in range(model.ngeom)
@@ -1434,7 +2296,9 @@ def compile_unified_model(
     return mujoco, model
 
 
-def _matrix_from_pose(position: tuple[float, ...], quaternion_wxyz: tuple[float, ...]) -> NDArray[np.float64]:
+def _matrix_from_pose(
+    position: tuple[float, ...], quaternion_wxyz: tuple[float, ...]
+) -> NDArray[np.float64]:
     w, x, y, z = quaternion_wxyz
     rotation = np.array(
         [
@@ -1466,9 +2330,9 @@ def urdf_zero_fk(hand_side: str = "right") -> dict[str, NDArray[np.float64]]:
             if parent_name not in transforms:
                 continue
             position, quaternion = _origin(joint.find("origin"))
-            transforms[child.get("link", "")] = transforms[parent_name] @ _matrix_from_pose(
-                position, quaternion
-            )
+            transforms[child.get("link", "")] = transforms[
+                parent_name
+            ] @ _matrix_from_pose(position, quaternion)
             remaining.remove(joint)
             progressed = True
         if not progressed:
@@ -1506,9 +2370,15 @@ def validate_static_fk(
             if body_id < 0:
                 raise ValueError(f"compiled hand body is absent: {compiled_name}")
             if not np.allclose(data.xpos[body_id], expected[:3, 3], atol=atol, rtol=0):
-                raise ValueError(f"compiled static FK position mismatch at {compiled_name}")
-            if not np.allclose(data.xmat[body_id].reshape(3, 3), expected[:3, :3], atol=atol, rtol=0):
-                raise ValueError(f"compiled static FK orientation mismatch at {compiled_name}")
+                raise ValueError(
+                    f"compiled static FK position mismatch at {compiled_name}"
+                )
+            if not np.allclose(
+                data.xmat[body_id].reshape(3, 3), expected[:3, :3], atol=atol, rtol=0
+            ):
+                raise ValueError(
+                    f"compiled static FK orientation mismatch at {compiled_name}"
+                )
 
 
 @lru_cache(maxsize=None)
@@ -1526,7 +2396,12 @@ def object_collision_vertices(object_type: str = OBJECT_TYPE) -> NDArray[np.floa
         )
     ]
     result = np.concatenate(pieces, axis=0)
-    if result.ndim != 2 or result.shape[1] != 3 or len(result) < 12 or not np.all(np.isfinite(result)):
+    if (
+        result.ndim != 2
+        or result.shape[1] != 3
+        or len(result) < 12
+        or not np.all(np.isfinite(result))
+    ):
         raise ValueError(f"unexpected {object_type} collision vertices: {result.shape}")
     result.setflags(write=False)
     return result
@@ -1546,11 +2421,17 @@ def _collision_mesh_vertices(
         triangle_count = struct.unpack_from("<I", payload, 80)[0]
         expected_length = 84 + triangle_count * 50
         if len(payload) != expected_length:
-            raise ValueError(f"{object_type} collision STL has an invalid binary length")
+            raise ValueError(
+                f"{object_type} collision STL has an invalid binary length"
+            )
         triangles = np.frombuffer(
             payload,
             dtype=np.dtype(
-                [("normal", "<f4", (3,)), ("vertices", "<f4", (3, 3)), ("attribute", "<u2")]
+                [
+                    ("normal", "<f4", (3,)),
+                    ("vertices", "<f4", (3, 3)),
+                    ("attribute", "<u2"),
+                ]
             ),
             count=triangle_count,
             offset=84,
@@ -1566,15 +2447,35 @@ def _collision_mesh_vertices(
             if parts[0] == "v" and len(parts) == 4:
                 vertices.append(tuple(float(value) for value in parts[1:4]))
             elif parts[0] == "f" and len(parts) == 4:
-                faces.append(tuple(int(value.split("/", maxsplit=1)[0]) - 1 for value in parts[1:4]))
+                faces.append(
+                    tuple(
+                        int(value.split("/", maxsplit=1)[0]) - 1 for value in parts[1:4]
+                    )
+                )
         vertex_array = np.asarray(vertices, dtype=np.float64)
         face_array = np.asarray(faces, dtype=np.int64)
-        if face_array.ndim != 2 or face_array.shape[1:] != (3,) or np.any(face_array < 0) or np.any(face_array >= len(vertex_array)):
-            raise ValueError(f"{object_type} collision OBJ must contain indexed triangles")
+        if (
+            face_array.ndim != 2
+            or face_array.shape[1:] != (3,)
+            or np.any(face_array < 0)
+            or np.any(face_array >= len(vertex_array))
+        ):
+            raise ValueError(
+                f"{object_type} collision OBJ must contain indexed triangles"
+            )
         result = vertex_array[face_array].reshape(-1, 3)
     else:
-        raise ValueError(f"unsupported collision mesh format for {object_type}: {path.suffix}")
+        raise ValueError(
+            f"unsupported collision mesh format for {object_type}: {path.suffix}"
+        )
     result = result * np.asarray(scale, dtype=np.float64)
-    if result.ndim != 2 or result.shape[1] != 3 or len(result) < 12 or not np.all(np.isfinite(result)):
-        raise ValueError(f"unexpected {object_type} collision piece vertices: {result.shape}")
+    if (
+        result.ndim != 2
+        or result.shape[1] != 3
+        or len(result) < 12
+        or not np.all(np.isfinite(result))
+    ):
+        raise ValueError(
+            f"unexpected {object_type} collision piece vertices: {result.shape}"
+        )
     return result
