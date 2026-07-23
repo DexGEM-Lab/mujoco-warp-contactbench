@@ -30,6 +30,10 @@ VECTOR_SPECS = {
     "object_position": 3, "object_quaternion_xyzw": 4, "object_linear_velocity": 3,
     "target_object_position": 3, "target_object_quaternion_xyzw": 4,
 }
+OPTIONAL_VECTOR_SPECS = {
+    # Observation-intervention traces retain the pre-replacement live input.
+    "live_processed_observation": OBS_DIM_021PRO,
+}
 SCALAR_SPECS = {
     "decision_frame": np.dtype(np.int64), "state_frame": np.dtype(np.int64),
     "reset": np.dtype(np.bool_), "terminated": np.dtype(np.bool_), "truncated": np.dtype(np.bool_),
@@ -64,6 +68,14 @@ def validate_trace(metadata: Mapping[str, Any], arrays: Mapping[str, np.ndarray]
         if array.shape[0] != count:
             raise ValueError("trace arrays have inconsistent frame counts")
     assert count is not None
+    for name, width in OPTIONAL_VECTOR_SPECS.items():
+        if name not in arrays:
+            continue
+        array = np.asarray(arrays[name])
+        if array.ndim != 2 or array.shape != (count, width):
+            raise ValueError(f"{name} must have shape ({count}, {width}), got {array.shape}")
+        if array.dtype != np.dtype(np.float32) or not np.all(np.isfinite(array)):
+            raise ValueError(f"{name} must be finite float32 values")
     for name, dtype in SCALAR_SPECS.items():
         value = arrays.get(name)
         array = None if value is None else np.asarray(value)

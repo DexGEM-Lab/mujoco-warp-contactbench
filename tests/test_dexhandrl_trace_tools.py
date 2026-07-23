@@ -18,6 +18,7 @@ from sim.dexhandrl.trace_contract import (
     validate_trace,
 )
 from tools.compare_dexhandrl_traces import compare
+import tools.trace_dexhandrl_mujoco as mujoco_trace
 from tools.trace_dexhandrl_mujoco import (
     ControlTraceIntervention,
     ObservationTraceIntervention,
@@ -173,6 +174,18 @@ def test_trace_contract_rejects_wrong_state_dtype_and_filter_metadata():
 def test_trace_contract_rejects_nonfinite_values():
     metadata, arrays = _trace(); arrays["policy_mean"][0, 0] = np.nan
     with pytest.raises(ValueError, match="finite"): validate_trace(metadata, arrays)
+
+
+def test_trace_contract_validates_optional_live_processed_observation():
+    metadata, arrays = _trace()
+    arrays["live_processed_observation"] = np.zeros((2, 461), dtype=np.float32)
+    assert validate_trace(metadata, arrays) == 2
+    arrays["live_processed_observation"] = arrays["live_processed_observation"].astype(np.float64)
+    with pytest.raises(ValueError, match="live_processed_observation.*float32"):
+        validate_trace(metadata, arrays)
+    arrays["live_processed_observation"] = np.zeros((1, 461), dtype=np.float32)
+    with pytest.raises(ValueError, match="live_processed_observation.*shape"):
+        validate_trace(metadata, arrays)
 
 def test_gym_trace_resolves_caller_output_and_rejects_checkout_writes(tmp_path, monkeypatch):
     caller, gym_root = tmp_path / "caller", tmp_path / "gym"
@@ -401,14 +414,16 @@ def _control_trace(tmp_path, *, metadata=None, arrays=None):
     return path
 
 
-def test_observation_trace_parser_accepts_repeated_components(tmp_path):
+def test_observation_trace_parser_accepts_repeated_components_and_phase_end(tmp_path):
     args = _parser().parse_args([
         "--output", str(tmp_path / "trace.npz"), "--observation-trace", "gym.npz",
         "--replace-observation-component", "contact_force_magnitude",
         "--replace-observation-component", "contact_force_directions",
+        "--observation-intervention-end-frame", "440",
     ])
     assert args.observation_trace == Path("gym.npz")
     assert args.replace_observation_component == ["contact_force_magnitude", "contact_force_directions"]
+    assert args.observation_intervention_end_frame == 440
 
 
 @pytest.mark.parametrize(
@@ -418,11 +433,27 @@ def test_observation_trace_parser_accepts_repeated_components(tmp_path):
         (None, None, ("contact_force_magnitude",), "required together"),
         (Path("control.npz"), Path("gym.npz"), ("contact_force_magnitude",), "cannot be combined"),
         (None, Path("gym.npz"), ("contact_force_mag",), "exact OBS_COMPONENT_SLICES"),
+        (None, None, (), "requires --observation-trace"),
+        (None, Path("gym.npz"), ("contact_force_magnitude",), f"{RESET_DECISION_FRAME}..{FINAL_STATE_FRAME}"),
     ],
 )
 def test_observation_trace_cli_pairing_fails_closed(control_trace, observation_trace, components, message):
+    end = RESET_DECISION_FRAME - 1 if message == "requires --observation-trace" else (
+        FINAL_STATE_FRAME + 1 if message == f"{RESET_DECISION_FRAME}..{FINAL_STATE_FRAME}" else None
+    )
     with pytest.raises(ValueError, match=message):
-        _validate_trace_interventions(control_trace, observation_trace, components)
+        _validate_trace_interventions(control_trace, observation_trace, components, end)
+
+
+def test_observation_trace_cli_wires_phase_end_to_run(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(mujoco_trace, "run", lambda *args: captured.setdefault("args", args) or Path("unused.npz"))
+    monkeypatch.setattr(sys, "argv", ["trace_dexhandrl_mujoco.py", "--output", str(tmp_path / "trace.npz"),
+                                       "--observation-trace", "gym.npz",
+                                       "--replace-observation-component", "contact_force_magnitude",
+                                       "--observation-intervention-end-frame", "440"])
+    assert mujoco_trace.main() == 0
+    assert captured["args"][-1] == 440
 
 
 def test_observation_trace_rejects_bad_source_component_and_frame(tmp_path):
@@ -464,6 +495,27 @@ def test_observation_trace_replaces_exact_slices_and_preserves_normal_input(tmp_
         untouched[start:end] = False
     np.testing.assert_array_equal(hybrid[untouched], live[untouched])
     assert _policy_observation(live, RESET_DECISION_FRAME, None) is live
+
+
+def test_observation_trace_phase_end_is_inclusive_and_consumes_pass_through_rows(tmp_path):
+    metadata, arrays = _trace((RESET_DECISION_FRAME, RESET_DECISION_FRAME + 1), backend="gym")
+    arrays["processed_observation"][0] = 10
+    arrays["processed_observation"][1] = 20
+    intervention = ObservationTraceIntervention.load(
+        _control_trace(tmp_path, metadata=metadata, arrays=arrays), 2,
+        ("contact_force_magnitude",), RESET_DECISION_FRAME,
+    )
+    live_first = np.zeros(461, dtype=np.float32)
+    replaced = intervention.apply(live_first, RESET_DECISION_FRAME)
+    start, end = OBS_COMPONENT_SLICES["contact_force_magnitude"]
+    np.testing.assert_array_equal(replaced[start:end], np.full(end - start, 10, dtype=np.float32))
+    live_second = np.full(461, 2, dtype=np.float32)
+    passed_through = intervention.apply(live_second, RESET_DECISION_FRAME + 1)
+    assert intervention._row == 2
+    assert passed_through is not live_second
+    np.testing.assert_array_equal(passed_through, live_second)
+    assert intervention.metadata_record()["intervention_end_frame"] == RESET_DECISION_FRAME
+    assert "consumed at every decision" in intervention.metadata_record()["switch_semantics"]
 
 
 def test_observation_trace_metadata_states_policy_only_import(tmp_path):

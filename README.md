@@ -602,6 +602,32 @@ This is a diagnosis only: a validated schema-v3 Gym trace is required, source
 and live decision frames must agree for every intervention, and no Gym target,
 action, or physics state is imported.
 
+#### Phase-switch contact-feedback diagnostic
+
+To test whether replayed contact feedback masks the live MuJoCo release state,
+keep the same contact-slice intervention through an inclusive decision frame
+and then switch policy input back to untouched live observations. The source row
+is still consumed and frame-validated after the switch, so a pass-through row
+cannot hide trace misalignment. The resulting trace records
+`live_processed_observation` as the float32 461D observation before any slice
+replacement; `processed_observation` remains the actual policy input.
+
+```bash
+$MUJOCO_PYTHON tools/trace_dexhandrl_mujoco.py \
+  --checkpoint "$CHECKPOINT" --steps 631 \
+  --observation-trace outputs/dexhandrl_trace/v3_full631_gym/gym_v3_full631.npz \
+  --replace-observation-component contact_force_magnitude \
+  --replace-observation-component contact_force_directions \
+  --replace-observation-component object_contact_force_magnitude \
+  --observation-intervention-end-frame 440 \
+  --output outputs/dexhandrl_trace/mujoco_contact_phase_switch.npz
+```
+
+`--observation-intervention-end-frame` is valid only with an observation trace
+and one or more replacement components; it is bounded to decisions 62–693.
+Without it, replacement remains active for every trace row. The metadata records
+the inclusive end frame and the switch semantics.
+
 Existing v2 smoke NPZ artifacts remain structural evidence only: their
 synthetic 61/62 labels are one frame early, so they are not alignment evidence.
 Fresh v3 traces use Gym's live `current_frame_idx` rather than synthesized

@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from sim.dexhandrl.obs_layout import OBS_COMPONENT_SLICES, OBS_DIM_021PRO
 from sim.dexhandrl.trace_contract import (
     EXACT_IDENTITY,
+    FINAL_STATE_FRAME,
     MAX_ACTIONS,
     RESET_DECISION_FRAME,
     SCHEMA,
@@ -46,7 +47,7 @@ class ObservationTraceIntervention:
     """
 
     def __init__(self, source_path: Path, metadata: Mapping[str, Any], arrays: Mapping[str, np.ndarray],
-                 components: tuple[str, ...]) -> None:
+                 components: tuple[str, ...], intervention_end_frame: int | None = None) -> None:
         if metadata.get("backend") != "gym":
             raise ValueError("--observation-trace must be a Gym trace")
         if not components:
@@ -62,6 +63,7 @@ class ObservationTraceIntervention:
         self.arrays = {name: np.asarray(value) for name, value in arrays.items()}
         self.count = validate_trace(self.metadata, self.arrays)
         self.components = components
+        self.intervention_end_frame = intervention_end_frame
         self.source_observations = np.asarray(self.arrays["processed_observation"], dtype=np.float32)
         if not np.all(np.isfinite(self.source_observations)):
             raise ValueError("observation trace requires finite processed_observation")
@@ -69,9 +71,10 @@ class ObservationTraceIntervention:
         self._row = 0
 
     @classmethod
-    def load(cls, path: Path, steps: int, components: tuple[str, ...]) -> "ObservationTraceIntervention":
+    def load(cls, path: Path, steps: int, components: tuple[str, ...],
+             intervention_end_frame: int | None = None) -> "ObservationTraceIntervention":
         metadata, arrays = load_trace(str(path))
-        intervention = cls(path, metadata, arrays, components)
+        intervention = cls(path, metadata, arrays, components, intervention_end_frame)
         if intervention.count < steps:
             raise ValueError(
                 f"--observation-trace has {intervention.count} actions, fewer than requested --steps={steps}"
@@ -90,12 +93,14 @@ class ObservationTraceIntervention:
             raise RuntimeError(
                 f"observation trace decision frame {source_frame} does not equal live target frame {target_frame}"
             )
+        self._row += 1
+        if self.intervention_end_frame is not None and target_frame > self.intervention_end_frame:
+            return live.copy()
         hybrid = live.copy()
-        source = self.source_observations[self._row]
+        source = self.source_observations[self._row - 1]
         for name in self.components:
             start, end = OBS_COMPONENT_SLICES[name]
             hybrid[start:end] = source[start:end]
-        self._row += 1
         return hybrid
 
     def metadata_record(self) -> dict[str, Any]:
@@ -104,6 +109,13 @@ class ObservationTraceIntervention:
             "source_sha256": self.source_sha256,
             "source_backend": "gym",
             "components": list(self.components),
+            "intervention_end_frame": self.intervention_end_frame,
+            "switch_semantics": (
+                "Source rows are alignment-validated and consumed at every decision; named slices are "
+                "replaced through intervention_end_frame inclusive, then the untouched live observation is used."
+                if self.intervention_end_frame is not None else
+                "Named slices are replaced for every traced decision."
+            ),
             "semantics": (
                 "Only named Gym processed_observation slices are imported into MuJoCo policy input; "
                 "no target, action, residual/control stage, or physics state is imported."
@@ -206,7 +218,7 @@ class ControlTraceIntervention:
 
 
 def _validate_trace_interventions(control_trace: Path | None, observation_trace: Path | None,
-                                  components: tuple[str, ...]) -> None:
+                                  components: tuple[str, ...], intervention_end_frame: int | None = None) -> None:
     if control_trace is not None and observation_trace is not None:
         raise ValueError("--observation-trace cannot be combined with --control-trace")
     if (observation_trace is None) != (not bool(components)):
@@ -217,6 +229,13 @@ def _validate_trace_interventions(control_trace: Path | None, observation_trace:
             "--replace-observation-component must name exact OBS_COMPONENT_SLICES keys; "
             f"invalid: {', '.join(invalid)}"
         )
+    if intervention_end_frame is not None:
+        if observation_trace is None or not components:
+            raise ValueError("--observation-intervention-end-frame requires --observation-trace and --replace-observation-component")
+        if not RESET_DECISION_FRAME <= intervention_end_frame <= FINAL_STATE_FRAME:
+            raise ValueError(
+                f"--observation-intervention-end-frame must be in {RESET_DECISION_FRAME}..{FINAL_STATE_FRAME}"
+            )
 
 
 def _policy_observation(live_observation: np.ndarray, decision_frame: int,
@@ -296,13 +315,16 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
         finger_kp: float = 15.0, finger_kv: float = 0.0,
         base_rot_kp: float = 10000.0, base_rot_kv: float = 125.0,
         base_rot_force: float = 100.0, observation_trace: Path | None = None,
-        replace_observation_component: tuple[str, ...] = ()) -> Path:
+        replace_observation_component: tuple[str, ...] = (),
+        observation_intervention_end_frame: int | None = None) -> Path:
     if not 1 <= steps <= MAX_ACTIONS:
         raise ValueError(f"--steps must be in 1..{MAX_ACTIONS}")
-    _validate_trace_interventions(control_trace, observation_trace, replace_observation_component)
+    _validate_trace_interventions(
+        control_trace, observation_trace, replace_observation_component, observation_intervention_end_frame
+    )
     intervention = ControlTraceIntervention.load(control_trace, steps) if control_trace is not None else None
     observation_intervention = (ObservationTraceIntervention.load(
-        observation_trace, steps, replace_observation_component
+        observation_trace, steps, replace_observation_component, observation_intervention_end_frame
     ) if observation_trace is not None else None)
     import torch
     from sim.dexhandrl.hand_mapping import full_dof_from_qpos
@@ -322,7 +344,9 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
     set_mode = getattr(agent, "set_running_mode", None)
     if callable(set_mode):
         set_mode("eval")
-    names = ("decision_frame", "state_frame", "reset", "terminated", "truncated", "processed_observation", "rms_observation", "policy_mean", "final_action", "base_offset_before", "base_offset_after", "joint_offset_before", "joint_offset_after", "reference_active_target", "corrected_active_target", "applied_active_target", "full_target", "hand_qpos", "hand_qvel", "object_position", "object_quaternion_xyzw", "object_linear_velocity", "target_object_position", "target_object_quaternion_xyzw")
+    names = ["decision_frame", "state_frame", "reset", "terminated", "truncated", "processed_observation", "rms_observation", "policy_mean", "final_action", "base_offset_before", "base_offset_after", "joint_offset_before", "joint_offset_after", "reference_active_target", "corrected_active_target", "applied_active_target", "full_target", "hand_qpos", "hand_qvel", "object_position", "object_quaternion_xyzw", "object_linear_velocity", "target_object_position", "target_object_quaternion_xyzw"]
+    if observation_intervention is not None:
+        names.append("live_processed_observation")
     obs, _ = env.reset(); store: dict[str, list[np.ndarray]] = {name: [] for name in names}
     if int(env._current_frame) != RESET_DECISION_FRAME:
         raise RuntimeError(f"MuJoCo reset policy frame must be {RESET_DECISION_FRAME}, got {env._current_frame}")
@@ -333,7 +357,8 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
         for _step in range(steps):
             decision_frame = int(env._current_frame)
             source = intervention.current(decision_frame) if intervention is not None else None
-            policy_observation = _policy_observation(obs, decision_frame, observation_intervention)
+            live_processed_observation = np.asarray(obs, dtype=np.float32).copy()
+            policy_observation = _policy_observation(live_processed_observation, decision_frame, observation_intervention)
             tensor = torch.as_tensor(policy_observation[None], dtype=torch.float32, device=agent.policy.device)
             normalized = agent._observation_preprocessor(tensor)
             rms_observation = normalized.detach().cpu().numpy()[0]
@@ -357,6 +382,7 @@ def run(output: Path, steps: int, checkpoint: Path, control_trace: Path | None =
                         raise RuntimeError(f"environment altered injected source {name}")
             _append(store, decision_frame=np.asarray(decision_frame), state_frame=np.asarray(state_frame), reset=np.asarray(decision_frame == RESET_DECISION_FRAME), terminated=np.asarray(terminated), truncated=np.asarray(truncated),
               processed_observation=policy_observation, rms_observation=rms_observation, policy_mean=policy_mean, final_action=action,
+              **({"live_processed_observation": live_processed_observation} if observation_intervention is not None else {}),
               base_offset_before=before_base, base_offset_after=(source["base_offset_after"] if source is not None else env.base_position_offset), joint_offset_before=before_joint, joint_offset_after=(source["joint_offset_after"] if source is not None else env.joint_offset),
               reference_active_target=(source["reference_active_target"] if source is not None else np.asarray(trace["reference_active_target"], dtype=np.float32)), corrected_active_target=(source["corrected_active_target"] if source is not None else np.asarray(trace["corrected_active_target"], dtype=np.float32)), applied_active_target=(source["applied_active_target"] if source is not None else np.asarray(trace["applied_active_target"], dtype=np.float32)), full_target=(source["full_target"] if source is not None else np.asarray(trace["full_target"], dtype=np.float32)),
               hand_qpos=full_dof_from_qpos(np.asarray(env._dx.qpos), env.ids), hand_qvel=_ordered_qvel(env), object_position=np.asarray(info["object_position"]), object_quaternion_xyzw=np.asarray(env._dx.xquat[env.object_body_id], dtype=np.float32)[[1, 2, 3, 0]], object_linear_velocity=np.asarray(env._dx.qvel[env.ids.object_free_dof_addr:env.ids.object_free_dof_addr + 3]), target_object_position=np.asarray(info["target_object_position"]), target_object_quaternion_xyzw=np.asarray(env.trajectory.object_quat_xyzw[state_frame]))
@@ -386,6 +412,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--observation-trace", type=Path, help="validated Gym trace supplying selected policy-observation slices")
     p.add_argument("--replace-observation-component", action="append", default=[], metavar="NAME",
                    help="exact OBS_COMPONENT_SLICES key to replace; repeat for multiple components")
+    p.add_argument("--observation-intervention-end-frame", type=int, metavar="INT",
+                   help=f"inclusive replacement end frame ({RESET_DECISION_FRAME}..{FINAL_STATE_FRAME}); requires observation intervention")
     p.add_argument("--hand-friction", default="0.5 0.01 0.001")
     p.add_argument("--finger-kp", type=float, default=15.0)
     p.add_argument("--finger-kv", type=float, default=0.0)
@@ -400,12 +428,13 @@ def main() -> int:
     parser = _parser()
     a = parser.parse_args()
     try:
-        _validate_trace_interventions(a.control_trace, a.observation_trace, tuple(a.replace_observation_component))
+        _validate_trace_interventions(a.control_trace, a.observation_trace, tuple(a.replace_observation_component),
+                                      a.observation_intervention_end_frame)
     except ValueError as error:
         parser.error(str(error))
     print(run(a.output, a.steps, a.checkpoint, a.control_trace, a.hand_friction, a.headless,
               a.finger_kp, a.finger_kv, a.base_rot_kp, a.base_rot_kv, a.base_rot_force,
-              a.observation_trace, tuple(a.replace_observation_component)))
+              a.observation_trace, tuple(a.replace_observation_component), a.observation_intervention_end_frame))
     return 0
 
 
