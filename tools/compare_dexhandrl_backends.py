@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -57,9 +58,9 @@ def _frame_summary(delta: np.ndarray) -> np.ndarray:
 
 
 def metric(left: np.ndarray, right: np.ndarray, frames: np.ndarray, thresholds: tuple[float, ...] = THRESHOLDS) -> dict[str, Any]:
-    """Return exactness, magnitude, and first divergence for aligned arrays."""
-    left = _array(left, name="metric left")
-    right = _array(right, name="metric right")
+    """Return numeric array equality, dtypes, magnitude, and first divergence."""
+    left = _array(left, name="metric native")
+    right = _array(right, name="metric mjx")
     frames = np.asarray(frames, dtype=np.int64)
     if left.shape != right.shape or left.shape[0] != frames.shape[0]:
         raise ValueError(f"metric alignment mismatch: {left.shape}, {right.shape}, {frames.shape}")
@@ -71,7 +72,12 @@ def metric(left: np.ndarray, right: np.ndarray, frames: np.ndarray, thresholds: 
         for threshold in thresholds
     }
     return {
+        # np.array_equal compares numeric values across numeric dtypes; a dtype
+        # asymmetry is evidence to report, not an automatic exactness failure.
         "exact": bool(np.array_equal(left, right)),
+        "native_dtype": str(left.dtype),
+        "mjx_dtype": str(right.dtype),
+        "dtype_equal": bool(left.dtype == right.dtype),
         "rmse": float(np.sqrt(np.mean(delta * delta))),
         "max_abs": float(np.max(np.abs(delta))),
         "first_nonzero": None if not nonzero.size else int(frames[nonzero[0]]),
@@ -178,15 +184,27 @@ def collect_rollout(env: Any, steps: int) -> tuple[dict[str, np.ndarray], dict[s
         "action_dim": int(env.num_actions),
         "observation_dim": int(env.num_observations),
     }
+    start_frame = int(env.start_frame)
+    expected_reset = start_frame + 1
+    expected_decisions = np.arange(expected_reset, expected_reset + steps, dtype=np.int64)
+    expected_states = np.arange(expected_reset, expected_reset + steps + 1, dtype=np.int64)
+    if arrays["frame"][0] != expected_reset:
+        raise ValueError(f"{env.cfg.runtime_backend} reset frame {arrays['frame'][0]} != start_frame + 1 ({expected_reset})")
+    if not np.array_equal(arrays["decision_frame"], expected_decisions):
+        raise ValueError(f"{env.cfg.runtime_backend} decision frame schedule does not start at reset frame")
+    if not np.array_equal(arrays["frame"], expected_states):
+        raise ValueError(f"{env.cfg.runtime_backend} state frame schedule does not span reset through reset + steps")
     metadata = {
         "identity": identity,
         "physics_contract": env.cfg.physics.record(),
         "runtime_backend": str(env.cfg.runtime_backend),
         "frame_contract": {
-            "reset_frame": int(arrays["frame"][0]),
+            "start_frame": start_frame,
+            "reset_frame": expected_reset,
             "state_frames": arrays["frame"].astype(int).tolist(),
             "decision_frames": arrays["decision_frame"].astype(int).tolist(),
             "zero_action_dim": 22,
+            "validated": "reset=start_frame+1; decisions=reset..reset+steps-1; states=reset..reset+steps",
         },
     }
     return arrays, metadata
@@ -196,7 +214,60 @@ def _timing(values: np.ndarray) -> dict[str, Any]:
     values = np.asarray(values, dtype=np.float64)
     steady = values[min(5, len(values)):]
     summary = lambda sample: {"mean_s": float(np.mean(sample)), "median_s": float(np.median(sample))}
-    return {"all": summary(values), "steady_after_first5": summary(steady if len(steady) else values)}
+    return {
+        "measurement": "full env.step wall time; excludes reset and compilation",
+        "all": summary(values),
+        "steady_after_first5": summary(steady if len(steady) else values),
+    }
+
+
+def _state_metrics(native: Mapping[str, np.ndarray], mjx: Mapping[str, np.ndarray], key: str) -> dict[str, Any]:
+    """Keep reset and post-step rows distinguishable from aggregate state evidence."""
+    frames = native["frame"]
+    return {
+        "all_rows": metric(native[key], mjx[key], frames),
+        "reset_row": metric(native[key][:1], mjx[key][:1], frames[:1]),
+        "post_step_rows": metric(native[key][1:], mjx[key][1:], frames[1:]),
+    }
+
+
+def _git_head() -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL
+    ).strip()
+
+
+def _provenance(native_env: Any, mjx_env: Any) -> dict[str, Any]:
+    # Unit-test fakes intentionally avoid simulator imports. A real comparison
+    # has already constructed both runtimes, so these fields are concrete there.
+    try:
+        import jax
+        jax_version = jax.__version__
+        actual_backend = jax.default_backend()
+        actual_devices = [str(device) for device in jax.devices()]
+    except ImportError:
+        jax_version, actual_backend, actual_devices = "unavailable", "unavailable", []
+    try:
+        import mujoco
+        mujoco_version = mujoco.__version__
+    except ImportError:
+        mujoco_version = "unavailable"
+    return {
+        "git_head": _git_head(),
+        "python": sys.version.split()[0],
+        "numpy": np.__version__,
+        "mujoco": mujoco_version,
+        "jax": jax_version,
+        "native": {"requested_device": str(native_env.cfg.device), "runtime_backend": str(native_env.cfg.runtime_backend)},
+        "mjx": {
+            "requested_device": str(mjx_env.cfg.device),
+            "requested_platforms": os.environ.get("JAX_PLATFORMS"),
+            "actual_default_backend": actual_backend,
+            "actual_devices": actual_devices,
+            "runtime_backend": str(mjx_env.cfg.runtime_backend),
+            "actual_mjx_impl": str(getattr(getattr(mjx_env, "mx", None), "impl", "unknown")),
+        },
+    }
 
 
 def compare_rollouts(native_env: Any, mjx_env: Any, *, steps: int = DEFAULT_STEPS) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
@@ -219,37 +290,73 @@ def compare_rollouts(native_env: Any, mjx_env: Any, *, steps: int = DEFAULT_STEP
     for name, value in arrays.items():
         _array(value, name=name)
     comparisons: dict[str, Any] = {}
-    for key in STATE_KEYS + TRACE_KEYS + ("info_full_target",):
-        frames = native["frame"] if key in STATE_KEYS else native["decision_frame"]
-        comparisons[key] = metric(native[key], mjx[key], frames)
+    for key in STATE_KEYS:
+        comparisons[key] = _state_metrics(native, mjx, key)
+    for key in TRACE_KEYS + ("info_full_target",):
+        comparisons[key] = metric(native[key], mjx[key], native["decision_frame"])
     comparisons["processed_obs_components"] = {
-        name: metric(native["processed_obs"][:, begin:end], mjx["processed_obs"][:, begin:end], native["frame"])
+        name: _state_metrics(
+            {"frame": native["frame"], "processed_obs": native["processed_obs"][:, begin:end]},
+            {"frame": mjx["frame"], "processed_obs": mjx["processed_obs"][:, begin:end]},
+            "processed_obs",
+        )
         for name, (begin, end) in OBS_COMPONENT_SLICES.items()
     }
-    applied_error = comparisons["applied_active_target"]["max_abs"]
-    if applied_error > 1e-7:
-        raise ValueError(f"applied-active target mismatch exceeds 1e-7: {applied_error:g}")
+    reference = comparisons["reference_active_target"]
+    if not reference["exact"]:
+        raise ValueError(f"reference-active target must be exact: max_abs={reference['max_abs']:g}")
+    applied = comparisons["applied_active_target"]
+    if applied["max_abs"] > 1e-7:
+        raise ValueError(f"applied-active target mismatch exceeds 1e-7: {applied['max_abs']:g}")
+    physics = native_meta["physics_contract"]
     report = {
-        "schema": "dexhandrl.native_mjx_backend_evidence.v1",
+        "schema": "dexhandrl.native_mjx_backend_evidence.v2",
+        "provenance": _provenance(native_env, mjx_env),
         "identity": native_meta["identity"],
-        "physics_contract": native_meta["physics_contract"],
+        "physics_contract": physics,
         "frame_contract": native_meta["frame_contract"],
-        "inputs": {"steps": steps, "actions": "zero 22D", "residual": False},
+        "inputs": {
+            "steps": steps,
+            "actions": "zero 22D",
+            "residual": False,
+            "object_position_terminal_threshold": float(native_env.cfg.object_position_terminal_threshold),
+            "settle_frames": int(native_env.cfg.settle_frames),
+            "substeps": int(physics["substeps"]),
+        },
         "comparison": comparisons,
+        "preregistered_target_exactness": {
+            "reference_active_target": {"required": True, "observed_exact": reference["exact"], "observed_max_abs": reference["max_abs"]},
+            "corrected_active_target": {
+                "preregistered_exactness": "falsified as a backend-independent requirement",
+                "observed_exact": comparisons["corrected_active_target"]["exact"],
+                "observed_max_abs": comparisons["corrected_active_target"]["max_abs"],
+            },
+            "applied_active_target": {
+                "preregistered_exactness": "falsified as a backend-independent requirement; retained acceptance bound is max_abs <= 1e-7",
+                "observed_exact": applied["exact"],
+                "observed_max_abs": applied["max_abs"],
+                "required_max_abs": 1e-7,
+            },
+        },
         "timing": {"native": _timing(native["step_seconds"]), "mjx": _timing(mjx["step_seconds"])},
         "artifact": {},
         "backend_authority": (
             "MJX-Warp remains authoritative for training and exact reference traces; native MuJoCo is a CPU viewer backend. "
-            "Reward exactness across these 50 early-phase steps is near-trivial and is not equivalence evidence."
+            "Reward exactness across these early-phase steps is near-trivial and is not equivalence evidence."
         ),
-        "full_target_note": "full_target and ctrl are reported but are not required exact: active-to-full routing reads each backend's live distal qpos.",
+        "reset_note": "Each backend reset already advances settle_frames * substeps internal physics steps before the reset observation is captured; reset_row is therefore reported separately from post_step_rows.",
+        "target_routing_note": "reference_active_target is the exact shared reference. corrected_active_target and applied_active_target are state-dependent: live current_full is routed to reference_full, then full_to_active selects active targets. full_target and ctrl are reported without an exactness requirement because routing reads each backend's live distal qpos.",
+        "exactness_note": "exact means numeric np.array_equal on the original captured arrays. NumPy array_equal does not require matching numeric dtypes; native_dtype, mjx_dtype, and dtype_equal record dtype asymmetry explicitly.",
     }
     return report, arrays
 
 
 def _make_envs(args: argparse.Namespace) -> tuple[Any, Any]:
+    # JAX reads platform configuration during import. Set it before importing
+    # skrl_env (which can import JAX) and before constructing either backend.
+    os.environ["JAX_PLATFORMS"] = "cpu" if args.mjx_device == "cpu" else "cuda,cpu"
     # Keep heavyweight runtime imports inside execution so --help and unit tests
-    # remain offline-safe. JAX platform selection must precede MJX construction.
+    # remain offline-safe.
     from sim.dexhandrl.contracts import DexHandPhysicsConfig
     from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 
@@ -267,7 +374,6 @@ def _make_envs(args: argparse.Namespace) -> tuple[Any, Any]:
     if args.lance is not None:
         common["lance_path"] = args.lance
     native = DexHandRLMJXEnv(DexHandRLMJXEnvConfig(**common, device="cpu", runtime_backend="mujoco-native"))
-    os.environ["JAX_PLATFORMS"] = "cpu" if args.mjx_device == "cpu" else "cuda,cpu"
     mjx = DexHandRLMJXEnv(DexHandRLMJXEnvConfig(**common, device=args.mjx_device, runtime_backend="mjx-warp"))
     return native, mjx
 
