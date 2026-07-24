@@ -303,9 +303,11 @@ def test_training_cli_parses_pair_assignment_cycle(
         "--all-pairs",
         "--pair-assignment-cycle", "2",
         "--resume-checkpoint", str(resume),
+        "--evaluation-enabled", "false",
     ]) == 0
     assert captured[0].pair_assignment_cycle == 2
     assert captured[0].resume_checkpoint == str(resume.resolve())
+    assert captured[0].evaluation_enabled is False
 
 
 def test_training_cli_enables_narrow_device_transition(
@@ -1320,8 +1322,9 @@ def test_run_closes_recorder_when_training_viewer_construction_fails(
     assert recorder_closed == [True]
 
 
-def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("evaluation_enabled", [True, False])
+def test_run_evaluation_lifecycle_and_native_checkpoint_boundaries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, evaluation_enabled: bool
 ) -> None:
     tool = _load_tool()
     constructions: list[tuple[str, int, int, bool]] = []
@@ -1394,7 +1397,10 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
         return tool.EvaluationResult(mode, 1, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, False, False, True, [1.0], [0.0])
 
     def train(*_: object, **__: object) -> tuple[list[object], int, float]:
-        assert initial_runtime_ref[0]() is not None
+        if evaluation_enabled:
+            assert initial_runtime_ref[0]() is not None
+        else:
+            assert not initial_runtime_ref
         return [], 0, 0.0
 
     monkeypatch.setattr(tool, "_assert_cuda_runtime", lambda: None)
@@ -1416,6 +1422,7 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
             updates=1,
             minibatch_size=4096,
             evaluation_num_envs=128,
+            evaluation_enabled=evaluation_enabled,
             resume_checkpoint=str(tmp_path / "resume.pt"),
             device_resident_controls=True,
             device_transition=True,
@@ -1424,17 +1431,34 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
         ),
     )
 
-    assert constructions == [
-        ("training", 4096, 4096, True),
-        ("evaluation-1", 128, 2048, False),
-    ]
-    assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-1", "trained")]
+    assert constructions == (
+        [
+            ("training", 4096, 4096, True),
+            ("evaluation-1", 128, 2048, False),
+        ]
+        if evaluation_enabled
+        else [("training", 4096, 4096, True)]
+    )
     assert loads[0] == ("training", "resume.pt")
-    assert loads[1][0] == "evaluation-1" and loads[2][0] == "training"
-    assert loads[1][1] == loads[2][1] and loads[1][1].startswith(".initial-")
-    assert loads[3] == ("evaluation-1", "run.pt")
-    assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
-    assert result["budget"]["evaluation_num_envs"] == 128
+    if evaluation_enabled:
+        assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-1", "trained")]
+        assert loads[1][0] == "evaluation-1" and loads[2][0] == "training"
+        assert loads[1][1] == loads[2][1] and loads[1][1].startswith(".initial-")
+        assert loads[3] == ("evaluation-1", "run.pt")
+        assert result["trajectory_selection"]["evaluation_assignments"] == [
+            {"env_id": i, "identity": f"prefix-{i}"} for i in range(128)
+        ]
+        assert result["budget"]["evaluation_num_envs"] == 128
+        assert result["evaluation"]["status"] == "completed"
+    else:
+        assert modes == []
+        assert len(loads) == 2 and loads[1][0] == "training"
+        assert loads[1][1].startswith(".initial-")
+        assert result["trajectory_selection"]["evaluation_assignments"] == []
+        assert result["budget"]["evaluation_num_envs"] == 0
+        assert result["evaluation"]["status"] == "skipped"
+        assert result["trained"] is None and result["acceptance"]["accepted"] is None
+        assert result["artifacts"]["evaluation_trace"] is None
     assert result["budget"]["device_transition"] is True
     assert result["environment"]["device_transition"] is True
     assert result["learning_starts"] == 0

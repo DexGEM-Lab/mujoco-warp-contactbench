@@ -203,6 +203,7 @@ class TrainingBudget:
     # count is an explicit diagnostic mode and must not be mistaken for the
     # Gym single-environment reference result.
     evaluation_num_envs: int | None = 1
+    evaluation_enabled: bool = True
     headless: bool = True
     viewer_envs: int = 1
     viewer_stride: int = 1
@@ -529,7 +530,7 @@ def _wandb_config(
     budget: TrainingBudget,
     ppo_config: ManoPPOConfig,
     trajectory_assignments: list[dict[str, object]],
-    evaluation_ppo_config: ManoPPOConfig,
+    evaluation_ppo_config: ManoPPOConfig | None,
     evaluation_trajectory_assignments: list[dict[str, object]],
     trajectory_selection: dict[str, object] | None = None,
     device: dict[str, object],
@@ -556,9 +557,16 @@ def _wandb_config(
             ],
         },
         "evaluation": {
+            "enabled": evaluation_ppo_config is not None,
             "num_envs": len(evaluation_trajectory_assignments),
-            "coverage": "at_least_one_environment_per_resolved_pair",
-            "ppo_config": asdict(evaluation_ppo_config),
+            "coverage": (
+                "at_least_one_environment_per_resolved_pair"
+                if evaluation_ppo_config is not None
+                else None
+            ),
+            "ppo_config": (
+                None if evaluation_ppo_config is None else asdict(evaluation_ppo_config)
+            ),
             "trajectory_assignments": evaluation_trajectory_assignments,
         },
         "reward": {
@@ -1680,6 +1688,7 @@ def _trajectory_selection_metadata(
         "padding_policy": "full" if selection.require_full_padding else "clip_to_source",
         "dataset_path": str(selection.dataset_path),
         "dataset_version": selection.expected_dataset_version,
+        "pair_assignment_cycle": selection.pair_assignment_cycle,
         "requested_hand_side": selection.hand_side,
         "resolved_hand_side": (
             "both" if len(hand_layout.controlled_sides) == 2 else hand_layout.controlled_sides[0]
@@ -1941,7 +1950,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     contact_capacity = recommended_warp_contact_capacity(
         budget.num_envs, trajectories.hand_sides
     )
-    evaluation_num_envs = _full_coverage_evaluation_num_envs(budget, trajectories)
+    evaluation_num_envs = (
+        _full_coverage_evaluation_num_envs(budget, trajectories)
+        if budget.evaluation_enabled
+        else 0
+    )
     assigned_object_types = {
         item.identity.identity.split("_")[0]
         for item in getattr(trajectories, "trajectories", ())
@@ -1992,12 +2005,21 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     if resume_checkpoint is not None:
         load_skrl_checkpoint(runtime.agent, resume_checkpoint)
     trajectory_assignments = _trajectory_assignments(trajectories)
-    evaluation_runtime, evaluation_ppo_config, evaluation_trajectory_assignments = _build_evaluation_runtime(
-        selection=selection,
-        budget=budget,
-        training_config=ppo_config,
-        num_envs=evaluation_num_envs,
-    )
+    if budget.evaluation_enabled:
+        (
+            evaluation_runtime,
+            evaluation_ppo_config,
+            evaluation_trajectory_assignments,
+        ) = _build_evaluation_runtime(
+            selection=selection,
+            budget=budget,
+            training_config=ppo_config,
+            num_envs=evaluation_num_envs,
+        )
+    else:
+        evaluation_runtime = None
+        evaluation_ppo_config = None
+        evaluation_trajectory_assignments = []
     trajectory_selection = _trajectory_selection_metadata(
         selection,
         trajectories,
@@ -2030,9 +2052,13 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                     trajectory_selection=trajectory_selection,
                 ),
             )
-            load_skrl_checkpoint(evaluation_runtime.agent, initial_checkpoint)
-            zero_baseline = _evaluate(evaluation_runtime, "zero")
-            untrained = _evaluate(evaluation_runtime, "untrained")
+            if evaluation_runtime is not None:
+                load_skrl_checkpoint(evaluation_runtime.agent, initial_checkpoint)
+                zero_baseline = _evaluate(evaluation_runtime, "zero")
+                untrained = _evaluate(evaluation_runtime, "untrained")
+            else:
+                zero_baseline = None
+                untrained = None
             # Make the checkpoint boundary executable: PPO starts from exactly
             # the native policy, value, optimizer, and normalizer state reported
             # by the untrained comparison, independent of RNG construction.
@@ -2040,7 +2066,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         # Keep this bounded evaluator alive for the trained row. Reconstructing
         # all object routes after a large training runtime leaves JAX/Warp
         # allocator caches competing with a second set of evaluator buffers.
-        if wandb_run is not None:
+        if wandb_run is not None and zero_baseline is not None and untrained is not None:
             _log_wandb_evaluations(wandb_run, [zero_baseline, untrained], update=0, transitions=0)
         recorder: ManoRerunRecorder | None = None
         observer: TrainingObserver | None = None
@@ -2152,21 +2178,25 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        # Evaluate exactly what a user will later load. skrl preprocessor/module
-        # state may differ after PPO training, so loading the final native
-        # checkpoint remains the reproducibility boundary even though the
-        # already-built physical evaluator is reused.
-        load_skrl_checkpoint(evaluation_runtime.agent, checkpoint)
-        trained = _evaluate(evaluation_runtime, "trained")
-        np.savez_compressed(
-            trace_path,
-            zero_reward=np.asarray(zero_baseline.rewards_by_call, dtype=np.float32),
-            untrained_reward=np.asarray(untrained.rewards_by_call, dtype=np.float32),
-            trained_reward=np.asarray(trained.rewards_by_call, dtype=np.float32),
-            zero_object_target_distance=np.asarray(zero_baseline.object_target_distance_by_call, dtype=np.float32),
-            untrained_object_target_distance=np.asarray(untrained.object_target_distance_by_call, dtype=np.float32),
-            trained_object_target_distance=np.asarray(trained.object_target_distance_by_call, dtype=np.float32),
-        )
+        # Evaluation may be disabled for large persistent-workspace training.
+        # A separate process can load the native checkpoint after this process
+        # releases its process-global Warp patches and allocator caches.
+        if evaluation_runtime is not None:
+            if zero_baseline is None or untrained is None:  # pragma: no cover - construction invariant
+                raise RuntimeError("evaluation runtime exists without initial baselines")
+            load_skrl_checkpoint(evaluation_runtime.agent, checkpoint)
+            trained = _evaluate(evaluation_runtime, "trained")
+            np.savez_compressed(
+                trace_path,
+                zero_reward=np.asarray(zero_baseline.rewards_by_call, dtype=np.float32),
+                untrained_reward=np.asarray(untrained.rewards_by_call, dtype=np.float32),
+                trained_reward=np.asarray(trained.rewards_by_call, dtype=np.float32),
+                zero_object_target_distance=np.asarray(zero_baseline.object_target_distance_by_call, dtype=np.float32),
+                untrained_object_target_distance=np.asarray(untrained.object_target_distance_by_call, dtype=np.float32),
+                trained_object_target_distance=np.asarray(trained.object_target_distance_by_call, dtype=np.float32),
+            )
+        else:
+            trained = None
         result = {
             "schema": "manorl.cube1_fast_training.v1",
             "trajectory_selection": trajectory_selection,
@@ -2190,30 +2220,50 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "resolved_capture_transition_diagnostics": budget.resolved_capture_transition_diagnostics,
                 "warp_contact_capacity": contact_capacity,
                 "evaluation_num_envs": evaluation_num_envs,
-                "evaluation_ppo_config": asdict(evaluation_ppo_config),
+                "evaluation_ppo_config": (
+                    None if evaluation_ppo_config is None else asdict(evaluation_ppo_config)
+                ),
             },
             "actual": {"transitions": transitions, "elapsed_seconds": elapsed, "updates": len(updates)},
             "throughput": throughput,
             "phase_profile": phase_profile,
             "device": device,
-            "baseline": asdict(zero_baseline),
-            "untrained": asdict(untrained),
-            "trained": asdict(trained),
-            "acceptance": {
-                "trained_completed_horizon": trained.completed_horizon,
-                "trained_calls_not_before_zero_reference": trained.calls >= zero_baseline.calls,
-                "trained_return_exceeds_untrained": trained.return_mean > untrained.return_mean,
-                "accepted": (
-                    trained.calls >= zero_baseline.calls
-                    and trained.return_mean > untrained.return_mean
+            "evaluation": {
+                "enabled": evaluation_runtime is not None,
+                "status": "completed" if trained is not None else "skipped",
+                "reason": (
+                    None
+                    if trained is not None
+                    else "disabled; evaluate the native checkpoint in a separate process"
                 ),
             },
+            "baseline": None if zero_baseline is None else asdict(zero_baseline),
+            "untrained": None if untrained is None else asdict(untrained),
+            "trained": None if trained is None else asdict(trained),
+            "acceptance": (
+                {
+                    "trained_completed_horizon": trained.completed_horizon,
+                    "trained_calls_not_before_zero_reference": trained.calls >= zero_baseline.calls,
+                    "trained_return_exceeds_untrained": trained.return_mean > untrained.return_mean,
+                    "accepted": (
+                        trained.calls >= zero_baseline.calls
+                        and trained.return_mean > untrained.return_mean
+                    ),
+                }
+                if trained is not None and zero_baseline is not None and untrained is not None
+                else {
+                    "trained_completed_horizon": None,
+                    "trained_calls_not_before_zero_reference": None,
+                    "trained_return_exceeds_untrained": None,
+                    "accepted": None,
+                }
+            ),
             "updates": updates,
             "artifacts": {
                 "checkpoint": str(checkpoint),
                 "last_checkpoint": str(last_checkpoint),
                 "periodic_checkpoints": [str(path) for path in periodic_checkpoints],
-                "evaluation_trace": str(trace_path),
+                "evaluation_trace": None if trained is None else str(trace_path),
                 "episode_returns": str(episodes_path),
                 "rerun": rerun_artifact,
             },
@@ -2221,27 +2271,34 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         metrics_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         if wandb_run is not None:
-            _log_wandb_evaluations(
-                wandb_run, [trained], update=len(updates), transitions=transitions
-            )
-            acceptance_metrics = {
+            final_metrics = {
                 "global_step": len(updates),
                 "update": len(updates),
                 "transitions": transitions,
                 **throughput,
-                **{f"acceptance/{key}": value for key, value in result["acceptance"].items()},
             }
-            wandb_run.log(acceptance_metrics, step=len(updates))
-            wandb_run.summary.update(acceptance_metrics)
+            if trained is not None:
+                _log_wandb_evaluations(
+                    wandb_run, [trained], update=len(updates), transitions=transitions
+                )
+                final_metrics.update(
+                    {
+                        f"acceptance/{key}": value
+                        for key, value in result["acceptance"].items()
+                    }
+                )
+            wandb_run.log(final_metrics, step=len(updates))
+            wandb_run.summary.update(final_metrics)
             artifact_paths = [
                 checkpoint,
                 _checkpoint_sidecar_path(checkpoint),
                 last_checkpoint,
                 _checkpoint_sidecar_path(last_checkpoint),
                 metrics_path,
-                trace_path,
                 episodes_path,
             ]
+            if trained is not None:
+                artifact_paths.append(trace_path)
             for periodic_checkpoint in periodic_checkpoints:
                 artifact_paths.extend(
                     [periodic_checkpoint, _checkpoint_sidecar_path(periodic_checkpoint)]
@@ -2264,6 +2321,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--num-envs", type=int, default=2048)
     parser.add_argument("--evaluation-num-envs", type=int, default=1)
+    parser.add_argument(
+        "--evaluation-enabled",
+        type=parse_cli_bool,
+        default=True,
+        metavar="{true,false}",
+        help="disable the resident evaluator and evaluate the final checkpoint in a separate process",
+    )
     parser.add_argument(
         "--dataset-path",
         type=Path,
@@ -2533,6 +2597,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             minibatch_size=args.minibatch_size,
             evaluation_num_envs=args.evaluation_num_envs,
+            evaluation_enabled=args.evaluation_enabled,
             headless=args.headless,
             viewer_envs=args.viewer_envs,
             viewer_stride=args.viewer_stride,
