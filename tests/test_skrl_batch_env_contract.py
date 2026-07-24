@@ -10,6 +10,7 @@ import pytest
 from sim.dexhandrl.hand_mapping import active_to_full_dof, full_to_active_dof
 from sim.dexhandrl.skrl_batch_env import (
     DexHandRLBatchConfig,
+    conservative_batch_ccd_capacity,
     conservative_batch_constraint_capacity,
     conservative_batch_contact_capacity,
 )
@@ -44,10 +45,13 @@ def test_batch_config_requires_all_actions_and_active_reference() -> None:
 def test_batch_capacity_floors_are_global_and_per_world() -> None:
     batch = _batch(7)
     assert conservative_batch_contact_capacity(7) == 960
+    assert conservative_batch_ccd_capacity(7) == 512
     # efc__force is (world, capacity), so N must not inflate the second axis.
     assert [conservative_batch_constraint_capacity(worlds) for worlds in (1, 7, 1024)] == [512, 512, 512]
     with pytest.raises(ValueError, match="global 128-row-per-world floor"):
         DexHandRLBatchConfig(trajectories=batch, contact_capacity=895)
+    with pytest.raises(ValueError, match="global 64-candidate-per-world floor"):
+        DexHandRLBatchConfig(trajectories=batch, ccd_capacity=447)
     with pytest.raises(ValueError, match="must be positive"):
         DexHandRLBatchConfig(trajectories=batch, per_world_constraint_capacity=0)
 
@@ -58,16 +62,20 @@ def test_batch_capacity_sizing_matches_measured_256_world_high_water() -> None:
     observed_global_contacts = 1377
     observed_max_constraints_per_world = 56
     measured_initial_nefc = 146
+    observed_reset_collisions = 220
 
     contact_capacity = conservative_batch_contact_capacity(worlds)
+    ccd_capacity = conservative_batch_ccd_capacity(worlds)
     constraint_capacity = conservative_batch_constraint_capacity(worlds)
 
     assert contact_capacity == 128 * worlds + 64 == 32832
+    assert ccd_capacity == 64 * worlds + 64 == 16448
     assert contact_capacity / observed_global_contacts > 23
     assert constraint_capacity == 512
     assert constraint_capacity >= measured_initial_nefc + 64
     # The production runtime retains fail-closed 80% high-water guards.
     assert observed_global_contacts / contact_capacity < 0.8
+    assert observed_reset_collisions / conservative_batch_ccd_capacity(7) < 0.8
     assert observed_max_constraints_per_world / constraint_capacity < 0.8
 
 
@@ -135,5 +143,9 @@ def test_device_transition_source_has_no_host_conversion() -> None:
     assert "data._impl" in source
     assert source.count("self.mjx.make_data(") == 1
     assert "data = self._forward_world(data)" in source
+    assert "naccdmax=self.ccd_capacity" in source
+    assert "requested_ccd_capacity" in source
+    assert "actual_ccd_capacity" in source
+    assert "ncollision_high_water" in source
     assert "requested_per_world_constraint_capacity" in source
     assert "actual_constraint_buffer_shape" in source

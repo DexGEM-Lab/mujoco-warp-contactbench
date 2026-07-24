@@ -80,6 +80,7 @@ class DexHandRLBatchConfig:
     policy_base_ang_velocity_limit: float = 10.0
     policy_finger_velocity_limit: float = 2.0
     contact_capacity: int | None = None
+    ccd_capacity: int | None = None
     per_world_constraint_capacity: int | None = None
     isaac_source_root: Path = DEFAULT_ISAAC_SOURCE_ROOT
     task_config_path: Path | None = None
@@ -101,6 +102,8 @@ class DexHandRLBatchConfig:
             raise ValueError("settle_frames must be non-negative")
         if self.contact_capacity is not None and self.contact_capacity < 128 * self.trajectories.num_envs:
             raise ValueError("contact_capacity is below the conservative global 128-row-per-world floor")
+        if self.ccd_capacity is not None and self.ccd_capacity < 64 * self.trajectories.num_envs:
+            raise ValueError("ccd_capacity is below the conservative global 64-candidate-per-world floor")
         if self.per_world_constraint_capacity is not None and self.per_world_constraint_capacity < 1:
             raise ValueError("per_world_constraint_capacity must be positive")
 
@@ -144,6 +147,19 @@ def conservative_batch_contact_capacity(num_envs: int) -> int:
     return 128 * num_envs + 64
 
 
+def conservative_batch_ccd_capacity(num_envs: int) -> int:
+    """Global Warp CCD/EPA scratch capacity: 64 candidates per world + 64.
+
+    ``naccdmax`` bounds collision-convex EPA scratch independently of the
+    global contact table. Server2's direct seven-world reset observed 220
+    collision candidates (about 31.4/world), so this retains a twofold reset
+    bound without allocating contact-sized scratch.
+    """
+    if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
+        raise ValueError("num_envs must be a positive integer")
+    return 64 * num_envs + 64
+
+
 def conservative_batch_constraint_capacity(num_envs: int) -> int:
     """Per-world Warp constraint capacity: 512, independent of batch size.
 
@@ -171,6 +187,7 @@ class DexHandRLMJXBatchEnv:
         self.batch = cfg.trajectories
         self.num_envs = self.batch.num_envs
         self.contact_capacity = cfg.contact_capacity or conservative_batch_contact_capacity(self.num_envs)
+        self.ccd_capacity = cfg.ccd_capacity or conservative_batch_ccd_capacity(self.num_envs)
         self.per_world_constraint_capacity = (
             cfg.per_world_constraint_capacity or conservative_batch_constraint_capacity(self.num_envs)
         )
@@ -222,8 +239,15 @@ class DexHandRLMJXBatchEnv:
         impl = data._impl
         required = ("contact__geom", "contact__worldid", "contact__dim", "contact__efc_address", "contact__friction", "contact__frame")
         missing = [name for name in required if not hasattr(impl, name)]
-        if missing or not all(hasattr(impl, name) for name in ("nacon", "nefc", "efc__force")):
+        required_scalars = ("nacon", "nefc", "efc__force", "ncollision", "naccdmax")
+        if missing or not all(hasattr(impl, name) for name in required_scalars):
             raise RuntimeError(f"MJX-Warp contact ABI is incompatible; missing={missing}")
+        if tuple(impl.ncollision.shape) != (1,):
+            raise RuntimeError(f"MJX-Warp ncollision ABI is incompatible: shape={impl.ncollision.shape}")
+        if int(impl.naccdmax) != self.ccd_capacity:
+            raise RuntimeError(
+                f"MJX-Warp naccdmax ABI is incompatible: {impl.naccdmax} != requested {self.ccd_capacity}"
+            )
 
     def _build_static_contract(self, root: Path) -> None:
         mujoco, model = self.mujoco, self.model
@@ -315,7 +339,7 @@ class DexHandRLMJXBatchEnv:
             )
         single = self.mjx.make_data(
             self.model, device=self.device, impl="warp", naconmax=self.contact_capacity,
-            njmax=self.per_world_constraint_capacity,
+            naccdmax=self.ccd_capacity, njmax=self.per_world_constraint_capacity,
         )
         self._assert_warp_abi(single)
         template = self.jax.vmap(lambda _: single)(self.jp.arange(self.num_envs, dtype=self.jp.int32))
@@ -488,10 +512,14 @@ class DexHandRLMJXBatchEnv:
             "frame": np.asarray(self.state.frame), "episode_count": np.asarray(self.state.episode_count),
             "qpos": np.asarray(self.state.data.qpos), "qvel": np.asarray(self.state.data.qvel),
             "requested_global_contact_capacity": self.contact_capacity,
+            "requested_ccd_capacity": self.ccd_capacity,
             "requested_per_world_constraint_capacity": self.per_world_constraint_capacity,
             "actual_contact_buffer_shape": tuple(np.asarray(impl.contact__geom).shape),
+            "actual_ccd_capacity": int(impl.naccdmax),
+            "actual_ncollision_shape": tuple(np.asarray(impl.ncollision).shape),
             "actual_constraint_buffer_shape": tuple(np.asarray(impl.efc__force).shape),
             "contact_high_water": int(np.asarray(impl.nacon).max(initial=0)),
+            "ncollision_high_water": int(np.asarray(impl.ncollision).max(initial=0)),
             "constraint_high_water_per_world": nefc,
             "constraint_high_water": int(nefc.max(initial=0)),
             "host_initial_nefc": self._host_initial_nefc,

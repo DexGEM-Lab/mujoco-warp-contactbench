@@ -120,6 +120,9 @@ def _capacity_guard(telemetry: dict[str, Any]) -> None:
     if len(contact_capacity) and contact_capacity[0]:
         if float(telemetry.get("contact_high_water", 0)) / float(contact_capacity[0]) >= 0.8:
             raise RuntimeError("MJX contact buffer reached 80% of actual capacity")
+    ccd_capacity = int(telemetry.get("actual_ccd_capacity", 0))
+    if ccd_capacity and float(telemetry.get("ncollision_high_water", 0)) / float(ccd_capacity) >= 0.8:
+        raise RuntimeError("MJX CCD buffer reached 80% of actual capacity")
     constraint_capacity = telemetry.get("actual_constraint_buffer_shape", (0, 0))
     if len(constraint_capacity) > 1 and constraint_capacity[1]:
         if float(telemetry.get("constraint_high_water", 0)) / float(constraint_capacity[1]) >= 0.8:
@@ -235,6 +238,7 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
                       "done": _scalar(done_sum), "timeout": _scalar(timeout_sum), "elapsed": elapsed,
                       "steps_per_s": transitions / elapsed, "finite": finite_value, "transition.valid": valid_value,
                       "contact_high_water": int(telemetry.get("contact_high_water", 0)),
+                      "ncollision_high_water": int(telemetry.get("ncollision_high_water", 0)),
                       "constraint_high_water": int(telemetry.get("constraint_high_water", 0)),
                       "capacity": {key: telemetry[key] for key in telemetry if "capacity" in key or "buffer_shape" in key}}
             if completed_updates % int(cfg.log_interval_updates) == 0 or checkpoint_due:

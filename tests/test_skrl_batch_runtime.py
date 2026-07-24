@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from sim.dexhandrl.skrl_batch_runtime import DLPackBridge, run_batch_ppo
+from sim.dexhandrl.skrl_batch_runtime import DLPackBridge, _capacity_guard, run_batch_ppo
 from sim.dexhandrl.skrl_train import SkrlLauncherConfig, build_arg_parser
 
 
@@ -56,8 +56,10 @@ class _Env:
 
     def telemetry(self):
         return {"requested_global_contact_capacity": 320,
+                "requested_ccd_capacity": 192,
                 "requested_per_world_constraint_capacity": 512,
                 "actual_contact_buffer_shape": (100, 4), "contact_high_water": 2,
+                "actual_ccd_capacity": 192, "actual_ncollision_shape": (1,), "ncollision_high_water": 2,
                 "actual_constraint_buffer_shape": (2, 100), "constraint_high_water": 2}
 
 
@@ -87,6 +89,12 @@ class _Agent:
 @dataclass
 class _ModelConfig:
     name: str = "fake"
+
+
+def test_capacity_guard_fails_at_eighty_percent_of_actual_ccd_capacity():
+    with __import__("pytest").raises(RuntimeError, match="CCD buffer reached 80%"):
+        _capacity_guard({"actual_ccd_capacity": 64, "ncollision_high_water": 52})
+    _capacity_guard({"actual_ccd_capacity": 64, "ncollision_high_water": 51})
 
 
 def test_production_bridge_accepts_cuda_labeled_jax_buffers():
@@ -194,6 +202,8 @@ def test_progress_honors_log_cadence_but_emits_checkpoint_boundary(tmp_path):
     assert [record["update"] for record in records] == [2, 3]
     assert all(record["contact_high_water"] == 2 and record["constraint_high_water"] == 2 for record in records)
     assert all(record["capacity"]["requested_global_contact_capacity"] == 320 for record in records)
+    assert all(record["capacity"]["requested_ccd_capacity"] == 192 for record in records)
+    assert all(record["capacity"]["actual_ccd_capacity"] == 192 for record in records)
     assert all(record["capacity"]["requested_per_world_constraint_capacity"] == 512 for record in records)
 
 
