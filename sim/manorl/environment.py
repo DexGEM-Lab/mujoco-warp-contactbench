@@ -1145,11 +1145,14 @@ class MjxWarpPhysicalProducer:
     def device_contact_reduction(self, data: Any) -> Any:
         """Return compact JAX contact reductions without a host buffer copy."""
 
-        if set(self.hand_sides) not in ({"right"}, {"right", "left"}) or self.active_object_geom_ids is not None:
+        per_world_object_sets = self.active_object_geom_ids is not None
+        unified_object_sets = per_world_object_sets and hasattr(self, "object_types")
+        if set(self.hand_sides) not in ({"right"}, {"right", "left"}) or (
+            per_world_object_sets and not unified_object_sets
+        ):
             raise RuntimeError(
-                "device contact reduction supports homogeneous right-policy worlds with "
-                "a right-only or right-left compiled model; per-world object sets require "
-                "the host/debug path"
+                "device contact reduction supports homogeneous or unified right-policy worlds "
+                "with a right-only or right-left compiled model"
             )
         impl = data._impl
         required = (
@@ -1533,12 +1536,13 @@ class MujocoManoEnvironment:
         object_types = {parts[0] for parts in identity_parts}
         if config.device_transition and (
             self.hand_layout.controlled_sides != ("right",)
-            or len(object_types) != 1
+            or (len(object_types) != 1 and not config.unified_object_batch)
             or self.action_dim != JOINT_DOF
             or self.observation_dim != 480
         ):
             raise ValueError(
-                "device_transition supports a homogeneous right-policy batch with 28D actions and 480D observations"
+                "device_transition supports a homogeneous or unified right-policy batch "
+                "with 28D actions and 480D observations"
             )
         if config.device_contact_decode and len(object_types) != 1:
             raise ValueError(
@@ -2611,11 +2615,21 @@ class MujocoManoEnvironment:
         device_indices = self.jax.device_put(indices, self.device)
         device_next_indices = self.jax.device_put(next_indices, self.device)
         world = self.jp.arange(self.config.num_envs)
+        object_body_id = (
+            self.producer.active_object_body_ids
+            if getattr(self.producer, "active_object_geom_ids", None) is not None
+            else self.producer.object_body_id
+        )
+        object_qvel_address = (
+            self.producer.active_object_qvel_addresses
+            if getattr(self.producer, "active_object_geom_ids", None) is not None
+            else self.producer.object_qvel_address
+        )
         physical = extract_mjx_physical_features(
             qpos=self.data.qpos, qvel=self.data.qvel, xpos=self.data.xpos, xquat=self.data.xquat,
             hand_qpos_start=self.producer.hand_qpos_slices["right"].start,
-            hand_dof=JOINT_DOF, object_body_id=self.producer.object_body_id,
-            object_qvel_address=self.producer.object_qvel_address,
+            hand_dof=JOINT_DOF, object_body_id=object_body_id,
+            object_qvel_address=object_qvel_address,
             keypoint_body_ids=tuple(self.producer.keypoint_body_ids),
             fingertip_keypoint_ids=tuple(KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES),
             fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS,

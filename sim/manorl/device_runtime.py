@@ -204,8 +204,8 @@ def extract_mjx_physical_features(
     xquat: Any,
     hand_qpos_start: int,
     hand_dof: int,
-    object_body_id: int,
-    object_qvel_address: int,
+    object_body_id: Any,
+    object_qvel_address: Any,
     keypoint_body_ids: Sequence[int],
     fingertip_keypoint_ids: Sequence[int],
     fingertip_local_offsets: Any,
@@ -236,13 +236,41 @@ def extract_mjx_physical_features(
     batch = qpos.shape[0]
     if qvel.shape[0] != batch or xpos.shape[:2] != xquat.shape[:2] or xpos.shape[0] != batch:
         raise ValueError("MJX state batch dimensions must agree")
-    if not 0 <= object_body_id < xpos.shape[1] or object_qvel_address < 0:
-        raise ValueError("object body/qvel metadata is outside MJX state")
-    if hand_qpos_start < 0 or hand_qpos_start + hand_dof > qpos.shape[1] or object_qvel_address + 3 > qvel.shape[1]:
-        raise ValueError("hand/object state metadata is outside MJX state")
+    body_ids_host = np.asarray(object_body_id, dtype=np.int32)
+    qvel_addresses_host = np.asarray(object_qvel_address, dtype=np.int32)
+    if body_ids_host.ndim == 0 and qvel_addresses_host.ndim == 0:
+        body_id = int(body_ids_host)
+        qvel_address = int(qvel_addresses_host)
+        if not 0 <= body_id < xpos.shape[1] or qvel_address < 0:
+            raise ValueError("object body/qvel metadata is outside MJX state")
+        if qvel_address + 3 > qvel.shape[1]:
+            raise ValueError("object qvel metadata is outside MJX state")
+        object_position = xpos[:, body_id]
+        object_quaternion = xquat[:, body_id]
+        object_velocity = qvel[:, qvel_address : qvel_address + 3]
+    else:
+        if body_ids_host.shape != (batch,) or qvel_addresses_host.shape != (batch,):
+            raise ValueError("batched object body/qvel metadata must have shape (batch,)")
+        if (
+            np.any(body_ids_host < 0)
+            or np.any(body_ids_host >= xpos.shape[1])
+            or np.any(qvel_addresses_host < 0)
+            or np.any(qvel_addresses_host + 3 > qvel.shape[1])
+        ):
+            raise ValueError("batched object body/qvel metadata is outside MJX state")
+        world = jp.arange(batch)
+        body_ids = jp.asarray(body_ids_host)
+        qvel_addresses = jp.asarray(qvel_addresses_host)
+        object_position = xpos[world, body_ids]
+        object_quaternion = xquat[world, body_ids]
+        object_velocity = qvel[
+            world[:, None], qvel_addresses[:, None] + jp.arange(3)[None, :]
+        ]
+    if hand_qpos_start < 0 or hand_qpos_start + hand_dof > qpos.shape[1]:
+        raise ValueError("hand state metadata is outside MJX state")
     keypoints = xpos[:, ids]
     keypoint_quat, keypoint_valid = _normalize_wxyz_to_xyzw(xquat[:, ids])
-    object_quat, object_valid = _normalize_wxyz_to_xyzw(xquat[:, object_body_id])
+    object_quat, object_valid = _normalize_wxyz_to_xyzw(object_quaternion)
     hand_quat = keypoint_quat[:, 0]
     tips_world = keypoints[:, tips] + _quat_rotate_xyzw(keypoint_quat[:, tips], offsets[None])
     features = DevicePhysicalFeatures(
@@ -250,9 +278,9 @@ def extract_mjx_physical_features(
         keypoints[:, 0],
         hand_quat,
         keypoint_quat,
-        xpos[:, object_body_id],
+        object_position,
         object_quat,
-        qvel[:, object_qvel_address : object_qvel_address + 3],
+        object_velocity,
         keypoints,
         tips_world,
         jp.all(keypoint_valid) & object_valid & jp.all(jp.isfinite(qpos)) & jp.all(jp.isfinite(qvel)),

@@ -98,6 +98,38 @@ def test_jitted_physical_feature_gather_normalizes_xyzw_and_keeps_only_required_
     assert bool(actual.valid)
 
 
+def test_jitted_physical_feature_gather_supports_per_world_object_metadata() -> None:
+    rng = np.random.default_rng(53)
+    batch, nq, nv, nbody = 4, 42, 40, 28
+    qpos = rng.normal(size=(batch, nq)).astype(np.float32)
+    qvel = rng.normal(size=(batch, nv)).astype(np.float32)
+    xpos = rng.normal(size=(batch, nbody, 3)).astype(np.float32)
+    xquat = rng.normal(size=(batch, nbody, 4)).astype(np.float32)
+    body_ids = np.asarray([20, 21, 22, 23], dtype=np.int32)
+    qvel_addresses = np.asarray([25, 28, 31, 34], dtype=np.int32)
+    keypoint_ids = tuple(range(2, 18))
+    offsets = np.zeros((5, 3), dtype=np.float32)
+    fn = jax.jit(lambda q, v, p, r: extract_mjx_physical_features(
+        qpos=q, qvel=v, xpos=p, xquat=r,
+        hand_qpos_start=1, hand_dof=28, object_body_id=body_ids,
+        object_qvel_address=qvel_addresses, keypoint_body_ids=keypoint_ids,
+        fingertip_keypoint_ids=(0, 3, 6, 9, 12), fingertip_local_offsets=offsets,
+    ))
+
+    actual = fn(qpos, qvel, xpos, xquat)
+    world = np.arange(batch)
+    np.testing.assert_allclose(np.asarray(actual.object_position), xpos[world, body_ids], atol=2e-6)
+    np.testing.assert_allclose(
+        np.asarray(actual.object_linear_velocity),
+        np.stack([qvel[index, address : address + 3] for index, address in enumerate(qvel_addresses)]),
+        atol=2e-6,
+    )
+    expected_quat = xquat[world, body_ids][:, (1, 2, 3, 0)]
+    expected_quat /= np.linalg.norm(expected_quat, axis=1, keepdims=True)
+    np.testing.assert_allclose(np.asarray(actual.object_orientation_xyzw), expected_quat, atol=2e-6)
+    assert bool(actual.valid)
+
+
 def test_jitted_28dof_observation_matches_numpy_at_contact_thresholds_and_partial_rows() -> None:
     rng = np.random.default_rng(98)
     batch = 4
