@@ -1953,7 +1953,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     evaluation_num_envs = (
         _full_coverage_evaluation_num_envs(budget, trajectories)
         if budget.evaluation_enabled
-        else 0
+        else None
     )
     assigned_object_types = {
         item.identity.identity.split("_")[0]
@@ -2006,6 +2006,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         load_skrl_checkpoint(runtime.agent, resume_checkpoint)
     trajectory_assignments = _trajectory_assignments(trajectories)
     if budget.evaluation_enabled:
+        if evaluation_num_envs is None:  # pragma: no cover - resolved above
+            raise RuntimeError("enabled evaluation requires a positive environment count")
         (
             evaluation_runtime,
             evaluation_ppo_config,
@@ -2503,8 +2505,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.warp_ccd_contacts_per_world is None:
             parser.error("--warp-persistent-ccd-workspace requires --warp-ccd-contacts-per-world")
     evaluation_num_envs_maximum = min(args.num_envs, 128)
-    if args.evaluation_num_envs is not None and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum:
-        parser.error(f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided")
+    if (
+        args.evaluation_enabled
+        and args.evaluation_num_envs is not None
+        and not 1 <= args.evaluation_num_envs <= evaluation_num_envs_maximum
+    ):
+        parser.error(
+            f"evaluation-num-envs must be within 1..{evaluation_num_envs_maximum} when provided"
+        )
     resolved_minibatch_size = TrainingBudget(
         num_envs=args.num_envs, minibatch_size=args.minibatch_size
     ).resolved_minibatch_size

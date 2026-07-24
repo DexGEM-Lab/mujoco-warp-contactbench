@@ -304,10 +304,12 @@ def test_training_cli_parses_pair_assignment_cycle(
         "--pair-assignment-cycle", "2",
         "--resume-checkpoint", str(resume),
         "--evaluation-enabled", "false",
+        "--evaluation-num-envs", "0",
     ]) == 0
     assert captured[0].pair_assignment_cycle == 2
     assert captured[0].resume_checkpoint == str(resume.resolve())
     assert captured[0].evaluation_enabled is False
+    assert captured[0].evaluation_num_envs == 0
 
 
 def test_training_cli_enables_narrow_device_transition(
@@ -1330,6 +1332,7 @@ def test_run_evaluation_lifecycle_and_native_checkpoint_boundaries(
     constructions: list[tuple[str, int, int, bool]] = []
     loads: list[tuple[str, str]] = []
     modes: list[tuple[str, str]] = []
+    saved_runtime_configs: list[dict[str, object]] = []
     initial_runtime_ref: list[weakref.ReferenceType[object]] = []
     training_runtime_ref: list[weakref.ReferenceType[object]] = []
     training_physical_ref: list[weakref.ReferenceType[object]] = []
@@ -1385,7 +1388,8 @@ def test_run_evaluation_lifecycle_and_native_checkpoint_boundaries(
     def assignments(trajectory_batch: SimpleNamespace) -> list[dict[str, object]]:
         return [{"env_id": index, "identity": f"prefix-{index}"} for index in range(trajectory_batch.num_envs)]
 
-    def save(_: object, path: Path, **__: object) -> Path:
+    def save(_: object, path: Path, **kwargs: object) -> Path:
+        saved_runtime_configs.append(kwargs["runtime_config"])
         return path
 
     def evaluate(runtime: Runtime, mode: str) -> object:
@@ -1423,6 +1427,7 @@ def test_run_evaluation_lifecycle_and_native_checkpoint_boundaries(
             minibatch_size=4096,
             evaluation_num_envs=128,
             evaluation_enabled=evaluation_enabled,
+            pair_assignment_cycle=2,
             resume_checkpoint=str(tmp_path / "resume.pt"),
             device_resident_controls=True,
             device_transition=True,
@@ -1455,11 +1460,17 @@ def test_run_evaluation_lifecycle_and_native_checkpoint_boundaries(
         assert len(loads) == 2 and loads[1][0] == "training"
         assert loads[1][1].startswith(".initial-")
         assert result["trajectory_selection"]["evaluation_assignments"] == []
-        assert result["budget"]["evaluation_num_envs"] == 0
+        assert result["budget"]["evaluation_num_envs"] is None
         assert result["evaluation"]["status"] == "skipped"
         assert result["trained"] is None and result["acceptance"]["accepted"] is None
         assert result["artifacts"]["evaluation_trace"] is None
     assert result["budget"]["device_transition"] is True
+    assert result["trajectory_selection"]["pair_assignment_cycle"] == 2
+    assert saved_runtime_configs
+    assert all(
+        config["trajectory_selection"]["pair_assignment_cycle"] == 2
+        for config in saved_runtime_configs
+    )
     assert result["environment"]["device_transition"] is True
     assert result["learning_starts"] == 0
     assert not list((tmp_path / "run").glob(".initial-*"))
