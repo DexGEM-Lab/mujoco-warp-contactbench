@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -145,6 +147,14 @@ class SkrlLauncherConfig:
         object.__setattr__(self, "timesteps", resolved_timesteps)
         for name, value in physics_legacy_aliases(physics).items():
             object.__setattr__(self, name, value)
+
+
+def _seed_launcher(seed: int) -> None:
+    """Seed all Torch-side and host RNGs before training construction."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -781,6 +791,7 @@ def main(argv: list[str] | None = None) -> None:
         log_interval_updates=max(int(args.log_interval_updates), 1),
     )
 
+    _seed_launcher(launcher_cfg.seed)
     specs = _resolve_trajectory_specs(launcher_cfg)
     if launcher_cfg.action == "all":
         if launcher_cfg.mode in {"eval", "rollout"}:

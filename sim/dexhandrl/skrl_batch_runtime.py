@@ -232,7 +232,11 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
             telemetry = env.telemetry()
             _capacity_guard(telemetry)
             elapsed = max(time.perf_counter() - started, 1e-9)
-            checkpoint_due = completed_updates % int(cfg.checkpoint_interval_updates) == 0 or completed_updates == int(cfg.updates)
+            checkpoint_due = (
+                completed_updates == 1
+                or completed_updates % int(cfg.checkpoint_interval_updates) == 0
+                or completed_updates == int(cfg.updates)
+            )
             record = {"update": completed_updates, "transitions": transitions,
                       "reward_mean": _scalar(reward_sum / (int(cfg.rollouts) * int(env.num_envs))),
                       "done": _scalar(done_sum), "timeout": _scalar(timeout_sum), "elapsed": elapsed,

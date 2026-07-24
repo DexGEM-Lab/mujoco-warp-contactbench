@@ -199,7 +199,8 @@ def test_progress_honors_log_cadence_but_emits_checkpoint_boundary(tmp_path):
     run_batch_ppo(env, agent, cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
 
     records = [__import__("json").loads(line) for line in (tmp_path / "progress.jsonl").read_text().splitlines()]
-    assert [record["update"] for record in records] == [2, 3]
+    assert [record["update"] for record in records] == [1, 2, 3]
+    assert (tmp_path / "checkpoint-000001.pt").is_file()
     assert all(record["contact_high_water"] == 2 and record["constraint_high_water"] == 2 for record in records)
     assert all(record["capacity"]["requested_global_contact_capacity"] == 320 for record in records)
     assert all(record["capacity"]["requested_ccd_capacity"] == 192 for record in records)

@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from types import SimpleNamespace
+import random
 
+import numpy as np
 import pytest
+import torch
 
 import sim.dexhandrl.skrl_train as skrl_train
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, DexHandServoConfig
@@ -39,6 +42,22 @@ def test_cli_defaults_match_isaac_ppo_configuration() -> None:
     assert args.finger_kv == defaults.finger_kv == 0.0
     assert args.naconmax == defaults.naconmax == 8192
     assert args.njmax == defaults.njmax == 8192
+
+
+def test_launcher_seed_repeats_host_and_torch_rngs_and_seeds_cuda(monkeypatch) -> None:
+    cuda_seeds: list[int] = []
+    monkeypatch.setattr(skrl_train.torch.cuda, "manual_seed_all", cuda_seeds.append)
+
+    skrl_train._seed_launcher(17)
+    first = (random.random(), float(np.random.random()), torch.rand(4))
+    skrl_train._seed_launcher(17)
+    second = (random.random(), float(np.random.random()), torch.rand(4))
+
+    assert first[:2] == second[:2]
+    torch.testing.assert_close(first[2], second[2])
+    # torch.manual_seed also forwards to CUDA; the explicit CUDA call keeps the
+    # launcher contract visible rather than relying on that implementation detail.
+    assert cuda_seeds == [17, 17, 17, 17]
 
 
 def test_env_defaults_match_reference_pd_baseline() -> None:
