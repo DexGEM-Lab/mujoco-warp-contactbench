@@ -16,6 +16,7 @@ from sim.manorl.device_runtime import (
     build_device_observation_28,
     extract_mjx_physical_features,
     jax_to_torch_cuda,
+    pad_object_support_points_for_device,
     reduce_warp_contacts,
     reduce_warp_contacts_for_right_policy,
     torch_to_jax_cuda,
@@ -128,6 +129,22 @@ def test_jitted_physical_feature_gather_supports_per_world_object_metadata() -> 
     expected_quat /= np.linalg.norm(expected_quat, axis=1, keepdims=True)
     np.testing.assert_allclose(np.asarray(actual.object_orientation_xyzw), expected_quat, atol=2e-6)
     assert bool(actual.valid)
+
+
+def test_device_support_point_padding_repeats_real_tail_without_truncation() -> None:
+    rows = (
+        np.asarray([[0.0, 0.0, -2.0], [1.0, 0.0, 3.0]]),
+        np.asarray([[2.0, 0.0, -4.0]]),
+        np.asarray([[3.0, 0.0, 1.0], [4.0, 0.0, -1.0], [5.0, 0.0, 2.0]]),
+    )
+
+    padded = pad_object_support_points_for_device(rows, batch=3)
+
+    assert padded.shape == (3, 3, 3)
+    np.testing.assert_array_equal(padded[0, 2], rows[0][-1])
+    np.testing.assert_array_equal(padded[1, 1:], np.repeat(rows[1], 2, axis=0))
+    np.testing.assert_array_equal(padded[2], rows[2])
+    np.testing.assert_array_equal(padded[..., 2].min(axis=1), [-2.0, -4.0, -1.0])
 
 
 def test_jitted_28dof_observation_matches_numpy_at_contact_thresholds_and_partial_rows() -> None:

@@ -288,6 +288,50 @@ def extract_mjx_physical_features(
     return features
 
 
+def pad_object_support_points_for_device(
+    object_support_points: Any, *, batch: int
+) -> np.ndarray:
+    """Pad per-world support points without changing minimum-clearance semantics.
+
+    Host observation construction repeats each row's final real point to the
+    largest row length. Repeating an existing point preserves both object and
+    target minimum-z reductions while producing one dense device array.
+    """
+
+    if not isinstance(batch, int) or isinstance(batch, bool) or batch < 1:
+        raise ValueError("batch must be a positive integer")
+    if isinstance(object_support_points, (tuple, list)):
+        if len(object_support_points) != batch:
+            raise ValueError("per-world object_support_points must match the device batch")
+        rows = [np.asarray(value, dtype=np.float64) for value in object_support_points]
+    else:
+        support = np.asarray(object_support_points, dtype=np.float64)
+        if support.ndim == 2:
+            rows = [support] * batch
+        elif support.ndim == 3 and support.shape[0] == batch:
+            rows = [support[index] for index in range(batch)]
+        else:
+            raise ValueError("object_support_points must be (points, 3) or per-world rows")
+    if any(
+        row.ndim != 2
+        or row.shape[1:] != (3,)
+        or len(row) == 0
+        or not np.all(np.isfinite(row))
+        for row in rows
+    ):
+        raise ValueError("object_support_points must contain non-empty finite (points, 3) arrays")
+    maximum = max(len(row) for row in rows)
+    return np.stack(
+        [
+            np.concatenate(
+                (row, np.repeat(row[-1:], maximum - len(row), axis=0)), axis=0
+            )
+            for row in rows
+        ],
+        axis=0,
+    )
+
+
 def build_device_observation_28(
     *,
     physical: DevicePhysicalFeatures,

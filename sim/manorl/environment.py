@@ -33,6 +33,7 @@ from sim.manorl.device_runtime import (
     check_device_termination,
     compute_device_reward_28,
     extract_mjx_physical_features,
+    pad_object_support_points_for_device,
     reduce_warp_contacts,
     reduce_warp_contacts_for_right_policy,
 )
@@ -2609,7 +2610,12 @@ class MujocoManoEnvironment:
             self._device_object_geometry = self.jax.device_put(
                 np.broadcast_to(self.object_geometry, (self.config.num_envs, 12)), self.device
             )
-            self._device_object_support_points = self.jax.device_put(self.object_support_points, self.device)
+            self._device_object_support_points = self.jax.device_put(
+                pad_object_support_points_for_device(
+                    self.object_support_points, batch=self.config.num_envs
+                ),
+                self.device,
+            )
         reference_pos = self._device_reference_object_pos
         reference_quat = self._device_reference_object_quat
         device_indices = self.jax.device_put(indices, self.device)
