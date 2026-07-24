@@ -2605,52 +2605,49 @@ class MujocoManoEnvironment:
             resolved = resolved.at[:, wrist].set(current_qpos[:, wrist] + wrist_delta)
         return self.jp.clip(resolved, self._joint_lower_device, self._joint_upper_device)
 
-    def _device_transition_outputs(
-        self,
-        *,
-        pending_reset: NDArray[np.bool_],
-        prior_progress: NDArray[np.int64],
-        prior_steps: NDArray[np.int64],
-        prior_returns: NDArray[np.float64],
-        prior_control_call: int,
-    ) -> DeviceTransitionBatch:
-        """Complete the narrow post-physics transition without host policy egress.
+    def _initialize_device_transition_kernel(self) -> None:
+        """Create one compiled post-physics transition over persistent device inputs."""
 
-        The preceding delayed reset has already replaced physics state and reset
-        host-owned templates/residuals. Policy observation, reward, and reset
-        remain JAX CUDA arrays. Compact host telemetry is deliberately retained
-        for existing callbacks and metrics, but is not reused as policy egress.
-        """
-
-        indices = self._target_indices()
-        next_indices = np.minimum(indices + 5, self.trajectory_lengths - 1)
-        # Reference tables are immutable for this homogeneous environment.
-        # Keep their sole device copy across transitions; reset changes indices,
-        # never the source trajectories.
-        if not hasattr(self, "_device_reference_object_pos"):
-            self._device_reference_object_pos = self.jax.device_put(self.reference_object_pos, self.device)
-            self._device_reference_object_quat = self.jax.device_put(self.reference_object_quat_xyzw, self.device)
-            self._device_trajectory_lengths = self.jax.device_put(self.trajectory_lengths, self.device)
-            self._device_contact_start_frames = self.jax.device_put(self.contact_start_frames, self.device)
-            self._device_contact_end_frames = self.jax.device_put(self.contact_end_frames, self.device)
-            self._device_expected_contact_mask = self.jax.device_put(self.expected_contact_mask, self.device)
-            self._device_expected_contact_weights = self.jax.device_put(self.expected_contact_weights, self.device)
-            self._device_active_joint_mask = self.jax.device_put(self.active_joint_mask, self.device)
-            self._device_action_ids = self.jax.device_put(self.action_ids, self.device)
-            self._device_object_geometry = self.jax.device_put(
-                np.broadcast_to(self.object_geometry, (self.config.num_envs, 12)), self.device
-            )
-            self._device_object_support_points = self.jax.device_put(
-                pad_object_support_points_for_device(
-                    self.object_support_points, batch=self.config.num_envs
-                ),
-                self.device,
-            )
-        reference_pos = self._device_reference_object_pos
-        reference_quat = self._device_reference_object_quat
-        device_indices = self.jax.device_put(indices, self.device)
-        device_next_indices = self.jax.device_put(next_indices, self.device)
-        world = self.jp.arange(self.config.num_envs)
+        if hasattr(self, "_device_transition_fn"):
+            return
+        self._device_reference_object_pos = self.jax.device_put(
+            self.reference_object_pos, self.device
+        )
+        self._device_reference_object_quat = self.jax.device_put(
+            self.reference_object_quat_xyzw, self.device
+        )
+        self._device_trajectory_lengths = self.jax.device_put(
+            self.trajectory_lengths, self.device
+        )
+        self._device_contact_start_frames = self.jax.device_put(
+            self.contact_start_frames, self.device
+        )
+        self._device_contact_end_frames = self.jax.device_put(
+            self.contact_end_frames, self.device
+        )
+        self._device_expected_contact_mask = self.jax.device_put(
+            self.expected_contact_mask, self.device
+        )
+        self._device_expected_contact_weights = self.jax.device_put(
+            self.expected_contact_weights, self.device
+        )
+        self._device_active_joint_mask = self.jax.device_put(
+            self.active_joint_mask, self.device
+        )
+        self._device_action_ids = self.jax.device_put(self.action_ids, self.device)
+        self._device_object_geometry = self.jax.device_put(
+            np.broadcast_to(self.object_geometry, (self.config.num_envs, 12)),
+            self.device,
+        )
+        self._device_object_support_points = self.jax.device_put(
+            pad_object_support_points_for_device(
+                self.object_support_points, batch=self.config.num_envs
+            ),
+            self.device,
+        )
+        # Instantiate the pinned contact reducer before it is nested inside the
+        # outer JIT. Its ABI checks remain Python-side and execute exactly once.
+        self.producer.device_contact_reduction(self.data)
         object_body_id = (
             self.producer.active_object_body_ids
             if getattr(self.producer, "active_object_geom_ids", None) is not None
@@ -2661,48 +2658,137 @@ class MujocoManoEnvironment:
             if getattr(self.producer, "active_object_geom_ids", None) is not None
             else self.producer.object_qvel_address
         )
-        physical = extract_mjx_physical_features(
-            qpos=self.data.qpos, qvel=self.data.qvel, xpos=self.data.xpos, xquat=self.data.xquat,
-            hand_qpos_start=self.producer.hand_qpos_slices["right"].start,
-            hand_dof=JOINT_DOF, object_body_id=object_body_id,
-            object_qvel_address=object_qvel_address,
-            keypoint_body_ids=tuple(self.producer.keypoint_body_ids),
-            fingertip_keypoint_ids=tuple(KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES),
-            fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS,
-        )
-        contacts = self.producer.device_contact_reduction(self.data)
-        target_pos = reference_pos[world, device_indices]
-        target_quat = reference_quat[world, device_indices]
-        termination = check_device_termination(
-            object_position=physical.object_position, target_position=target_pos,
-            progress=self.jax.device_put(self.progress, self.device),
-            trajectory_lengths=self._device_trajectory_lengths,
-            early_mask=self.jax.device_put(early_phase_mask(
-                self.trajectory_steps, starts=np.zeros(self.config.num_envs, dtype=np.int64),
-                steps=self.config.compatibility.early_phase_steps,
-            ), self.device),
-            max_deviation_distance=self.config.max_deviation_distance,
-            deviation_penalty=self.config.deviation_penalty,
-        )
-        reward = compute_device_reward_28(
-            object_position=physical.object_position, target_object_position=target_pos,
-            object_orientation_xyzw=physical.object_orientation_xyzw,
-            target_object_orientation_xyzw=target_quat,
-            cumulative_offset=self.jax.device_put(self.cumulative_offset, self.device),
-            cumulative_joint_offset=self.jax.device_put(self.cumulative_joint_offset, self.device),
-            active_joint_mask=self._device_active_joint_mask,
-            hand_object_force_on_object_world_N=contacts.hand_object_forces,
-            expected_contact_mask=self._device_expected_contact_mask,
-            expected_contact_weights=self._device_expected_contact_weights,
-            object_linear_velocity=physical.object_linear_velocity,
-            trajectory_steps=self.jax.device_put(self.trajectory_steps, self.device),
-            contact_start_frames=self._device_contact_start_frames,
-            contact_end_frames=self._device_contact_end_frames,
-            rotation_disabled_mask=self.jp.zeros(self.config.num_envs, dtype=bool),
-            early_phase_starts=self.jp.zeros(self.config.num_envs, dtype=np.int64),
-            early_phase_steps=self.config.compatibility.early_phase_steps,
-            termination=termination, config=self.config.reward_config,
-        )
+        world = self.jp.arange(self.config.num_envs)
+
+        def transition(
+            data: Any,
+            indices: Any,
+            next_indices: Any,
+            progress: Any,
+            trajectory_steps: Any,
+            early_mask: Any,
+            cumulative_offset: Any,
+            cumulative_joint_offset: Any,
+            prior_progress: Any,
+            prior_steps: Any,
+            prior_returns: Any,
+            pending_reset: Any,
+            prior_control_call: Any,
+            point_cloud: Any,
+            point_scale: Any,
+        ) -> tuple[Any, ...]:
+            physical = extract_mjx_physical_features(
+                qpos=data.qpos,
+                qvel=data.qvel,
+                xpos=data.xpos,
+                xquat=data.xquat,
+                hand_qpos_start=self.producer.hand_qpos_slices["right"].start,
+                hand_dof=JOINT_DOF,
+                object_body_id=object_body_id,
+                object_qvel_address=object_qvel_address,
+                keypoint_body_ids=tuple(self.producer.keypoint_body_ids),
+                fingertip_keypoint_ids=tuple(
+                    KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES
+                ),
+                fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS,
+            )
+            contacts = self.producer.device_contact_reduction(data)
+            target_pos = self._device_reference_object_pos[world, indices]
+            target_quat = self._device_reference_object_quat[world, indices]
+            termination = check_device_termination(
+                object_position=physical.object_position,
+                target_position=target_pos,
+                progress=progress,
+                trajectory_lengths=self._device_trajectory_lengths,
+                early_mask=early_mask,
+                max_deviation_distance=self.config.max_deviation_distance,
+                deviation_penalty=self.config.deviation_penalty,
+            )
+            reward = compute_device_reward_28(
+                object_position=physical.object_position,
+                target_object_position=target_pos,
+                object_orientation_xyzw=physical.object_orientation_xyzw,
+                target_object_orientation_xyzw=target_quat,
+                cumulative_offset=cumulative_offset,
+                cumulative_joint_offset=cumulative_joint_offset,
+                active_joint_mask=self._device_active_joint_mask,
+                hand_object_force_on_object_world_N=contacts.hand_object_forces,
+                expected_contact_mask=self._device_expected_contact_mask,
+                expected_contact_weights=self._device_expected_contact_weights,
+                object_linear_velocity=physical.object_linear_velocity,
+                trajectory_steps=trajectory_steps,
+                contact_start_frames=self._device_contact_start_frames,
+                contact_end_frames=self._device_contact_end_frames,
+                rotation_disabled_mask=self.jp.zeros(self.config.num_envs, dtype=bool),
+                early_phase_starts=self.jp.zeros(self.config.num_envs, dtype=self.jp.int32),
+                early_phase_steps=self.config.compatibility.early_phase_steps,
+                termination=termination,
+                config=self.config.reward_config,
+            )
+            raw_observation, observation_valid = build_device_observation_28(
+                physical=physical,
+                hand_keypoint_contact_forces=contacts.keypoint_forces,
+                target_object_position=target_pos,
+                target_object_orientation_xyzw=target_quat,
+                target_object_pos_next_5=self._device_reference_object_pos[
+                    world, next_indices
+                ],
+                cumulative_offset=cumulative_offset,
+                cumulative_joint_offset=cumulative_joint_offset,
+                point_cloud_local=point_cloud,
+                point_cloud_scale=point_scale,
+                object_geometry=self._device_object_geometry,
+                expected_contact_mask=self._device_expected_contact_mask,
+                action_ids=self._device_action_ids,
+                object_support_points=self._device_object_support_points,
+                table_surface_height=FLOOR_TOP_Z,
+                mano_dof_lower=self._joint_lower_device[:JOINT_DOF],
+                mano_dof_upper=self._joint_upper_device[:JOINT_DOF],
+            )
+            counters = advance_device_task_counters(
+                progress=prior_progress,
+                trajectory_steps=prior_steps,
+                episode_returns=prior_returns,
+                pending_reset=pending_reset,
+                reward_total=reward.total,
+                next_reset=termination.reset,
+                control_call=prior_control_call,
+            )
+            valid = (
+                physical.valid
+                & contacts.valid
+                & termination.valid
+                & reward.valid
+                & observation_valid
+            )
+            return (
+                self.jp.clip(raw_observation, -5.0, 5.0).astype(self.jp.float32),
+                self.jp.asarray(reward.total, dtype=self.jp.float32),
+                self.jp.asarray(termination.reset, dtype=bool),
+                self.jp.asarray(termination.reason_code, dtype=self.jp.int32),
+                self.jp.asarray(termination.deviation_reset, dtype=bool),
+                self.jp.asarray(valid, dtype=bool),
+                reward,
+                termination,
+                counters,
+            )
+
+        self._device_transition_fn = self.jax.jit(transition)
+
+    def _device_transition_outputs(
+        self,
+        *,
+        pending_reset: NDArray[np.bool_],
+        prior_progress: NDArray[np.int64],
+        prior_steps: NDArray[np.int64],
+        prior_returns: NDArray[np.float64],
+        prior_control_call: int,
+    ) -> DeviceTransitionBatch:
+        """Complete one fused post-physics transition with device policy egress."""
+
+        self._initialize_device_transition_kernel()
+        indices = self._target_indices()
+        next_indices = np.minimum(indices + 5, self.trajectory_lengths - 1)
         template = self._point_template()
         point_cloud = np.asarray(template.local_points, dtype=np.float64)
         point_scale = (
@@ -2710,61 +2796,102 @@ class MujocoManoEnvironment:
             if template.normalized and template.scale is not None
             else np.ones(3, dtype=np.float64)
         )
-        raw_observation, observation_valid = build_device_observation_28(
-            physical=physical, hand_keypoint_contact_forces=contacts.keypoint_forces,
-            target_object_position=target_pos, target_object_orientation_xyzw=target_quat,
-            target_object_pos_next_5=reference_pos[world, device_next_indices],
-            cumulative_offset=self.jax.device_put(self.cumulative_offset, self.device),
-            cumulative_joint_offset=self.jax.device_put(self.cumulative_joint_offset, self.device),
-            point_cloud_local=self.jax.device_put(point_cloud, self.device),
-            point_cloud_scale=self.jax.device_put(point_scale, self.device),
-            object_geometry=self._device_object_geometry,
-            expected_contact_mask=self._device_expected_contact_mask,
-            action_ids=self._device_action_ids,
-            object_support_points=self._device_object_support_points,
-            table_surface_height=FLOOR_TOP_Z,
-            mano_dof_lower=self._joint_lower_device[:JOINT_DOF], mano_dof_upper=self._joint_upper_device[:JOINT_DOF],
+        early_mask = early_phase_mask(
+            self.trajectory_steps,
+            starts=np.zeros(self.config.num_envs, dtype=np.int64),
+            steps=self.config.compatibility.early_phase_steps,
         )
-        counters = advance_device_task_counters(
-            progress=self.jax.device_put(prior_progress, self.device),
-            trajectory_steps=self.jax.device_put(prior_steps, self.device),
-            episode_returns=self.jax.device_put(prior_returns, self.device),
-            pending_reset=self.jax.device_put(pending_reset, self.device), reward_total=reward.total,
-            next_reset=termination.reset, control_call=self.jp.asarray(prior_control_call, dtype=np.int64),
+        (
+            device_indices,
+            device_next_indices,
+            device_progress,
+            device_trajectory_steps,
+            device_early_mask,
+            device_cumulative_offset,
+            device_cumulative_joint_offset,
+            device_prior_progress,
+            device_prior_steps,
+            device_prior_returns,
+            device_pending_reset,
+            device_prior_control_call,
+            device_point_cloud,
+            device_point_scale,
+        ) = self.jax.device_put(
+            (
+                indices,
+                next_indices,
+                self.progress,
+                self.trajectory_steps,
+                early_mask,
+                self.cumulative_offset,
+                self.cumulative_joint_offset,
+                prior_progress,
+                prior_steps,
+                prior_returns,
+                pending_reset,
+                np.asarray(prior_control_call, dtype=np.int32),
+                point_cloud,
+                point_scale,
+            ),
+            self.device,
         )
-        valid = physical.valid & contacts.valid & termination.valid & reward.valid & observation_valid
-
-        # Batch all device→host transfers into 4 sync points instead of ~30.
-        # jax.device_get on pytrees (NamedTuples) materializes all leaves in
-        # one transfer, eliminating per-field GPU synchronization overhead.
-        host_valid = self.jax.device_get(valid)
-        host_reward = self.jax.device_get(reward)
-        host_termination = self.jax.device_get(termination)
-        host_counters = self.jax.device_get(counters)
-
+        (
+            policy_observation,
+            policy_reward,
+            policy_reset,
+            reason_code,
+            deviation_reset,
+            valid,
+            reward,
+            termination,
+            counters,
+        ) = self._device_transition_fn(
+            self.data,
+            device_indices,
+            device_next_indices,
+            device_progress,
+            device_trajectory_steps,
+            device_early_mask,
+            device_cumulative_offset,
+            device_cumulative_joint_offset,
+            device_prior_progress,
+            device_prior_steps,
+            device_prior_returns,
+            device_pending_reset,
+            device_prior_control_call,
+            device_point_cloud,
+            device_point_scale,
+        )
+        host_valid, host_reward, host_termination, host_counters = self.jax.device_get(
+            (valid, reward, termination, counters)
+        )
         if not bool(host_valid):
-            raise RuntimeError("device_transition rejected non-finite or invalid transition inputs")
-
-        policy_observation = self.jp.clip(raw_observation, -5.0, 5.0).astype(self.jp.float32)
-        policy_reward = self.jp.asarray(reward.total, dtype=self.jp.float32)
-        policy_reset = self.jp.asarray(termination.reset, dtype=bool)
-        # JAX-to-NumPy conversion can yield a read-only view.  These compact
-        # counters cross back into host-owned task state and are subsequently
-        # updated by indexed delayed resets, so retain writable ownership.
+            raise RuntimeError(
+                "device_transition rejected non-finite or invalid transition inputs"
+            )
+        # These compact counters cross back into host-owned lifecycle state and
+        # are subsequently mutated by delayed indexed resets.
         self.progress = np.asarray(host_counters.progress, dtype=np.int64).copy()
-        self.trajectory_steps = np.asarray(host_counters.trajectory_steps, dtype=np.int64).copy()
-        self.episode_returns = np.asarray(host_counters.episode_returns, dtype=np.float64).copy()
+        self.trajectory_steps = np.asarray(
+            host_counters.trajectory_steps, dtype=np.int64
+        ).copy()
+        self.episode_returns = np.asarray(
+            host_counters.episode_returns, dtype=np.float64
+        ).copy()
         self.reset_mask = np.asarray(host_counters.reset_mask, dtype=bool).copy()
-        if not all(array.flags.writeable for array in (
-            self.progress, self.trajectory_steps, self.episode_returns, self.reset_mask,
-        )):
+        if not all(
+            array.flags.writeable
+            for array in (
+                self.progress,
+                self.trajectory_steps,
+                self.episode_returns,
+                self.reset_mask,
+            )
+        ):
             raise RuntimeError("device transition counters must be writable host arrays")
         self.control_call = int(host_counters.control_call)
         self.last_physical = None
         self.last_observation = None
-        # These compact vectors already cross the Gym boundary.  Materialize
-        # the complete diagnostics contract from kernel outputs so training
-        # telemetry observes the reward actually used for this transition.
         self.last_reward = RewardDiagnostics(
             total=np.asarray(host_reward.total, dtype=np.float64),
             distance_x=np.asarray(host_reward.distance_x, dtype=np.float64),
@@ -2784,21 +2911,25 @@ class MujocoManoEnvironment:
             object_speed=np.asarray(host_reward.object_speed, dtype=np.float64),
             survival=np.asarray(host_reward.survival, dtype=np.float64),
             early_phase=np.asarray(host_reward.early_phase, dtype=bool),
-            deviation_penalty=np.asarray(host_termination.deviation_penalty, dtype=np.float64),
+            deviation_penalty=np.asarray(
+                host_termination.deviation_penalty, dtype=np.float64
+            ),
         )
         self.last_termination = TerminationResult(
             reset=np.asarray(host_termination.reset, dtype=bool),
             deviation_reset=np.asarray(host_termination.deviation_reset, dtype=bool),
-            deviation_penalty=np.asarray(host_termination.deviation_penalty, dtype=np.float64),
+            deviation_penalty=np.asarray(
+                host_termination.deviation_penalty, dtype=np.float64
+            ),
         )
         self.last_transition = None
         return DeviceTransitionBatch(
             observation=policy_observation,
             reward=policy_reward,
             reset=policy_reset,
-            reason_code=self.jp.asarray(termination.reason_code, dtype=self.jp.int32),
-            deviation_reset=self.jp.asarray(termination.deviation_reset, dtype=bool),
-            valid=self.jp.asarray(valid, dtype=bool),
+            reason_code=reason_code,
+            deviation_reset=deviation_reset,
+            valid=valid,
         )
 
     def _build_observation(self, physical: PhysicalSnapshot) -> ObservationResult:
