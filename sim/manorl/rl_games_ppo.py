@@ -233,9 +233,7 @@ class RlGamesPPO(PPO):
 
         policy_loss_total = 0.0
         entropy_loss_total = 0.0
-        raw_entropy_total = 0.0
         value_loss_total = 0.0
-        raw_critic_loss_total = 0.0
         bounds_loss_total = 0.0
         bounds_loss_coef = float(getattr(self.cfg, "bounds_loss_coef", 0.0))
         exact_kls: list[float] = []
@@ -295,14 +293,13 @@ class RlGamesPPO(PPO):
                             (torch.exp(log_ratio) - 1.0) - log_ratio
                         ).mean()
 
-                    # Gym telemetry reports entropy itself, independent of its
-                    # objective coefficient. Keep the objective numerically
-                    # identical while retaining the raw positive quantity.
-                    raw_entropy = self.policy.get_entropy(role="policy").mean()
-                    entropy_loss: torch.Tensor | float = (
-                        -self.cfg.entropy_loss_scale * raw_entropy
-                        if self.cfg.entropy_loss_scale else 0.0
-                    )
+                    entropy_loss: torch.Tensor | float
+                    if self.cfg.entropy_loss_scale:
+                        entropy_loss = -self.cfg.entropy_loss_scale * self.policy.get_entropy(
+                            role="policy"
+                        ).mean()
+                    else:
+                        entropy_loss = 0.0
                     ratio = torch.exp(next_log_prob - sampled_log_prob)
                     surrogate = sampled_advantages * ratio
                     surrogate_clipped = sampled_advantages * torch.clip(
@@ -318,13 +315,12 @@ class RlGamesPPO(PPO):
                         bounds_loss = torch.zeros((), device=policy_loss.device)
 
                     predicted_values, _ = self.value.act(inputs, role="value")
-                    raw_critic_loss = rl_games_critic_loss(
+                    value_loss = self.cfg.value_loss_scale * rl_games_critic_loss(
                         predicted_values,
                         sampled_values,
                         sampled_returns,
                         value_clip=self.cfg.value_clip,
                     )
-                    value_loss = self.cfg.value_loss_scale * raw_critic_loss
 
                 self.optimizer.zero_grad()
                 total_loss = policy_loss + entropy_loss + value_loss + bounds_loss_coef * bounds_loss
@@ -375,9 +371,7 @@ class RlGamesPPO(PPO):
 
                 policy_loss_total += policy_loss.item()
                 value_loss_total += value_loss.item()
-                raw_critic_loss_total += raw_critic_loss.item()
                 bounds_loss_total += bounds_loss.item()
-                raw_entropy_total += raw_entropy.item()
                 if self.cfg.entropy_loss_scale:
                     entropy_loss_total += entropy_loss.item()
                 exact_kls.append(exact_kl.item())
@@ -389,9 +383,7 @@ class RlGamesPPO(PPO):
         denominator = float(completed_minibatches)
         self.track_data("Loss / Policy loss", policy_loss_total / denominator)
         self.track_data("Loss / Value loss", value_loss_total / denominator)
-        self.track_data("Gym / Critic loss", raw_critic_loss_total / denominator)
         self.track_data("Loss / Bounds loss", bounds_loss_total / denominator)
-        self.track_data("Gym / Raw entropy", raw_entropy_total / denominator)
         if self.cfg.entropy_loss_scale:
             self.track_data("Loss / Entropy loss", entropy_loss_total / denominator)
         self.track_data(

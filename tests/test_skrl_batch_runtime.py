@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from sim.dexhandrl.skrl_batch_runtime import DLPackBridge, _capacity_guard, run_batch_ppo
+from sim.dexhandrl.skrl_batch_runtime import DLPackBridge, _EpisodeTelemetry, _capacity_guard, _consume_tracking, run_batch_ppo
 from sim.dexhandrl.skrl_train import SkrlLauncherConfig, build_arg_parser
 
 
@@ -208,6 +208,7 @@ def test_progress_honors_log_cadence_but_emits_checkpoint_boundary(tmp_path):
     assert all(record["capacity"]["requested_ccd_capacity"] == 192 for record in records)
     assert all(record["capacity"]["actual_ccd_capacity"] == 192 for record in records)
     assert all(record["capacity"]["requested_per_world_constraint_capacity"] == 512 for record in records)
+    assert all(record["metrics"]["performance/step_fps"] * record["metrics"]["performance/step_time"] == __import__("pytest").approx(2.0) for record in records)
 
 
 def test_parser_accepts_action_all_and_batch_checkpoint_options():
@@ -238,9 +239,10 @@ def test_episode_metrics_keep_raw_and_bootstrapped_shaped_rewards_separate(tmp_p
     run_batch_ppo(TelemetryEnv(), ShapingAgent([]), cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
     metrics = __import__("json").loads((tmp_path / "progress.jsonl").read_text())["metrics"]
     assert metrics["rewards"] == 1.5 and metrics["shaped_rewards"] == 11.5
-    assert metrics["alive"] == 5.0 and metrics["alive_instant"] == 5.0
-    assert metrics["training/termination_rates/failure"] == .5
-    assert metrics["training/termination_rates/timeout"] == .5
+    assert metrics["alive"] == 5.0
+    assert metrics["object_pos_tracking_x"] == 6.0
+    assert metrics["terminal_reward_raw_weighted_gap"] == -93.5
+    assert "x" not in metrics and "alive_instant" not in metrics
 
 
 def test_resume_runs_only_remaining_global_timesteps_and_validates_sidecar(tmp_path):
@@ -260,15 +262,59 @@ def test_tensorboard_uses_global_transition_axis_and_tracking_is_cleared(tmp_pat
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
     class TrackingAgent(_Agent):
         def __init__(self, order):
-            super().__init__(order); self.tracking_data = {"Gym / Critic loss": [3.0], "Gym / Raw entropy": [2.0]}
+            super().__init__(order); self.tracking_data = {"Loss / Policy loss": [2.0], "Loss / Value loss": [12.0], "Learning / Learning rate": [0.0001]}
     logdir = tmp_path / "tb"
     cfg = SkrlLauncherConfig(output_dir=tmp_path, tensorboard_logdir=logdir, updates=1, rollouts=1)
     agent = TrackingAgent([])
     run_batch_ppo(_Env(), agent, cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
     events = EventAccumulator(str(logdir)); events.Reload()
-    assert events.Scalars("losses/c_loss")[0].step == 2
+    assert events.Scalars("losses/a_loss")[0].value == 2.0
+    assert events.Scalars("losses/c_loss")[0].value == 3.0
+    assert events.Scalars("info/lr_mul")[0].value == 1.0
+    assert events.Scalars("rewards/step")[0].step == 2
     assert events.Scalars("global_step")[0].value == 2
     assert agent.tracking_data == {}
+
+
+def test_standard_skrl_tracking_map_unscales_critic_and_uses_scheduler_inputs():
+    class Scheduler:
+        def consume_kl_inputs(self):
+            return [0.1, 0.3]
+
+    policy = SimpleNamespace(
+        log_std=torch.full((22,), -0.99),
+        cfg=SimpleNamespace(fixed_sigma=True),
+    )
+    agent = SimpleNamespace(
+        policy=policy,
+        scheduler=Scheduler(),
+        tracking_data={
+            "Loss / Policy loss": [2.0],
+            "Loss / Value loss": [12.0],
+            "Learning / Learning rate": [1e-4],
+        },
+    )
+    metrics = _consume_tracking(agent, SimpleNamespace(value_loss_scale=4.0, ratio_clip=.2))
+    assert metrics["losses/a_loss"] == 2.0
+    assert metrics["losses/c_loss"] == 3.0
+    assert metrics["losses/bounds_loss"] == 0.0
+    assert metrics["info/kl"] == .2
+    assert metrics["info/lr_mul"] == 1.0 and metrics["info/e_clip"] == .2
+    assert metrics["losses/entropy"] == __import__("pytest").approx(22 * (-.99 + .5 * (1 + np.log(2 * np.pi))))
+    assert agent.tracking_data == {}
+
+
+def test_core_reward_window_is_rolling_while_components_are_current_update_samples():
+    telemetry = _EpisodeTelemetry(1, [0], torch.device("cpu"))
+    for reward in range(1, 102):
+        telemetry.step(
+            torch.tensor([float(reward)]), torch.tensor([float(reward)]),
+            torch.tensor([[float(reward)] + [0.] * 9]), torch.tensor([True]), torch.tensor([1]),
+        )
+        metrics = telemetry.flush()
+    assert metrics["rewards"] == __import__("pytest").approx(51.5)
+    assert metrics["alive"] == 101.0
+    assert "rewards/cube1_02" not in metrics
 
 
 def test_all_action_requires_explicit_updates_before_runtime_construction():
@@ -283,5 +329,11 @@ def test_initialization_ownership_keeps_single_action_trainer_in_charge():
     import inspect
     from sim.dexhandrl import skrl_batch_runtime, skrl_train
 
-    assert ".init(" not in inspect.getsource(skrl_train._build_agent)
-    assert "init()" in inspect.getsource(skrl_batch_runtime.run_batch_ppo)
+    agent_source = inspect.getsource(skrl_train._build_agent)
+    runtime_source = inspect.getsource(skrl_batch_runtime.run_batch_ppo)
+    assert ".init(" not in agent_source
+    assert "agent = PPO(" in agent_source
+    assert "DexHandTelemetryKLAdaptiveLR" in agent_source
+    assert "RlGamesPPO" not in agent_source
+    assert "init()" in runtime_source
+    assert "init(trainer_cfg" not in runtime_source

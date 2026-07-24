@@ -351,13 +351,19 @@ def _build_batch_env(cfg: SkrlLauncherConfig, specs: list[dict[str, Any]]):
     return env, _BatchSpaces(env.num_envs)
 
 
+def _reward_shaper_1_0(rewards: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
+    """Authoritative DexHand run shaper; explicit to preserve telemetry provenance."""
+    del timestep, timesteps
+    return rewards * 1.0
+
+
 def _build_agent(env, cfg: SkrlLauncherConfig):
     if build_skrl_models is None or SkrlDexHandModelConfig is None:  # pragma: no cover - dependency-specific failure
         raise RuntimeError(
             "skrl model helpers are unavailable. Install skrl, torch, and gymnasium in the MuJoCo env first."
         ) from _SKRL_MODELS_IMPORT_ERROR
-    _, PPO_DEFAULT_CONFIG, _, RandomMemory, _ = _require_skrl()
-    from sim.manorl.rl_games_ppo import RlGamesAdaptiveLR, RlGamesPPO
+    PPO, PPO_DEFAULT_CONFIG, _, RandomMemory, _ = _require_skrl()
+    from sim.dexhandrl.skrl_batch_runtime import DexHandTelemetryKLAdaptiveLR
     model_cfg = SkrlDexHandModelConfig(
         pointnet_enabled=cfg.pointnet_enabled,
         film_enabled=cfg.film_enabled,
@@ -374,8 +380,8 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
     _set_cfg_value(agent_cfg, "learning_epochs", int(cfg.learning_epochs))
     _set_cfg_value(agent_cfg, "mini_batches", int(cfg.mini_batches))
     _set_cfg_value(agent_cfg, "learning_rate", float(cfg.learning_rate))
-    _set_cfg_value(agent_cfg, "learning_rate_scheduler", RlGamesAdaptiveLR if cfg.kl_threshold > 0 else None)
-    _set_cfg_value(agent_cfg, "learning_rate_scheduler_kwargs", {"kl_threshold": float(cfg.kl_threshold)} if cfg.kl_threshold > 0 else {})
+    _set_cfg_value(agent_cfg, "learning_rate_scheduler", DexHandTelemetryKLAdaptiveLR)
+    _set_cfg_value(agent_cfg, "learning_rate_scheduler_kwargs", {"kl_threshold": float(cfg.kl_threshold)})
     _set_cfg_value(agent_cfg, "discount_factor", float(cfg.discount_factor))
     _set_cfg_value(agent_cfg, "gae_lambda", float(cfg.gae_lambda))
     _set_cfg_value(agent_cfg, "random_timesteps", int(cfg.random_timesteps))
@@ -388,6 +394,7 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
     _set_cfg_value(agent_cfg, "kl_threshold", float(cfg.kl_threshold))
     _set_cfg_value(agent_cfg, "mixed_precision", bool(cfg.mixed_precision))
     _set_cfg_value(agent_cfg, "time_limit_bootstrap", bool(cfg.time_limit_bootstrap))
+    _set_cfg_value(agent_cfg, "rewards_shaper", _reward_shaper_1_0)
     _set_cfg_value(agent_cfg, "observation_preprocessor", RlGamesRunningMeanStd)
     _set_cfg_value(
         agent_cfg,
@@ -407,7 +414,7 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
         {"size": 1, "device": device},
     )
 
-    agent = RlGamesPPO(
+    agent = PPO(
         models=models,
         memory=memory,
         cfg=agent_cfg,
