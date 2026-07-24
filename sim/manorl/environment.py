@@ -2703,58 +2703,63 @@ class MujocoManoEnvironment:
             next_reset=termination.reset, control_call=self.jp.asarray(prior_control_call, dtype=np.int64),
         )
         valid = physical.valid & contacts.valid & termination.valid & reward.valid & observation_valid
-        if not bool(np.asarray(valid)):
+
+        # Batch all device→host transfers into 4 sync points instead of ~30.
+        # jax.device_get on pytrees (NamedTuples) materializes all leaves in
+        # one transfer, eliminating per-field GPU synchronization overhead.
+        host_valid = self.jax.device_get(valid)
+        host_reward = self.jax.device_get(reward)
+        host_termination = self.jax.device_get(termination)
+        host_counters = self.jax.device_get(counters)
+
+        if not bool(host_valid):
             raise RuntimeError("device_transition rejected non-finite or invalid transition inputs")
-        # These compact host diagnostics remain the existing callback and
-        # metric contract. They are a residual telemetry boundary, distinct
-        # from the policy egress below.
-        reward_total = np.asarray(reward.total, dtype=np.float64)
-        reset = np.asarray(termination.reset, dtype=bool)
+
         policy_observation = self.jp.clip(raw_observation, -5.0, 5.0).astype(self.jp.float32)
         policy_reward = self.jp.asarray(reward.total, dtype=self.jp.float32)
         policy_reset = self.jp.asarray(termination.reset, dtype=bool)
         # JAX-to-NumPy conversion can yield a read-only view.  These compact
         # counters cross back into host-owned task state and are subsequently
         # updated by indexed delayed resets, so retain writable ownership.
-        self.progress = np.asarray(counters.progress, dtype=np.int64).copy()
-        self.trajectory_steps = np.asarray(counters.trajectory_steps, dtype=np.int64).copy()
-        self.episode_returns = np.asarray(counters.episode_returns, dtype=np.float64).copy()
-        self.reset_mask = np.asarray(counters.reset_mask, dtype=bool).copy()
+        self.progress = np.asarray(host_counters.progress, dtype=np.int64).copy()
+        self.trajectory_steps = np.asarray(host_counters.trajectory_steps, dtype=np.int64).copy()
+        self.episode_returns = np.asarray(host_counters.episode_returns, dtype=np.float64).copy()
+        self.reset_mask = np.asarray(host_counters.reset_mask, dtype=bool).copy()
         if not all(array.flags.writeable for array in (
             self.progress, self.trajectory_steps, self.episode_returns, self.reset_mask,
         )):
             raise RuntimeError("device transition counters must be writable host arrays")
-        self.control_call = int(np.asarray(counters.control_call))
+        self.control_call = int(host_counters.control_call)
         self.last_physical = None
         self.last_observation = None
         # These compact vectors already cross the Gym boundary.  Materialize
         # the complete diagnostics contract from kernel outputs so training
         # telemetry observes the reward actually used for this transition.
         self.last_reward = RewardDiagnostics(
-            total=reward_total.copy(),
-            distance_x=np.asarray(reward.distance_x, dtype=np.float64),
-            distance_y=np.asarray(reward.distance_y, dtype=np.float64),
-            distance_z=np.asarray(reward.distance_z, dtype=np.float64),
-            ungated_distance_x=np.asarray(reward.ungated_distance_x, dtype=np.float64),
-            ungated_distance_y=np.asarray(reward.ungated_distance_y, dtype=np.float64),
-            ungated_distance_z=np.asarray(reward.ungated_distance_z, dtype=np.float64),
-            rotation=np.asarray(reward.rotation, dtype=np.float64),
-            position_penalty=np.asarray(reward.position_penalty, dtype=np.float64),
-            joint_penalty=np.asarray(reward.joint_penalty, dtype=np.float64),
-            action_penalty=np.asarray(reward.action_penalty, dtype=np.float64),
-            raw_contact=np.asarray(reward.raw_contact, dtype=np.float64),
-            contact=np.asarray(reward.contact, dtype=np.float64),
-            distance_gate=np.asarray(reward.distance_gate, dtype=np.float64),
-            object_stability=np.asarray(reward.object_stability, dtype=np.float64),
-            object_speed=np.asarray(reward.object_speed, dtype=np.float64),
-            survival=np.asarray(reward.survival, dtype=np.float64),
-            early_phase=np.asarray(reward.early_phase, dtype=bool),
-            deviation_penalty=np.asarray(termination.deviation_penalty, dtype=np.float64),
+            total=np.asarray(host_reward.total, dtype=np.float64),
+            distance_x=np.asarray(host_reward.distance_x, dtype=np.float64),
+            distance_y=np.asarray(host_reward.distance_y, dtype=np.float64),
+            distance_z=np.asarray(host_reward.distance_z, dtype=np.float64),
+            ungated_distance_x=np.asarray(host_reward.ungated_distance_x, dtype=np.float64),
+            ungated_distance_y=np.asarray(host_reward.ungated_distance_y, dtype=np.float64),
+            ungated_distance_z=np.asarray(host_reward.ungated_distance_z, dtype=np.float64),
+            rotation=np.asarray(host_reward.rotation, dtype=np.float64),
+            position_penalty=np.asarray(host_reward.position_penalty, dtype=np.float64),
+            joint_penalty=np.asarray(host_reward.joint_penalty, dtype=np.float64),
+            action_penalty=np.asarray(host_reward.action_penalty, dtype=np.float64),
+            raw_contact=np.asarray(host_reward.raw_contact, dtype=np.float64),
+            contact=np.asarray(host_reward.contact, dtype=np.float64),
+            distance_gate=np.asarray(host_reward.distance_gate, dtype=np.float64),
+            object_stability=np.asarray(host_reward.object_stability, dtype=np.float64),
+            object_speed=np.asarray(host_reward.object_speed, dtype=np.float64),
+            survival=np.asarray(host_reward.survival, dtype=np.float64),
+            early_phase=np.asarray(host_reward.early_phase, dtype=bool),
+            deviation_penalty=np.asarray(host_termination.deviation_penalty, dtype=np.float64),
         )
         self.last_termination = TerminationResult(
-            reset=reset.copy(),
-            deviation_reset=np.asarray(termination.deviation_reset, dtype=bool),
-            deviation_penalty=np.asarray(termination.deviation_penalty, dtype=np.float64),
+            reset=np.asarray(host_termination.reset, dtype=bool),
+            deviation_reset=np.asarray(host_termination.deviation_reset, dtype=bool),
+            deviation_penalty=np.asarray(host_termination.deviation_penalty, dtype=np.float64),
         )
         self.last_transition = None
         return DeviceTransitionBatch(
