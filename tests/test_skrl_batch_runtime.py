@@ -226,6 +226,10 @@ def test_resume_config_rejects_missing_or_invalid_bounds(tmp_path):
 
 def test_episode_metrics_keep_raw_and_bootstrapped_shaped_rewards_separate(tmp_path):
     class TelemetryEnv(_Env):
+        def __init__(self):
+            super().__init__()
+            self.batch = SimpleNamespace(action_indices=[0, 1])
+
         def step_device(self, actions):
             transition = super().step_device(actions)
             return _Transition(transition.observation, np.asarray([1., 2.], np.float32),
@@ -240,9 +244,19 @@ def test_episode_metrics_keep_raw_and_bootstrapped_shaped_rewards_separate(tmp_p
     metrics = __import__("json").loads((tmp_path / "progress.jsonl").read_text())["metrics"]
     assert metrics["rewards"] == 1.5 and metrics["shaped_rewards"] == 11.5
     assert metrics["alive"] == 5.0
+    assert metrics["alive_instant"] == 5.0
+    assert metrics["alive/object_cube1"] == 5.0
     assert metrics["object_pos_tracking_x"] == 6.0
+    assert metrics["object_pos_tracking_x_instant"] == 6.0
+    assert metrics["reward_by_pair/cube1_01/total_reward"] == 1.0
+    assert metrics["reward_by_pair_instant/cube1_01/total_reward"] == 1.0
+    assert metrics["reward_by_pair/cube1_02/total_reward"] == 2.0
+    assert "reward_by_pair/cube1_03/total_reward" not in metrics
+    assert metrics["training/termination_rates/failure"] == .5
+    assert metrics["training/termination_rates/success"] == 0.0
+    assert metrics["training/termination_rates/timeout"] == .5
     assert metrics["terminal_reward_raw_weighted_gap"] == -93.5
-    assert "x" not in metrics and "alive_instant" not in metrics
+    assert "x" not in metrics
 
 
 def test_resume_runs_only_remaining_global_timesteps_and_validates_sidecar(tmp_path):
@@ -283,7 +297,7 @@ def test_standard_skrl_tracking_map_unscales_critic_and_uses_scheduler_inputs():
 
     policy = SimpleNamespace(
         log_std=torch.full((22,), -0.99),
-        cfg=SimpleNamespace(fixed_sigma=True),
+        backbone=SimpleNamespace(fixed_sigma=True),
     )
     agent = SimpleNamespace(
         policy=policy,
@@ -302,6 +316,41 @@ def test_standard_skrl_tracking_map_unscales_critic_and_uses_scheduler_inputs():
     assert metrics["info/lr_mul"] == 1.0 and metrics["info/e_clip"] == .2
     assert metrics["losses/entropy"] == __import__("pytest").approx(22 * (-.99 + .5 * (1 + np.log(2 * np.pi))))
     assert agent.tracking_data == {}
+
+
+def test_fixed_entropy_requires_actual_fixed_backbone_and_22d_log_std():
+    from sim.dexhandrl.skrl_batch_runtime import _fixed_gaussian_entropy
+
+    assert _fixed_gaussian_entropy(SimpleNamespace(log_std=torch.zeros(22), backbone=SimpleNamespace(fixed_sigma=False))) is None
+    assert _fixed_gaussian_entropy(SimpleNamespace(log_std=torch.zeros(21), backbone=SimpleNamespace(fixed_sigma=True))) is None
+    assert _fixed_gaussian_entropy(SimpleNamespace(log_std=torch.zeros(22), backbone=SimpleNamespace(fixed_sigma=True))) is not None
+
+
+def test_identity_reward_shaper_preserves_ppo_bootstrap_mutation():
+    from sim.dexhandrl.skrl_train import _reward_shaper_1_0
+
+    rewards = torch.tensor([1.0])
+    assert _reward_shaper_1_0(rewards, 0, 1) is rewards
+
+
+def test_update_time_ends_before_validation_and_telemetry(tmp_path):
+    import time
+
+    class TimedEnv(_Env):
+        def telemetry(self):
+            time.sleep(.08)
+            return super().telemetry()
+
+    class TimedAgent(_Agent):
+        def post_interaction(self, **kwargs):
+            time.sleep(.01)
+            super().post_interaction(**kwargs)
+
+    cfg = SkrlLauncherConfig(output_dir=tmp_path, updates=1, rollouts=1)
+    run_batch_ppo(TimedEnv(), TimedAgent([]), cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
+    metrics = __import__("json").loads((tmp_path / "progress.jsonl").read_text())["metrics"]
+    assert .005 < metrics["performance/rl_update_time"] < .05
+    assert (tmp_path / "metrics_schema.json").read_text().find('"games_to_track": 100') >= 0
 
 
 def test_core_reward_window_is_rolling_while_components_are_current_update_samples():

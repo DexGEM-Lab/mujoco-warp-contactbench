@@ -354,7 +354,7 @@ def _build_batch_env(cfg: SkrlLauncherConfig, specs: list[dict[str, Any]]):
 def _reward_shaper_1_0(rewards: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
     """Authoritative DexHand run shaper; explicit to preserve telemetry provenance."""
     del timestep, timesteps
-    return rewards * 1.0
+    return rewards
 
 
 def _build_agent(env, cfg: SkrlLauncherConfig):

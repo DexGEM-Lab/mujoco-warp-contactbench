@@ -145,7 +145,12 @@ def _fixed_gaussian_entropy(policy: Any) -> float | None:
     """Entropy of DexHand's fixed 22-D diagonal Gaussian, not its loss term."""
     import math
     log_std = getattr(policy, "log_std", None)
-    if log_std is None or not getattr(policy, "cfg", None) or not bool(getattr(policy.cfg, "fixed_sigma", False)):
+    backbone = getattr(policy, "backbone", None)
+    if (
+        log_std is None
+        or not bool(getattr(backbone, "fixed_sigma", False))
+        or tuple(log_std.shape) != (22,)
+    ):
         return None
     return _scalar((log_std + 0.5 * (1.0 + math.log(2.0 * math.pi))).sum())
 
@@ -228,20 +233,36 @@ class _EpisodeTelemetry:
             "terminal_reward_raw_weighted_gap": _scalar((raw - weighted.sum(dim=1)).mean()),
         }
 
-        def add_sample_means(mask: Any, suffix: str) -> None:
+        def add_episode_metrics(mask: Any, suffix: str) -> None:
             if not bool(mask.any()):
                 return
-            selected_raw, selected_weighted = raw[mask], weighted[mask]
+            selected_raw, selected_shaped = raw[mask], shaped[mask]
+            selected_length, selected_weighted = length[mask], weighted[mask]
+            # Component instant values are PerGroup's mean of each completed
+            # episode total normalized by that episode's own length.
+            for index, component in enumerate(REWARD_COMPONENTS):
+                totals = selected_weighted[:, index]
+                metrics[f"{component}{suffix}"] = _scalar(totals.mean())
+                metrics[f"{component}_instant{suffix}"] = _scalar((totals / selected_length).mean())
             if suffix:
                 metrics[f"rewards{suffix}"] = _scalar(selected_raw.mean())
-            for index, component in enumerate(REWARD_COMPONENTS):
-                metrics[f"{component}{suffix}"] = _scalar(selected_weighted[:, index].mean())
+                metrics[f"shaped_rewards{suffix}"] = _scalar(selected_shaped.mean())
+                metrics[f"episode_lengths{suffix}"] = _scalar(selected_length.mean())
 
-        add_sample_means(torch.ones_like(actions, dtype=torch.bool), "")
-        add_sample_means(torch.ones_like(actions, dtype=torch.bool), "/object_cube1")
+        all_episodes = torch.ones_like(actions, dtype=torch.bool)
+        add_episode_metrics(all_episodes, "")
+        add_episode_metrics(all_episodes, "/object_cube1")
         action_names = ("01", "02", "03", "04", "09", "10", "18")
         for index, action_name in enumerate(action_names):
-            add_sample_means(actions == index, f"/cube1_{action_name}")
+            mask = actions == index
+            label = f"cube1_{action_name}"
+            add_episode_metrics(mask, f"/{label}")
+            if bool(mask.any()):
+                metrics[f"reward_by_pair/{label}/total_reward"] = _scalar(raw[mask].mean())
+                metrics[f"reward_by_pair_instant/{label}/total_reward"] = _scalar((raw[mask] / length[mask]).mean())
+        total = float(len(actions))
+        for code, name in ((1, "failure"), (0, "success"), (2, "timeout")):
+            metrics[f"training/termination_rates/{name}"] = _scalar((reason == code).sum().float() / total)
         return metrics
 
 
@@ -251,7 +272,8 @@ def _write_schema(output: Path) -> None:
         "provenance": "standard-skrl PPO with telemetry-only KL observation",
         "standard_skrl_analogs": {"a_loss": "Loss / Policy loss", "c_loss": "Loss / Value loss / value_loss_scale", "bounds_loss": 0, "entropy": "fixed policy.log_std Gaussian summed over 22", "info/kl": "KLAdaptiveLR.step inputs mean"},
         "reward_shaper": 1.0,
-        "axes": {"iter": "global update", "step": "global transitions", "time": "cumulative elapsed seconds"},
+        "axes": {"iter": "global update", "step": "global transitions", "time": "segment-local elapsed seconds"},
+        "games_to_track": GAMES_TO_TRACK,
         "reward_components": list(REWARD_COMPONENTS),
     }, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -310,9 +332,14 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
             play_start = time.perf_counter(); reward_sum = torch.zeros((), device=observations.device); done_sum = torch.zeros((), device=observations.device); timeout_sum = torch.zeros((), device=observations.device); finite = valid = True
             for local in range(int(cfg.rollouts)):
                 global_timestep = ((update - 1) * int(cfg.rollouts)) + local
+                # Gym's env_step includes autoreset. Time reset_done with the
+                # matching device step, without including policy inference or
+                # materializing per-step tensors.
                 if global_timestep:
+                    reset_started = time.perf_counter()
                     reset = env.reset_done_device(bridge.torch_to_jax(pending.to(dtype=torch.float32)))
                     observations = bridge.jax_to_torch(reset.observation)
+                    step_time += time.perf_counter() - reset_started
                 agent.pre_interaction(timestep=global_timestep, timesteps=int(cfg.timesteps))
                 with torch.no_grad(): actions, _ = agent.act(observations, None, timestep=global_timestep, timesteps=int(cfg.timesteps))
                 step_started = time.perf_counter()
@@ -342,13 +369,15 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
             play_time = time.perf_counter() - play_start
             update_start = time.perf_counter()
             agent.post_interaction(timestep=global_timestep + 1, timesteps=int(cfg.timesteps))
+            # PPO update timing ends at the optimizer boundary. Validation and
+            # host telemetry are deliberately outside this measurement.
+            update_time = time.perf_counter() - update_start
             finite_value, valid_value = bool(finite.item()), bool(valid.item())
             if not finite_value or not valid_value:
                 raise RuntimeError(f"invalid batch transition at PPO update {update}: finite={finite_value}, valid={valid_value}")
             _assert_finite_agent_parameters(agent, update=update)
             telemetry = env.telemetry()
             _capacity_guard(telemetry)
-            update_time = time.perf_counter() - update_start
             transitions = update * int(cfg.rollouts) * int(env.num_envs)
             elapsed = time.perf_counter() - started
             metrics = episodes.flush()
