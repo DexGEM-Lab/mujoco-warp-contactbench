@@ -16,11 +16,15 @@ from sim.manorl.skrl_runtime import ProfiledGymnasiumWrapper
 from sim.manorl.trajectory import load_reference_trajectory
 
 
-def _environment(*, device_resident_controls: bool) -> MujocoManoEnvironment:
+def _environment(
+    *,
+    device_resident_controls: bool,
+    num_envs: int = 1,
+) -> MujocoManoEnvironment:
     return MujocoManoEnvironment(
         load_reference_trajectory(),
         EnvironmentConfig(
-            num_envs=1,
+            num_envs=num_envs,
             device="cpu",
             residual_enabled=True,
             max_deviation_distance=1_000_000.0,
@@ -253,3 +257,73 @@ def test_device_resident_controls_match_legacy_outputs_and_delayed_reset() -> No
     np.testing.assert_array_equal(accelerated_extras["time_outs"], legacy_extras["time_outs"])
     np.testing.assert_array_equal(accelerated.trajectory_steps, [0])
     assert accelerated.data.qpos.shape[0] == 1
+
+
+def test_device_control_partial_reset_uses_fixed_mask_and_preserves_host_lifecycle() -> None:
+    environment = _environment(device_resident_controls=True, num_envs=3)
+    selected = np.asarray((0, 2), dtype=np.int64)
+    unselected = np.asarray((1,), dtype=np.int64)
+
+    qpos = np.asarray(environment.data.qpos).copy() + 0.125
+    qvel = np.full_like(np.asarray(environment.data.qvel), 0.25)
+    ctrl = np.full_like(np.asarray(environment.data.ctrl), -0.375)
+    environment.data = environment.data.replace(
+        qpos=environment.jax.device_put(environment.jp.asarray(qpos), environment.device),
+        qvel=environment.jax.device_put(environment.jp.asarray(qvel), environment.device),
+        ctrl=environment.jax.device_put(environment.jp.asarray(ctrl), environment.device),
+    )
+    environment.progress[:] = (11, 12, 13)
+    environment.trajectory_steps[:] = (21, 22, 23)
+    environment.cumulative_offset[:] = 1.0
+    environment.cumulative_joint_offset[:] = 2.0
+    for values in environment.cumulative_offset_by_side.values():
+        values[:] = 3.0
+    environment.reset_mask[:] = True
+    environment.episode_returns[:] = (4.0, 5.0, 6.0)
+
+    captured_masks: list[np.ndarray] = []
+    reset_data = environment._reset_data_fn
+
+    def capture_reset_mask(data: object, reset_mask: object) -> object:
+        captured_masks.append(np.asarray(reset_mask, dtype=bool).copy())
+        return reset_data(data, reset_mask)
+
+    environment._reset_data_fn = capture_reset_mask
+    environment._reset_indices(selected)
+
+    assert len(captured_masks) == 1
+    np.testing.assert_array_equal(captured_masks[0], [True, False, True])
+    assert captured_masks[0].shape == (environment.config.num_envs,)
+    np.testing.assert_allclose(
+        np.asarray(environment.data.qpos)[selected], environment._reset_qpos[selected], rtol=0.0, atol=1e-6
+    )
+    np.testing.assert_allclose(np.asarray(environment.data.qvel)[selected], 0.0, rtol=0.0, atol=1e-6)
+    np.testing.assert_allclose(
+        np.asarray(environment.data.ctrl)[selected], environment.reference_q_model[selected, 0], rtol=0.0, atol=1e-6
+    )
+    np.testing.assert_allclose(np.asarray(environment.data.qpos)[unselected], qpos[unselected], rtol=0.0, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(environment.data.qvel)[unselected], qvel[unselected], rtol=0.0, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(environment.data.ctrl)[unselected], ctrl[unselected], rtol=0.0, atol=1e-6)
+
+    np.testing.assert_array_equal(environment.progress, [0, 12, 0])
+    np.testing.assert_array_equal(environment.trajectory_steps, [0, 22, 0])
+    np.testing.assert_allclose(environment.cumulative_offset[selected], 0.0)
+    np.testing.assert_allclose(environment.cumulative_offset[unselected], 1.0)
+    np.testing.assert_allclose(environment.cumulative_joint_offset[selected], 0.0)
+    np.testing.assert_allclose(environment.cumulative_joint_offset[unselected], 2.0)
+    for values in environment.cumulative_offset_by_side.values():
+        np.testing.assert_allclose(values[selected], 0.0)
+        np.testing.assert_allclose(values[unselected], 3.0)
+    np.testing.assert_array_equal(environment.reset_mask, [False, True, False])
+    np.testing.assert_allclose(environment.episode_returns, [0.0, 5.0, 0.0])
+    for values in (
+        environment.progress,
+        environment.trajectory_steps,
+        environment.cumulative_offset,
+        environment.cumulative_joint_offset,
+        environment.reset_mask,
+        environment.episode_returns,
+    ):
+        assert values.flags.writeable
+    environment.progress[1] = 99
+    assert environment.progress[1] == 99

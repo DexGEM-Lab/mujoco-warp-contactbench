@@ -127,6 +127,26 @@ _CURATED_GRASP_ALIASES_BY_PAIR = {
 }
 
 
+def _build_masked_reset_data_fn(
+    *,
+    jax: Any,
+    jp: Any,
+    reset_qpos: Any,
+    reset_ctrl: Any,
+) -> Any:
+    """Compile one full-batch reset write with a fixed-shape world mask."""
+
+    def reset_data(data: Any, reset_mask: Any) -> Any:
+        row_mask = reset_mask[:, None]
+        return data.replace(
+            qpos=jp.where(row_mask, reset_qpos, data.qpos),
+            qvel=jp.where(row_mask, jp.zeros_like(data.qvel), data.qvel),
+            ctrl=jp.where(row_mask, reset_ctrl, data.ctrl),
+        )
+
+    return jax.jit(reset_data)
+
+
 def minimum_warp_contact_capacity(num_envs: int, hand_sides: object) -> int:
     """Return the conservative batch contact floor for the compiled hands.
 
@@ -1642,6 +1662,12 @@ class MujocoManoEnvironment:
         self._configure_warp_ccd_overflow_guard()
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
         self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)
+        self._reset_data_fn = _build_masked_reset_data_fn(
+            jax=jax,
+            jp=self.jp,
+            reset_qpos=self._reset_qpos_device,
+            reset_ctrl=self._reset_ctrl_device,
+        )
         self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
         self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
         self._controller_targets_fn = jax.jit(self._device_controller_targets)
@@ -1857,6 +1883,12 @@ class MujocoManoEnvironment:
             )
         self._reset_qpos_device = jax.device_put(self._reset_qpos, self.device)
         self._reset_ctrl_device = jax.device_put(self.reference_q_model[:, 0], self.device)
+        self._reset_data_fn = _build_masked_reset_data_fn(
+            jax=jax,
+            jp=self.jp,
+            reset_qpos=self._reset_qpos_device,
+            reset_ctrl=self._reset_ctrl_device,
+        )
         self._joint_lower_device = jax.device_put(self.joint_lower, self.device)
         self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
         self._controller_targets_fn = jax.jit(self._device_controller_targets)
@@ -2424,12 +2456,10 @@ class MujocoManoEnvironment:
             return
         writes_started = self._phase_start("reset_indexed_writes")
         if self.config.device_resident_controls:
-            device_ids = self.jax.device_put(env_ids, self.device)
-            self.data = self.data.replace(
-                qpos=self.data.qpos.at[device_ids].set(self._reset_qpos_device[device_ids]),
-                qvel=self.data.qvel.at[device_ids].set(self.jp.zeros_like(self.data.qvel[device_ids])),
-                ctrl=self.data.ctrl.at[device_ids].set(self._reset_ctrl_device[device_ids]),
-            )
+            reset_mask = np.zeros(self.config.num_envs, dtype=bool)
+            reset_mask[env_ids] = True
+            device_reset_mask = self.jax.device_put(reset_mask, self.device)
+            self.data = self._reset_data_fn(self.data, device_reset_mask)
         else:
             qpos = np.asarray(self.data.qpos, dtype=np.float64).copy()
             qvel = np.asarray(self.data.qvel, dtype=np.float64).copy()
