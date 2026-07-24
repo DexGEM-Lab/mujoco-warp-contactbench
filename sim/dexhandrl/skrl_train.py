@@ -101,6 +101,8 @@ class SkrlLauncherConfig:
     separate: bool = True
     checkpoint_interval_updates: int = 100
     log_interval_updates: int = 1
+    start_update: int = 0
+    tensorboard_logdir: Path | None = None
 
     def __post_init__(self) -> None:
         physics = resolve_physics_config(
@@ -133,6 +135,8 @@ class SkrlLauncherConfig:
             raise ValueError("rollouts must be positive")
         if updates is not None and int(updates) <= 0:
             raise ValueError("updates must be positive")
+        if int(self.start_update) < 0:
+            raise ValueError("start_update must be non-negative")
         if timesteps is not None and int(timesteps) <= 0:
             raise ValueError("timesteps must be positive")
         if updates is not None and timesteps is not None and int(timesteps) != int(updates) * rollouts:
@@ -143,6 +147,10 @@ class SkrlLauncherConfig:
         else:
             resolved_timesteps = 250_000 if timesteps is None else int(timesteps)
             resolved_updates = resolved_timesteps // rollouts if resolved_timesteps % rollouts == 0 else None
+        if resolved_updates is not None and int(self.start_update) >= resolved_updates:
+            raise ValueError("start_update must be less than total updates")
+        if int(self.start_update) > 0 and self.checkpoint is None:
+            raise ValueError("start_update requires an explicit --checkpoint")
         object.__setattr__(self, "updates", resolved_updates)
         object.__setattr__(self, "timesteps", resolved_timesteps)
         for name, value in physics_legacy_aliases(physics).items():
@@ -348,8 +356,8 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
         raise RuntimeError(
             "skrl model helpers are unavailable. Install skrl, torch, and gymnasium in the MuJoCo env first."
         ) from _SKRL_MODELS_IMPORT_ERROR
-    PPO, PPO_DEFAULT_CONFIG, _, RandomMemory, _ = _require_skrl()
-    from skrl.resources.schedulers.torch import KLAdaptiveLR
+    _, PPO_DEFAULT_CONFIG, _, RandomMemory, _ = _require_skrl()
+    from sim.manorl.rl_games_ppo import RlGamesAdaptiveLR, RlGamesPPO
     model_cfg = SkrlDexHandModelConfig(
         pointnet_enabled=cfg.pointnet_enabled,
         film_enabled=cfg.film_enabled,
@@ -366,12 +374,8 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
     _set_cfg_value(agent_cfg, "learning_epochs", int(cfg.learning_epochs))
     _set_cfg_value(agent_cfg, "mini_batches", int(cfg.mini_batches))
     _set_cfg_value(agent_cfg, "learning_rate", float(cfg.learning_rate))
-    _set_cfg_value(agent_cfg, "learning_rate_scheduler", KLAdaptiveLR)
-    _set_cfg_value(
-        agent_cfg,
-        "learning_rate_scheduler_kwargs",
-        {"kl_threshold": float(cfg.kl_threshold)},
-    )
+    _set_cfg_value(agent_cfg, "learning_rate_scheduler", RlGamesAdaptiveLR if cfg.kl_threshold > 0 else None)
+    _set_cfg_value(agent_cfg, "learning_rate_scheduler_kwargs", {"kl_threshold": float(cfg.kl_threshold)} if cfg.kl_threshold > 0 else {})
     _set_cfg_value(agent_cfg, "discount_factor", float(cfg.discount_factor))
     _set_cfg_value(agent_cfg, "gae_lambda", float(cfg.gae_lambda))
     _set_cfg_value(agent_cfg, "random_timesteps", int(cfg.random_timesteps))
@@ -403,7 +407,7 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
         {"size": 1, "device": device},
     )
 
-    agent = PPO(
+    agent = RlGamesPPO(
         models=models,
         memory=memory,
         cfg=agent_cfg,
@@ -713,6 +717,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--separate", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--checkpoint-interval-updates", type=int, default=100)
     parser.add_argument("--log-interval-updates", type=int, default=1)
+    parser.add_argument("--start-update", type=int, default=0)
+    parser.add_argument("--tensorboard-logdir", type=Path, default=None)
     return parser
 
 
@@ -789,6 +795,8 @@ def main(argv: list[str] | None = None) -> None:
         separate=bool(args.separate),
         checkpoint_interval_updates=max(int(args.checkpoint_interval_updates), 1),
         log_interval_updates=max(int(args.log_interval_updates), 1),
+        start_update=int(args.start_update),
+        tensorboard_logdir=args.tensorboard_logdir,
     )
 
     _seed_launcher(launcher_cfg.seed)

@@ -28,6 +28,10 @@ run.
 - Focused CPU tests, a real 77-pair trajectory check, and a server2 GPU preflight
   pass before restarting the full run on physical GPU 3.
 
+## Current user requirement
+
+At clean `313e322`, add Gym/W&B-equivalent TensorBoard telemetry and exact checkpoint resume for the live Server2-compatible DexHandRL all-action runtime. Do not touch Server2 or any live process. The implementation must preserve PPO and physics, export only measurements produced after the new run begins, aggregate device-resident per-world raw/shaped returns and weighted reward components before host materialization at update boundaries, and resume global updates from an explicit sidecar-validated checkpoint.
+
 ## Outputs
 
 Preserve all prior training outputs. New preflight and full-run paths must use

@@ -26,6 +26,8 @@ class _Transition:
     terminated: np.ndarray
     truncated: np.ndarray
     valid: np.ndarray
+    reason: np.ndarray | None = None
+    weighted: np.ndarray | None = None
 
 
 class _Env:
@@ -209,8 +211,64 @@ def test_progress_honors_log_cadence_but_emits_checkpoint_boundary(tmp_path):
 
 
 def test_parser_accepts_action_all_and_batch_checkpoint_options():
-    args = build_arg_parser().parse_args(["--action", "all", "--updates", "1", "--checkpoint-interval-updates", "3"])
-    assert (args.action, args.updates, args.checkpoint_interval_updates) == ("all", 1, 3)
+    args = build_arg_parser().parse_args(["--action", "all", "--updates", "4", "--start-update", "2", "--checkpoint-interval-updates", "3"])
+    assert (args.action, args.updates, args.start_update, args.checkpoint_interval_updates) == ("all", 4, 2, 3)
+
+
+def test_resume_config_rejects_missing_or_invalid_bounds(tmp_path):
+    import pytest
+    with pytest.raises(ValueError, match="start_update requires"):
+        SkrlLauncherConfig(output_dir=tmp_path, updates=2, start_update=1)
+    with pytest.raises(ValueError, match="less than total"):
+        SkrlLauncherConfig(output_dir=tmp_path, updates=2, start_update=2, checkpoint=tmp_path / "checkpoint-000002.pt")
+
+
+def test_episode_metrics_keep_raw_and_bootstrapped_shaped_rewards_separate(tmp_path):
+    class TelemetryEnv(_Env):
+        def step_device(self, actions):
+            transition = super().step_device(actions)
+            return _Transition(transition.observation, np.asarray([1., 2.], np.float32),
+                np.asarray([True, False]), np.asarray([False, True]), np.ones(2, bool),
+                np.asarray([1, 2], np.int32), np.arange(20, dtype=np.float32).reshape(2, 10))
+    class ShapingAgent(_Agent):
+        def record_transition(self, **kwargs):
+            kwargs["rewards"].add_(10.)
+            super().record_transition(**kwargs)
+    cfg = SkrlLauncherConfig(output_dir=tmp_path, updates=1, rollouts=1)
+    run_batch_ppo(TelemetryEnv(), ShapingAgent([]), cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
+    metrics = __import__("json").loads((tmp_path / "progress.jsonl").read_text())["metrics"]
+    assert metrics["rewards"] == 1.5 and metrics["shaped_rewards"] == 11.5
+    assert metrics["alive"] == 5.0 and metrics["alive_instant"] == 5.0
+    assert metrics["training/termination_rates/failure"] == .5
+    assert metrics["training/termination_rates/timeout"] == .5
+
+
+def test_resume_runs_only_remaining_global_timesteps_and_validates_sidecar(tmp_path):
+    checkpoint = tmp_path / "checkpoint-000001.pt"; checkpoint.write_bytes(b"placeholder")
+    checkpoint.with_suffix(".json").write_text('{"update": 1}', encoding="utf-8")
+    cfg = SkrlLauncherConfig(output_dir=tmp_path, checkpoint=checkpoint, updates=2, start_update=1, rollouts=2)
+    env = _Env(); agent = _Agent(env.order)
+    result = run_batch_ppo(env, agent, cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
+    assert result.updates == 1 and result.transitions == 4
+    assert [record["timestep"] for record in agent.records] == [2, 3]
+    assert (tmp_path / "checkpoint-000002.pt").is_file()
+
+
+def test_tensorboard_uses_global_transition_axis_and_tracking_is_cleared(tmp_path):
+    pytest = __import__("pytest")
+    pytest.importorskip("tensorboard")
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+    class TrackingAgent(_Agent):
+        def __init__(self, order):
+            super().__init__(order); self.tracking_data = {"Gym / Critic loss": [3.0], "Gym / Raw entropy": [2.0]}
+    logdir = tmp_path / "tb"
+    cfg = SkrlLauncherConfig(output_dir=tmp_path, tensorboard_logdir=logdir, updates=1, rollouts=1)
+    agent = TrackingAgent([])
+    run_batch_ppo(_Env(), agent, cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
+    events = EventAccumulator(str(logdir)); events.Reload()
+    assert events.Scalars("losses/c_loss")[0].step == 2
+    assert events.Scalars("global_step")[0].value == 2
+    assert agent.tracking_data == {}
 
 
 def test_all_action_requires_explicit_updates_before_runtime_construction():

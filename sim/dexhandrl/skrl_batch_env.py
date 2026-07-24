@@ -118,6 +118,7 @@ class DeviceBatchTransition(NamedTuple):
     terminated: Any
     truncated: Any
     reason: Any
+    weighted: Any
     reference_active: Any
     corrected_active: Any
     applied_active: Any
@@ -450,7 +451,7 @@ class DexHandRLMJXBatchEnv:
         valid = control.valid & obs_valid & contacts.valid & reward.valid & self.jp.all(self.jp.isfinite(actions))
         reason = self.jp.where(reward.terminated, 1, self.jp.where(reward.truncated, 2, 0)).astype(self.jp.int32)
         return next_state, DeviceBatchTransition(obs, reward.total.astype(self.jp.float32), reward.terminated, reward.truncated, reason,
-            control.reference_active, control.corrected_active, control.applied_active, control.full_target, control.ctrl, valid)
+            reward.weighted.astype(self.jp.float32), control.reference_active, control.corrected_active, control.applied_active, control.full_target, control.ctrl, valid)
 
     def _replace_rows(self, current: Any, cached: Any, mask: Any) -> Any:
         if not hasattr(current, "ndim") or current.ndim == 0 or current.shape[0] != self.num_envs:
@@ -486,7 +487,7 @@ class DexHandRLMJXBatchEnv:
         obs, valid = self._observe_state(state)
         zeros = self.jp.zeros((self.num_envs,), dtype=self.jp.float32)
         return DeviceBatchTransition(obs, zeros, self.jp.zeros((self.num_envs,), dtype=bool), self.jp.zeros((self.num_envs,), dtype=bool), self.jp.zeros((self.num_envs,), dtype=self.jp.int32),
-            state.previous_active, state.previous_active, state.previous_active, self.jp.zeros((self.num_envs, 26), dtype=self.jp.float32), self.jp.zeros((self.num_envs, self.model.nu), dtype=self.jp.float32), valid)
+            self.jp.zeros((self.num_envs, 10), dtype=self.jp.float32), state.previous_active, state.previous_active, state.previous_active, self.jp.zeros((self.num_envs, 26), dtype=self.jp.float32), self.jp.zeros((self.num_envs, self.model.nu), dtype=self.jp.float32), valid)
 
     def reset_device(self) -> DeviceBatchTransition:
         self.state = self._initial_state
