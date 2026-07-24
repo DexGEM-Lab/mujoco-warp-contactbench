@@ -297,12 +297,15 @@ def test_training_cli_parses_pair_assignment_cycle(
     captured: list[object] = []
     monkeypatch.setattr(tool, "run", lambda _output, budget: captured.append(budget) or {})
 
+    resume = tmp_path / "prior.pt"
     assert tool.main([
         "--output", str(tmp_path / "training"),
         "--all-pairs",
         "--pair-assignment-cycle", "2",
+        "--resume-checkpoint", str(resume),
     ]) == 0
     assert captured[0].pair_assignment_cycle == 2
+    assert captured[0].resume_checkpoint == str(resume.resolve())
 
 
 def test_training_cli_enables_narrow_device_transition(
@@ -1349,6 +1352,9 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
             self.contact_start_frame = 250
             self.jax = SimpleNamespace(default_backend=lambda: "gpu")
 
+        def warp_ccd_metadata(self) -> dict[str, object]:
+            return {}
+
     def trajectories(_: object, *, num_envs: int) -> SimpleNamespace:
         return SimpleNamespace(num_envs=num_envs, hand_sides=("right",))
 
@@ -1410,6 +1416,7 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
             updates=1,
             minibatch_size=4096,
             evaluation_num_envs=128,
+            resume_checkpoint=str(tmp_path / "resume.pt"),
             device_resident_controls=True,
             device_transition=True,
             capture_transition_diagnostics=False,
@@ -1422,9 +1429,10 @@ def test_run_reuses_bounded_evaluator_and_native_checkpoint_boundaries(
         ("evaluation-1", 128, 2048, False),
     ]
     assert modes == [("evaluation-1", "zero"), ("evaluation-1", "untrained"), ("evaluation-1", "trained")]
-    assert loads[0][0] == "evaluation-1" and loads[1][0] == "training"
-    assert loads[0][1] == loads[1][1] and loads[0][1].startswith(".initial-")
-    assert loads[2] == ("evaluation-1", "run.pt")
+    assert loads[0] == ("training", "resume.pt")
+    assert loads[1][0] == "evaluation-1" and loads[2][0] == "training"
+    assert loads[1][1] == loads[2][1] and loads[1][1].startswith(".initial-")
+    assert loads[3] == ("evaluation-1", "run.pt")
     assert result["trajectory_selection"]["evaluation_assignments"] == [{"env_id": i, "identity": f"prefix-{i}"} for i in range(128)]
     assert result["budget"]["evaluation_num_envs"] == 128
     assert result["budget"]["device_transition"] is True

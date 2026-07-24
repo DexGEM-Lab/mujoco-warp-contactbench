@@ -197,6 +197,7 @@ class TrainingBudget:
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
     checkpoint_interval_updates: int | None = 200
+    resume_checkpoint: str | None = None
     minibatch_size: int | None = None
     # Evaluation is intentionally one fixed trajectory by default.  A larger
     # count is an explicit diagnostic mode and must not be mistaken for the
@@ -1983,6 +1984,13 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     runtime = ManoSkrlRuntime(ManoGymnasiumVectorEnv(physical), ppo_config)
     if runtime.device != "cuda":
         raise RuntimeError(f"skrl runtime must train on CUDA, got {runtime.device!r}")
+    resume_checkpoint = (
+        None
+        if budget.resume_checkpoint is None
+        else Path(budget.resume_checkpoint).expanduser().resolve()
+    )
+    if resume_checkpoint is not None:
+        load_skrl_checkpoint(runtime.agent, resume_checkpoint)
     trajectory_assignments = _trajectory_assignments(trajectories)
     evaluation_runtime, evaluation_ppo_config, evaluation_trajectory_assignments = _build_evaluation_runtime(
         selection=selection,
@@ -2249,6 +2257,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--updates", type=int, default=8000)
     parser.add_argument("--checkpoint-interval-updates", type=int, default=200)
+    parser.add_argument(
+        "--resume-checkpoint",
+        type=Path,
+        help="continue policy, value, optimizer, and normalizers from a native ManoRL checkpoint",
+    )
     parser.add_argument("--num-envs", type=int, default=2048)
     parser.add_argument("--evaluation-num-envs", type=int, default=1)
     parser.add_argument(
@@ -2513,6 +2526,11 @@ def main(argv: list[str] | None = None) -> int:
                 tags=_parse_wandb_tags(args.wandb_tags),
             ),
             checkpoint_interval_updates=args.checkpoint_interval_updates,
+            resume_checkpoint=(
+                None
+                if args.resume_checkpoint is None
+                else str(args.resume_checkpoint.expanduser().resolve())
+            ),
             minibatch_size=args.minibatch_size,
             evaluation_num_envs=args.evaluation_num_envs,
             headless=args.headless,
