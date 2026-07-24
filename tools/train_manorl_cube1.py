@@ -188,6 +188,7 @@ class TrainingBudget:
     object_type: str = "cube1"
     gesture: str = "01"
     trajectory_selector: str | None = None
+    pair_assignment_cycle: int = 0
     dataset_path: str = DATASET_PATH
     dataset_version: int | None = None
     hand_side: str = "auto"
@@ -1933,6 +1934,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         dataset_path=Path(budget.dataset_path),
         expected_dataset_version=budget.dataset_version,
         hand_side=budget.hand_side,
+        pair_assignment_cycle=budget.pair_assignment_cycle,
     )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
     contact_capacity = recommended_warp_contact_capacity(
@@ -2313,6 +2315,15 @@ def main(argv: list[str] | None = None) -> int:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--pair-assignment-cycle",
+        type=int,
+        default=0,
+        help=(
+            "advance every selected object/action pair by this many local environment-slot "
+            "windows; successive cycles cover long pairs without increasing num-envs"
+        ),
+    )
+    parser.add_argument(
         "--object",
         dest="object_type",
         help="legacy single-pair object selector; requires --gesture",
@@ -2397,6 +2408,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset_path=args.dataset_path,
             expected_dataset_version=args.dataset_version,
             hand_side=args.hand_side,
+            pair_assignment_cycle=args.pair_assignment_cycle,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -2485,6 +2497,7 @@ def main(argv: list[str] | None = None) -> int:
             trajectory_selector=(
                 None if selector is None else parsed_selection.canonical_selector
             ),
+            pair_assignment_cycle=args.pair_assignment_cycle,
             dataset_path=str(args.dataset_path.resolve()),
             dataset_version=args.dataset_version,
             hand_side=args.hand_side,

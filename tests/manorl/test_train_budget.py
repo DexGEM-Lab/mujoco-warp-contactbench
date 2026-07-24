@@ -290,6 +290,21 @@ def test_training_cli_parses_independent_diagnostics_switch(
     assert budget.resolved_capture_transition_diagnostics is True
 
 
+def test_training_cli_parses_pair_assignment_cycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured: list[object] = []
+    monkeypatch.setattr(tool, "run", lambda _output, budget: captured.append(budget) or {})
+
+    assert tool.main([
+        "--output", str(tmp_path / "training"),
+        "--all-pairs",
+        "--pair-assignment-cycle", "2",
+    ]) == 0
+    assert captured[0].pair_assignment_cycle == 2
+
+
 def test_training_cli_enables_narrow_device_transition(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -186,6 +186,7 @@ class TrajectoryBatch:
     trajectories: tuple[ReferenceTrajectory, ...]
     resolved_pairs: tuple[ObjectActionPair, ...] = ()
     selection_mode: str | None = None
+    pair_assignment_cycle: int = 0
 
     def __post_init__(self) -> None:
         if not self.trajectories:
@@ -196,6 +197,12 @@ class TrajectoryBatch:
             raise TypeError("resolved_pairs must contain ObjectActionPair values")
         if self.selection_mode not in (None, "pairs", "all"):
             raise ValueError("selection_mode must be 'pairs', 'all', or None")
+        if (
+            not isinstance(self.pair_assignment_cycle, int)
+            or isinstance(self.pair_assignment_cycle, bool)
+            or self.pair_assignment_cycle < 0
+        ):
+            raise ValueError("pair_assignment_cycle must be a non-negative integer")
 
     @property
     def num_envs(self) -> int:
@@ -288,6 +295,7 @@ class TrajectorySelection:
     pre_padding: int = DEFAULT_PRE_PADDING
     post_padding: int = DEFAULT_POST_PADDING
     hand_side: str = "auto"
+    pair_assignment_cycle: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_path", Path(self.dataset_path))
@@ -311,6 +319,12 @@ class TrajectorySelection:
             raise ValueError("expected_dataset_version must be a positive integer")
         if self.pre_padding < 0 or self.post_padding < 0:
             raise ValueError("trajectory padding must be non-negative")
+        if (
+            not isinstance(self.pair_assignment_cycle, int)
+            or isinstance(self.pair_assignment_cycle, bool)
+            or self.pair_assignment_cycle < 0
+        ):
+            raise ValueError("pair_assignment_cycle must be a non-negative integer")
         normalize_hand_side(self.hand_side)
 
     @property
@@ -1422,8 +1436,10 @@ def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: 
     """Discover eligible pairs and deterministically assign them to vector worlds.
 
     Pair slots round-robin over sorted resolved pairs; each pair independently
-    round-robins its sorted exact-identity trajectories. Full rows are decoded
-    in bounded chunks and malformed candidates are skipped before assignment.
+    round-robins its sorted exact-identity trajectories. ``pair_assignment_cycle``
+    advances every pair by one local slot-window, so successive fixed-size runs
+    cover long pairs without increasing simultaneous world residency. Full rows
+    are decoded in bounded chunks and malformed candidates are skipped.
     """
 
     if not isinstance(selection, TrajectorySelection):
@@ -1453,12 +1469,20 @@ def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: 
     for env_id in range(num_envs):
         pair = resolved_pairs[env_id % pair_count]
         pair_slot_counts[pair] += 1
+    rotated_candidates_by_pair: dict[ObjectActionPair, tuple[_TrajectoryCandidate, ...]] = {}
+    for pair in resolved_pairs:
+        candidates = candidates_by_pair[pair]
+        slots = pair_slot_counts[pair]
+        offset = (
+            selection.pair_assignment_cycle * slots
+        ) % len(candidates)
+        rotated_candidates_by_pair[pair] = candidates[offset:] + candidates[:offset]
     decoded_by_pair = _decode_valid_candidates(
         dataset,
         version,
         selection=selection,
         resolved_pairs=resolved_pairs,
-        candidates_by_pair=candidates_by_pair,
+        candidates_by_pair=rotated_candidates_by_pair,
         limits={
             pair: min(pair_slot_counts[pair], len(candidates_by_pair[pair]))
             for pair in resolved_pairs
@@ -1476,4 +1500,5 @@ def load_assigned_trajectory_batch(selection: TrajectorySelection, *, num_envs: 
         tuple(assignments),
         resolved_pairs=resolved_pairs,
         selection_mode=selection.mode,
+        pair_assignment_cycle=selection.pair_assignment_cycle,
     )

@@ -113,6 +113,9 @@ def test_pair_selector_normalizes_and_preserves_exact_pairs() -> None:
 def test_trajectory_selection_defaults_to_100_pre_and_250_post_padding() -> None:
     selection = TrajectorySelection()
     assert (selection.pre_padding, selection.post_padding) == (100, 250)
+    assert selection.pair_assignment_cycle == 0
+    with pytest.raises(ValueError, match="pair_assignment_cycle"):
+        TrajectorySelection(pair_assignment_cycle=-1)
 
 
 @pytest.mark.parametrize(
@@ -256,6 +259,57 @@ def test_assigned_loader_skips_invalid_full_candidate_rows(
     )
     assert batch.trajectories[0].identity.row_index == 1
     assert batch.trajectories[0].identity.identity == "cube1_01_002"
+
+
+def test_assigned_loader_rotates_each_pair_by_local_slot_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "source.lance"
+    path.mkdir()
+    timestamps = np.arange(1373, dtype=np.float64) / 111.0
+    rows = [deepcopy(_accepted_fake_row(timestamps)) for _ in range(3)]
+    for sequence, row in enumerate(rows, start=1):
+        identity = f"cube1_01_{sequence:03d}"
+        row["index"].update(
+            scene="cube1",
+            source_path=f"cube1/{identity}/{identity}_mano.npy",
+            uuid=f"row-{sequence}",
+        )
+
+    class FakeTable:
+        def __init__(self, values: list[dict[str, object]]) -> None:
+            self.values = values
+
+        def to_pylist(self) -> list[dict[str, object]]:
+            return self.values
+
+    class FakeDataset:
+        version = EXPECTED_DATASET_VERSION
+
+        def to_table(self, *, columns: list[str]) -> FakeTable:
+            assert columns == ["index", "trajectory_metadata"]
+            return FakeTable(rows)
+
+        def take(self, indices: list[int], *, columns: list[str]) -> FakeTable:
+            assert columns == list(LANCE_COLUMNS)
+            return FakeTable([rows[index] for index in indices])
+
+    import lance
+
+    monkeypatch.setattr(lance, "dataset", lambda _: FakeDataset(), raising=False)
+    monkeypatch.setattr("sim.manorl.trajectory._initial_support_shift", lambda *_: 0.0)
+    observed = []
+    for cycle in range(4):
+        batch = load_assigned_trajectory_batch(
+            TrajectorySelection(
+                "cube1", "01", dataset_path=path, pair_assignment_cycle=cycle
+            ),
+            num_envs=1,
+        )
+        observed.append(batch.trajectories[0].identity.row_index)
+        assert batch.pair_assignment_cycle == cycle
+
+    assert observed == [0, 1, 2, 0]
 
 
 def test_assigned_loader_does_not_decode_pairs_without_environment_slots(
