@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 import time
@@ -202,6 +203,126 @@ def passive_dexhand_viewer(env: Any, *, headless: bool) -> Iterator[PassiveDexHa
         viewer.close()
 
 
+def _tile_layout(count: int, *, width: int, height: int) -> list[tuple[int, int, int, int]]:
+    if count < 1:
+        raise ValueError("tile_envs must be positive")
+    columns = math.ceil(math.sqrt(count))
+    rows = math.ceil(count / columns)
+    tile_width, tile_height = width // columns, height // rows
+    return [
+        ((index % columns) * tile_width, height - (index // columns + 1) * tile_height, tile_width, tile_height)
+        for index in range(count)
+    ]
+
+
+class TiledDexHandRenderer:
+    """Local GLFW/MuJoCo observer for a batch runtime; it never owns physics."""
+
+    def __init__(self, environment: Any, *, tile_envs: int) -> None:
+        if not 1 <= tile_envs <= environment.num_envs:
+            raise ValueError("tile_envs must be within [1, num_envs]")
+        _require_graphical_display(headless=False)
+        import glfw
+
+        self.environment, self.tile_envs = environment, tile_envs
+        self.glfw, self.mujoco = glfw, environment.mujoco
+        self.width, self.height = 1600, 900
+        self.window: Any | None = None
+        self._initialized = False
+        if not glfw.init():
+            raise RuntimeError("GLFW initialization failed for tiled DexHand rendering")
+        self._initialized = True
+        try:
+            self.window = glfw.create_window(self.width, self.height, f"DexHandRL batch viewer ({tile_envs} worlds)", None, None)
+            if self.window is None:
+                raise RuntimeError("could not create GLFW window for tiled DexHand rendering")
+            glfw.make_context_current(self.window)
+            glfw.swap_interval(1)
+            mujoco = self.mujoco
+            self.data = [mujoco.MjData(environment.model) for _ in range(tile_envs)]
+            self.camera = mujoco.MjvCamera()
+            mujoco.mjv_defaultCamera(self.camera)
+            self.camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+            self._reset_camera()
+            self.option = mujoco.MjvOption()
+            mujoco.mjv_defaultOption(self.option)
+            self.scene = mujoco.MjvScene(environment.model, maxgeom=10_000)
+            self.context = mujoco.MjrContext(environment.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+            self.viewports = _tile_layout(tile_envs, width=self.width, height=self.height)
+            self._install_controls()
+        except BaseException:
+            self.close()
+            raise
+
+    def _reset_camera(self) -> None:
+        self.camera.azimuth, self.camera.elevation, self.camera.distance = 135.0, -20.0, 1.2
+        self.camera.lookat[:] = (0.25, 0.0, 0.1)
+
+    def _install_controls(self) -> None:
+        glfw, mujoco, window = self.glfw, self.mujoco, self.window
+        mouse = {"left": False, "middle": False, "right": False, "x": 0.0, "y": 0.0}
+        def button(_: Any, which: int, action: int, __: int) -> None:
+            if which == glfw.MOUSE_BUTTON_LEFT: mouse["left"] = action == glfw.PRESS
+            elif which == glfw.MOUSE_BUTTON_MIDDLE: mouse["middle"] = action == glfw.PRESS
+            elif which == glfw.MOUSE_BUTTON_RIGHT: mouse["right"] = action == glfw.PRESS
+            mouse["x"], mouse["y"] = glfw.get_cursor_pos(window)
+        def cursor(_: Any, x: float, y: float) -> None:
+            w, h = glfw.get_window_size(window); dx, dy = (x - mouse["x"]) / max(w, 1), (y - mouse["y"]) / max(h, 1)
+            mouse["x"], mouse["y"] = x, y
+            action = mujoco.mjtMouse.mjMOUSE_ROTATE_V if mouse["left"] else (mujoco.mjtMouse.mjMOUSE_MOVE_V if mouse["middle"] else (mujoco.mjtMouse.mjMOUSE_MOVE_H if mouse["right"] else None))
+            if action is not None: mujoco.mjv_moveCamera(self.environment.model, action, dx, -dy, self.scene, self.camera)
+        def scroll(_: Any, __: float, offset: float) -> None:
+            mujoco.mjv_moveCamera(self.environment.model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0, -0.05 * offset, self.scene, self.camera)
+        def key(_: Any, key: int, __: int, action: int, ___: int) -> None:
+            if action == glfw.PRESS and key == glfw.KEY_R: self._reset_camera()
+            elif action == glfw.PRESS and key == glfw.KEY_ESCAPE: glfw.set_window_should_close(window, True)
+        glfw.set_mouse_button_callback(window, button); glfw.set_cursor_pos_callback(window, cursor)
+        glfw.set_scroll_callback(window, scroll); glfw.set_key_callback(window, key)
+
+    def render(self, snapshot: Any) -> bool:
+        """Mirror a minimal snapshot; no simulation step primitive is reachable here."""
+        if self.window is None or self.glfw.window_should_close(self.window): return False
+        glfw, mujoco = self.glfw, self.mujoco
+        width, height = glfw.get_framebuffer_size(self.window)
+        if (width, height) != (self.width, self.height):
+            self.width, self.height = width, height; self.viewports = _tile_layout(self.tile_envs, width=width, height=height)
+        mujoco.mjr_rectangle(mujoco.MjrRect(0, 0, width, height), 0.055, 0.085, 0.12, 1.0)
+        for env_id, (x, y, tile_width, tile_height) in enumerate(self.viewports):
+            state = type("RenderState", (), {name: getattr(snapshot, name)[env_id] for name in ("qpos", "qvel", "ctrl")})()
+            mirror_mjx_state_to_mjdata(self.data[env_id], state)
+            mujoco.mj_forward(self.environment.model, self.data[env_id])
+            mujoco.mjv_updateScene(self.environment.model, self.data[env_id], self.option, None, self.camera, mujoco.mjtCatBit.mjCAT_ALL, self.scene)
+            viewport = mujoco.MjrRect(x, y, tile_width, tile_height)
+            mujoco.mjr_render(viewport, self.scene, self.context)
+            mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT, viewport, f"world {env_id}", f"frame {int(snapshot.frame[env_id])}  episode {int(snapshot.episode_count[env_id])}", self.context)
+        glfw.swap_buffers(self.window); glfw.poll_events()
+        return not glfw.window_should_close(self.window)
+
+    def close(self) -> None:
+        window, initialized = self.window, self._initialized
+        self.window, self._initialized = None, False
+        try:
+            if window is not None: self.glfw.destroy_window(window)
+        finally:
+            if initialized: self.glfw.terminate()
+
+
+class BatchZeroActionStepper:
+    """Zero 22D residual actions; reset terminal worlds on device before next step."""
+
+    def __init__(self, environment: Any) -> None:
+        self.environment = environment
+        self.actions = np.zeros((environment.num_envs, environment.num_actions), dtype=np.float32)
+        self.pending_done = None
+        self.environment.reset_device()
+
+    def step(self) -> None:
+        if self.pending_done is not None:
+            self.environment.reset_done_device(self.pending_done)
+        transition = self.environment.step_device(self.actions)
+        self.pending_done = transition.terminated | transition.truncated
+
+
 class ZeroActionStepper:
     """Production stepper that supplies zero 22D policy actions each control step."""
 
@@ -222,6 +343,78 @@ class ZeroActionStepper:
             else:
                 self.finished = True
         return transition
+
+
+def _validate_batch_options(args: argparse.Namespace) -> None:
+    if args.num_envs < 1:
+        raise ValueError("--num-envs must be positive")
+    if args.tile_envs < 1 or args.tile_envs > args.num_envs:
+        raise ValueError("--tile-envs must be within [1, num-envs]")
+    if args.render_stride < 1:
+        raise ValueError("--render-stride must be positive")
+    if args.num_envs > 1:
+        if args.runtime_backend != "mjx-warp":
+            raise ValueError("multi-env viewing requires --runtime-backend mjx-warp")
+        if args.object_name != "cube1":
+            raise ValueError("multi-env viewing requires --object cube1")
+        if args.action != "01":
+            raise ValueError("multi-env viewing requires --gesture 01")
+
+
+def _resolve_batched_assignments(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Select cube1/action01 rows in stable order and cycle them across worlds."""
+    from sim.dexhandrl.lance_loader import list_trajectories
+    rows = [row for row in list_trajectories(args.lance_path, limit=None)
+            if row["object_name"] == "cube1" and row["action"] == "01"]
+    rows.sort(key=lambda row: (int(row["row_id"]), str(row["uuid"])))
+    if not rows:
+        raise RuntimeError(f"no trajectories found for cube1/01 in {args.lance_path}")
+    if args.uuid is not None:
+        matched = [(index, row) for index, row in enumerate(rows) if row["uuid"] == args.uuid]
+        if not matched:
+            raise RuntimeError(f"trajectory uuid {args.uuid!r} not found for cube1/01")
+        index, row = matched[0]
+        return [{**row, "sequence_index": index} for _ in range(args.num_envs)]
+    start = args.sequence_index % len(rows)
+    return [{**rows[(start + env_id) % len(rows)], "sequence_index": (start + env_id) % len(rows)}
+            for env_id in range(args.num_envs)]
+
+
+def _run_batched(args: argparse.Namespace, options: ViewerOptions, physics: DexHandPhysicsConfig) -> int:
+    from sim.dexhandrl.skrl_batch_env import DexHandRLBatchConfig, DexHandRLMJXBatchEnv
+    from sim.dexhandrl.trajectory_batch import load_trajectory_batch
+    root = Path(args.isaac_source_root)
+    assignments = _resolve_batched_assignments(args)
+    trajectories = load_trajectory_batch(
+        args.lance_path, assignments, pre_contact_frames=200, post_contact_frames=250,
+        contact_bodies_file=root / "assets/all_assets/Assets/object_grasps_simple.yaml",
+        task_config_path=root / "dexhand_env/cfg/task/Dexhand021proReconstruction.yaml",
+    )
+    env = DexHandRLMJXBatchEnv(DexHandRLBatchConfig(
+        trajectories=trajectories, action="all", device=args.device, object_name="cube1", physics=physics,
+        use_residual=options.use_residual, object_position_terminal_threshold=options.terminal_threshold,
+        isaac_source_root=root,
+    ))
+    try:
+        print(f"DexHandRL tiled viewer: backend=mjx-warp device={args.device} worlds={env.num_envs} tiles={args.tile_envs}; zero 22D residual actions", flush=True)
+        stepper, steps = BatchZeroActionStepper(env), 0
+        renderer = TiledDexHandRenderer(env, tile_envs=args.tile_envs)
+        try:
+            while True:
+                started = time.monotonic()
+                stepper.step()
+                steps += 1
+                if steps % args.render_stride == 0 and not renderer.render(env.render_snapshot()):
+                    break
+                if args.max_steps is not None and steps >= args.max_steps:
+                    break
+                if options.sleep_enabled:
+                    time.sleep(_sleep_duration(control_dt=physics.control_dt, speed=options.speed, compute_time=time.monotonic() - started))
+        finally:
+            renderer.close()
+        return steps
+    finally:
+        env.close()
 
 
 def _physics_from_args(args: argparse.Namespace) -> DexHandPhysicsConfig:
@@ -252,6 +445,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--isaac-source-root", type=Path, default=DEFAULT_ISAAC_SOURCE_ROOT)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="cpu")
     parser.add_argument("--runtime-backend", choices=("mujoco-native", "mjx-warp"), default="mujoco-native")
+    parser.add_argument("--num-envs", type=int, default=1, help="number of genuine MJX-Warp worlds (default: 1)")
+    parser.add_argument("--tile-envs", type=int, default=1, help="number of worlds rendered as tiles (default: 1)")
+    parser.add_argument("--render-stride", type=int, default=1, help="render every N completed batch transitions (default: 1)")
     parser.add_argument(
         "--use_residual", type=_parse_cli_bool, default=True, action=_StoreExplicit,
         metavar="{true,false}", help="enable 22D residual action processing (default: true)",
@@ -297,11 +493,14 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--checkpoint is not supported by the native zero-action viewer")
     if args.runtime_backend == "mujoco-native" and args.device != "cpu":
         raise ValueError("--runtime-backend mujoco-native requires --device cpu")
+    _validate_batch_options(args)
     options = _resolve_viewer_options(args)
     _require_graphical_display(headless=args.headless)
+    physics = _physics_from_args(args)
+    if args.num_envs > 1:
+        return _run_batched(args, options, physics)
     from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 
-    physics = _physics_from_args(args)
     env = DexHandRLMJXEnv(DexHandRLMJXEnvConfig(
         lance_path=args.lance_path, isaac_source_root=args.isaac_source_root,
         object_name=args.object_name, action=args.action, sequence_index=args.sequence_index,

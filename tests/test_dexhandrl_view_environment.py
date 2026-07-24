@@ -8,11 +8,15 @@ import pytest
 import sim.dexhandrl.skrl_env as skrl_env_module
 from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 from sim.dexhandrl.view_environment import (
+    BatchZeroActionStepper,
     PassiveDexHandViewer,
+    TiledDexHandRenderer,
     ZeroActionStepper,
     _parser,
     _parse_cli_bool,
     _require_graphical_display,
+    _resolve_batched_assignments,
+    _validate_batch_options,
     _resolve_viewer_options,
     _sleep_duration,
     _wait_for_passive_viewer_shutdown,
@@ -44,6 +48,33 @@ def test_viewer_parser_defaults_are_manorl_aligned():
 def test_viewer_parser_allows_explicit_mjx_warp_selection():
     args = _parser().parse_args(["--runtime-backend", "mjx-warp", "--device", "gpu"])
     assert (args.runtime_backend, args.device) == ("mjx-warp", "gpu")
+
+
+def test_tiled_viewer_validation_requires_mjx_cube01_and_valid_tile_range():
+    args = _parser().parse_args(["--runtime-backend", "mjx-warp", "--device", "gpu", "--num-envs", "8", "--tile-envs", "8"])
+    _validate_batch_options(args)
+    for argv, message in [
+        (["--num-envs", "8"], "requires --runtime-backend"),
+        (["--runtime-backend", "mjx-warp", "--num-envs", "8", "--tile-envs", "9"], "tile-envs"),
+        (["--runtime-backend", "mjx-warp", "--num-envs", "8", "--gesture", "02"], "gesture 01"),
+        (["--runtime-backend", "mjx-warp", "--num-envs", "8", "--render-stride", "0"], "render-stride"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            _validate_batch_options(_parser().parse_args(argv))
+
+
+def test_batched_cube01_assignments_are_stable_and_cycle(monkeypatch):
+    import sim.dexhandrl.lance_loader as loader
+    rows = [
+        {"object_name": "cube1", "action": "01", "uuid": "later", "row_id": 20},
+        {"object_name": "cube1", "action": "01", "uuid": "first", "row_id": 10},
+        {"object_name": "cube1", "action": "02", "uuid": "other", "row_id": 1},
+    ]
+    monkeypatch.setattr(loader, "list_trajectories", lambda *_args, **_kwargs: rows)
+    args = _parser().parse_args(["--runtime-backend", "mjx-warp", "--num-envs", "4", "--sequence-index", "1"])
+    specs = _resolve_batched_assignments(args)
+    assert [spec["uuid"] for spec in specs] == ["later", "first", "later", "first"]
+    assert [spec["sequence_index"] for spec in specs] == [1, 0, 1, 0]
 
 
 def test_viewer_parser_preserves_old_command_compatibility():
@@ -103,6 +134,30 @@ def test_graphical_viewer_rejects_headless_or_missing_display(monkeypatch):
     monkeypatch.delenv("DISPLAY", raising=False)
     with pytest.raises(RuntimeError, match="requires DISPLAY"):
         _require_graphical_display(headless=False)
+
+
+def test_batch_stepper_resets_terminal_rows_before_the_next_batched_step():
+    class Environment:
+        num_envs, num_actions = 2, 22
+        def __init__(self): self.calls = []
+        def reset_device(self): self.calls.append("initial")
+        def reset_done_device(self, done): self.calls.append(("reset", done))
+        def step_device(self, actions):
+            self.calls.append(("step", actions.copy()))
+            return type("Transition", (), {"terminated": np.array([True, False]), "truncated": np.array([False, False])})()
+
+    env = Environment()
+    stepper = BatchZeroActionStepper(env)
+    stepper.step(); stepper.step()
+    assert env.calls[0] == "initial"
+    assert env.calls[1][0] == "step" and env.calls[2][0] == "reset" and env.calls[3][0] == "step"
+    assert env.calls[1][1].shape == (2, 22) and not env.calls[1][1].any()
+
+
+def test_tiled_renderer_is_observer_only():
+    # The renderer accepts snapshots and calls only native mirror/render APIs;
+    # stepping remains exclusively in BatchZeroActionStepper.
+    assert "step_device" not in TiledDexHandRenderer.render.__code__.co_names
 
 
 def test_zero_action_stepper_steps_production_shaped_environment_and_resets_when_looping():

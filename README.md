@@ -505,6 +505,24 @@ DISPLAY=:1 PYTHONPATH="$PWD" \
   --speed 0.25 --use_residual false --terminal true
 ```
 
+For an interactive tiled GPU view of eight genuine MJX-Warp worlds, use one compiled
+cube1 model and device-resident batch state:
+
+```bash
+DISPLAY=:1 PYTHONPATH="$PWD" JAX_PLATFORMS=cuda \
+  /home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python \
+  -m sim.dexhandrl.view_environment \
+  --runtime-backend mjx-warp --device gpu --object cube1 --gesture 01 \
+  --num-envs 8 --tile-envs 8 --render-stride 1 --use_residual false --terminal true
+```
+
+This tiled path selects cube1/action01 trajectories deterministically, advances one
+`DexHandRLMJXBatchEnv` with zero 22D residual actions, resets terminal rows on device
+before their next transition, and mirrors only `qpos`, `qvel`, `ctrl`, frame, and episode
+counters into eight native `MjData` render buffers. It never advances native render
+physics or copies Warp contact/capacity telemetry. `--device cpu` remains available for
+diagnosis but is not expected to be responsive at this batch size.
+
 The viewer defaults explicitly to the CPU-only `mujoco-native` runtime. It
 advances the same generated scene and immutable `physics_contract` through the
 same controller, reset and per-backend settling, ordered velocity/position

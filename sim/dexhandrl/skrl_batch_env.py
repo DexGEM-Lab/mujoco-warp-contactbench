@@ -136,6 +136,22 @@ class _BatchState(NamedTuple):
     joint_offset: Any
 
 
+@dataclass(frozen=True)
+class BatchRenderSnapshot:
+    """Small host-owned state needed to mirror batched worlds for rendering.
+
+    This intentionally excludes MJX-Warp's global contact and constraint
+    buffers.  Rendering needs generalized coordinates and controls only;
+    asking it for telemetry would synchronize and copy capacity-sized buffers.
+    """
+
+    qpos: np.ndarray
+    qvel: np.ndarray
+    ctrl: np.ndarray
+    frame: np.ndarray
+    episode_count: np.ndarray
+
+
 def conservative_batch_contact_capacity(num_envs: int) -> int:
     """Global Warp contact capacity: preregistered 128 rows per world + 64.
 
@@ -500,6 +516,18 @@ class DexHandRLMJXBatchEnv:
     def reset_done_device(self, mask: Any) -> DeviceBatchTransition:
         self.state = self._reset_mask_fn(self.state, mask)
         return self._reset_observation_fn(self.state)
+
+    def render_snapshot(self) -> BatchRenderSnapshot:
+        """Materialize only render-relevant per-world state on the host.
+
+        Deliberately do not inspect ``data._impl``: its contact/constraint
+        arrays scale with batch capacity and are logging-only telemetry.
+        """
+        data = self.state.data
+        return BatchRenderSnapshot(
+            qpos=np.asarray(data.qpos), qvel=np.asarray(data.qvel), ctrl=np.asarray(data.ctrl),
+            frame=np.asarray(self.state.frame), episode_count=np.asarray(self.state.episode_count),
+        )
 
     def telemetry(self) -> dict[str, Any]:
         """Opt-in host snapshot of requested/actual capacities and high water.

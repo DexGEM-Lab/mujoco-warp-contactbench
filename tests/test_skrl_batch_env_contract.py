@@ -34,6 +34,25 @@ def _batch(worlds: int = 1) -> DexHandTrajectoryBatch:
     )
 
 
+def test_render_snapshot_materializes_only_render_state_not_contact_telemetry() -> None:
+    from sim.dexhandrl.skrl_batch_env import DexHandRLMJXBatchEnv
+
+    class Data:
+        qpos = np.ones((2, 3), dtype=np.float32)
+        qvel = np.ones((2, 2), dtype=np.float32)
+        ctrl = np.ones((2, 4), dtype=np.float32)
+        @property
+        def _impl(self):
+            raise AssertionError("render snapshot must not access Warp contact telemetry")
+
+    env = object.__new__(DexHandRLMJXBatchEnv)
+    env.state = type("State", (), {"data": Data(), "frame": np.array([3, 4]), "episode_count": np.array([5, 6])})()
+    snapshot = env.render_snapshot()
+    np.testing.assert_array_equal(snapshot.qpos, Data.qpos)
+    np.testing.assert_array_equal(snapshot.frame, [3, 4])
+    np.testing.assert_array_equal(snapshot.episode_count, [5, 6])
+
+
 def test_batch_config_requires_all_actions_and_active_reference() -> None:
     batch = _batch()
     with pytest.raises(ValueError, match="action='all'"):
