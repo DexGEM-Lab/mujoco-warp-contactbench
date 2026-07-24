@@ -28,6 +28,17 @@ def _model(adapter: ManoGymnasiumVectorEnv) -> ManoActorCritic:
     )
 
 
+def test_cuda_ordinal_resolution_treats_implicit_cuda_as_current_device() -> None:
+    import torch
+
+    from sim.manorl.skrl_runtime import _resolved_cuda_ordinal
+
+    assert _resolved_cuda_ordinal(torch.device("cuda"), current_ordinal=2) == 2
+    assert _resolved_cuda_ordinal(torch.device("cuda:0"), current_ordinal=2) == 0
+    assert _resolved_cuda_ordinal(torch.device("cuda:2"), current_ordinal=0) == 2
+    assert _resolved_cuda_ordinal(torch.device("cpu"), current_ordinal=2) is None
+
+
 def test_model_defaults_to_source_pointnet_film(adapter: ManoGymnasiumVectorEnv) -> None:
     import torch
 

@@ -29,6 +29,15 @@ from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, PPO_REWARD_SCALE, REWARD_
 from sim.manorl.rl_games_ppo import RlGamesAdaptiveLR, RlGamesPPO
 
 
+def _resolved_cuda_ordinal(device: Any, *, current_ordinal: int) -> int | None:
+    """Resolve implicit ``cuda`` and explicit ``cuda:N`` into one namespace."""
+
+    if getattr(device, "type", None) != "cuda":
+        return None
+    index = getattr(device, "index", None)
+    return int(current_ordinal if index is None else index)
+
+
 def source_aligned_reward_shaper(
     rewards: torch.Tensor, timestep: int, timesteps: int
 ) -> torch.Tensor:
@@ -264,8 +273,21 @@ class DeviceTransitionGymnasiumWrapper(ResettableGymnasiumWrapper):
         reward = jax_to_torch_cuda(transition.reward).to(dtype=torch.float32).view(self.num_envs, 1)
         terminated = jax_to_torch_cuda(transition.reset).to(dtype=torch.bool).view(self.num_envs, 1)
         truncated = torch.zeros_like(terminated)
-        if observation.device != self.device or reward.device != self.device or terminated.device != self.device:
-            raise RuntimeError("JAX-to-Torch DLPack transition changed CUDA device")
+        current_ordinal = torch.cuda.current_device()
+        expected_ordinal = _resolved_cuda_ordinal(
+            self.device, current_ordinal=current_ordinal
+        )
+        transition_ordinals = tuple(
+            _resolved_cuda_ordinal(tensor.device, current_ordinal=current_ordinal)
+            for tensor in (observation, reward, terminated)
+        )
+        if expected_ordinal is None or any(
+            ordinal != expected_ordinal for ordinal in transition_ordinals
+        ):
+            raise RuntimeError(
+                "JAX-to-Torch DLPack transition changed CUDA device: "
+                f"expected cuda:{expected_ordinal}, received {transition_ordinals}"
+            )
         if observation.dtype != torch.float32:
             raise RuntimeError("JAX-to-Torch DLPack observation must be float32")
         if self._vectorized:
