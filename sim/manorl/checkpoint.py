@@ -152,6 +152,15 @@ def _validate_model_compatibility(metadata: dict[str, Any], agent: "PPO") -> Non
         )
 
 
+def _canonical_residual_action(value: dict[str, Any]) -> dict[str, Any]:
+    """Normalize tuple/list JSON differences and legacy implicit 1x multipliers."""
+
+    normalized = json.loads(json.dumps(value, sort_keys=True))
+    normalized.setdefault("joint_scale_multiplier", 1.0)
+    normalized.setdefault("joint_max_offset_multiplier", 1.0)
+    return normalized
+
+
 def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> None:
     """Reject side/layout mismatches when a checkpoint records the new fields.
 
@@ -208,6 +217,16 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
             raise CheckpointFormatError(
                 f"checkpoint environment {field}={checkpoint_value!r} does not match "
                 f"target runtime {target_value!r}"
+            )
+
+    checkpoint_residual = checkpoint_environment.get("residual_action")
+    target_residual = target_environment.get("residual_action")
+    if isinstance(checkpoint_residual, dict) and isinstance(target_residual, dict):
+        checkpoint_residual = _canonical_residual_action(checkpoint_residual)
+        target_residual = _canonical_residual_action(target_residual)
+        if checkpoint_residual != target_residual:
+            raise CheckpointFormatError(
+                "checkpoint environment residual_action does not match target runtime"
             )
 
 

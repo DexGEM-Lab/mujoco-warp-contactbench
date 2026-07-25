@@ -205,6 +205,11 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
         "action_dim": 28,
         "observation_dim": 480,
         "model_action_dim": 56,
+        "warp_ccd": {},
+        "residual_action": {
+            "joint_scale_multiplier": 1.0,
+            "joint_max_offset_multiplier": 1.0,
+        },
     }
     agent = Agent()
     agent.manorl_environment_signature = signature.copy()
@@ -231,6 +236,22 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     with pytest.raises(CheckpointFormatError, match="controlled_hand_sides"):
         load_skrl_checkpoint_for_inference(agent, checkpoint)
     assert agent.loaded is None
+
+    mismatched_residual = copy.deepcopy(metadata)
+    mismatched_residual["runtime_config"]["environment"]["residual_action"][
+        "joint_scale_multiplier"
+    ] = 1.5
+    sidecar.write_text(json.dumps(mismatched_residual), encoding="utf-8")
+    with pytest.raises(CheckpointFormatError, match="residual_action"):
+        load_skrl_checkpoint(agent, checkpoint)
+
+    # Sidecars written before explicit multiplier fields had an implicit 1x
+    # contract and remain compatible with a current 1x target runtime.
+    implicit_one = copy.deepcopy(metadata)
+    implicit_one["runtime_config"]["environment"]["residual_action"] = {}
+    sidecar.write_text(json.dumps(implicit_one), encoding="utf-8")
+    load_skrl_checkpoint(agent, checkpoint)
+    assert agent.loaded == str(checkpoint)
 
     # The current runtime no longer accepts pre-28-DoF sidecars without a hand
     # signature, even if their tensor shapes happen to load.

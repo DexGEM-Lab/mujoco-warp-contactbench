@@ -45,6 +45,8 @@ def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
         *(0.1, 0.1, 0.15, 0.1) * 4,
     )
     assert len(config.joint_scale) == len(config.max_joint_offset) == 22
+    assert config.joint_scale_multiplier == 1.0
+    assert config.joint_max_offset_multiplier == 1.0
     assert config.early_phase_steps == 30
     values = _control_inputs()
     result = process_residual_actions(
@@ -65,6 +67,52 @@ def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
     np.testing.assert_array_equal(result.cumulative_joint_offset[2, 10:], 0.0)
     # Rotation is immediate, unlike the position and joint cumulative residuals.
     np.testing.assert_allclose(result.targets[2, 3:6], 0.00025)
+
+
+def test_joint_scale_and_cap_multipliers_apply_exactly_once() -> None:
+    values = _control_inputs(batch=1)
+    values["raw_actions"][:] = 1.0
+    values["cumulative_offset"][:] = 0.0
+    values["cumulative_joint_offset"][:] = 0.0
+    values["active_joint_mask"][:] = True
+    config = ResidualActionConfig(
+        joint_scale_multiplier=1.5,
+        joint_max_offset_multiplier=1.5,
+    )
+    base_scales = np.asarray(config.joint_scale)
+    base_caps = np.asarray(config.max_joint_offset)
+
+    first = process_residual_actions(
+        **values,
+        trajectory_steps=np.array([51]),
+        config=config,
+    )
+    np.testing.assert_allclose(
+        first.cumulative_joint_offset,
+        1.5 * base_scales[None, :],
+    )
+    np.testing.assert_allclose(first.cumulative_offset, [[0.002, 0.002, 0.002]])
+
+    capped = process_residual_actions(
+        **{
+            **values,
+            "cumulative_joint_offset": 10.0 * base_caps[None, :],
+        },
+        trajectory_steps=np.array([52]),
+        config=config,
+    )
+    np.testing.assert_allclose(
+        capped.cumulative_joint_offset,
+        1.5 * base_caps[None, :],
+    )
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, np.nan, np.inf])
+def test_joint_multipliers_must_be_finite_and_positive(value: float) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        ResidualActionConfig(joint_scale_multiplier=value)
+    with pytest.raises(ValueError, match="finite and positive"):
+        ResidualActionConfig(joint_max_offset_multiplier=value)
 
 
 def test_position_action_unit_maps_signed_xy_and_z_steps() -> None:

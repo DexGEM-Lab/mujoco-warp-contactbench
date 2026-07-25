@@ -55,7 +55,17 @@ class ResidualActionConfig:
     max_position_offset: tuple[float, float, float] = (0.02, 0.02, 0.02)
     joint_scale: tuple[float, ...] = SOURCE_ALIGNED_JOINT_SCALE
     max_joint_offset: tuple[float, ...] = SOURCE_ALIGNED_JOINT_CAP
+    joint_scale_multiplier: float = 1.0
+    joint_max_offset_multiplier: float = 1.0
     early_phase_steps: int = DEFAULT_EARLY_PHASE_STEPS
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("joint_scale_multiplier", self.joint_scale_multiplier),
+            ("joint_max_offset_multiplier", self.joint_max_offset_multiplier),
+        ):
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
 
 
 SOURCE_ALIGNED_RESIDUAL_ACTION: Final = ResidualActionConfig()
@@ -251,8 +261,14 @@ def process_residual_actions(
     accumulate = (steps != 0) & ~early & residual
 
     position_scale = np.asarray(config.position_scale, dtype=np.float64)
-    joint_scale = np.asarray(config.joint_scale, dtype=np.float64)
-    joint_limit = np.asarray(config.max_joint_offset, dtype=np.float64)
+    joint_scale = (
+        np.asarray(config.joint_scale, dtype=np.float64)
+        * config.joint_scale_multiplier
+    )
+    joint_limit = (
+        np.asarray(config.max_joint_offset, dtype=np.float64)
+        * config.joint_max_offset_multiplier
+    )
     if len(config.joint_scale) == 22 and cumulative_dim == 20:
         # A 28-DoF default config may be used by a legacy 26-DoF replay;
         # drop CMC twist and MCP abduction while retaining the named legacy

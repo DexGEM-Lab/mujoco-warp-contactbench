@@ -193,6 +193,8 @@ class TrainingBudget:
     dataset_version: int | None = None
     hand_side: str = "auto"
     residual_enabled: bool = True
+    joint_scale_multiplier: float = 1.0
+    joint_max_offset_multiplier: float = 1.0
     use_film: bool = True
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
@@ -222,6 +224,13 @@ class TrainingBudget:
     @property
     def transitions(self) -> int:
         return self.num_envs * ManoPPOConfig().rollouts * self.updates
+
+    @property
+    def residual_action_config(self) -> ResidualActionConfig:
+        return ResidualActionConfig(
+            joint_scale_multiplier=self.joint_scale_multiplier,
+            joint_max_offset_multiplier=self.joint_max_offset_multiplier,
+        )
 
     @property
     def resolved_minibatch_size(self) -> int:
@@ -535,7 +544,7 @@ def _wandb_config(
     trajectory_selection: dict[str, object] | None = None,
     device: dict[str, object],
 ) -> dict[str, object]:
-    residual_action = ResidualActionConfig()
+    residual_action = budget.residual_action_config
     config = {
         "training_budget": {
             **asdict(budget),
@@ -586,6 +595,8 @@ def _wandb_config(
                 "max_position_offset": list(residual_action.max_position_offset),
                 "joint_scale": list(residual_action.joint_scale),
                 "max_joint_offset": list(residual_action.max_joint_offset),
+                "joint_scale_multiplier": residual_action.joint_scale_multiplier,
+                "joint_max_offset_multiplier": residual_action.joint_max_offset_multiplier,
                 "early_phase_steps": residual_action.early_phase_steps,
                 "rotation_effective_scale": 0.00025,
             },
@@ -1765,6 +1776,7 @@ def _build_evaluation_runtime(
             num_envs=num_envs,
             device="gpu",
             residual_enabled=budget.residual_enabled,
+            residual_action=budget.residual_action_config,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
             contact_capacity=recommended_warp_contact_capacity(
                 num_envs, trajectories.hand_sides
@@ -1975,6 +1987,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             num_envs=budget.num_envs,
             device="gpu",
             residual_enabled=budget.residual_enabled,
+            residual_action=budget.residual_action_config,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
             contact_capacity=contact_capacity,
             device_resident_controls=budget.device_resident_controls,
@@ -2412,6 +2425,18 @@ def main(argv: list[str] | None = None) -> int:
         help="legacy single-pair action selector; requires --object",
     )
     parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
+    parser.add_argument(
+        "--joint-scale-multiplier",
+        type=float,
+        default=1.0,
+        help="multiply all per-joint residual increments after the named base scales",
+    )
+    parser.add_argument(
+        "--joint-max-offset-multiplier",
+        type=float,
+        default=1.0,
+        help="multiply all per-joint cumulative residual caps",
+    )
     parser.add_argument("--film", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--headless", type=parse_cli_bool, default=True, metavar="{true,false}")
@@ -2493,6 +2518,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
+    for name, value in (
+        ("joint-scale-multiplier", args.joint_scale_multiplier),
+        ("joint-max-offset-multiplier", args.joint_max_offset_multiplier),
+    ):
+        if not math.isfinite(value) or value <= 0:
+            parser.error(f"--{name} must be finite and positive")
     for name, value in (
         ("warp-ccd-iterations", args.warp_ccd_iterations),
         ("warp-ccd-contacts-per-world", args.warp_ccd_contacts_per_world),
@@ -2587,6 +2618,8 @@ def main(argv: list[str] | None = None) -> int:
             dataset_version=args.dataset_version,
             hand_side=args.hand_side,
             residual_enabled=args.use_residual,
+            joint_scale_multiplier=args.joint_scale_multiplier,
+            joint_max_offset_multiplier=args.joint_max_offset_multiplier,
             use_film=args.film,
             terminal=args.terminal,
             wandb=WandbOptions(

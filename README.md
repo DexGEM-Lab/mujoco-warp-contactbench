@@ -210,6 +210,13 @@ every eligible pair in the pinned Lance dataset. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
+Finger residual increments and their cumulative caps have independent explicit
+multipliers. Both default to `1.0`; use `--joint-scale-multiplier 1.5` and
+`--joint-max-offset-multiplier 1.5` to match the Gym 1.5x action-scaling
+configuration without changing wrist position or rotation scaling. The values
+are recorded in W&B, Rerun, and native checkpoint metadata; resume rejects a
+checkpoint whose residual-action contract differs from the target runtime.
+
 For an opt-in safety cap that may stop before all 8,000 updates complete, add
 `--wall-clock-seconds <positive-seconds>`. `--evaluation-num-envs` requests a
 minimum diagnostic count within `1..min(--num-envs, 128)`. The trainer raises

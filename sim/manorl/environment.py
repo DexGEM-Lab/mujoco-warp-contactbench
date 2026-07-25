@@ -225,6 +225,8 @@ class EnvironmentConfig:
             raise TypeError("servo must be a ServoConfig")
         if not isinstance(self.residual_enabled, bool):
             raise TypeError("residual_enabled must be bool")
+        if not isinstance(self.residual_action, ResidualActionConfig):
+            raise TypeError("residual_action must be a ResidualActionConfig")
         if not isinstance(self.reward_config, RewardConfig):
             raise TypeError("reward_config must be a RewardConfig")
         if self.max_deviation_distance < 0 or self.deviation_penalty < 0:

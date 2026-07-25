@@ -290,6 +290,39 @@ def test_training_cli_parses_independent_diagnostics_switch(
     assert budget.resolved_capture_transition_diagnostics is True
 
 
+def test_training_cli_parses_joint_action_multipliers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured: list[object] = []
+    monkeypatch.setattr(tool, "run", lambda _output, budget: captured.append(budget) or {})
+
+    assert tool.main([
+        "--output", str(tmp_path / "training"),
+        "--pairs", "banana:01",
+        "--joint-scale-multiplier", "1.5",
+        "--joint-max-offset-multiplier", "1.5",
+    ]) == 0
+    budget = captured[0]
+    assert budget.joint_scale_multiplier == 1.5
+    assert budget.joint_max_offset_multiplier == 1.5
+    assert budget.residual_action_config.joint_scale_multiplier == 1.5
+    assert budget.residual_action_config.joint_max_offset_multiplier == 1.5
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--joint-scale-multiplier", "--joint-max-offset-multiplier"],
+)
+def test_training_cli_rejects_invalid_joint_action_multiplier(
+    flag: str, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    with pytest.raises(SystemExit, match="2"):
+        tool.main(["--output", str(tmp_path / "training"), flag, "0"])
+    assert "must be finite and positive" in capsys.readouterr().err
+
+
 def test_training_cli_parses_pair_assignment_cycle(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

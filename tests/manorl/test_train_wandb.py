@@ -184,7 +184,11 @@ def test_wandb_uses_output_parent_without_root_cache(monkeypatch: pytest.MonkeyP
 
 def test_wandb_config_is_complete_and_json_serializable() -> None:
     tool = _load_tool()
-    budget = _budget(tool, entity="")
+    budget = tool.TrainingBudget(
+        joint_scale_multiplier=1.5,
+        joint_max_offset_multiplier=1.5,
+        wandb=tool.WandbOptions(enabled=True, entity=""),
+    )
     config = tool._wandb_config(
         budget=budget,
         ppo_config=tool.ManoPPOConfig(),
@@ -219,6 +223,8 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
         0.01,
         0.005,
     ]
+    assert config["environment"]["residual_action"]["joint_scale_multiplier"] == 1.5
+    assert config["environment"]["residual_action"]["joint_max_offset_multiplier"] == 1.5
     assert config["environment"]["residual_action"]["early_phase_steps"] == 30
     assert config["environment"]["max_deviation_distance"] == 0.10
     assert config["trajectory_assignments"][0]["identity"] == "cube1_01_009"
