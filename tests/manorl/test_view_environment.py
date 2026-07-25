@@ -704,6 +704,41 @@ def test_inference_config_defaults_to_film_when_sidecar_has_no_model_variant(
     assert _checkpoint_use_film(checkpoint) is True
 
 
+def test_checkpoint_environment_options_restore_residual_and_per_world_ccd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from sim.manorl import checkpoint as checkpoint_module
+    from sim.manorl.view_environment import _checkpoint_environment_options
+
+    checkpoint = tmp_path / "policy.pt"
+    checkpoint.touch()
+    monkeypatch.setattr(
+        checkpoint_module,
+        "checkpoint_runtime_metadata",
+        lambda path: {
+            "runtime_config": {
+                "environment": {
+                    "residual_action": {
+                        "joint_scale_multiplier": 1.5,
+                        "joint_max_offset_multiplier": 1.5,
+                    },
+                    "warp_ccd": {
+                        "ccd_iterations": None,
+                        "contacts_per_world": 16,
+                        "naccdmax": 32768,
+                    },
+                }
+            }
+        },
+    )
+
+    options = _checkpoint_environment_options(checkpoint)
+    assert options.residual_action.joint_scale_multiplier == 1.5
+    assert options.residual_action.joint_max_offset_multiplier == 1.5
+    assert options.warp_ccd_iterations is None
+    assert options.warp_ccd_contacts_per_world == 16
+
+
 def test_stochastic_record_stepper_uses_sidecar_model_variant(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -805,6 +840,69 @@ def test_viewer_dispatches_shared_stepper_to_each_renderer(
     assert not hasattr(created["config"], "visual_meshes")
 
 
+def test_checkpoint_viewer_applies_sidecar_options_and_dataset_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    created: dict[str, object] = {}
+    checkpoint = tmp_path / "policy.pt"
+    checkpoint.touch()
+    dataset = tmp_path / "dataset.lance"
+
+    class FakeEnvironment:
+        def __init__(self, trajectory: object, config: object) -> None:
+            self.config = config
+            created["config"] = config
+
+    def load(selection: object, *, num_envs: int) -> object:
+        created["selection"] = selection
+        created["num_envs"] = num_envs
+        return SimpleNamespace(hand_sides=("right",))
+
+    options = viewer._CheckpointEnvironmentOptions(
+        residual_action=viewer.ResidualActionConfig(
+            joint_scale_multiplier=1.5,
+            joint_max_offset_multiplier=1.5,
+        ),
+        warp_ccd_contacts_per_world=16,
+    )
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    monkeypatch.setattr(viewer, "_validate_checkpoint_path", lambda path: path)
+    monkeypatch.setattr(viewer, "_checkpoint_environment_options", lambda path: options)
+    monkeypatch.setattr(viewer, "load_assigned_trajectory_batch", load)
+    monkeypatch.setattr(viewer, "MujocoManoEnvironment", FakeEnvironment)
+    monkeypatch.setattr(viewer, "_build_checkpoint_stepper", lambda env, path: object())
+    monkeypatch.setattr(viewer, "_view_single", lambda *args, **kwargs: None)
+
+    viewer.view_environment(
+        device="cpu",
+        speed=1.0,
+        loop=False,
+        print_every=1,
+        terminal=True,
+        trajectory_name="accepted",
+        num_envs=1,
+        render_env=0,
+        tile_envs=1,
+        object_type="banana",
+        gesture="01",
+        rerun_output=None,
+        use_residual=True,
+        checkpoint=checkpoint,
+        dataset_path=dataset,
+        dataset_version=978,
+        hand_side="right",
+    )
+
+    selection = created["selection"]
+    assert selection.expected_dataset_version == 978
+    config = created["config"]
+    assert config.residual_action.joint_scale_multiplier == 1.5
+    assert config.residual_action.joint_max_offset_multiplier == 1.5
+    assert config.warp_ccd_contacts_per_world == 16
+
+
 def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytest.MonkeyPatch) -> None:
     import sim.manorl.view_environment as viewer
 
@@ -826,6 +924,10 @@ def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytes
             use_residual=False,
             checkpoint=Path("policy.pt"),
         )
+
+
+def test_viewer_cli_accepts_pinned_dataset_version() -> None:
+    assert parse_args(["--dataset-version", "978"]).dataset_version == 978
 
 
 def test_removed_policy_contract_cli_is_rejected() -> None:

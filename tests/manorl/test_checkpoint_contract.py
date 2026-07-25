@@ -205,7 +205,11 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
         "action_dim": 28,
         "observation_dim": 480,
         "model_action_dim": 56,
-        "warp_ccd": {},
+        "warp_ccd": {
+            "ccd_iterations": None,
+            "contacts_per_world": 16,
+            "naccdmax": 32768,
+        },
         "residual_action": {
             "joint_scale_multiplier": 1.0,
             "joint_max_offset_multiplier": 1.0,
@@ -221,6 +225,9 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     sidecar = checkpoint.with_suffix(checkpoint.suffix + ".json")
     metadata = json.loads(sidecar.read_text(encoding="utf-8"))
 
+    # Aggregate CCD scratch scales with num_envs and is not a policy/physics
+    # compatibility field. A one-world viewer must load an N2048 checkpoint.
+    agent.manorl_environment_signature["warp_ccd"]["naccdmax"] = 16
     load_skrl_checkpoint(agent, checkpoint)
     assert agent.loaded == str(checkpoint)
 
@@ -236,6 +243,14 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     with pytest.raises(CheckpointFormatError, match="controlled_hand_sides"):
         load_skrl_checkpoint_for_inference(agent, checkpoint)
     assert agent.loaded is None
+
+    mismatched_ccd = copy.deepcopy(metadata)
+    mismatched_ccd["runtime_config"]["environment"]["warp_ccd"][
+        "contacts_per_world"
+    ] = 8
+    sidecar.write_text(json.dumps(mismatched_ccd), encoding="utf-8")
+    with pytest.raises(CheckpointFormatError, match="warp_ccd"):
+        load_skrl_checkpoint(agent, checkpoint)
 
     mismatched_residual = copy.deepcopy(metadata)
     mismatched_residual["runtime_config"]["environment"]["residual_action"][

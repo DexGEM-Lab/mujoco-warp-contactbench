@@ -161,6 +161,15 @@ def _canonical_residual_action(value: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _canonical_warp_ccd(value: object) -> object:
+    """Remove aggregate capacity, which scales with the target vector batch."""
+
+    normalized = json.loads(json.dumps(value, sort_keys=True))
+    if isinstance(normalized, dict):
+        normalized.pop("naccdmax", None)
+    return normalized
+
+
 def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> None:
     """Reject side/layout mismatches when a checkpoint records the new fields.
 
@@ -213,6 +222,9 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
                 )
             checkpoint_value = tuple(checkpoint_value)
             target_value = tuple(target_value)
+        elif field == "warp_ccd":
+            checkpoint_value = _canonical_warp_ccd(checkpoint_value)
+            target_value = _canonical_warp_ccd(target_value)
         if checkpoint_value != target_value:
             raise CheckpointFormatError(
                 f"checkpoint environment {field}={checkpoint_value!r} does not match "

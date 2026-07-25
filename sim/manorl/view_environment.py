@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
+from dataclasses import dataclass, fields
 import math
 import os
 from pathlib import Path
@@ -19,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
-from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
+from sim.manorl.abi import ResidualActionConfig, TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.assets import (
     COLLISION_GEOM_GROUP,
     compile_model,
@@ -130,6 +131,68 @@ def _inference_ppo_config(num_envs: int, *, use_film: bool = True) -> ManoPPOCon
         minibatch_size=num_envs,
         learning_epochs=1,
         use_film=use_film,
+    )
+
+
+@dataclass(frozen=True)
+class _CheckpointEnvironmentOptions:
+    residual_action: ResidualActionConfig = ResidualActionConfig()
+    warp_ccd_iterations: int | None = None
+    warp_ccd_contacts_per_world: int | None = None
+
+
+def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentOptions:
+    """Restore action and per-world CCD semantics from native checkpoint metadata."""
+
+    from sim.manorl.checkpoint import CheckpointFormatError, checkpoint_runtime_metadata
+
+    metadata = checkpoint_runtime_metadata(checkpoint)
+    runtime_config = metadata.get("runtime_config")
+    environment = (
+        runtime_config.get("environment")
+        if isinstance(runtime_config, dict)
+        else None
+    )
+    if not isinstance(environment, dict):
+        return _CheckpointEnvironmentOptions()
+
+    residual_values = environment.get("residual_action")
+    if residual_values is None:
+        residual_action = ResidualActionConfig()
+    elif isinstance(residual_values, dict):
+        allowed = {item.name for item in fields(ResidualActionConfig)}
+        unknown = sorted(set(residual_values) - allowed)
+        if unknown:
+            raise CheckpointFormatError(
+                f"checkpoint residual_action has unsupported fields: {unknown}"
+            )
+        values = dict(residual_values)
+        for name in (
+            "position_scale",
+            "max_position_offset",
+            "joint_scale",
+            "max_joint_offset",
+        ):
+            if name in values:
+                values[name] = tuple(values[name])
+        try:
+            residual_action = ResidualActionConfig(**values)
+        except (TypeError, ValueError) as exc:
+            raise CheckpointFormatError(
+                f"checkpoint residual_action is invalid: {exc}"
+            ) from exc
+    else:
+        raise CheckpointFormatError("checkpoint residual_action must be a mapping")
+
+    warp_ccd = environment.get("warp_ccd")
+    if warp_ccd is None:
+        warp_ccd = {}
+    if not isinstance(warp_ccd, dict):
+        raise CheckpointFormatError("checkpoint warp_ccd must be a mapping")
+    return _CheckpointEnvironmentOptions(
+        residual_action=residual_action,
+        warp_ccd_iterations=warp_ccd.get("ccd_iterations"),
+        warp_ccd_contacts_per_world=warp_ccd.get("contacts_per_world"),
     )
 
 
@@ -703,6 +766,7 @@ def view_environment(
     use_residual: bool,
     checkpoint: Path | None,
     dataset_path: Path | None = None,
+    dataset_version: int | None = None,
     hand_side: str = "auto",
 ) -> None:
     """Run a batched production environment and render its first world."""
@@ -720,10 +784,11 @@ def view_environment(
     if checkpoint is not None and not use_residual:
         raise ValueError("--checkpoint requires --use_residual true so policy actions reach the controller")
     checkpoint = None if checkpoint is None else _validate_checkpoint_path(checkpoint)
-    if checkpoint is not None:
-        from sim.manorl.checkpoint import checkpoint_runtime_metadata
-
-        checkpoint_runtime_metadata(checkpoint)
+    checkpoint_options = (
+        _CheckpointEnvironmentOptions()
+        if checkpoint is None
+        else _checkpoint_environment_options(checkpoint)
+    )
     if device == "gpu":
         import torch
 
@@ -741,6 +806,7 @@ def view_environment(
                 object_type=selected_object,
                 gesture=selected_gesture,
                 dataset_path=(dataset_path if dataset_path is not None else TrajectorySelection().dataset_path),
+                expected_dataset_version=dataset_version,
                 hand_side=hand_side,
             ),
             num_envs=num_envs,
@@ -771,8 +837,11 @@ def view_environment(
             device=device,
             num_envs=num_envs,
             residual_enabled=use_residual,
+            residual_action=checkpoint_options.residual_action,
             max_deviation_distance=max_deviation_distance,
             contact_capacity=contact_capacity,
+            warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
+            warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side=hand_side,
         ),
     )
@@ -839,6 +908,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--object", dest="object_type", help="Lance object selector; requires --gesture")
     parser.add_argument("--gesture", help="Lance two-digit action selector; requires --object")
     parser.add_argument("--dataset-path", type=Path, help="optional Lance dataset for modern hand-side rows")
+    parser.add_argument(
+        "--dataset-version",
+        type=int,
+        help="open this exact historical Lance version instead of the latest version",
+    )
     parser.add_argument(
         "--hand-side",
         choices=("auto", "both", "right", "left"),
@@ -912,6 +986,7 @@ def main(argv: list[str] | None = None) -> int:
         object_type=args.object_type,
         gesture=args.gesture,
         dataset_path=args.dataset_path,
+        dataset_version=args.dataset_version,
         hand_side=args.hand_side,
         rerun_output=args.rerun_output,
         use_residual=args.use_residual,
