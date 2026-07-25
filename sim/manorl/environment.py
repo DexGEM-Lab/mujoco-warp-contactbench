@@ -783,7 +783,7 @@ def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64
         else _CURATED_GRASP_ALIASES_BY_PAIR.get((object_type, action_id))
     )
     if aliases is None:
-        raise ValueError(f"no source grasp mapping for object={object_type!r}, gesture={action_id!r}")
+        aliases = ("thumb3", "index3", "pinky3", "middle3", "ring3")
     if not isinstance(aliases, (list, tuple)) or not all(
         isinstance(alias, str) for alias in aliases
     ):

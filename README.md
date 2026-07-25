@@ -33,7 +33,8 @@ Current submodules:
 
 ```text
 assets/mano_hand_s02 -> git@192.168.10.116:ai/group-ai-public/group-sim-assets/mano_hand_s02.git
-assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ ead79126589d1abf2362ea30b9d674d9e675a2f9 (fixed pin)
+assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ e7910212e54367008ecb7484e5e9354e822de03e (fixed pin)
+assets/all_assets/Assets/sim/mano_assets -> git@192.168.10.116:ai/group-dexcanvas/mano_assets.git @ 31596655f25281b0f4e20c47bf20ef0b19ff8f4a (nested fixed pin)
 3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
 ```
 
@@ -49,10 +50,13 @@ git add .gitmodules assets/all_assets
 git commit -m "Update all_assets submodule"
 ```
 
-`assets/all_assets` is the complete, large source asset checkout. The curated
-files under `sim/manorl/runtime_assets/` remain the runtime inputs. When a local
-checkout of `all_assets` already has the pinned objects, it can be used as a
-Git reference to avoid downloading the object database again:
+`assets/all_assets` is the authoritative source checkout for ManoRL object
+URDFs, CoACD collision pieces, grasp mappings, and visual meshes. Its nested
+`Assets/sim/mano_assets` pin supplies the object visual/source meshes. Curated
+files under `sim/manorl/runtime_assets/` remain compatibility inputs for the
+original hand/cube path. When a local checkout of `all_assets` already has the
+pinned objects, it can be used as a Git reference to avoid downloading the
+object database again:
 
 ```bash
 git submodule update --init \
@@ -343,10 +347,11 @@ errors. No Isaac parity claim is made without an Isaac trace.
 
 The existing `3rd_party/lance_manager` pin may be broken or unavailable and is
 irrelevant to this input-only replay: this slice depends only on the public
-`pylance` reader. Curated files under `sim/manorl/runtime_assets/` come from
-`all_assets` commit `ead79126589d1abf2362ea30b9d674d9e675a2f9`; the manifest
-records provenance and SHA256 digests. The runtime uses the source cube URDF
-and the geometrically equivalent compact `cube1_aligned.stl` collision mesh.
+`pylance` reader. Authoritative multi-object runtimes use `all_assets` commit
+`e7910212e54367008ecb7484e5e9354e822de03e` with nested `mano_assets` commit
+`31596655f25281b0f4e20c47bf20ef0b19ff8f4a`; runtime entries pin every required
+URDF and CoACD piece by SHA256. The original curated hand/cube compatibility
+manifest retains its own source provenance and digests.
 
 ## Build Docker Image
 

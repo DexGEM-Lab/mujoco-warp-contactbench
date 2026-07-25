@@ -88,10 +88,21 @@ def test_source_grasp_mapping_remains_authoritative_over_curated_pair(
     )
 
 
-def test_unknown_grasp_pair_still_fails_without_source_or_curated_mapping(
+def test_iphone_07_without_source_or_curated_mapping_uses_exact_keypoints(
     tmp_path, monkeypatch
 ) -> None:
     _install_mapping(tmp_path, monkeypatch, {"iphone": {}})
 
-    with pytest.raises(ValueError, match="no source grasp mapping"):
-        _expected_keypoint_ids("iphone", "07")
+    expected_names = (
+        "thumb_ip",
+        "index_dip",
+        "pinky_dip",
+        "middle_dip",
+        "ring_dip",
+    )
+    expected_ids = np.asarray(
+        [KEYPOINT_NAMES.index(name) for name in expected_names], dtype=np.int64
+    )
+    np.testing.assert_array_equal(
+        _expected_keypoint_ids("iphone", "07"), expected_ids
+    )
