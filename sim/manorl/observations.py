@@ -547,18 +547,19 @@ def build_observation(
     )
     support_quat = obj_quat / np.maximum(np.linalg.norm(obj_quat, axis=1, keepdims=True), 1e-9)
     target_support_quat = target_quat / np.maximum(np.linalg.norm(target_quat, axis=1, keepdims=True), 1e-9)
-    support_quat_batch = np.broadcast_to(
-        support_quat[:, None, :], (batch, max_support_points, 4)
-    )
-    target_support_quat_batch = np.broadcast_to(
-        target_support_quat[:, None, :], (batch, max_support_points, 4)
-    )
-    object_min_z = (
-        quat_rotate_xyzw(support_quat_batch, support_batch)[..., 2] + obj_pos[:, None, 2]
-    ).min(axis=1)
+    def rotated_support_z(quaternions: NDArray[np.float64]) -> NDArray[np.float64]:
+        qx, qy, qz, qw = (quaternions[:, index, None] for index in range(4))
+        vx, vy, vz = (support_batch[:, :, index] for index in range(3))
+        # Exact z component of quat_rotate_xyzw; avoid allocating full
+        # broadcast quaternions, two 3D cross products, and rotated xyz.
+        scale = 2.0 * qw * qw - 1.0
+        cross_z = qx * vy - qy * vx
+        dot = qx * vx + qy * vy + qz * vz
+        return vz * scale + cross_z * qw * 2.0 + qz * dot * 2.0
+
+    object_min_z = (rotated_support_z(support_quat) + obj_pos[:, None, 2]).min(axis=1)
     target_min_z = (
-        quat_rotate_xyzw(target_support_quat_batch, support_batch)[..., 2]
-        + target_pos[:, None, 2]
+        rotated_support_z(target_support_quat) + target_pos[:, None, 2]
     ).min(axis=1)
     if not np.isfinite(state.table_surface_height):
         raise ValueError("table_surface_height must be finite")

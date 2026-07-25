@@ -729,6 +729,9 @@ def _dynamic_surface_template(
     return _source_surface_points(seed, object_type)
 
 
+_TORCH_SURFACE_SAMPLER_CACHE: dict[tuple[str, str], tuple[object, object]] = {}
+
+
 def _torch_global_surface_templates(
     batch_size: int, object_type: str = OBJECT_TYPE
 ) -> NDArray[np.float64]:
@@ -741,16 +744,22 @@ def _torch_global_surface_templates(
     if not torch.cuda.is_available():
         raise RuntimeError("torch_cuda_global point sampling requires CUDA")
     device = torch.device("cuda")
-    triangles = torch.as_tensor(
-        object_collision_vertices(object_type).reshape(-1, 3, 3).copy(),
-        dtype=torch.float32,
-        device=device,
-    )
-    edge_1 = triangles[:, 1] - triangles[:, 0]
-    edge_2 = triangles[:, 2] - triangles[:, 0]
-    areas = torch.linalg.norm(torch.cross(edge_1, edge_2, dim=1), dim=1) * 0.5
-    area_cdf = torch.cumsum(areas / areas.sum(), dim=0)
-    area_cdf[-1] = 1.0
+    cache_key = (str(device), object_type)
+    cached = _TORCH_SURFACE_SAMPLER_CACHE.get(cache_key)
+    if cached is None:
+        triangles = torch.as_tensor(
+            object_collision_vertices(object_type).reshape(-1, 3, 3).copy(),
+            dtype=torch.float32,
+            device=device,
+        )
+        edge_1 = triangles[:, 1] - triangles[:, 0]
+        edge_2 = triangles[:, 2] - triangles[:, 0]
+        areas = torch.linalg.norm(torch.cross(edge_1, edge_2, dim=1), dim=1) * 0.5
+        area_cdf = torch.cumsum(areas / areas.sum(), dim=0)
+        area_cdf[-1] = 1.0
+        _TORCH_SURFACE_SAMPLER_CACHE[cache_key] = (triangles, area_cdf)
+    else:
+        triangles, area_cdf = cached
     flat_count = batch_size * POINT_COUNT
     face_indices = torch.searchsorted(
         area_cdf,
@@ -1626,6 +1635,14 @@ class MujocoManoEnvironment:
             np.float64, copy=True
         )
         self._step_fn = jax.jit(jax.vmap(lambda world: mjx.step(self.mjx_model, world)))
+        self._physics_loop_fn = jax.jit(
+            lambda data: jax.lax.fori_loop(
+                0,
+                PHYSICS_SUBSTEPS_PER_TARGET,
+                lambda _index, state: self._step_fn(state),
+                data,
+            )
+        )
         self._forward_fn = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
         self._build_reference_tables()
         self._reset_qpos = self._initial_qpos()
@@ -1822,6 +1839,14 @@ class MujocoManoEnvironment:
             np.float64, copy=True
         )
         self._step_fn = jax.jit(jax.vmap(lambda world: mjx.step(self.mjx_model, world)))
+        self._physics_loop_fn = jax.jit(
+            lambda data: jax.lax.fori_loop(
+                0,
+                PHYSICS_SUBSTEPS_PER_TARGET,
+                lambda _index, state: self._step_fn(state),
+                data,
+            )
+        )
         self._forward_fn = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
         self._build_reference_tables()
         self._reset_qpos = self._initial_qpos()
@@ -3164,9 +3189,12 @@ class MujocoManoEnvironment:
         self._phase_stop("controller_target_work", controller_phase)
         self.data = self.data.replace(ctrl=controller_targets_device)
         physics_phase = self._phase_start("mjx_physics")
-        for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
-            self.data = self._step_fn(self.data)
-            self._check_warp_ccd_overflow()
+        if self.config.device_transition and not self._warp_ccd_overflow_guard_available:
+            self.data = self._physics_loop_fn(self.data)
+        else:
+            for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
+                self.data = self._step_fn(self.data)
+                self._check_warp_ccd_overflow()
         self._phase_stop("mjx_physics", physics_phase)
         self.progress += 1
         pending_reset = self.reset_mask.copy()
