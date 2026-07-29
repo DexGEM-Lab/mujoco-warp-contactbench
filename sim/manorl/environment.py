@@ -10,6 +10,7 @@ array retains capacity-padding entries after the solved records.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass, replace
+from functools import lru_cache
 import inspect
 import time
 import warnings
@@ -780,6 +781,7 @@ def _torch_global_surface_templates(
     return points.detach().cpu().numpy().astype(np.float64, copy=False)
 
 
+@lru_cache(maxsize=None)
 def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64]:
     runtime = object_runtime(object_type)
     import yaml
