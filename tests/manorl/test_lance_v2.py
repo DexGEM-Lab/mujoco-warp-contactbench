@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import numpy as np
+
+from sim.manorl.environment import MaterializedContactBuffers, MaterializedState
+from sim.manorl.contracts import TrajectoryIdentity
+from sim.manorl.lance_v2 import (
+    FORCE_DIRECTION_CONTRACT,
+    SYNTHETIC_LANCE_V2_CONTRACT,
+    build_v2_row,
+    build_v2_schema,
+    corrected_contact_frames,
+    write_v2_lance,
+)
+from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
+from sim.manorl.trajectory import ReferenceTrajectory
+
+
+def _state() -> MaterializedState:
+    body_count = 4
+    xpos = np.zeros((1, body_count, 3), dtype=np.float64)
+    xpos[0, 1] = (0.1, 0.2, 0.3)
+    xpos[0, 2] = (0.5, 0.5, 0.5)
+    xpos[0, 3] = (0.0, 0.0, 0.0)
+    xquat = np.zeros((1, body_count, 4), dtype=np.float64)
+    xquat[..., 0] = 1.0
+    return MaterializedState(
+        qpos=np.zeros((1, 28), dtype=np.float64),
+        qvel=np.zeros((1, 28), dtype=np.float64),
+        xpos=xpos,
+        xquat=xquat,
+        keypoints=np.zeros((1, 16, 3), dtype=np.float64),
+        keypoint_quats=np.broadcast_to(np.asarray([0.0, 0.0, 0.0, 1.0]), (1, 16, 4)).copy(),
+        fingertips=np.zeros((1, 5, 3), dtype=np.float64),
+    )
+
+
+def _buffers() -> MaterializedContactBuffers:
+    return MaterializedContactBuffers(
+        count=1,
+        capacity=1,
+        geom=np.asarray([[0, 16]], dtype=np.int64),
+        position=np.asarray([[1.0, 2.0, 3.0]], dtype=np.float64),
+        world=np.asarray([0], dtype=np.int64),
+        dimension=np.asarray([3], dtype=np.int64),
+        addresses=np.asarray([[0, 1, 2, 3]], dtype=np.int64),
+        nefc=np.asarray([4], dtype=np.int64),
+        friction=np.zeros((1, 5), dtype=np.float64),
+        frame=np.broadcast_to(np.eye(3), (1, 3, 3)).copy(),
+        constraint_force=np.asarray([[1.0, 2.0, 0.0, 0.0]], dtype=np.float64),
+        raw_metadata={},
+        host_metadata={},
+    )
+
+
+def test_v2_normal_force_has_no_legacy_half_scale_and_uses_actual_frames() -> None:
+    state = _state()
+    model = SimpleNamespace(geom_bodyid=np.asarray([1] + [0] * 15 + [2], dtype=np.int64))
+    entries = corrected_contact_frames(
+        buffers=_buffers(),
+        state=state,
+        model=model,
+        keypoint_geom_ids=tuple(range(16)),
+        object_geom_ids=(16,),
+        object_body_id=2,
+        wrist_body_id=3,
+        object_name="cube2",
+    )[0]
+    assert len(entries) == 1
+    entry = entries[0]
+    # sum([1, 2, 0, 0]) = 3; v1's 0.5 scale would incorrectly produce 1.5.
+    np.testing.assert_allclose(entry["total_force_world"], [3.0, 0.0, 0.0])
+    np.testing.assert_allclose(entry["total_force_joint"], entry["total_force_world"])
+    np.testing.assert_allclose(entry["total_force_object"], entry["total_force_world"])
+    np.testing.assert_allclose(entry["contact_pairs"][0]["pos_joint"], [0.9, 1.8, 2.7])
+    np.testing.assert_allclose(entry["contact_pairs"][0]["pos_object"], [0.5, 1.5, 2.5])
+    assert FORCE_DIRECTION_CONTRACT.endswith("scale_1p0")
+
+
+def test_mano_48d_conversion_matches_source_layout() -> None:
+    values = np.zeros((2, 28), dtype=np.float64)
+    values[1, 6] = 0.2
+    converted = right_urdf_trajectory_to_mano_48d(values)
+    assert converted.shape == (2, 48)
+    np.testing.assert_array_equal(converted[:, :3], 0.0)
+    assert np.linalg.norm(converted[1, 3:]) > 0.0
+
+
+def test_v2_schema_has_explicit_contract_and_28d_rollout_fields() -> None:
+    schema = build_v2_schema(observation_dim=480, action_dim=28)
+    assert schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V2_CONTRACT.encode()
+    assert schema.field("trajectory_metadata").type[0].name == "data_fps"
+    assert schema.field("hands").type.value_type[6].name == "urdf_dof_target"
+    assert schema.field("rollout").type[0].name == "transition_count"
+    assert schema.field("provenance").type[5].name == "checkpoint_update"
+
+
+def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
+    identity = TrajectoryIdentity(
+        dataset_path="/source.lance", dataset_version=295, row_index=3, object_index=0,
+        uuid="499dab41-1e12-4595-a040-c5ec979fc3bb", file_uuid="f",
+        identity="cube2_02_0004", source_start=10, source_stop=12,
+        movement_start_raw=10, movement_end_raw=11,
+    )
+    trajectory = ReferenceTrajectory(
+        identity=identity, dataset_version=295, source_indices=np.asarray([10, 11]),
+        timestamps=np.asarray([0.0, 0.005]), q_ref=np.zeros((2, 28)),
+        object_pos_raw=np.zeros((2, 3)), object_pos=np.zeros((2, 3)),
+        object_quat_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]] * 2), object_z_shift=0.0,
+    )
+    states = {
+        "hand_position": np.zeros((2, 3)), "hand_orientation_xyzw": np.asarray([[0.0, 0.0, 0.0, 1.0]] * 2),
+        "mano_joint_pos": np.zeros((2, 21, 3)), "urdf_dof": np.zeros((2, 28)),
+        "urdf_dof_target": np.zeros((2, 28)), "object_position": np.zeros((2, 3)),
+        "object_orientation_xyzw": np.asarray([[0.0, 0.0, 0.0, 1.0]] * 2),
+    }
+    rollout = {
+        "observation_t": np.zeros((1, 480)), "next_observation": np.zeros((1, 480)),
+        "policy_mean_action": np.zeros((1, 28)), "processed_action": np.zeros((1, 28)),
+        "cumulative_position_residual": np.zeros((1, 3)), "cumulative_joint_residual": np.zeros((1, 22)),
+        "command_reference_index": np.asarray([0]), "command_source_frame_index": np.asarray([10]),
+        "reference_target": np.zeros((1, 28)), "processed_target": np.zeros((1, 28)),
+        "controller_target": np.zeros((1, 28)), "reward": np.asarray([1.0]),
+        "terminated": np.asarray([True]), "termination_reason_code": np.asarray([1]),
+    }
+    row = build_v2_row(
+        trajectory=trajectory, source_index={}, source_metadata={}, states=states,
+        contacts=[[], []], rollout=rollout,
+        provenance={"checkpoint_path": "/c.pt", "checkpoint_sha256": "abc", "checkpoint_update": 1, "checkpoint_metadata": {}, "software_commit": "deadbeef"},
+    )
+    assert row["trajectory_metadata"]["data_fps"] == 200
+    assert row["trajectory_metadata"]["total_frames"] == 2
+    assert row["rollout"]["transition_count"] == 1
+    assert row["provenance"]["force_contract"] == FORCE_DIRECTION_CONTRACT
+
+
+def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
+    # Keep this writer test deliberately small; GPU rollout tests validate the
+    # full row builder and contact invariants separately.
+    output = tmp_path / "synthetic_v2.lance"
+    row = {
+        "index": {"uuid": "u", "seed_uuid": "s", "capMachine": "m", "operator": "o", "scene": "cube2", "is_generated": True},
+        "trajectory_metadata": {
+            "data_fps": 200, "total_frames": 1, "gesture": "02", "hand_names": ["right"], "hand_slots": ["right", "left"], "object_names": ["cube2"], "mano_hand_shapes": [[0.0] * 10],
+            "raw_data_info": {"capMachine": "m", "operator": "o", "scene": "cube2", "id": 1},
+            "trajectory_info": {"object_move": [{"object_name": "cube2", "start_frame": 0, "end_frame": 0}]}, "capture_info": None, "train_info": {"commit_hash": "c", "reward_value": 0.0},
+        },
+        "timestamp": [0.0],
+        "hands": [{"hand_name": "right", "mano_global_pos": [[0.0] * 3], "mano_global_rot_aa": [[0.0] * 3], "mano_hand_pose": [[0.0] * 48], "mano_joint_pos": [[[0.0] * 3] * 21], "urdf_dof": [[0.0] * 28], "urdf_dof_target": [[0.0] * 28]}, {"hand_name": None, "mano_global_pos": [], "mano_global_rot_aa": [], "mano_hand_pose": [], "mano_joint_pos": [], "urdf_dof": [], "urdf_dof_target": []}],
+        "objects": [{"rot_aa": [[0.0] * 3], "pos": [[0.0] * 3]}], "contact": [[]],
+        "reference": {"source_frame_index": [0], "hand_urdf_dof": [[0.0] * 28], "object_pos": [[0.0] * 3], "object_rot_aa": [[0.0] * 3]},
+        "rollout": {"transition_count": 0, "observation_t": [], "next_observation": [], "policy_mean_action": [], "processed_action": [], "cumulative_position_residual": [], "cumulative_joint_residual": [], "command_reference_index": [], "command_source_frame_index": [], "reference_target": [], "processed_target": [], "controller_target": [], "reward": [], "terminated": [], "termination_reason_code": []},
+        "provenance": {"contract": SYNTHETIC_LANCE_V2_CONTRACT, "force_contract": FORCE_DIRECTION_CONTRACT, "policy_mode": "deterministic_mean", "checkpoint_path": "p", "checkpoint_sha256": "h", "checkpoint_update": 1, "checkpoint_metadata_json": "{}", "dataset_path": "d", "dataset_version": 1, "row_index": 0, "source_identity": "id", "software_commit": "c"},
+    }
+    write_v2_lance([row], output=output, observation_dim=480, action_dim=28)
+    import lance
+    dataset = lance.dataset(str(output))
+    assert dataset.count_rows() == 1
+    assert dataset.schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V2_CONTRACT.encode()
+    assert dataset.take([0]).to_pylist()[0]["trajectory_metadata"]["data_fps"] == 200

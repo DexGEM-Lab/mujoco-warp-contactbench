@@ -15,6 +15,7 @@ def test_generic_train_and_inference_shell_syntax() -> None:
             str(ROOT / "train.sh"),
             str(ROOT / "inference.sh"),
             str(ROOT / "test.sh"),
+            str(ROOT / "synthesize.sh"),
         ],
         check=True,
     )
@@ -33,6 +34,16 @@ def test_generic_train_rejects_nonpositive_environment_count() -> None:
 def test_generic_inference_requires_checkpoint() -> None:
     result = subprocess.run(
         [str(ROOT / "inference.sh"), "cube1", "01", "20", "0"],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 2
+    assert "Set CHECKPOINT or MANORL_CHECKPOINT" in result.stderr
+
+
+def test_synthesis_requires_checkpoint() -> None:
+    result = subprocess.run(
+        [str(ROOT / "synthesize.sh"), "cube2", "02", "5", "0"],
         text=True,
         capture_output=True,
     )

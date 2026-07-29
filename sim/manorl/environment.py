@@ -361,6 +361,7 @@ class MaterializedContactBuffers:
     count: int
     capacity: int
     geom: NDArray[np.int64]
+    position: NDArray[np.float64]
     world: NDArray[np.int64]
     dimension: NDArray[np.int64]
     addresses: NDArray[np.int64]
@@ -400,6 +401,7 @@ class TransitionSnapshot:
 
     control_call: int
     raw_actions: NDArray[np.float64]
+    processed_actions: NDArray[np.float64]
     command_reference_indices: NDArray[np.int64]
     command_targets: NDArray[np.float64]
     processed_targets: NDArray[np.float64]
@@ -1029,6 +1031,7 @@ class MjxWarpPhysicalProducer:
             "contact__efc_address",
             "contact__friction",
             "contact__frame",
+            "contact__pos",
             "efc__force",
         )
         missing = [name for name in required if not hasattr(impl, name)]
@@ -1059,6 +1062,7 @@ class MjxWarpPhysicalProducer:
         addresses = np.asarray(raw_values["contact__efc_address"], dtype=np.int64)
         friction = np.asarray(raw_values["contact__friction"], dtype=np.float64)
         frame = np.asarray(raw_values["contact__frame"], dtype=np.float64)
+        position = np.asarray(raw_values["contact__pos"], dtype=np.float64)
         forces = np.asarray(raw_values["efc__force"], dtype=np.float64)
         capacity = len(geom)
         if not 0 <= count <= capacity:
@@ -1072,6 +1076,7 @@ class MjxWarpPhysicalProducer:
             addresses.shape == (capacity, 4),
             friction.shape == (capacity, 5),
             frame.shape == (capacity, 3, 3),
+            position.shape == (capacity, 3),
             forces.ndim == 2 and forces.shape[0] == batch,
         )
         if not all(expected_shapes):
@@ -1094,6 +1099,7 @@ class MjxWarpPhysicalProducer:
                 "contact__efc_address": addresses,
                 "contact__friction": friction,
                 "contact__frame": frame,
+                "contact__pos": position,
                 "efc__force": forces,
             }
             host_metadata = {name: _array_metadata(value) for name, value in host_values.items()}
@@ -1106,6 +1112,7 @@ class MjxWarpPhysicalProducer:
             count=count,
             capacity=capacity,
             geom=geom,
+            position=position,
             world=world,
             dimension=dimension,
             addresses=addresses,
@@ -3149,6 +3156,10 @@ class MujocoManoEnvironment:
             ],
             axis=1,
         )
+        processed_actions = np.concatenate(
+            [action_results[side].actions for side in self.hand_layout.controlled_sides],
+            axis=1,
+        )
         self._phase_stop("action_conversion_processing", action_phase)
         controller_phase = self._phase_start("controller_target_work")
         if self.config.device_resident_controls:
@@ -3265,6 +3276,7 @@ class MujocoManoEnvironment:
             self.last_transition = TransitionSnapshot(
                 control_call=self.control_call,
                 raw_actions=actions.copy(),
+                processed_actions=processed_actions.copy(),
                 command_reference_indices=mocap_indices.copy(),
                 command_targets=mocap_targets.copy(),
                 processed_targets=processed_targets.copy(),

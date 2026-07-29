@@ -227,6 +227,33 @@ every eligible pair in the pinned Lance dataset. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
+### Corrected v2 checkpoint rollout synthesis
+
+`./synthesize.sh` runs a deterministic checkpoint mean policy on GPU and writes
+one independent complete source-length trajectory per assigned environment:
+
+```bash
+CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \\
+  ./synthesize.sh cube2 02 5 0
+```
+
+The output is a nested Lance dataset plus a sibling `.manifest.json`. The v2
+contract is `synthetic_mano_28d_checkpoint_rollout_v2`: timestamps use the
+actual `0.005 s` control interval (`data_fps=200`), `force_normal` contains the
+solved normal component with scale `1.0`, and all force frames use a consistent
+hand-to-object direction. `pos_joint` and `total_force_joint` use the live
+collision-link transform rather than the historical wrist fallback. Each row
+also stores 28D physical and controller targets, 21 keypoints, reference frame
+indices, policy mean/processed actions, observations, rewards, termination
+codes, checkpoint SHA256, runtime sidecar, action contract, and source identity.
+
+`--num-envs` controls the simultaneous identities; set it to the number of
+eligible `cube2:02` rows to export the whole pair, or use a smaller value and
+advance `--pair-assignment-cycle` across bounded batches. The exporter refuses
+to overwrite an existing dataset unless `--replace` is passed to the Python
+CLI. It requires a native checkpoint sidecar and preserves the checkpoint's
+serialized residual-action/CCD settings.
+
 Finger residual increments and their cumulative caps have independent explicit
 multipliers, both defaulting to `2.0`. Wrist XYZ residuals default to a
 `0.003 m` per-step scale and a symmetric `0.03 m` cumulative cap. Override them
