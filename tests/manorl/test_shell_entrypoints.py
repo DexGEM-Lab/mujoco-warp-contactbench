@@ -9,7 +9,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_generic_train_and_inference_shell_syntax() -> None:
     subprocess.run(
-        ["bash", "-n", str(ROOT / "train.sh"), str(ROOT / "inference.sh")],
+        [
+            "bash",
+            "-n",
+            str(ROOT / "train.sh"),
+            str(ROOT / "inference.sh"),
+            str(ROOT / "test.sh"),
+        ],
         check=True,
     )
 
@@ -32,3 +38,13 @@ def test_generic_inference_requires_checkpoint() -> None:
     )
     assert result.returncode == 2
     assert "Set CHECKPOINT or MANORL_CHECKPOINT" in result.stderr
+
+
+def test_reference_test_rejects_invalid_gpu() -> None:
+    result = subprocess.run(
+        [str(ROOT / "test.sh"), "invalid"],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 2
+    assert "physical_gpu must be a non-negative integer" in result.stderr

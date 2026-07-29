@@ -213,9 +213,13 @@ The two stable repository entrypoints cover routine training and checkpoint view
 # Render 20 cube1/action-01 trajectories from one checkpoint on physical GPU 0.
 CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
   ./inference.sh cube1 01 20 0
+
+# Render the fixed no-checkpoint reference test: cube1/action-01, N20,
+# residual actions disabled, on physical GPU 0.
+./test.sh 0
 ```
 
-`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`. Both scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
+`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
 
 The trainer also accepts exact multi-object/action selection. Use
 `--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
