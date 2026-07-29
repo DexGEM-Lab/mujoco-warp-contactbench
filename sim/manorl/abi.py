@@ -27,11 +27,18 @@ SOURCE_ALIGNED_JOINT_CAP: Final = tuple(
 )
 DEFAULT_EARLY_PHASE_STEPS: Final[int] = 30
 
-# This binds the source-aligned production observation/control mapping and
-# terminal reset separately from reward contracts.
+# This binds the production observation/control mapping and terminal reset
+# separately from reward contracts. Legacy v4 checkpoints remain readable
+# because their sidecars record the exact residual-action mapping.
+LEGACY_ENVIRONMENT_CONTRACT_IDS: Final = frozenset(
+    {
+        "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
+        "action2mm_max20mm_observation_contact_0p2n_deviation_0p10_v4"
+    }
+)
 ENVIRONMENT_CONTRACT_ID: Final = (
     "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
-    "action2mm_max20mm_observation_contact_0p2n_deviation_0p10_v4"
+    "action3mm_max30mm_joint2x_observation_contact_0p2n_deviation_0p10_v5"
 )
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
@@ -50,13 +57,13 @@ class ResidualActionConfig:
     gamma_xy: float = 0.9
     gamma_z: float = 0.9
     gamma_joints: float = 0.9
-    position_scale: tuple[float, float, float] = (0.002, 0.002, 0.002)
+    position_scale: tuple[float, float, float] = (0.003, 0.003, 0.003)
     rotation_scale: float = 0.01
-    max_position_offset: tuple[float, float, float] = (0.02, 0.02, 0.02)
+    max_position_offset: tuple[float, float, float] = (0.03, 0.03, 0.03)
     joint_scale: tuple[float, ...] = SOURCE_ALIGNED_JOINT_SCALE
     max_joint_offset: tuple[float, ...] = SOURCE_ALIGNED_JOINT_CAP
-    joint_scale_multiplier: float = 1.0
-    joint_max_offset_multiplier: float = 1.0
+    joint_scale_multiplier: float = 2.0
+    joint_max_offset_multiplier: float = 2.0
     early_phase_steps: int = DEFAULT_EARLY_PHASE_STEPS
 
     def __post_init__(self) -> None:

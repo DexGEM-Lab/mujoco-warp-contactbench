@@ -31,7 +31,7 @@ formats.
 
 | Code path | Key classes/functions | Concrete migration change | Why it matters |
 | --- | --- | --- | --- |
-| `sim/manorl/abi.py` | `ResidualActionConfig`, `process_residual_actions`, `early_phase_mask`, `check_termination` | Uses the current 28-DoF MuJoCo action mapping: XYZ action scale is `0.002 m`, accumulated XYZ cap is `0.02 m`, XYZ/joint gamma is `0.9`, and early phase is 30. The 22 joint scales/caps follow the six-joint thumb plus four-joint index-through-pinky order. Processing clips normalized actions, zeros inactive fingers and early-phase actions, accumulates residuals, applies limits, and adds the result to the mocap target. Deviation reset remains strictly above `0.10 m`. | A normalized policy action has one authoritative native command mapping. |
+| `sim/manorl/abi.py` | `ResidualActionConfig`, `process_residual_actions`, `early_phase_mask`, `check_termination` | Uses the current 28-DoF MuJoCo action mapping: default XYZ action scale is `0.003 m`, accumulated XYZ cap is `0.03 m`, joint scale/cap multipliers are `2.0`, XYZ/joint gamma is `0.9`, and early phase is 30. The 22 base joint scales/caps follow the six-joint thumb plus four-joint index-through-pinky order. Processing clips normalized actions, zeros inactive fingers and early-phase actions, accumulates residuals, applies limits, and adds the result to the mocap target. Deviation reset remains strictly above `0.10 m`. | A normalized policy action has one authoritative native command mapping. |
 | `sim/manorl/observations.py` | `ObservationLayout`, `SOURCE_ALIGNED_COMPATIBILITY`, `build_observation` | Preserves the named field order with shape-derived 28-DoF layouts, `[-5, 5]` policy clipping, a hand-relative 64x3 point-cloud block, 30-step early phase, and movement pre-padding 100. One controlled hand produces 480 observations; two controlled hands produce 505. | Matching the total dimension is insufficient; the checkpoint requires the same internal feature meanings and trajectory frame alignment. |
 | `sim/manorl/environment.py` | `EnvironmentConfig`, `_torch_global_surface_templates`, `_set_dynamic_templates`, `_reward_state`, `step` | Makes dynamic point templates the default. GPU sampling uses surface-area CDF face selection followed by square-root barycentric sampling with the global CUDA Torch RNG; construction/reset ordering preserves the source RNG sequence. CPU uses a deterministic fallback on the same MJX-Warp environment path. The environment passes the aligned residual and reward configs through the real physics step, observation, reward, and termination path. | PointNet receives the same sampling distribution as Gym, while viewer, evaluation, and training all execute one physical environment implementation. |
 | `sim/manorl/model.py` | `PointNetEncoder`, `FiLMLayer`, `FiLMBlock`, `ManoActorCritic` | Uses the source FiLM actor by default. PointNet maps 64x3 points through `3 -> 64 -> 128 -> 256`, max-pools, then emits 64 features. Action, observation, and conditioning widths derive from the resolved one- or two-hand layout, producing 28 or 56 policy actions. An explicit `use_film=False` model remains available for isolated diagnostics. | One model implementation follows the selected 28-DoF hand layout without hard-coded legacy widths. |
@@ -127,15 +127,14 @@ clipped before `ActionProcessor` (`vec_task.py:374-376`;
 1. zeros inactive finger actions and their stored offsets from the expected
    contact mask (`finger_mask_manager.py:68-158`);
 2. zeros all actions in `[early_phase_start, early_phase_start + N)`;
-3. applies XYZ scales `(0.002, 0.002, 0.002)`, rotation scale
-   `0.025 * 0.01`, and the configured per-joint scales;
+3. applies default XYZ scales `(0.003, 0.003, 0.003)`, rotation scale
+   `0.025 * 0.01`, and the configured per-joint base scales multiplied by `2.0`;
 4. zeros all cumulative offsets on reset, in early phase, on the first step
    after early phase, or in non-residual mode; the first post-early step then
    immediately accumulates its scaled action from zero history, while later
    steps apply gamma `0.9`;
-5. clips XYZ offsets to `[-0.02, 0.02]` from `baseMaxOffset`; the
-   `maxOffsetScale=1.0` per-joint limits are materialized in the 22-entry cap
-   vector; and
+5. clips default XYZ offsets to `[-0.03, 0.03]`; the effective per-joint
+   limits are the 22-entry base cap vector multiplied by `2.0`; and
 6. adds `[cum_xyz, immediate_rotation, cum_joints]` to the mocap target,
    then clamps to physical DOF limits.
 
@@ -146,12 +145,14 @@ The executable scale, mask, transition, and target assembly are
 the deterministic portion is implemented in this 5B slice. Source
 `actionsMovingAverage=1` makes its moving-average assignment an identity for
 the configured ABI. The target must not reuse the acceptance replay's
-`RESIDUAL_ENABLED=False` as its training default. The listed
-`(0.002, 0.002, 0.002)` and `[-0.02, 0.02]` values are shared by checkpoint
-evaluation and new target training.
+`RESIDUAL_ENABLED=False` as its training default. New v5 checkpoints and
+training use `(0.003, 0.003, 0.003)`, `[-0.03, 0.03]`, and `2.0` joint
+scale/cap multipliers. V4 checkpoint sidecars retain and restore their explicit
+`0.002`/`0.02` and multiplier values.
 
-The production mapping includes all 22 joint scales and accumulated-offset
-limits. The six thumb scales are `(0.02, 0.02, 0.02, 0.02, 0.01, 0.005)` and
+The production mapping includes all 22 base joint scales and accumulated-offset
+limits; the v5 defaults multiply both vectors by `2.0`. The six thumb base
+scales are `(0.02, 0.02, 0.02, 0.02, 0.01, 0.005)` and
 caps are `(0.2, 0.2, 0.2, 0.2, 0.1, 0.05)`; each other finger uses scales
 `(0.01, 0.01, 0.015, 0.005)` and caps `(0.1, 0.1, 0.15, 0.1)`.
 

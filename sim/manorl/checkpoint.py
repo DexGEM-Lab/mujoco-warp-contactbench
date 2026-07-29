@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, LEGACY_ENVIRONMENT_CONTRACT_IDS
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 
 if TYPE_CHECKING:
@@ -119,9 +119,10 @@ def _validate_environment_contract(metadata: dict[str, Any]) -> None:
     environment_contract = metadata.get("environment_contract")
     if not isinstance(environment_contract, str) or not environment_contract:
         raise CheckpointFormatError("checkpoint environment contract is missing")
-    if environment_contract != ENVIRONMENT_CONTRACT_ID:
+    supported = {ENVIRONMENT_CONTRACT_ID, *LEGACY_ENVIRONMENT_CONTRACT_IDS}
+    if environment_contract not in supported:
         raise CheckpointFormatError(
-            f"checkpoint environment contract {environment_contract!r} != required {ENVIRONMENT_CONTRACT_ID!r}"
+            f"checkpoint environment contract {environment_contract!r} is not a required supported contract; supported={sorted(supported)!r}"
         )
 
 

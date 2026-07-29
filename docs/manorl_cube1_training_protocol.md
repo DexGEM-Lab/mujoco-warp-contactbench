@@ -55,10 +55,11 @@ current native checkpoint contracts. The file-by-file implementation map is in
   the validated early phase of 30 steps, movement pre-padding 100, and the
   `0.10 m` deviation threshold. Its normalized action Box is 28-wide for one
   controlled hand and 56-wide for two controlled hands. XYZ residual actions
-  use a per-step scale of `0.002 m`, gamma `0.9`, and cap `+/-0.02 m`. The six
+  use a per-step scale of `0.003 m`, gamma `0.9`, and cap `+/-0.03 m`. The six
   thumb joint scales are `(0.02, 0.02, 0.02, 0.02, 0.01, 0.005)` with caps
-  `(0.2, 0.2, 0.2, 0.2, 0.1, 0.05)`; each other finger uses scales
-  `(0.01, 0.01, 0.015, 0.005)` and caps `(0.1, 0.1, 0.15, 0.1)`.
+  `(0.2, 0.2, 0.2, 0.2, 0.1, 0.05)`; each other finger uses base scales
+  `(0.01, 0.01, 0.015, 0.005)` and base caps `(0.1, 0.1, 0.15, 0.1)`. Both
+  joint vectors use default multiplier `2.0`.
   FiLM and dynamic PointNet are enabled by default; GPU sampling uses the
   global CUDA Torch RNG.
 - PPO records the terminal transition and its terminal observation. Before the

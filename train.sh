@@ -100,6 +100,12 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "hand_side": "$HAND_SIDE",
   "updates": $UPDATES,
   "checkpoint_interval_updates": $CHECKPOINT_INTERVAL,
+  "residual_action": {
+    "position_scale_m": 0.003,
+    "max_position_offset_m": 0.03,
+    "joint_scale_multiplier": 2.0,
+    "joint_max_offset_multiplier": 2.0
+  },
   "wandb_entity": "$WANDB_ENTITY",
   "wandb_project": "$WANDB_PROJECT",
   "output": "$RUN_DIR/training"
@@ -130,8 +136,10 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   "${SELECTION_ARGS[@]}" \
   --pair-assignment-cycle 0 \
   --use_residual true \
-  --joint-scale-multiplier 1.0 \
-  --joint-max-offset-multiplier 1.0 \
+  --position-scale 0.003 \
+  --max-position-offset 0.03 \
+  --joint-scale-multiplier 2.0 \
+  --joint-max-offset-multiplier 2.0 \
   --film true \
   --terminal true \
   --headless true \

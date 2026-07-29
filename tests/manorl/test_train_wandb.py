@@ -213,8 +213,8 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["reward"]["contact_force_threshold_N"] == 0.2
     assert config["environment"]["contract"] == tool.ENVIRONMENT_CONTRACT_ID
     assert config["environment"]["observation_contact_threshold_N"] == 0.2
-    assert config["environment"]["residual_action"]["position_scale"] == [0.002, 0.002, 0.002]
-    assert config["environment"]["residual_action"]["max_position_offset"] == [0.02, 0.02, 0.02]
+    assert config["environment"]["residual_action"]["position_scale"] == [0.003, 0.003, 0.003]
+    assert config["environment"]["residual_action"]["max_position_offset"] == [0.03, 0.03, 0.03]
     assert config["environment"]["residual_action"]["joint_scale"][:6] == [
         0.02,
         0.02,

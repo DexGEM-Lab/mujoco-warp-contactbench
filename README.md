@@ -228,11 +228,13 @@ headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
 Finger residual increments and their cumulative caps have independent explicit
-multipliers. Both default to `1.0`; use `--joint-scale-multiplier 1.5` and
-`--joint-max-offset-multiplier 1.5` to match the Gym 1.5x action-scaling
-configuration without changing wrist position or rotation scaling. The values
-are recorded in W&B, Rerun, and native checkpoint metadata; resume rejects a
-checkpoint whose residual-action contract differs from the target runtime.
+multipliers, both defaulting to `2.0`. Wrist XYZ residuals default to a
+`0.003 m` per-step scale and a symmetric `0.03 m` cumulative cap. Override them
+with `--joint-scale-multiplier`, `--joint-max-offset-multiplier`,
+`--position-scale`, and `--max-position-offset`. The values are recorded in
+W&B, Rerun, and native checkpoint metadata; resume rejects a checkpoint whose
+residual-action contract differs from the target runtime. V4 sidecars remain
+readable and restore their explicit `0.002`/`0.02` and multiplier contract.
 
 For an opt-in safety cap that may stop before all 8,000 updates complete, add
 `--wall-clock-seconds <positive-seconds>`. `--evaluation-num-envs` requests a

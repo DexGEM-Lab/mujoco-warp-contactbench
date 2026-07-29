@@ -12,7 +12,7 @@ import sys
 
 import torch
 
-from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
+from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, LEGACY_ENVIRONMENT_CONTRACT_IDS
 from sim.manorl.checkpoint import CheckpointFormatError, load_skrl_checkpoint, load_skrl_checkpoint_for_inference, save_skrl_checkpoint
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 
@@ -50,6 +50,13 @@ metadata = json.loads(sidecar(checkpoint).read_text(encoding="utf-8"))
 assert metadata["reward_contract"] == REWARD_CONTRACT_ID
 assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
 assert metadata["environment_contract"] == ENVIRONMENT_CONTRACT_ID
+load_skrl_checkpoint(agent, checkpoint)
+assert agent.loaded == str(checkpoint)
+
+legacy_v4 = dict(metadata)
+legacy_v4["environment_contract"] = next(iter(LEGACY_ENVIRONMENT_CONTRACT_IDS))
+sidecar(checkpoint).write_text(json.dumps(legacy_v4), encoding="utf-8")
+agent.loaded = None
 load_skrl_checkpoint(agent, checkpoint)
 assert agent.loaded == str(checkpoint)
 

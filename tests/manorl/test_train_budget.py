@@ -290,7 +290,21 @@ def test_training_cli_parses_independent_diagnostics_switch(
     assert budget.resolved_capture_transition_diagnostics is True
 
 
-def test_training_cli_parses_joint_action_multipliers(
+def test_training_budget_uses_v5_residual_action_defaults() -> None:
+    tool = _load_tool()
+    budget = tool.TrainingBudget()
+    config = budget.residual_action_config
+    assert budget.position_scale == 0.003
+    assert budget.max_position_offset == 0.03
+    assert budget.joint_scale_multiplier == 2.0
+    assert budget.joint_max_offset_multiplier == 2.0
+    assert config.position_scale == (0.003, 0.003, 0.003)
+    assert config.max_position_offset == (0.03, 0.03, 0.03)
+    assert config.joint_scale_multiplier == 2.0
+    assert config.joint_max_offset_multiplier == 2.0
+
+
+def test_training_cli_parses_residual_action_scales(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tool = _load_tool()
@@ -300,21 +314,32 @@ def test_training_cli_parses_joint_action_multipliers(
     assert tool.main([
         "--output", str(tmp_path / "training"),
         "--pairs", "banana:01",
+        "--position-scale", "0.004",
+        "--max-position-offset", "0.04",
         "--joint-scale-multiplier", "1.5",
         "--joint-max-offset-multiplier", "1.5",
     ]) == 0
     budget = captured[0]
+    assert budget.position_scale == 0.004
+    assert budget.max_position_offset == 0.04
     assert budget.joint_scale_multiplier == 1.5
     assert budget.joint_max_offset_multiplier == 1.5
+    assert budget.residual_action_config.position_scale == (0.004, 0.004, 0.004)
+    assert budget.residual_action_config.max_position_offset == (0.04, 0.04, 0.04)
     assert budget.residual_action_config.joint_scale_multiplier == 1.5
     assert budget.residual_action_config.joint_max_offset_multiplier == 1.5
 
 
 @pytest.mark.parametrize(
     "flag",
-    ["--joint-scale-multiplier", "--joint-max-offset-multiplier"],
+    [
+        "--position-scale",
+        "--max-position-offset",
+        "--joint-scale-multiplier",
+        "--joint-max-offset-multiplier",
+    ],
 )
-def test_training_cli_rejects_invalid_joint_action_multiplier(
+def test_training_cli_rejects_invalid_residual_action_scale(
     flag: str, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     tool = _load_tool()

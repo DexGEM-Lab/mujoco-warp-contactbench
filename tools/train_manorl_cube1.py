@@ -194,8 +194,10 @@ class TrainingBudget:
     dataset_version: int | None = None
     hand_side: str = "auto"
     residual_enabled: bool = True
-    joint_scale_multiplier: float = 1.0
-    joint_max_offset_multiplier: float = 1.0
+    position_scale: float = 0.003
+    max_position_offset: float = 0.03
+    joint_scale_multiplier: float = 2.0
+    joint_max_offset_multiplier: float = 2.0
     use_film: bool = True
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
@@ -229,6 +231,8 @@ class TrainingBudget:
     @property
     def residual_action_config(self) -> ResidualActionConfig:
         return ResidualActionConfig(
+            position_scale=(self.position_scale,) * 3,
+            max_position_offset=(self.max_position_offset,) * 3,
             joint_scale_multiplier=self.joint_scale_multiplier,
             joint_max_offset_multiplier=self.joint_max_offset_multiplier,
         )
@@ -2427,15 +2431,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--use_residual", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument(
+        "--position-scale",
+        type=float,
+        default=0.003,
+        help="scale each normalized XYZ residual action into meters per control step",
+    )
+    parser.add_argument(
+        "--max-position-offset",
+        type=float,
+        default=0.03,
+        help="symmetric cumulative XYZ residual offset cap in meters",
+    )
+    parser.add_argument(
         "--joint-scale-multiplier",
         type=float,
-        default=1.0,
+        default=2.0,
         help="multiply all per-joint residual increments after the named base scales",
     )
     parser.add_argument(
         "--joint-max-offset-multiplier",
         type=float,
-        default=1.0,
+        default=2.0,
         help="multiply all per-joint cumulative residual caps",
     )
     parser.add_argument("--film", type=parse_cli_bool, default=True, metavar="{true,false}")
@@ -2520,6 +2536,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
     for name, value in (
+        ("position-scale", args.position_scale),
+        ("max-position-offset", args.max_position_offset),
         ("joint-scale-multiplier", args.joint_scale_multiplier),
         ("joint-max-offset-multiplier", args.joint_max_offset_multiplier),
     ):
@@ -2619,6 +2637,8 @@ def main(argv: list[str] | None = None) -> int:
             dataset_version=args.dataset_version,
             hand_side=args.hand_side,
             residual_enabled=args.use_residual,
+            position_scale=args.position_scale,
+            max_position_offset=args.max_position_offset,
             joint_scale_multiplier=args.joint_scale_multiplier,
             joint_max_offset_multiplier=args.joint_max_offset_multiplier,
             use_film=args.film,

@@ -200,8 +200,8 @@ def test_cpu_rollout_update_and_native_checkpoint_round_trip(adapter: ManoGymnas
         == CONTACT_FORCE_THRESHOLD
         == 0.2
     )
-    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.002, 0.002, 0.002)
-    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.02, 0.02, 0.02)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["position_scale"] == (0.003, 0.003, 0.003)
+    assert runtime.checkpoint_metadata()["environment"]["residual_action"]["max_position_offset"] == (0.03, 0.03, 0.03)
     assert runtime.checkpoint_metadata()["environment"]["max_deviation_distance"] == 1_000_000.0
     hand_metadata = runtime.checkpoint_metadata()["environment"]
     expected_hand_metadata = {
