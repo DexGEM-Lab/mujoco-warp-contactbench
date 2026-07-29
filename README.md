@@ -204,6 +204,19 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --checkpoint-interval-updates 200 --evaluation-num-envs 1
 ```
 
+The two stable repository entrypoints cover routine training and checkpoint viewing without rewriting launch scripts:
+
+```bash
+# Train every eligible gesture for one object on physical GPU 0.
+./train.sh cube1 2048 0
+
+# Render 20 cube1/action-01 trajectories from one checkpoint on physical GPU 0.
+CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
+  ./inference.sh cube1 01 20 0
+```
+
+`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`. Both scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
+
 The trainer also accepts exact multi-object/action selection. Use
 `--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
 every eligible pair in the pinned Lance dataset. Mixed-object batches run
