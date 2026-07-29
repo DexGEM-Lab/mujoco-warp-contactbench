@@ -7,6 +7,7 @@ import argparse
 from collections import defaultdict
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -48,6 +49,9 @@ DEFAULT_DATASET = Path(
 
 
 def _software_commit() -> str:
+    override = os.environ.get("MANORL_SOFTWARE_COMMIT")
+    if override:
+        return override
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"],
