@@ -97,7 +97,7 @@ def test_wandb_defaults_and_overrides_map_to_init(monkeypatch: pytest.MonkeyPatc
         assert run is fake.run
 
     assert fake.init_calls == [{
-        "project": "one_policy",
+        "project": "mujoco-mano",
         "entity": None,
         "group": "s02",
         "name": "cube1_03-cube1-01",

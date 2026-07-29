@@ -52,6 +52,7 @@ from sim.manorl.trajectory import (
     load_assigned_trajectory_batch,
 )
 
+DEFAULT_WANDB_PROJECT = "mujoco-mano"
 DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
 REWARD_UPDATE_COMPONENTS = (
     "total",
@@ -153,7 +154,7 @@ SKRL_TRACKING_METRICS = (
 @dataclass(frozen=True)
 class WandbOptions:
     enabled: bool = True
-    project: str = "one_policy"
+    project: str = DEFAULT_WANDB_PROJECT
     group: str = "s02"
     entity: str = ""
     name: str | None = None
@@ -2485,7 +2486,7 @@ def main(argv: list[str] | None = None) -> int:
         help="experimentally preallocate bundled Warp CCD scratch for unified GPU training",
     )
     parser.add_argument("--wandb", type=parse_cli_bool, default=True, metavar="{true,false}")
-    parser.add_argument("--wandb-project", default="one_policy")
+    parser.add_argument("--wandb-project", default=DEFAULT_WANDB_PROJECT)
     parser.add_argument("--wandb-group", default="s02")
     parser.add_argument("--wandb-entity", default="")
     parser.add_argument("--wandb-name")
