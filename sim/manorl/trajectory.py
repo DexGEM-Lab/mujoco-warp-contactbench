@@ -1178,6 +1178,8 @@ def _candidate_from_metadata_row(
     except (KeyError, TypeError, ValueError, StopIteration):
         return None
     requested_start = start_raw - selection.pre_padding
+    if requested_start < 0:
+        return None
     requested_stop = end_raw + selection.post_padding
     if not source_path:
         # Modern capture metadata uses an inclusive movement end.  Historical
@@ -1301,9 +1303,11 @@ def _selected_trajectory_from_row(
     start_raw, end_raw = int(entry["start_frame"]), int(entry["end_frame"])
     requested_start = start_raw - selection.pre_padding
     requested_stop = end_raw + selection.post_padding
-    if selection.require_full_padding and (
-        requested_start < 0 or requested_stop > source_count
-    ):
+    if requested_start < 0:
+        raise ValueError(
+            f"row {row_index} movement start {start_raw} cannot provide {selection.pre_padding}-frame pre-padding"
+        )
+    if selection.require_full_padding and requested_stop > source_count:
         raise ValueError(
             f"row {row_index} cannot provide [{start_raw}-{selection.pre_padding}, {end_raw}+{selection.post_padding})"
         )

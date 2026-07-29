@@ -14,6 +14,8 @@ from sim.manorl.trajectory import (
     LANCE_COLUMNS,
     ObjectActionPair,
     TrajectorySelection,
+    _candidate_from_metadata_row,
+    _selected_trajectory_from_row,
     load_assigned_trajectory_batch,
     load_cube1_action_01_batch10,
     load_reference_trajectory,
@@ -201,6 +203,27 @@ def _accepted_fake_row(timestamps: np.ndarray) -> dict[str, object]:
         "hands": [{"urdf_dof": np.zeros((1373, 26))}],
         "objects": [{"pos": np.repeat([[0.0, 0.0, 1.0]], 1373, axis=0), "rot_aa": np.zeros((1373, 3))}],
     }
+
+
+def test_candidate_rejects_negative_movement_pre_padding_margin(tmp_path: Path) -> None:
+    row = deepcopy(_accepted_fake_row(np.arange(1373, dtype=np.float64) / 111.0))
+    row["index"].update(
+        scene="cube1",
+        source_path="cube1/cube1_01_009/cube1_01_009_mano.npy",
+    )
+    row["trajectory_metadata"]["trajectory_info"]["object_move"][0]["start_frame"] = 50
+    selection = TrajectorySelection(
+        "cube1", "01", dataset_path=tmp_path / "source.lance", pre_padding=100
+    )
+    assert _candidate_from_metadata_row(row, row_index=0, selection=selection) is None
+    with pytest.raises(ValueError, match="pre-padding"):
+        _selected_trajectory_from_row(
+            row,
+            EXPECTED_DATASET_VERSION,
+            row_index=0,
+            selection=selection,
+            expected_pair=ObjectActionPair("cube1", "01"),
+        )
 
 
 def test_timestamps_require_strict_monotonicity_only() -> None:
