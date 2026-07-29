@@ -29,20 +29,20 @@ def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
     assert config.joint_scale == (
         0.02,
         0.02,
-        0.02,
+        0.008,
         0.02,
         0.01,
         0.005,
-        *(0.01, 0.01, 0.015, 0.005) * 4,
+        *(0.01, 0.0025, 0.015, 0.005) * 4,
     )
     assert config.max_joint_offset == (
         0.2,
         0.2,
-        0.2,
+        0.08,
         0.2,
         0.1,
         0.05,
-        *(0.1, 0.1, 0.15, 0.1) * 4,
+        *(0.1, 0.025, 0.15, 0.1) * 4,
     )
     assert len(config.joint_scale) == len(config.max_joint_offset) == 22
     assert config.joint_scale_multiplier == 2.0
@@ -62,11 +62,23 @@ def test_residual_control_clips_masks_and_uses_target_early_interval() -> None:
     np.testing.assert_array_equal(result.cumulative_joint_offset[:2], 0.0)
     np.testing.assert_allclose(
         result.cumulative_joint_offset[2, :10],
-        [0.04, 0.04, 0.04, 0.04, 0.02, 0.01, 0.02, 0.02, 0.03, 0.01],
+        [0.04, 0.04, 0.016, 0.04, 0.02, 0.01, 0.02, 0.005, 0.03, 0.01],
     )
     np.testing.assert_array_equal(result.cumulative_joint_offset[2, 10:], 0.0)
     # Rotation is immediate, unlike the position and joint cumulative residuals.
     np.testing.assert_allclose(result.targets[2, 3:6], 0.00025)
+
+
+def test_named_joint_scale_overrides_use_mano_action_order() -> None:
+    config = ResidualActionConfig()
+    thumb_cmc_twist = 2
+    finger_mcp_flex = (7, 11, 15, 19)
+    assert config.joint_scale[thumb_cmc_twist] == 0.008
+    assert config.max_joint_offset[thumb_cmc_twist] == 0.08
+    assert [config.joint_scale[index] for index in finger_mcp_flex] == [0.0025] * 4
+    assert [config.max_joint_offset[index] for index in finger_mcp_flex] == [0.025] * 4
+    assert config.joint_scale[thumb_cmc_twist] * config.joint_scale_multiplier == 0.016
+    assert config.max_joint_offset[thumb_cmc_twist] * config.joint_max_offset_multiplier == 0.16
 
 
 def test_joint_scale_and_cap_multipliers_apply_exactly_once() -> None:
@@ -139,7 +151,7 @@ def test_residual_control_accumulates_only_active_joints_and_clamps() -> None:
     np.testing.assert_allclose(result.cumulative_offset, [[0.0291, 0.0291, 0.0291]])
     np.testing.assert_allclose(
         result.cumulative_joint_offset[0, :10],
-        [0.04, 0.04, 0.04, 0.04, 0.02, 0.01, 0.02, 0.02, 0.03, 0.01],
+        [0.04, 0.04, 0.016, 0.04, 0.02, 0.01, 0.02, 0.005, 0.03, 0.01],
     )
     np.testing.assert_array_equal(result.cumulative_joint_offset[0, 10:], 0.0)
     disabled = process_residual_actions(
@@ -175,12 +187,12 @@ def test_joint_recurrence_converges_within_configured_caps() -> None:
     values["cumulative_offset"][:] = 0.0
     values["active_joint_mask"][:] = True
     expected_scales = 2.0 * np.array(
-        [0.02, 0.02, 0.02, 0.02, 0.01, 0.005]
-        + [0.01, 0.01, 0.015, 0.005] * 4
+        [0.02, 0.02, 0.008, 0.02, 0.01, 0.005]
+        + [0.01, 0.0025, 0.015, 0.005] * 4
     )
     expected_caps = 2.0 * np.array(
-        [0.2, 0.2, 0.2, 0.2, 0.1, 0.05]
-        + [0.1, 0.1, 0.15, 0.1] * 4
+        [0.2, 0.2, 0.08, 0.2, 0.1, 0.05]
+        + [0.1, 0.025, 0.15, 0.1] * 4
     )
     expected_steady_state = np.minimum(
         expected_caps,

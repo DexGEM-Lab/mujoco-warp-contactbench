@@ -145,16 +145,16 @@ The executable scale, mask, transition, and target assembly are
 the deterministic portion is implemented in this 5B slice. Source
 `actionsMovingAverage=1` makes its moving-average assignment an identity for
 the configured ABI. The target must not reuse the acceptance replay's
-`RESIDUAL_ENABLED=False` as its training default. New v5 checkpoints and
+`RESIDUAL_ENABLED=False` as its training default. New v6 checkpoints and
 training use `(0.003, 0.003, 0.003)`, `[-0.03, 0.03]`, and `2.0` joint
-scale/cap multipliers. V4 checkpoint sidecars retain and restore their explicit
-`0.002`/`0.02` and multiplier values.
+scale/cap multipliers. V4/v5 checkpoint sidecars retain and restore their
+explicit residual-action vectors and multiplier values.
 
 The production mapping includes all 22 base joint scales and accumulated-offset
-limits; the v5 defaults multiply both vectors by `2.0`. The six thumb base
-scales are `(0.02, 0.02, 0.02, 0.02, 0.01, 0.005)` and
-caps are `(0.2, 0.2, 0.2, 0.2, 0.1, 0.05)`; each other finger uses scales
-`(0.01, 0.01, 0.015, 0.005)` and caps `(0.1, 0.1, 0.15, 0.1)`.
+limits; the v6 defaults multiply both vectors by `2.0`. The six thumb base
+scales are `(0.02, 0.02, 0.008, 0.02, 0.01, 0.005)` and
+caps are `(0.2, 0.2, 0.08, 0.2, 0.1, 0.05)`; each other finger uses scales
+`(0.01, 0.0025, 0.015, 0.005)` and caps `(0.1, 0.025, 0.15, 0.1)`.
 
 ## Episode and reset ABI
 

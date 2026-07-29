@@ -53,12 +53,13 @@ assert metadata["environment_contract"] == ENVIRONMENT_CONTRACT_ID
 load_skrl_checkpoint(agent, checkpoint)
 assert agent.loaded == str(checkpoint)
 
-legacy_v4 = dict(metadata)
-legacy_v4["environment_contract"] = next(iter(LEGACY_ENVIRONMENT_CONTRACT_IDS))
-sidecar(checkpoint).write_text(json.dumps(legacy_v4), encoding="utf-8")
-agent.loaded = None
-load_skrl_checkpoint(agent, checkpoint)
-assert agent.loaded == str(checkpoint)
+for legacy_contract in LEGACY_ENVIRONMENT_CONTRACT_IDS:
+    legacy_environment_contract = dict(metadata)
+    legacy_environment_contract["environment_contract"] = legacy_contract
+    sidecar(checkpoint).write_text(json.dumps(legacy_environment_contract), encoding="utf-8")
+    agent.loaded = None
+    load_skrl_checkpoint(agent, checkpoint)
+    assert agent.loaded == str(checkpoint)
 
 missing = dict(metadata)
 missing.pop("reward_contract")

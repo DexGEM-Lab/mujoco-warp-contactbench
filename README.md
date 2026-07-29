@@ -233,8 +233,11 @@ multipliers, both defaulting to `2.0`. Wrist XYZ residuals default to a
 with `--joint-scale-multiplier`, `--joint-max-offset-multiplier`,
 `--position-scale`, and `--max-position-offset`. The values are recorded in
 W&B, Rerun, and native checkpoint metadata; resume rejects a checkpoint whose
-residual-action contract differs from the target runtime. V4 sidecars remain
-readable and restore their explicit `0.002`/`0.02` and multiplier contract.
+residual-action contract differs from the target runtime. The base
+`thumbCmcTwist` scale/cap are `0.008`/`0.08`; each non-thumb
+`fingerMcpFlex` scale/cap is `0.0025`/`0.025`, before the global `2.0`
+multipliers. V4/v5 sidecars remain readable and restore their explicit
+residual-action contracts.
 
 For an opt-in safety cap that may stop before all 8,000 updates complete, add
 `--wall-clock-seconds <positive-seconds>`. `--evaluation-num-envs` requests a

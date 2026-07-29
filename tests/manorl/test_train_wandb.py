@@ -218,11 +218,14 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["environment"]["residual_action"]["joint_scale"][:6] == [
         0.02,
         0.02,
-        0.02,
+        0.008,
         0.02,
         0.01,
         0.005,
     ]
+    assert config["environment"]["residual_action"]["joint_scale"][7] == 0.0025
+    assert config["environment"]["residual_action"]["max_joint_offset"][2] == 0.08
+    assert config["environment"]["residual_action"]["max_joint_offset"][7] == 0.025
     assert config["environment"]["residual_action"]["joint_scale_multiplier"] == 1.5
     assert config["environment"]["residual_action"]["joint_max_offset_multiplier"] == 1.5
     assert config["environment"]["residual_action"]["early_phase_steps"] == 30

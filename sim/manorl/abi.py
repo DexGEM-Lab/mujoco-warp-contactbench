@@ -18,12 +18,12 @@ from numpy.typing import NDArray
 # the MANO actionScaling order: CMC abd/flex/twist, MCP flex/abd, IP, then MCP
 # abd/flex, PIP, DIP for index through pinky.
 SOURCE_ALIGNED_JOINT_SCALE: Final = tuple(
-    [0.02, 0.02, 0.02, 0.02, 0.01, 0.005]
-    + [0.01, 0.01, 0.015, 0.005] * 4
+    [0.02, 0.02, 0.008, 0.02, 0.01, 0.005]
+    + [0.01, 0.0025, 0.015, 0.005] * 4
 )
 SOURCE_ALIGNED_JOINT_CAP: Final = tuple(
-    [0.2, 0.2, 0.2, 0.2, 0.1, 0.05]
-    + [0.1, 0.1, 0.15, 0.1] * 4
+    [0.2, 0.2, 0.08, 0.2, 0.1, 0.05]
+    + [0.1, 0.025, 0.15, 0.1] * 4
 )
 DEFAULT_EARLY_PHASE_STEPS: Final[int] = 30
 
@@ -33,12 +33,15 @@ DEFAULT_EARLY_PHASE_STEPS: Final[int] = 30
 LEGACY_ENVIRONMENT_CONTRACT_IDS: Final = frozenset(
     {
         "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
-        "action2mm_max20mm_observation_contact_0p2n_deviation_0p10_v4"
+        "action2mm_max20mm_observation_contact_0p2n_deviation_0p10_v4",
+        "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
+        "action3mm_max30mm_joint2x_observation_contact_0p2n_deviation_0p10_v5",
     }
 )
 ENVIRONMENT_CONTRACT_ID: Final = (
     "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
-    "action3mm_max30mm_joint2x_observation_contact_0p2n_deviation_0p10_v5"
+    "action3mm_max30mm_joint2x_thumbtwist0p008_fingermcpflex0p0025_"
+    "observation_contact_0p2n_deviation_0p10_v6"
 )
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 
