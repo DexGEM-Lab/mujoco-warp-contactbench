@@ -50,6 +50,7 @@ from sim.manorl.trajectory import (
 WARP_BROADPHASE_CONTACTS_PER_WORLD = 31
 UNIFIED_WARP_CONTACTS_PER_WORLD = 64
 WARP_CONTACT_CAPACITY_MARGIN = 64
+DEFAULT_WANDB_PROJECT = "mujoco-dexhand"
 DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
 REWARD_UPDATE_COMPONENTS = (
     "total",
@@ -151,7 +152,7 @@ SKRL_TRACKING_METRICS = (
 @dataclass(frozen=True)
 class WandbOptions:
     enabled: bool = True
-    project: str = "one_policy"
+    project: str = DEFAULT_WANDB_PROJECT
     group: str = "s02"
     entity: str = ""
     name: str | None = None
@@ -2257,7 +2258,7 @@ def main(argv: list[str] | None = None) -> int:
         help="use one fixed-topology MJX model for mixed-object batches",
     )
     parser.add_argument("--wandb", type=parse_cli_bool, default=True, metavar="{true,false}")
-    parser.add_argument("--wandb-project", default="one_policy")
+    parser.add_argument("--wandb-project", default=DEFAULT_WANDB_PROJECT)
     parser.add_argument("--wandb-group", default="s02")
     parser.add_argument("--wandb-entity", default="")
     parser.add_argument("--wandb-name")
