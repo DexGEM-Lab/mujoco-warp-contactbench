@@ -15,3 +15,6 @@ Full isolated-row validation established: schema v2.2; 49 identities × 5 episod
 The v2.2 dataset is scientifically and structurally valid, but the user paused its NAS publication; the hidden NAS staging copy was removed and v2.1 remains authoritative. The completed 245-row artifact stays on Server2 as the old-policy diagnostic baseline.
 
 A new policy is training from scratch under contact-v2 across all 213 valid right-hand cube2 identities (`01,02,03,04,10,11`) with deterministic padding to N4096. This avoids contaminating PPO optimizer/value state with the old reward contract. The principal live risk is reward avoidance: the policy could reduce late punishment by failing to acquire contact. Evaluate checkpoint trajectories against both late-contact fraction and in-window contact/task success; neither metric alone establishes behavioral improvement.
+
+## Capacity boundary
+On the 24 GiB RTX 4090, steady rollout memory is not the limiting measurement. N16384 and N14336 both execute three updates, then fail when the first reset-heavy transition requests additional Warp device storage. N12288 completes the same five-update test, including 8,088 resets in update 4. The justified production ceiling for this exact cube1/contact-v2/CCD contract is therefore N12288. N8192 remains the lower-memory operating point; N14336 is the nearest tested failing point.
