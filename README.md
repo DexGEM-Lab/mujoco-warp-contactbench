@@ -252,7 +252,10 @@ eligible `cube2:02` rows to export the whole pair, or use a smaller value and
 advance `--pair-assignment-cycle` across bounded batches. The exporter refuses
 to overwrite an existing dataset unless `--replace` is passed to the Python
 CLI. It requires a native checkpoint sidecar and preserves the checkpoint's
-serialized residual-action/CCD settings.
+serialized residual-action/CCD settings. On hosts where nested Lance row reads
+are natively unstable, set `MANORL_PREDECODED_MANIFEST` to the validated
+isolated-predecode manifest; every selected pickle is SHA256-checked before the
+GPU rollout.
 
 Finger residual increments and their cumulative caps have independent explicit
 multipliers, both defaulting to `2.0`. Wrist XYZ residuals default to a

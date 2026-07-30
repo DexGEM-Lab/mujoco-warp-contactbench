@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import pickle
 import re
 import subprocess
 from typing import Any
@@ -66,6 +67,51 @@ def _software_commit() -> str:
 def _checkpoint_update(path: Path) -> int:
     match = re.search(r"checkpoint-(\d+)$", path.stem)
     return int(match.group(1)) if match else -1
+
+
+def _load_predecoded_batch(
+    selection: TrajectorySelection, *, num_envs: int, manifest_path: Path
+) -> TrajectoryBatch:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if Path(manifest.get("dataset_path", "")) != selection.dataset_path:
+        raise ValueError("predecoded manifest source dataset differs from the requested dataset")
+    if int(manifest.get("dataset_version", -1)) != selection.expected_dataset_version:
+        raise ValueError("predecoded manifest dataset version differs from the requested version")
+    if manifest.get("hand_side") != "right":
+        raise ValueError("predecoded manifest must use right-hand selection")
+    pairs = selection.requested_pairs
+    if pairs is None or len(pairs) != 1:
+        raise ValueError("predecoded v2 export requires one explicit object/action pair")
+    pair = pairs[0]
+    records = [
+        record for record in manifest.get("valid_records", [])
+        if record.get("pair") == pair.canonical
+    ]
+    if not records:
+        raise LookupError(f"predecoded manifest has no valid {pair.canonical} trajectories")
+    if num_envs > len(records):
+        raise ValueError(
+            f"num-envs {num_envs} exceeds {len(records)} distinct predecoded identities "
+            f"for {pair.canonical}"
+        )
+    offset = (selection.pair_assignment_cycle * num_envs) % len(records)
+    records = (records[offset:] + records[:offset])[:num_envs]
+    trajectories = []
+    for record in records:
+        path = manifest_path.parent / f"{record['identity']}.pkl"
+        if file_sha256(path) != record.get("pickle_sha256"):
+            raise RuntimeError(f"predecoded trajectory hash changed: {path}")
+        with path.open("rb") as stream:
+            trajectory = pickle.load(stream)
+        if trajectory.identity.identity != record["identity"]:
+            raise RuntimeError(f"predecoded trajectory identity changed: {path}")
+        trajectories.append(trajectory)
+    return TrajectoryBatch(
+        tuple(trajectories),
+        resolved_pairs=pairs,
+        selection_mode=selection.mode,
+        pair_assignment_cycle=selection.pair_assignment_cycle,
+    )
 
 
 def _source_metadata(trajectories: TrajectoryBatch) -> dict[int, tuple[dict[str, Any], dict[str, Any]]]:
@@ -147,19 +193,29 @@ def export_checkpoint_rollouts(
     device: str,
     replace: bool = False,
     allow_deviation_termination: bool = False,
+    predecoded_manifest: Path | None = None,
 ) -> dict[str, Any]:
     """Run one independent source-length episode per assigned trajectory."""
 
     checkpoint = _validate_checkpoint_path(checkpoint)
     checkpoint_options = _checkpoint_environment_options(checkpoint)
-    trajectories = load_assigned_trajectory_batch(selection, num_envs=num_envs)
+    trajectories = (
+        load_assigned_trajectory_batch(selection, num_envs=num_envs)
+        if predecoded_manifest is None
+        else _load_predecoded_batch(
+            selection, num_envs=num_envs, manifest_path=predecoded_manifest
+        )
+    )
     identities = [item.identity.identity for item in trajectories.trajectories]
     if len(set(identities)) != len(identities):
         raise ValueError(
             "num-envs exceeds the distinct valid identities in this assignment window; "
             "reduce it so every exported Lance row has a unique source trajectory"
         )
-    if trajectories.hand_sides != ("right",) or trajectories.action_dim != JOINT_DOF:
+    if trajectories.action_dim != JOINT_DOF or any(
+        item.action_layout.controlled_sides != ("right",)
+        for item in trajectories.trajectories
+    ):
         raise ValueError("v2 checkpoint export currently requires one controlled right 28D hand")
     metadata_by_row = _source_metadata(trajectories)
     environment = MujocoManoEnvironment(
@@ -192,6 +248,10 @@ def export_checkpoint_rollouts(
         "checkpoint_metadata": checkpoint_metadata,
         "software_commit": _software_commit(),
     }
+    right_model_index = environment.model_hand_sides.index("right")
+    right_model_slice = slice(
+        right_model_index * JOINT_DOF, (right_model_index + 1) * JOINT_DOF
+    )
     state_storage = [defaultdict(list) for _ in range(num_envs)]
     rollout_storage = [defaultdict(list) for _ in range(num_envs)]
     contact_storage: list[list[list[dict[str, Any]]]] = [[] for _ in range(num_envs)]
@@ -202,7 +262,10 @@ def export_checkpoint_rollouts(
         initial = _state_row(environment, env_id)
         _append_state(state_storage[env_id], initial)
         state_storage[env_id]["urdf_dof_target"].append(
-            np.asarray(environment.reference_q_model[env_id, 0], dtype=np.float64)
+            np.asarray(
+                environment.reference_q_model[env_id, 0, right_model_slice],
+                dtype=np.float64,
+            )
         )
         contact_storage[env_id].append(initial_contacts[env_id])
 
@@ -226,7 +289,10 @@ def export_checkpoint_rollouts(
             post = _state_row(environment, int(env_id))
             _append_state(state_storage[env_id], post)
             state_storage[env_id]["urdf_dof_target"].append(
-                np.asarray(transition.controller_targets[env_id], dtype=np.float64)
+                np.asarray(
+                    transition.controller_targets[env_id, right_model_slice],
+                    dtype=np.float64,
+                )
             )
             contact_storage[env_id].append(frame_contacts[env_id])
             command_index = int(transition.command_reference_indices[env_id])
@@ -252,13 +318,19 @@ def export_checkpoint_rollouts(
                 int(environment.reference_source_indices[env_id, command_index])
             )
             rollout["reference_target"].append(
-                np.asarray(transition.command_targets[env_id], dtype=np.float64)
+                np.asarray(
+                    transition.command_targets[env_id, right_model_slice], dtype=np.float64
+                )
             )
             rollout["processed_target"].append(
-                np.asarray(transition.processed_targets[env_id], dtype=np.float64)
+                np.asarray(
+                    transition.processed_targets[env_id, right_model_slice], dtype=np.float64
+                )
             )
             rollout["controller_target"].append(
-                np.asarray(transition.controller_targets[env_id], dtype=np.float64)
+                np.asarray(
+                    transition.controller_targets[env_id, right_model_slice], dtype=np.float64
+                )
             )
             rollout["reward"].append(float(transition.reward.total[env_id]))
             terminal = bool(transition.termination.reset[env_id])
@@ -344,6 +416,9 @@ def export_checkpoint_rollouts(
             "dataset_version": selection.expected_dataset_version,
             "num_envs": num_envs,
             "pair_assignment_cycle": selection.pair_assignment_cycle,
+            "predecoded_manifest": (
+                None if predecoded_manifest is None else str(predecoded_manifest)
+            ),
         },
         "runtime": {
             "device": device,
@@ -376,6 +451,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", choices=("cpu", "gpu"), default="gpu")
     parser.add_argument("--replace", action="store_true")
     parser.add_argument(
+        "--predecoded-manifest",
+        type=Path,
+        help="optional isolated-predecode manifest for native-Lance-unstable hosts",
+    )
+    parser.add_argument(
         "--allow-deviation-termination",
         action="store_true",
         help="retain the training 0.10 m deviation terminal instead of requiring full source-length episodes",
@@ -407,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         device=args.device,
         replace=args.replace,
         allow_deviation_termination=args.allow_deviation_termination,
+        predecoded_manifest=args.predecoded_manifest,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0

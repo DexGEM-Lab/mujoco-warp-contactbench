@@ -15,6 +15,7 @@ DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/huma
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
 OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v2_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
 PYTHON=${MANORL_PYTHON:-$ROOT/.venv/bin/python}
+PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
 
 if [[ -z "$CHECKPOINT" ]]; then
   echo "Set CHECKPOINT or MANORL_CHECKPOINT to a native ManoRL checkpoint." >&2
@@ -42,6 +43,12 @@ export PYTHONPATH=$ROOT
 export CUDA_VISIBLE_DEVICES=$GPU
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
+EXTRA_ARGS=()
+if [[ -n "$PREDECODED_MANIFEST" ]]; then
+  PREDECODED_MANIFEST=$(realpath -e "$PREDECODED_MANIFEST")
+  EXTRA_ARGS+=(--predecoded-manifest "$PREDECODED_MANIFEST")
+fi
+
 exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \
   --device gpu \
   --checkpoint "$CHECKPOINT" \
@@ -50,4 +57,5 @@ exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \
   --gesture "$GESTURE" \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
-  --num-envs "$NUM_ENVS"
+  --num-envs "$NUM_ENVS" \
+  "${EXTRA_ARGS[@]}"
