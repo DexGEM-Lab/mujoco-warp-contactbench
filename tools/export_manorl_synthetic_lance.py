@@ -83,19 +83,24 @@ def _load_predecoded_batch(
     if manifest.get("hand_side") != "right":
         raise ValueError("predecoded manifest must use right-hand selection")
     pairs = selection.requested_pairs
-    if pairs is None or len(pairs) != 1:
-        raise ValueError("predecoded v2 export requires one explicit object/action pair")
-    pair = pairs[0]
+    if not pairs:
+        raise ValueError("predecoded v2 export requires explicit object/action pairs")
+    object_types = {pair.object_type for pair in pairs}
+    if len(object_types) != 1:
+        raise ValueError("predecoded v2 export requires one homogeneous object type")
+    requested = {pair.canonical for pair in pairs}
     records = [
         record for record in manifest.get("valid_records", [])
-        if record.get("pair") == pair.canonical
+        if record.get("pair") in requested
     ]
-    if not records:
-        raise LookupError(f"predecoded manifest has no valid {pair.canonical} trajectories")
+    available = {record["pair"] for record in records}
+    missing = sorted(requested - available)
+    if missing:
+        raise LookupError(f"predecoded manifest omits requested pairs: {missing}")
     if num_envs > len(records):
         raise ValueError(
             f"num-envs {num_envs} exceeds {len(records)} distinct predecoded identities "
-            f"for {pair.canonical}"
+            f"for {selection.canonical_selector}"
         )
     offset = (selection.pair_assignment_cycle * num_envs) % len(records)
     records = (records[offset:] + records[:offset])[:num_envs]
@@ -492,6 +497,8 @@ def _export_isolated_repeated_rollouts(
             "--max-attempts-per-identity", "1",
             "--internal-attempt-control", str(control_path),
         ]
+        if selection.selector is not None:
+            command.extend(["--pairs", selection.canonical_selector])
         if predecoded_manifest is not None:
             command.extend(["--predecoded-manifest", str(predecoded_manifest)])
         if allow_deviation_termination:
@@ -563,6 +570,7 @@ def _export_isolated_repeated_rollouts(
         "selection": {
             "object": selection.object_type,
             "gesture": selection.action_id,
+            "selector": selection.canonical_selector,
             "dataset_path": str(selection.dataset_path),
             "dataset_version": selection.expected_dataset_version,
             "num_source_identities": num_envs,
@@ -821,6 +829,7 @@ def export_checkpoint_rollouts(
         "selection": {
             "object": selection.object_type,
             "gesture": selection.action_id,
+            "selector": selection.canonical_selector,
             "dataset_path": str(selection.dataset_path),
             "dataset_version": selection.expected_dataset_version,
             "num_source_identities": num_envs,
@@ -880,6 +889,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--object", dest="object_type", default="cube2")
     parser.add_argument("--gesture", default="02")
+    parser.add_argument(
+        "--pairs",
+        help="optional comma-separated homogeneous object:action selector",
+    )
     parser.add_argument("--dataset-path", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--dataset-version", type=int, default=295)
     parser.add_argument("--num-envs", type=int, default=5)
@@ -931,6 +944,7 @@ def main(argv: list[str] | None = None) -> int:
         selection=TrajectorySelection(
             object_type=args.object_type,
             gesture=args.gesture,
+            selector=args.pairs,
             dataset_path=args.dataset_path,
             expected_dataset_version=args.dataset_version,
             hand_side="right",

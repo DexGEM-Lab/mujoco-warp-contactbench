@@ -21,7 +21,12 @@ from sim.manorl.lance_v2 import (
     write_v2_lance,
 )
 from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
-from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch, TrajectorySelection
+from sim.manorl.trajectory import (
+    ObjectActionPair,
+    ReferenceTrajectory,
+    TrajectoryBatch,
+    TrajectorySelection,
+)
 import tools.export_manorl_synthetic_lance as exporter_module
 from tools.export_manorl_synthetic_lance import (
     _load_predecoded_batch,
@@ -223,6 +228,66 @@ def test_predecoded_manifest_selects_unique_hashed_identity_window(tmp_path) -> 
     assert [item.identity.identity for item in batch.trajectories] == ["cube2_02_0002"]
 
 
+def test_predecoded_manifest_selects_multiple_homogeneous_pairs(tmp_path) -> None:
+    dataset = tmp_path / "source.lance"
+    dataset.mkdir()
+    records = []
+    for sequence, action_id in enumerate(("01", "02"), start=1):
+        identity = TrajectoryIdentity(
+            dataset_path=str(dataset), dataset_version=295, row_index=sequence,
+            object_index=0, uuid=f"10000000-0000-0000-0000-00000000000{sequence}",
+            file_uuid="f", identity=f"cube2_{action_id}_{sequence:04d}",
+            source_start=0, source_stop=2, movement_start_raw=0,
+            movement_end_raw=1,
+        )
+        trajectory = ReferenceTrajectory(
+            identity=identity, dataset_version=295,
+            source_indices=np.asarray([0, 1]),
+            timestamps=np.asarray([0.0, 0.005]), q_ref=np.zeros((2, 28)),
+            object_pos_raw=np.zeros((2, 3)), object_pos=np.zeros((2, 3)),
+            object_quat_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]] * 2),
+            object_z_shift=0.0,
+        )
+        path = tmp_path / f"{identity.identity}.pkl"
+        path.write_bytes(pickle.dumps(trajectory))
+        from sim.manorl.lance_v2 import file_sha256
+
+        records.append(
+            {
+                "identity": identity.identity,
+                "pair": f"cube2:{action_id}",
+                "pickle_sha256": file_sha256(path),
+            }
+        )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "dataset_path": str(dataset),
+                "dataset_version": 295,
+                "hand_side": "right",
+                "valid_records": records,
+            }
+        )
+    )
+    batch = _load_predecoded_batch(
+        TrajectorySelection(
+            "cube2", "01", selector="cube2:01,cube2:02",
+            dataset_path=dataset, expected_dataset_version=295,
+            hand_side="right",
+        ),
+        num_envs=2,
+        manifest_path=manifest,
+    )
+    assert [item.identity.identity for item in batch.trajectories] == [
+        "cube2_01_0001", "cube2_02_0002"
+    ]
+    assert batch.resolved_pairs == (
+        ObjectActionPair("cube2", "01"),
+        ObjectActionPair("cube2", "02"),
+    )
+
+
 def test_repeated_synthesis_isolates_five_attempt_rounds(
     tmp_path, monkeypatch
 ) -> None:
@@ -252,6 +317,7 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(
     monkeypatch.setattr(exporter_module, "_software_commit", lambda: "commit")
 
     def fake_child(command, check):
+        assert command[command.index("--pairs") + 1] == "cube2:02"
         output = Path(command[command.index("--output") + 1])
         control_path = Path(command[command.index("--internal-attempt-control") + 1])
         control = json.loads(control_path.read_text())
@@ -286,7 +352,8 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(
         checkpoint=checkpoint,
         output=output,
         selection=TrajectorySelection(
-            "cube2", "02", dataset_path=tmp_path / "source.lance",
+            "cube2", "02", selector="cube2:02",
+            dataset_path=tmp_path / "source.lance",
             expected_dataset_version=295, hand_side="right",
         ),
         num_envs=1,
@@ -298,6 +365,7 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(
     assert result["rows"] == 5
     assert output.is_dir()
     assert [control["attempt_seed"] for control in observed_controls] == [42, 43, 44, 45, 46]
+    assert all(control["pending_identities"] == [identity.identity] for control in observed_controls)
     assert [control["episode_indices"][identity.identity] for control in observed_controls] == list(range(5))
     assert [control["attempt_numbers"][identity.identity] for control in observed_controls] == [1, 2, 3, 4, 5]
     manifest = json.loads((tmp_path / "repeated.lance.manifest.json").read_text())
