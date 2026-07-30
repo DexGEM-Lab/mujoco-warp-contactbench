@@ -257,7 +257,9 @@ ten attempts. Attempts use consecutive seeds from the base `42`; successful
 rows record `episode_index`, `generation_attempt`, and the attempt seed. An
 identity that cannot reach five accepted episodes after ten attempts causes a
 nonzero exit and a `.partial` dataset/manifest instead of a misleading complete
-publication. Override the bounds with `--episodes-per-identity` and
+publication. Each attempt round runs in a fresh process and appends one Lance
+fragment, bounding native MJX-Warp/Lance lifetime and host memory across the
+five episodes. Override the bounds with `--episodes-per-identity` and
 `--max-attempts-per-identity`, or the corresponding
 `MANORL_SYNTH_EPISODES_PER_IDENTITY` and
 `MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY` wrapper variables.
