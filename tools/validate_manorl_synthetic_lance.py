@@ -140,6 +140,7 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         ),
         "reward_sum": float(metadata["train_info"]["reward_value"]),
         "checkpoint_sha256": row["provenance"]["checkpoint_sha256"],
+        "seed": int(row["provenance"]["seed"]),
         "max_object_position_reconstruction_m": max_pos_object_error,
         "max_total_force_sum_error_N": max_force_sum_error,
         "max_object_force_rotation_error_N": max_object_force_error,
@@ -213,8 +214,11 @@ def validate_dataset(
     if len(set(identities)) != row_count or len(set(uuids)) != row_count or len(set(source_rows)) != row_count:
         raise ValueError("dataset contains duplicate source identities, UUIDs, or row indices")
     checkpoint_hashes = {row["checkpoint_sha256"] for row in rows}
+    seeds = {row["seed"] for row in rows}
     if len(checkpoint_hashes) != 1:
         raise ValueError("dataset rows do not share one checkpoint SHA256")
+    if len(seeds) != 1:
+        raise ValueError("dataset rows do not share one rollout seed")
     summary = {
         "schema": SYNTHETIC_LANCE_V2_CONTRACT,
         "schema_metadata": metadata,
@@ -239,6 +243,7 @@ def validate_dataset(
         ),
         "reward_sum_all_rows": sum(row["reward_sum"] for row in rows),
         "checkpoint_sha256": next(iter(checkpoint_hashes)) if rows else None,
+        "seed": next(iter(seeds)) if rows else None,
         "checkpoint_environment_contract": (
             rows[0].get("checkpoint_environment_contract") if rows else None
         ),
