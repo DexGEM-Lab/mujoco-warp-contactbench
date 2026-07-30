@@ -161,7 +161,9 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
     return result
 
 
-def validate_dataset(path: Path, output: Path | None = None) -> dict[str, Any]:
+def validate_dataset(
+    path: Path, output: Path | None = None, *, max_attempts: int = 5
+) -> dict[str, Any]:
     import lance
 
     dataset = lance.dataset(str(path))
@@ -170,27 +172,41 @@ def validate_dataset(path: Path, output: Path | None = None) -> dict[str, Any]:
         raise ValueError("dataset schema_version is not the corrected v2 contract")
     if metadata.get("force_contract") != FORCE_DIRECTION_CONTRACT:
         raise ValueError("dataset force contract is not normal-only scale 1.0")
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
     row_count = int(dataset.count_rows())
     rows = []
     for row_index in range(row_count):
-        child = subprocess.run(
-            [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                str(path),
-                "--row-index",
-                str(row_index),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if child.returncode != 0:
-            raise RuntimeError(
-                f"isolated Lance validation failed for row {row_index} with exit "
-                f"{child.returncode}: {child.stderr.strip()}"
+        failures: list[tuple[int, str]] = []
+        for attempt in range(1, max_attempts + 1):
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    str(path),
+                    "--row-index",
+                    str(row_index),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
             )
-        rows.append(json.loads(child.stdout))
+            if child.returncode == 0:
+                decoded = json.loads(child.stdout)
+                decoded["decoder_attempts"] = attempt
+                rows.append(decoded)
+                break
+            failures.append((child.returncode, child.stderr.strip()))
+            if child.returncode >= 0 and child.returncode not in {134, 139}:
+                break
+        else:
+            child = None
+        if len(rows) != row_index + 1:
+            code, error = failures[-1]
+            raise RuntimeError(
+                f"isolated Lance validation failed for row {row_index} after "
+                f"{len(failures)} attempt(s), final exit {code}: {error}"
+            )
     identities = [row["source_identity"] for row in rows]
     uuids = [row["uuid"] for row in rows]
     source_rows = [row["source_row_index"] for row in rows]
@@ -215,6 +231,11 @@ def validate_dataset(path: Path, output: Path | None = None) -> dict[str, Any]:
         "contact_pairs": sum(row["contact_pairs"] for row in rows),
         "nonzero_policy_action_values": sum(
             row["nonzero_policy_action_values"] for row in rows
+        ),
+        "isolated_decoder_attempts": sum(row["decoder_attempts"] for row in rows),
+        "retried_row_count": sum(row["decoder_attempts"] > 1 for row in rows),
+        "max_decoder_attempts_for_one_row": max(
+            (row["decoder_attempts"] for row in rows), default=0
         ),
         "reward_sum_all_rows": sum(row["reward_sum"] for row in rows),
         "checkpoint_sha256": next(iter(checkpoint_hashes)) if rows else None,
@@ -249,6 +270,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--max-attempts", type=int, default=5)
     parser.add_argument("--row-index", type=int, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
@@ -258,7 +280,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.row_index is not None:
         print(json.dumps(validate_row(args.dataset, args.row_index), sort_keys=True))
         return 0
-    print(json.dumps(validate_dataset(args.dataset, args.output), indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            validate_dataset(
+                args.dataset, args.output, max_attempts=args.max_attempts
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
