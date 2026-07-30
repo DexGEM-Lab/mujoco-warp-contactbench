@@ -82,6 +82,9 @@ def test_nested_arrow_decode_exceptions_are_retryable() -> None:
     assert _is_retryable_nested_decode_failure(1, pyarrow_error)
     assert _is_retryable_nested_decode_failure(139, "segmentation fault")
     assert _is_retryable_nested_decode_failure(-11, "segmentation fault")
+    assert _is_retryable_nested_decode_failure(
+        1, "File /site-packages/pyarrow/compute.py: UnboundLocalError"
+    )
     assert not _is_retryable_nested_decode_failure(1, "ValueError: schema changed")
 
 

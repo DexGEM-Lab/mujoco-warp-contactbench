@@ -258,6 +258,7 @@ def _is_retryable_nested_decode_failure(returncode: int, stderr: str) -> bool:
         and (
             "dataset.take([row_index]).to_pylist()" in stderr
             or "pyarrow.lib." in stderr
+            or "/site-packages/pyarrow/" in stderr
         )
     )
 
