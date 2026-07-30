@@ -253,7 +253,7 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
 
 
 def _is_retryable_nested_decode_failure(returncode: int, stderr: str) -> bool:
-    return returncode in {134, 139} or (
+    return returncode < 0 or returncode in {134, 139} or (
         returncode >= 0
         and (
             "dataset.take([row_index]).to_pylist()" in stderr
