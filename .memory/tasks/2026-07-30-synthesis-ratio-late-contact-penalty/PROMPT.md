@@ -20,4 +20,11 @@ Make ManoRL checkpoint synthesis default to five accepted episodes per raw ident
 - Source: Guangguan v295 right-hand cube2:02, 49 identities.
 - Checkpoint: cube2 v5 checkpoint-000500.pt, SHA256 `dafa2135a4de46e52dfec8c0ee264ca82fcd1af18db6f402024f1499d6e7c0ee`.
 - Existing checkpoint behavior will not change from reward relabeling; a newly trained policy is required to learn release behavior. Existing checkpoint is used only to validate the synthesis machinery and persisted reward values.
-- New full target is 245 rows. Deliver atomically to `/mnt/nas-222-project/sunjieqiang/mujoco_synthetic` after validation.
+- The validated 245-row v2.2 run is diagnostic only; the user paused NAS publication on 2026-07-30. Keep the authoritative v2.1 NAS artifact unchanged.
+
+## Training extension
+- Train a new policy from scratch under the contact-v2 reward on every valid right-hand `cube2` identity.
+- Coverage is the 213 predecoded identities across `cube2:01,02,03,04,10,11`, assigned once before deterministic padding to N4096.
+- Use v6 action defaults, 5,000 requested updates, checkpoints every 100 updates, GPU1, and W&B group `cube2-all-contact-v2`.
+- Do not load the old reward-v1 checkpoint as a strict resume. It remains the behavioral baseline.
+- Keep the feature worktree intact while the remote process imports from it; source edits to runtime/reward modules are frozen for the duration of the run.
