@@ -287,6 +287,19 @@ Legacy-reward checkpoints remain loadable for inference/export, but only a newly
 trained checkpoint can learn the release behavior; training resume remains
 strictly bound to the new reward contract.
 
+The validated all-action cube2 delivery generated from contact-v2
+`checkpoint-000800.pt` is:
+
+```text
+/mnt/nas-222-project/sunjieqiang/mujoco_synthetic/
+cube2_all_actions_checkpoint800_ratio5_seed42_v22.lance
+```
+
+It contains 213 raw identities across actions `01,02,03,04,10,11`, five accepted
+episodes per identity (1,065 rows), and adjacent manifest, validation, and
+SHA256 checksum sidecars. All identities completed in five attempts; the ten
+attempt limit remained fail-closed and was not consumed.
+
 Finger residual increments and their cumulative caps have independent explicit
 multipliers, both defaulting to `2.0`. Wrist XYZ residuals default to a
 `0.003 m` per-step scale and a symmetric `0.03 m` cumulative cap. Override them
