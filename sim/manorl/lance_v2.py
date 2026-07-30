@@ -535,6 +535,7 @@ def write_v2_lance(
     observation_dim: int,
     action_dim: int,
     replace: bool = False,
+    append: bool = False,
 ) -> Path:
     import lance
     import pyarrow as pa
@@ -542,13 +543,19 @@ def write_v2_lance(
     output_path = Path(output)
     if not rows:
         raise ValueError("cannot write an empty v2 rollout dataset")
-    if output_path.exists():
+    if append and replace:
+        raise ValueError("append and replace are mutually exclusive")
+    if output_path.exists() and not append:
         if not replace:
             raise FileExistsError(f"output already exists: {output_path}")
         shutil.rmtree(output_path)
+    if append and not output_path.exists():
+        raise FileNotFoundError(f"append target does not exist: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(
         list(rows), schema=build_v2_schema(observation_dim=observation_dim, action_dim=action_dim)
     )
-    lance.write_dataset(table, str(output_path), mode="create")
+    lance.write_dataset(
+        table, str(output_path), mode="append" if append else "create"
+    )
     return output_path

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 import json
 import pickle
@@ -208,7 +209,7 @@ def test_predecoded_manifest_selects_unique_hashed_identity_window(tmp_path) -> 
     assert [item.identity.identity for item in batch.trajectories] == ["cube2_02_0002"]
 
 
-def test_repeated_synthesis_saves_five_successes_within_ten_attempts(
+def test_repeated_synthesis_isolates_five_attempt_rounds(
     tmp_path, monkeypatch
 ) -> None:
     identity = TrajectoryIdentity(
@@ -226,56 +227,45 @@ def test_repeated_synthesis_saves_five_successes_within_ten_attempts(
     )
     batch = TrajectoryBatch((trajectory,))
     checkpoint = tmp_path / "checkpoint-000500.pt"
-    captured: dict[str, object] = {}
-    successful_attempts = {1, 3, 4, 6, 7}
+    observed_controls: list[dict[str, object]] = []
 
     monkeypatch.setattr(exporter_module, "_validate_checkpoint_path", lambda path: path)
     monkeypatch.setattr(
-        exporter_module, "_checkpoint_environment_options", lambda path: SimpleNamespace()
-    )
-    monkeypatch.setattr(
         exporter_module, "load_assigned_trajectory_batch", lambda selection, num_envs: batch
-    )
-    monkeypatch.setattr(
-        exporter_module, "_source_metadata", lambda batch: {3: ({}, {})}
     )
     monkeypatch.setattr(exporter_module, "file_sha256", lambda path: "checkpoint-sha")
     monkeypatch.setattr(exporter_module, "checkpoint_runtime_metadata", lambda path: {})
     monkeypatch.setattr(exporter_module, "_software_commit", lambda: "commit")
 
-    def fake_attempt(**kwargs):
-        name = trajectory.identity.identity
-        attempt = kwargs["attempt_numbers"][name]
-        if attempt not in successful_attempts:
-            return {}, {name: "quality_failed"}, 480, 28
-        episode = kwargs["episode_indices"][name]
-        seed = kwargs["attempt_seed"]
-        return {
-            name: {
-                "index": {"uuid": f"generated-{episode}"},
-                "provenance": {
-                    "source_identity": name,
-                    "episode_index": episode,
-                    "generation_attempt": attempt,
-                    "seed": seed,
-                },
-            }
-        }, {}, 480, 28
+    def fake_child(command, check):
+        output = Path(command[command.index("--output") + 1])
+        control_path = Path(command[command.index("--internal-attempt-control") + 1])
+        control = json.loads(control_path.read_text())
+        observed_controls.append(control)
+        output.mkdir(parents=True, exist_ok=True)
+        name = identity.identity
+        episode = control["episode_indices"][name]
+        child_manifest = output.parent / f"{output.name}.manifest.json"
+        child_manifest.write_text(
+            json.dumps(
+                {
+                    "synthesis": {
+                        "counters": {
+                            name: {"attempts": 1, "saved": 1, "failures": []}
+                        }
+                    },
+                    "generated_uuids": [f"generated-{episode}"],
+                    "row_source_identities": [name],
+                }
+            )
+        )
+        return SimpleNamespace(returncode=0)
 
-    def fake_write(rows, **kwargs):
-        captured["rows"] = list(rows)
-        return kwargs["output"]
-
-    monkeypatch.setattr(exporter_module, "_run_attempt_batch", fake_attempt)
-    monkeypatch.setattr(exporter_module, "write_v2_lance", fake_write)
+    monkeypatch.setattr(exporter_module.subprocess, "run", fake_child)
     monkeypatch.setitem(
         sys.modules,
         "lance",
-        SimpleNamespace(
-            dataset=lambda path: SimpleNamespace(
-                count_rows=lambda: len(captured["rows"])
-            )
-        ),
+        SimpleNamespace(dataset=lambda path: SimpleNamespace(count_rows=lambda: 5)),
     )
     output = tmp_path / "repeated.lance"
     result = export_checkpoint_rollouts(
@@ -291,16 +281,17 @@ def test_repeated_synthesis_saves_five_successes_within_ten_attempts(
         max_attempts_per_identity=10,
     )
 
-    rows = captured["rows"]
     assert result["rows"] == 5
-    assert [row["provenance"]["episode_index"] for row in rows] == list(range(5))
-    assert [row["provenance"]["generation_attempt"] for row in rows] == [1, 3, 4, 6, 7]
-    assert [row["provenance"]["seed"] for row in rows] == [42, 44, 45, 47, 48]
+    assert output.is_dir()
+    assert [control["attempt_seed"] for control in observed_controls] == [42, 43, 44, 45, 46]
+    assert [control["episode_indices"][identity.identity] for control in observed_controls] == list(range(5))
+    assert [control["attempt_numbers"][identity.identity] for control in observed_controls] == [1, 2, 3, 4, 5]
     manifest = json.loads((tmp_path / "repeated.lance.manifest.json").read_text())
     assert manifest["complete"] is True
-    assert manifest["synthesis"]["counters"][identity.identity]["attempts"] == 7
+    assert manifest["rows"] == 5
+    assert manifest["synthesis"]["attempt_isolation"] == "one_fresh_process_per_attempt_round"
+    assert manifest["synthesis"]["counters"][identity.identity]["attempts"] == 5
     assert manifest["synthesis"]["counters"][identity.identity]["saved"] == 5
-
 
 def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
     # Keep this writer test deliberately small; GPU rollout tests validate the

@@ -11,7 +11,9 @@ import os
 from pathlib import Path
 import pickle
 import re
+import shutil
 import subprocess
+import sys
 from typing import Any
 
 import numpy as np
@@ -395,6 +397,226 @@ def _run_attempt_batch(
     return rows, failure_reasons, environment.observation_dim, environment.action_dim
 
 
+def _export_isolated_repeated_rollouts(
+    *,
+    checkpoint: Path,
+    output: Path,
+    selection: TrajectorySelection,
+    num_envs: int,
+    device: str,
+    replace: bool,
+    allow_deviation_termination: bool,
+    predecoded_manifest: Path | None,
+    seed: int,
+    episodes_per_identity: int,
+    max_attempts_per_identity: int,
+) -> dict[str, Any]:
+    """Run each attempt round in a fresh process and append accepted rows."""
+
+    checkpoint = _validate_checkpoint_path(checkpoint)
+    trajectories = (
+        load_assigned_trajectory_batch(selection, num_envs=num_envs)
+        if predecoded_manifest is None
+        else _load_predecoded_batch(
+            selection, num_envs=num_envs, manifest_path=predecoded_manifest
+        )
+    )
+    identities = [item.identity.identity for item in trajectories.trajectories]
+    if len(set(identities)) != len(identities):
+        raise ValueError("isolated synthesis requires distinct source identities")
+    if trajectories.action_dim != JOINT_DOF or any(
+        item.action_layout.controlled_sides != ("right",)
+        for item in trajectories.trajectories
+    ):
+        raise ValueError("checkpoint export requires one controlled right 28D hand")
+    if output.exists():
+        if not replace:
+            raise FileExistsError(f"output already exists: {output}")
+        shutil.rmtree(output)
+    building = output.parent / f".{output.name}.building"
+    partial = output.parent / f"{output.name}.partial"
+    for stale in (building, partial):
+        if stale.exists():
+            if not replace:
+                raise FileExistsError(f"stale synthesis output exists: {stale}")
+            shutil.rmtree(stale)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    control_path = output.parent / f".{output.name}.attempt-control.json"
+    child_manifest = building.parent / f"{building.name}.manifest.json"
+    counters = {
+        identity: {"attempts": 0, "saved": 0, "failures": []}
+        for identity in identities
+    }
+    generated_uuids: list[str] = []
+    row_source_identities: list[str] = []
+
+    for attempt_round in range(1, max_attempts_per_identity + 1):
+        pending = [
+            identity for identity in identities
+            if counters[identity]["saved"] < episodes_per_identity
+            and counters[identity]["attempts"] < max_attempts_per_identity
+        ]
+        if not pending:
+            break
+        for identity in pending:
+            counters[identity]["attempts"] += 1
+        attempt_seed = seed + attempt_round - 1
+        control = {
+            "pending_identities": pending,
+            "attempt_numbers": {
+                identity: counters[identity]["attempts"] for identity in pending
+            },
+            "episode_indices": {
+                identity: counters[identity]["saved"] for identity in pending
+            },
+            "attempt_seed": attempt_seed,
+            "append": building.exists(),
+        }
+        control_path.write_text(
+            json.dumps(control, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--checkpoint", str(checkpoint),
+            "--output", str(building),
+            "--object", selection.object_type,
+            "--gesture", selection.action_id,
+            "--dataset-path", str(selection.dataset_path),
+            "--dataset-version", str(selection.expected_dataset_version),
+            "--num-envs", str(num_envs),
+            "--pair-assignment-cycle", str(selection.pair_assignment_cycle),
+            "--device", device,
+            "--seed", str(attempt_seed),
+            "--episodes-per-identity", "1",
+            "--max-attempts-per-identity", "1",
+            "--internal-attempt-control", str(control_path),
+        ]
+        if predecoded_manifest is not None:
+            command.extend(["--predecoded-manifest", str(predecoded_manifest)])
+        if allow_deviation_termination:
+            command.append("--allow-deviation-termination")
+        completed = subprocess.run(command, check=False)
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"isolated synthesis attempt round {attempt_round} exited "
+                f"{completed.returncode}; control={control_path}"
+            )
+        child = json.loads(child_manifest.read_text(encoding="utf-8"))
+        child_counters = child["synthesis"]["counters"]
+        for identity in pending:
+            child_counter = child_counters[identity]
+            if child_counter["saved"] == 1:
+                counters[identity]["saved"] += 1
+            else:
+                counters[identity]["failures"].extend(child_counter["failures"])
+        generated_uuids.extend(child["generated_uuids"])
+        row_source_identities.extend(child["row_source_identities"])
+        print(
+            json.dumps(
+                {
+                    "event": "isolated_synthesis_progress",
+                    "attempt_round": attempt_round,
+                    "attempt_seed": attempt_seed,
+                    "saved_total": len(generated_uuids),
+                    "target_total": len(identities) * episodes_per_identity,
+                    "completed_identities": sum(
+                        counters[identity]["saved"] >= episodes_per_identity
+                        for identity in identities
+                    ),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
+    complete = all(
+        counter["saved"] == episodes_per_identity for counter in counters.values()
+    )
+    published = output if complete else partial
+    if building.exists():
+        building.replace(published)
+    child_manifest.unlink(missing_ok=True)
+    control_path.unlink(missing_ok=True)
+    checkpoint_sha = file_sha256(checkpoint)
+    provenance_base = {
+        "checkpoint_path": str(checkpoint.resolve()),
+        "checkpoint_sha256": checkpoint_sha,
+        "checkpoint_update": _checkpoint_update(checkpoint),
+        "checkpoint_metadata": checkpoint_runtime_metadata(checkpoint),
+        "software_commit": _software_commit(),
+    }
+    manifest_path = published.parent / f"{published.name}.manifest.json"
+    manifest = {
+        "schema": SYNTHETIC_LANCE_V22_CONTRACT,
+        "force_contract": FORCE_DIRECTION_CONTRACT,
+        "reward_contract": REWARD_CONTRACT_ID,
+        "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "output": str(published.resolve()),
+        "complete": complete,
+        "rows": len(generated_uuids),
+        "source_identities": identities,
+        "row_source_identities": row_source_identities,
+        "generated_uuids": generated_uuids,
+        "checkpoint": provenance_base,
+        "selection": {
+            "object": selection.object_type,
+            "gesture": selection.action_id,
+            "dataset_path": str(selection.dataset_path),
+            "dataset_version": selection.expected_dataset_version,
+            "num_source_identities": num_envs,
+            "pair_assignment_cycle": selection.pair_assignment_cycle,
+            "predecoded_manifest": (
+                None if predecoded_manifest is None else str(predecoded_manifest)
+            ),
+        },
+        "synthesis": {
+            "episodes_per_identity": episodes_per_identity,
+            "max_attempts_per_identity": max_attempts_per_identity,
+            "base_seed": seed,
+            "counters": counters,
+            "attempt_isolation": "one_fresh_process_per_attempt_round",
+        },
+        "runtime": {
+            "device": device,
+            "policy_mode": "deterministic_mean",
+            "control_timestep_seconds": 0.005,
+            "normal_force_scale": 1.0,
+            "deviation_termination": allow_deviation_termination,
+            "late_contact_grace_frames": 10,
+            "late_contact_penalty_multiplier": 3.0,
+            "late_contact_scope": "any_16_keypoint_hand_object_contact_above_0p2N",
+        },
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    if complete:
+        import lance
+
+        if lance.dataset(str(output)).count_rows() != len(generated_uuids):
+            raise RuntimeError("published repeated Lance row count is incorrect")
+    else:
+        incomplete = {
+            identity: counter for identity, counter in counters.items()
+            if counter["saved"] < episodes_per_identity
+        }
+        raise RuntimeError(
+            "synthesis target incomplete after bounded isolated attempts; "
+            f"partial={published}, manifest={manifest_path}, incomplete={incomplete}"
+        )
+    return {
+        "output": str(output),
+        "manifest": str(manifest_path),
+        "rows": len(generated_uuids),
+        "source_identities": identities,
+        "episodes_per_identity": episodes_per_identity,
+        "max_attempts_per_identity": max_attempts_per_identity,
+        "checkpoint_sha256": checkpoint_sha,
+    }
+
+
 def export_checkpoint_rollouts(
     *,
     checkpoint: Path,
@@ -408,6 +630,7 @@ def export_checkpoint_rollouts(
     seed: int = 42,
     episodes_per_identity: int = 5,
     max_attempts_per_identity: int = 10,
+    internal_attempt_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate an accepted 1:N checkpoint rollout dataset per raw identity."""
 
@@ -417,6 +640,15 @@ def export_checkpoint_rollouts(
         raise ValueError("episodes_per_identity must be positive")
     if max_attempts_per_identity < episodes_per_identity:
         raise ValueError("max attempts must be at least the target episodes per identity")
+    if episodes_per_identity > 1 and internal_attempt_control is None:
+        return _export_isolated_repeated_rollouts(
+            checkpoint=checkpoint, output=output, selection=selection,
+            num_envs=num_envs, device=device, replace=replace,
+            allow_deviation_termination=allow_deviation_termination,
+            predecoded_manifest=predecoded_manifest, seed=seed,
+            episodes_per_identity=episodes_per_identity,
+            max_attempts_per_identity=max_attempts_per_identity,
+        )
     checkpoint = _validate_checkpoint_path(checkpoint)
     checkpoint_options = _checkpoint_environment_options(checkpoint)
     trajectories = (
@@ -427,6 +659,16 @@ def export_checkpoint_rollouts(
         )
     )
     identities = [item.identity.identity for item in trajectories.trajectories]
+    if internal_attempt_control is not None:
+        requested = list(internal_attempt_control["pending_identities"])
+        available = {item.identity.identity: item for item in trajectories.trajectories}
+        missing = sorted(set(requested) - set(available))
+        if missing:
+            raise ValueError(f"internal attempt references unknown identities: {missing}")
+        trajectories = _trajectory_subset(
+            trajectories, [available[identity] for identity in requested]
+        )
+        identities = requested
     if len(set(identities)) != len(identities):
         raise ValueError(
             "num-envs exceeds the distinct valid identities in this assignment window; "
@@ -475,6 +717,16 @@ def export_checkpoint_rollouts(
             identity: int(counters[identity]["saved"]) for identity in pending
         }
         attempt_seed = seed + attempt_round - 1
+        if internal_attempt_control is not None:
+            attempt_numbers = {
+                identity: int(internal_attempt_control["attempt_numbers"][identity])
+                for identity in pending
+            }
+            episode_indices = {
+                identity: int(internal_attempt_control["episode_indices"][identity])
+                for identity in pending
+            }
+            attempt_seed = int(internal_attempt_control["attempt_seed"])
         attempt_rows, failures, observed_dim, acted_dim = _run_attempt_batch(
             checkpoint=checkpoint,
             checkpoint_options=checkpoint_options,
@@ -522,10 +774,21 @@ def export_checkpoint_rollouts(
         counter["saved"] == episodes_per_identity for counter in counters.values()
     )
     target_output = (
-        output if complete else output.parent / f"{output.name}.partial"
+        output
+        if internal_attempt_control is not None or complete
+        else output.parent / f"{output.name}.partial"
     )
-    if target_output.exists() and not replace:
+    append_output = bool(
+        internal_attempt_control is not None
+        and internal_attempt_control.get("append", False)
+    )
+    if target_output.exists() and not replace and not append_output:
         raise FileExistsError(f"output already exists: {target_output}")
+    previous_rows = 0
+    if append_output:
+        import lance
+
+        previous_rows = int(lance.dataset(str(target_output)).count_rows())
     if rows:
         assert observation_dim is not None and action_dim is not None
         write_v2_lance(
@@ -534,11 +797,12 @@ def export_checkpoint_rollouts(
             observation_dim=observation_dim,
             action_dim=action_dim,
             replace=replace,
+            append=append_output,
         )
         import lance
 
         dataset = lance.dataset(str(target_output))
-        if dataset.count_rows() != len(rows):
+        if dataset.count_rows() != previous_rows + len(rows):
             raise RuntimeError("written Lance row count differs from accepted rollout count")
     manifest_path = target_output.parent / f"{target_output.name}.manifest.json"
     manifest = {
@@ -585,7 +849,7 @@ def export_checkpoint_rollouts(
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
-    if not complete:
+    if not complete and internal_attempt_control is None:
         incomplete = {
             identity: counter
             for identity, counter in counters.items()
@@ -600,6 +864,10 @@ def export_checkpoint_rollouts(
         "manifest": str(manifest_path),
         "rows": len(rows),
         "source_identities": identities,
+        "accepted_source_identities": [
+            row["provenance"]["source_identity"] for row in rows
+        ],
+        "generated_uuids": [row["index"]["uuid"] for row in rows],
         "episodes_per_identity": episodes_per_identity,
         "max_attempts_per_identity": max_attempts_per_identity,
         "checkpoint_sha256": checkpoint_sha,
@@ -621,6 +889,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--episodes-per-identity", type=int, default=5)
     parser.add_argument("--max-attempts-per-identity", type=int, default=10)
     parser.add_argument("--replace", action="store_true")
+    parser.add_argument(
+        "--internal-attempt-control", type=Path, help=argparse.SUPPRESS
+    )
     parser.add_argument(
         "--predecoded-manifest",
         type=Path,
@@ -649,6 +920,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    internal_control = (
+        None
+        if args.internal_attempt_control is None
+        else json.loads(args.internal_attempt_control.read_text(encoding="utf-8"))
+    )
     result = export_checkpoint_rollouts(
         checkpoint=args.checkpoint,
         output=args.output,
@@ -668,6 +944,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         episodes_per_identity=args.episodes_per_identity,
         max_attempts_per_identity=args.max_attempts_per_identity,
+        internal_attempt_control=internal_control,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0
