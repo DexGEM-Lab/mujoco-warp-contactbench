@@ -127,7 +127,27 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         or np.any(contact_reward > 0.4 + 1e-6)
     ):
         raise ValueError(f"row {row_index} contact rewards violate the v2.2 bounds")
-    negative_contact_steps = int(np.count_nonzero(contact_reward < 0.0))
+    movement = metadata["trajectory_info"]["object_move"][0]
+    contact_start = int(movement["start_frame"])
+    contact_end = int(movement["end_frame"])
+    negative_indices = np.flatnonzero(contact_reward < 0.0)
+    positive_indices = np.flatnonzero(contact_reward > 0.0)
+    if (
+        np.any(negative_indices <= contact_end + 10)
+        or np.any(positive_indices < contact_start)
+        or np.any(positive_indices > contact_end)
+        or not np.allclose(
+            contact_reward[negative_indices], -1.2, rtol=0.0, atol=1e-6
+        )
+        or not np.allclose(
+            contact_reward[contact_end + 1 : min(contact_end + 11, transitions)],
+            0.0,
+            rtol=0.0,
+            atol=1e-7,
+        )
+    ):
+        raise ValueError(f"row {row_index} violates the late-contact timing contract")
+    negative_contact_steps = int(len(negative_indices))
     if (
         sum(bool(value) for value in rollout["terminated"]) != 1
         or not bool(rollout["terminated"][-1])
