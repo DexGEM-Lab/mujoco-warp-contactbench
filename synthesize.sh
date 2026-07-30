@@ -16,6 +16,7 @@ DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
 OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v2_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
 PYTHON=${MANORL_PYTHON:-$ROOT/.venv/bin/python}
 PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
+SEED=${MANORL_SYNTH_SEED:-42}
 
 if [[ -z "$CHECKPOINT" ]]; then
   echo "Set CHECKPOINT or MANORL_CHECKPOINT to a native ManoRL checkpoint." >&2
@@ -38,6 +39,10 @@ if [[ ! "$GPU" =~ ^[0-9]+$ ]]; then
   echo "physical_gpu must be a non-negative integer, got: $GPU" >&2
   exit 2
 fi
+if [[ ! "$SEED" =~ ^[0-9]+$ ]]; then
+  echo "seed must be a non-negative integer, got: $SEED" >&2
+  exit 2
+fi
 
 export PYTHONPATH=$ROOT
 export CUDA_VISIBLE_DEVICES=$GPU
@@ -58,4 +63,5 @@ exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
   --num-envs "$NUM_ENVS" \
+  --seed "$SEED" \
   "${EXTRA_ARGS[@]}"

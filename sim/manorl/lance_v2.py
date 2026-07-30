@@ -321,6 +321,7 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
                         ("row_index", pa.int64()),
                         ("source_identity", pa.string()),
                         ("software_commit", pa.string()),
+                        ("seed", pa.int64()),
                     ]
                 ),
             ),
@@ -497,6 +498,7 @@ def build_v2_row(
             "row_index": int(trajectory.identity.row_index),
             "source_identity": trajectory.identity.identity,
             "software_commit": str(provenance["software_commit"]),
+            "seed": int(provenance["seed"]),
         },
     }
     return row

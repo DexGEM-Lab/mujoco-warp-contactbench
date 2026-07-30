@@ -98,6 +98,7 @@ def test_v2_schema_has_explicit_contract_and_28d_rollout_fields() -> None:
     assert schema.field("hands").type.value_type[6].name == "urdf_dof_target"
     assert schema.field("rollout").type[0].name == "transition_count"
     assert schema.field("provenance").type[5].name == "checkpoint_update"
+    assert schema.field("provenance").type[-1].name == "seed"
 
 
 def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
@@ -131,12 +132,13 @@ def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
     row = build_v2_row(
         trajectory=trajectory, source_index={}, source_metadata={}, states=states,
         contacts=[[], []], rollout=rollout,
-        provenance={"checkpoint_path": "/c.pt", "checkpoint_sha256": "abc", "checkpoint_update": 1, "checkpoint_metadata": {}, "software_commit": "deadbeef"},
+        provenance={"checkpoint_path": "/c.pt", "checkpoint_sha256": "abc", "checkpoint_update": 1, "checkpoint_metadata": {}, "software_commit": "deadbeef", "seed": 42},
     )
     assert row["trajectory_metadata"]["data_fps"] == 200
     assert row["trajectory_metadata"]["total_frames"] == 2
     assert row["rollout"]["transition_count"] == 1
     assert row["provenance"]["force_contract"] == FORCE_DIRECTION_CONTRACT
+    assert row["provenance"]["seed"] == 42
 
 
 def test_predecoded_manifest_selects_unique_hashed_identity_window(tmp_path) -> None:
@@ -185,7 +187,7 @@ def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
         "objects": [{"rot_aa": [[0.0] * 3], "pos": [[0.0] * 3]}], "contact": [[]],
         "reference": {"source_frame_index": [0], "hand_urdf_dof": [[0.0] * 28], "object_pos": [[0.0] * 3], "object_rot_aa": [[0.0] * 3]},
         "rollout": {"transition_count": 0, "observation_t": [], "next_observation": [], "policy_mean_action": [], "processed_action": [], "cumulative_position_residual": [], "cumulative_joint_residual": [], "command_reference_index": [], "command_source_frame_index": [], "reference_target": [], "processed_target": [], "controller_target": [], "reward": [], "terminated": [], "termination_reason_code": []},
-        "provenance": {"contract": SYNTHETIC_LANCE_V2_CONTRACT, "force_contract": FORCE_DIRECTION_CONTRACT, "policy_mode": "deterministic_mean", "checkpoint_path": "p", "checkpoint_sha256": "h", "checkpoint_update": 1, "checkpoint_metadata_json": "{}", "dataset_path": "d", "dataset_version": 1, "row_index": 0, "source_identity": "id", "software_commit": "c"},
+        "provenance": {"contract": SYNTHETIC_LANCE_V2_CONTRACT, "force_contract": FORCE_DIRECTION_CONTRACT, "policy_mode": "deterministic_mean", "checkpoint_path": "p", "checkpoint_sha256": "h", "checkpoint_update": 1, "checkpoint_metadata_json": "{}", "dataset_path": "d", "dataset_version": 1, "row_index": 0, "source_identity": "id", "software_commit": "c", "seed": 42},
     }
     write_v2_lance([row], output=output, observation_dim=480, action_dim=28)
     import lance

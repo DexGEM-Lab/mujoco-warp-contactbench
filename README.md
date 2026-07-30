@@ -255,7 +255,9 @@ CLI. It requires a native checkpoint sidecar and preserves the checkpoint's
 serialized residual-action/CCD settings. On hosts where nested Lance row reads
 are natively unstable, set `MANORL_PREDECODED_MANIFEST` to the validated
 isolated-predecode manifest; every selected pickle is SHA256-checked before the
-GPU rollout.
+GPU rollout. The exporter seeds NumPy and Torch/CUDA with `42` by default so
+the dynamic point-cloud observation and deterministic policy mean are
+reproducible; override it with `MANORL_SYNTH_SEED` or `--seed`.
 
 Finger residual increments and their cumulative caps have independent explicit
 multipliers, both defaulting to `2.0`. Wrist XYZ residuals default to a

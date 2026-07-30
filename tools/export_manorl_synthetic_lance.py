@@ -194,9 +194,18 @@ def export_checkpoint_rollouts(
     replace: bool = False,
     allow_deviation_termination: bool = False,
     predecoded_manifest: Path | None = None,
+    seed: int = 42,
 ) -> dict[str, Any]:
     """Run one independent source-length episode per assigned trajectory."""
 
+    if seed < 0:
+        raise ValueError("seed must be non-negative")
+    np.random.seed(seed)
+    if device == "gpu":
+        import torch
+
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
     checkpoint = _validate_checkpoint_path(checkpoint)
     checkpoint_options = _checkpoint_environment_options(checkpoint)
     trajectories = (
@@ -247,6 +256,7 @@ def export_checkpoint_rollouts(
         "checkpoint_update": _checkpoint_update(checkpoint),
         "checkpoint_metadata": checkpoint_metadata,
         "software_commit": _software_commit(),
+        "seed": seed,
     }
     right_model_index = environment.model_hand_sides.index("right")
     right_model_slice = slice(
@@ -426,6 +436,7 @@ def export_checkpoint_rollouts(
             "control_timestep_seconds": 0.005,
             "normal_force_scale": 1.0,
             "deviation_termination": allow_deviation_termination,
+            "seed": seed,
         },
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
@@ -449,6 +460,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-envs", type=int, default=5)
     parser.add_argument("--pair-assignment-cycle", type=int, default=0)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="gpu")
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--replace", action="store_true")
     parser.add_argument(
         "--predecoded-manifest",
@@ -467,6 +479,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("dataset-version must be positive")
     if args.pair_assignment_cycle < 0:
         parser.error("pair-assignment-cycle must be non-negative")
+    if args.seed < 0:
+        parser.error("seed must be non-negative")
     return args
 
 
@@ -488,6 +502,7 @@ def main(argv: list[str] | None = None) -> int:
         replace=args.replace,
         allow_deviation_termination=args.allow_deviation_termination,
         predecoded_manifest=args.predecoded_manifest,
+        seed=args.seed,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0
