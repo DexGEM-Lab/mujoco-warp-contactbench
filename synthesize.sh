@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# GPU checkpoint -> corrected v2 synthetic Lance.
+# GPU checkpoint -> corrected v2.1 synthetic Lance.
 # Usage:
 #   CHECKPOINT=/path/checkpoint-000500.pt ./synthesize.sh [object] [gesture] [num_envs] [gpu]
 
@@ -13,7 +13,7 @@ GPU=${4:-${MANORL_GPU:-0}}
 CHECKPOINT=${CHECKPOINT:-${MANORL_CHECKPOINT:-}}
 DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance}
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
-OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v2_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
+OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v21_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
 PYTHON=${MANORL_PYTHON:-$ROOT/.venv/bin/python}
 PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
 SEED=${MANORL_SYNTH_SEED:-42}

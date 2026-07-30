@@ -1,4 +1,4 @@
-"""Corrected v2 synthetic Lance contract for deterministic checkpoint rollouts."""
+"""Corrected v2.1 synthetic Lance contract for checkpoint rollouts."""
 
 from __future__ import annotations
 
@@ -19,8 +19,11 @@ from sim.manorl.environment import MaterializedContactBuffers, MaterializedState
 from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
 from sim.manorl.trajectory import ReferenceTrajectory, wxyz_to_xyzw
 
-SYNTHETIC_LANCE_V2_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2"
+SYNTHETIC_LANCE_V21_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_1"
 FORCE_DIRECTION_CONTRACT = "normal_only_hand_to_object_world_joint_object_scale_1p0"
+MANO_GLOBAL_FRAME_CONTRACT = (
+    "urdf_floating_root_translation_intrinsic_XYZ_to_rotvec_v1"
+)
 HAND_SLOT_ORDER = ("right", "left")
 
 
@@ -209,7 +212,8 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
     )
     metadata = {
         b"schema": b"synthetic",
-        b"schema_version": SYNTHETIC_LANCE_V2_CONTRACT.encode(),
+        b"schema_version": SYNTHETIC_LANCE_V21_CONTRACT.encode(),
+        b"mano_global_frame_contract": MANO_GLOBAL_FRAME_CONTRACT.encode(),
         b"hand_slot_order": b"right,left",
         b"mano_dof_dim": b"28",
         b"control_timestep_seconds": str(CONTROL_TIMESTEP).encode(),
@@ -345,7 +349,7 @@ def generated_rollout_uuid(source_uuid: str, checkpoint_sha256: str, episode: in
     return str(
         uuid.uuid5(
             namespace,
-            f"{SYNTHETIC_LANCE_V2_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
+            f"{SYNTHETIC_LANCE_V21_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
         )
     )
 
@@ -367,8 +371,8 @@ def build_v2_row(
     if total_frames != len(trajectory.q_ref) or len(contacts) != total_frames:
         raise ValueError("v2 row must contain exactly one complete source-length episode")
     for name in (
-        "hand_position", "hand_orientation_xyzw", "mano_joint_pos",
-        "urdf_dof_target", "object_position", "object_orientation_xyzw",
+        "mano_joint_pos", "urdf_dof_target", "object_position",
+        "object_orientation_xyzw",
     ):
         if len(np.asarray(states[name])) != total_frames:
             raise ValueError(f"state field {name} is not frame-aligned")
@@ -378,21 +382,26 @@ def build_v2_row(
     object_rot_aa = Rotation.from_quat(
         np.asarray(states["object_orientation_xyzw"], dtype=np.float64)
     ).as_rotvec()
-    hand_rot_aa = Rotation.from_quat(
-        np.asarray(states["hand_orientation_xyzw"], dtype=np.float64)
-    ).as_rotvec()
+    hand_global_pos = urdf_dof[:, :3]
+    hand_rot_aa = Rotation.from_euler("XYZ", urdf_dof[:, 3:6]).as_rotvec()
     reference_object_rot_aa = Rotation.from_quat(trajectory.object_quat_xyzw).as_rotvec()
     mano_pose = right_urdf_trajectory_to_mano_48d(urdf_dof)
     checkpoint_sha = str(provenance["checkpoint_sha256"])
     source_uuid = str(trajectory.identity.uuid)
     cap_machine = str(source_index.get("capMachine") or "manorl-mjx-warp")
     operator = str(source_index.get("operator") or "manorl")
-    raw_hand_shapes = source_metadata.get("mano_hand_shapes")
-    hand_shapes = (
-        [[0.0] * 10]
-        if raw_hand_shapes is None or len(raw_hand_shapes) == 0
-        else raw_hand_shapes
-    )
+    raw_hand_shapes = source_metadata.get("mano_hand_shapes") or []
+    raw_hand_names = source_metadata.get("hand_names") or []
+    if "right" in raw_hand_names:
+        right_index = raw_hand_names.index("right")
+        if right_index >= len(raw_hand_shapes):
+            raise ValueError("source metadata omits the named right-hand MANO shape")
+        right_shape = np.asarray(raw_hand_shapes[right_index], dtype=np.float64)
+        if right_shape.shape != (10,) or not np.all(np.isfinite(right_shape)):
+            raise ValueError("source right-hand MANO shape must be one finite 10D row")
+        hand_shapes = [right_shape]
+    else:
+        hand_shapes = [np.zeros(10, dtype=np.float64)]
     start_frame = int(trajectory.identity.movement_start_raw - trajectory.identity.source_start)
     end_frame = int(trajectory.identity.movement_end_raw - trajectory.identity.source_start)
     empty_hand = {
@@ -446,7 +455,7 @@ def build_v2_row(
         "hands": [
             {
                 "hand_name": "right",
-                "mano_global_pos": _float_rows(states["hand_position"]),
+                "mano_global_pos": _float_rows(hand_global_pos),
                 "mano_global_rot_aa": _float_rows(hand_rot_aa),
                 "mano_hand_pose": _float_rows(mano_pose),
                 "mano_joint_pos": _float_rows(states["mano_joint_pos"]),
@@ -484,7 +493,7 @@ def build_v2_row(
             },
         },
         "provenance": {
-            "contract": SYNTHETIC_LANCE_V2_CONTRACT,
+            "contract": SYNTHETIC_LANCE_V21_CONTRACT,
             "force_contract": FORCE_DIRECTION_CONTRACT,
             "policy_mode": "deterministic_mean",
             "checkpoint_path": str(provenance["checkpoint_path"]),

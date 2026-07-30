@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate corrected v2 Lance rows in isolated decoder subprocesses."""
+"""Validate corrected v2.1 Lance rows in isolated decoder subprocesses."""
 
 from __future__ import annotations
 
@@ -13,7 +13,11 @@ from typing import Any
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from sim.manorl.lance_v2 import FORCE_DIRECTION_CONTRACT, SYNTHETIC_LANCE_V2_CONTRACT
+from sim.manorl.lance_v2 import (
+    FORCE_DIRECTION_CONTRACT,
+    MANO_GLOBAL_FRAME_CONTRACT,
+    SYNTHETIC_LANCE_V21_CONTRACT,
+)
 
 
 def _schema_metadata(dataset: Any) -> dict[str, str]:
@@ -50,6 +54,28 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         values = np.asarray(hand[name])
         if values.shape != shape or not np.all(np.isfinite(values)):
             raise ValueError(f"row {row_index} hands.{name} has invalid shape/values")
+    urdf_dof = np.asarray(hand["urdf_dof"], dtype=np.float64)
+    mano_global_pos = np.asarray(hand["mano_global_pos"], dtype=np.float64)
+    mano_global_rot = Rotation.from_rotvec(
+        np.asarray(hand["mano_global_rot_aa"], dtype=np.float64)
+    )
+    expected_global_rot = Rotation.from_euler("XYZ", urdf_dof[:, 3:6])
+    global_position_error = float(
+        np.max(np.linalg.norm(mano_global_pos - urdf_dof[:, :3], axis=1))
+    )
+    global_rotation_error = float(
+        np.max((mano_global_rot.inv() * expected_global_rot).magnitude())
+    )
+    if global_position_error > 1e-12 or global_rotation_error > 1e-6:
+        raise ValueError(f"row {row_index} MANO global pose is not the URDF floating root")
+    mano_pose = np.asarray(hand["mano_hand_pose"], dtype=np.float64)
+    if mano_pose.shape != (total_frames, 48) or not np.all(np.isfinite(mano_pose)):
+        raise ValueError(f"row {row_index} MANO hand pose has invalid shape/values")
+    hand_shapes = np.asarray(metadata["mano_hand_shapes"], dtype=np.float64)
+    if metadata["hand_names"] != ["right"] or hand_shapes.shape != (1, 10):
+        raise ValueError(f"row {row_index} must contain one active right-hand shape")
+    if row["hands"][1]["hand_name"] is not None:
+        raise ValueError(f"row {row_index} left fixed hand slot must remain empty")
     transitions = total_frames - 1
     rollout_shapes = {
         "observation_t": (transitions, 480),
@@ -141,6 +167,8 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         "reward_sum": float(metadata["train_info"]["reward_value"]),
         "checkpoint_sha256": row["provenance"]["checkpoint_sha256"],
         "seed": int(row["provenance"]["seed"]),
+        "max_mano_global_position_error_m": global_position_error,
+        "max_mano_global_rotation_error_rad": global_rotation_error,
         "max_object_position_reconstruction_m": max_pos_object_error,
         "max_total_force_sum_error_N": max_force_sum_error,
         "max_object_force_rotation_error_N": max_object_force_error,
@@ -169,8 +197,10 @@ def validate_dataset(
 
     dataset = lance.dataset(str(path))
     metadata = _schema_metadata(dataset)
-    if metadata.get("schema_version") != SYNTHETIC_LANCE_V2_CONTRACT:
-        raise ValueError("dataset schema_version is not the corrected v2 contract")
+    if metadata.get("schema_version") != SYNTHETIC_LANCE_V21_CONTRACT:
+        raise ValueError("dataset schema_version is not the corrected v2.1 contract")
+    if metadata.get("mano_global_frame_contract") != MANO_GLOBAL_FRAME_CONTRACT:
+        raise ValueError("dataset MANO global-frame contract changed")
     if metadata.get("force_contract") != FORCE_DIRECTION_CONTRACT:
         raise ValueError("dataset force contract is not normal-only scale 1.0")
     if max_attempts < 1:
@@ -220,7 +250,7 @@ def validate_dataset(
     if len(seeds) != 1:
         raise ValueError("dataset rows do not share one rollout seed")
     summary = {
-        "schema": SYNTHETIC_LANCE_V2_CONTRACT,
+        "schema": SYNTHETIC_LANCE_V21_CONTRACT,
         "schema_metadata": metadata,
         "rows": row_count,
         "unique_identities": len(set(identities)),
@@ -252,6 +282,12 @@ def validate_dataset(
         ),
         "checkpoint_reference_following_hand_sides": (
             rows[0].get("checkpoint_reference_following_hand_sides") if rows else None
+        ),
+        "max_mano_global_position_error_m": max(
+            (row["max_mano_global_position_error_m"] for row in rows), default=0.0
+        ),
+        "max_mano_global_rotation_error_rad": max(
+            (row["max_mano_global_rotation_error_rad"] for row in rows), default=0.0
         ),
         "max_object_position_reconstruction_m": max(
             (row["max_object_position_reconstruction_m"] for row in rows), default=0.0

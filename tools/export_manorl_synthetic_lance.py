@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export complete deterministic ManoRL checkpoint episodes to corrected v2 Lance."""
+"""Export complete deterministic ManoRL checkpoint episodes to corrected v2.1 Lance."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from sim.manorl.environment import (
 )
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
-    SYNTHETIC_LANCE_V2_CONTRACT,
+    SYNTHETIC_LANCE_V21_CONTRACT,
     build_v2_row,
     corrected_contact_frames,
     file_sha256,
@@ -159,10 +159,6 @@ def _state_row(environment: MujocoManoEnvironment, env_id: int) -> dict[str, np.
     if physical is None or observation is None:
         raise RuntimeError("environment omitted physical/observation state")
     return {
-        "hand_position": np.asarray(physical.hand_position[env_id], dtype=np.float64),
-        "hand_orientation_xyzw": np.asarray(
-            physical.hand_orientation_xyzw[env_id], dtype=np.float64
-        ),
         "mano_joint_pos": np.concatenate(
             [
                 np.asarray(physical.hand_keypoint_positions[env_id], dtype=np.float64),
@@ -411,7 +407,7 @@ def export_checkpoint_rollouts(
         raise RuntimeError("written Lance row count differs from completed rollout count")
     manifest_path = output.parent / f"{output.name}.manifest.json"
     manifest = {
-        "schema": SYNTHETIC_LANCE_V2_CONTRACT,
+        "schema": SYNTHETIC_LANCE_V21_CONTRACT,
         "force_contract": FORCE_DIRECTION_CONTRACT,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "output": str(output.resolve()),

@@ -227,7 +227,7 @@ every eligible pair in the pinned Lance dataset. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
-### Corrected v2 checkpoint rollout synthesis
+### Corrected v2.1 checkpoint rollout synthesis
 
 `./synthesize.sh` runs a deterministic checkpoint mean policy on GPU and writes
 one independent complete source-length trajectory per assigned environment:
@@ -237,15 +237,19 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \\
   ./synthesize.sh cube2 02 5 0
 ```
 
-The output is a nested Lance dataset plus a sibling `.manifest.json`. The v2
-contract is `synthetic_mano_28d_checkpoint_rollout_v2`: timestamps use the
+The output is a nested Lance dataset plus a sibling `.manifest.json`. The v2.1
+contract is `synthetic_mano_28d_checkpoint_rollout_v2_1`: timestamps use the
 actual `0.005 s` control interval (`data_fps=200`), `force_normal` contains the
 solved normal component with scale `1.0`, and all force frames use a consistent
 hand-to-object direction. `pos_joint` and `total_force_joint` use the live
-collision-link transform rather than the historical wrist fallback. Each row
-also stores 28D physical and controller targets, 21 keypoints, reference frame
-indices, policy mean/processed actions, observations, rewards, termination
-codes, checkpoint SHA256, runtime sidecar, action contract, and source identity.
+collision-link transform rather than the historical wrist fallback. MANO global
+translation is exactly `urdf_dof[:, :3]`; global axis-angle is derived from the
+URDF floating-root intrinsic `XYZ` composition `Rx @ Ry @ Rz`. Shape metadata
+contains only the raw right-hand shape declared by `hand_names=["right"]`.
+Each row also stores 28D physical and controller targets, 21 keypoints,
+reference frame indices, policy mean/processed actions, observations, rewards,
+termination codes, checkpoint SHA256, runtime sidecar, action contract, and
+source identity.
 
 `--num-envs` controls the simultaneous identities; set it to the number of
 eligible `cube2:02` rows to export the whole pair, or use a smaller value and
