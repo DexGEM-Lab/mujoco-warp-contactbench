@@ -14,7 +14,12 @@ import torch
 
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, LEGACY_ENVIRONMENT_CONTRACT_IDS
 from sim.manorl.checkpoint import CheckpointFormatError, load_skrl_checkpoint, load_skrl_checkpoint_for_inference, save_skrl_checkpoint
-from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
+from sim.manorl.rewards import (
+    LEGACY_PPO_REWARD_CONTRACT_IDS,
+    LEGACY_REWARD_CONTRACT_IDS,
+    PPO_REWARD_CONTRACT_ID,
+    REWARD_CONTRACT_ID,
+)
 
 
 class Agent:
@@ -52,6 +57,23 @@ assert metadata["ppo_reward_contract"] == PPO_REWARD_CONTRACT_ID
 assert metadata["environment_contract"] == ENVIRONMENT_CONTRACT_ID
 load_skrl_checkpoint(agent, checkpoint)
 assert agent.loaded == str(checkpoint)
+
+legacy_reward = dict(metadata)
+legacy_reward["reward_contract"] = LEGACY_REWARD_CONTRACT_IDS[0]
+legacy_reward["ppo_reward_contract"] = LEGACY_PPO_REWARD_CONTRACT_IDS[0]
+sidecar(checkpoint).write_text(json.dumps(legacy_reward), encoding="utf-8")
+agent.loaded = None
+load_skrl_checkpoint_for_inference(agent, checkpoint)
+assert agent.loaded == str(checkpoint)
+agent.loaded = None
+try:
+    load_skrl_checkpoint(agent, checkpoint)
+except CheckpointFormatError as exc:
+    assert "reward contract" in str(exc)
+    assert agent.loaded is None
+else:
+    raise AssertionError("training resume accepted a legacy reward contract")
+sidecar(checkpoint).write_text(json.dumps(metadata), encoding="utf-8")
 
 for legacy_contract in LEGACY_ENVIRONMENT_CONTRACT_IDS:
     legacy_environment_contract = dict(metadata)

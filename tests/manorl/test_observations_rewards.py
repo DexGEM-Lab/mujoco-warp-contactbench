@@ -316,12 +316,30 @@ def test_reward_contact_is_proportional_strict_and_has_no_gravity_gate() -> None
     assert "object_contact_force" not in RewardState.__dataclass_fields__
     assert "object_gravity_force" not in RewardState.__dataclass_fields__
     assert "object_contact_gate" not in diagnostics.__dataclass_fields__
-    assert REWARD_CONTRACT_ID == "source_aligned_hand_object_contact_1x_threshold_0p2n_v1"
-    assert (
-        PPO_REWARD_CONTRACT_ID
-        == "source_aligned_hand_object_contact_1x_threshold_0p2n_shaper_0p5_v1"
+    assert REWARD_CONTRACT_ID.endswith("anycontact_late10_penalty3x_v2")
+    assert PPO_REWARD_CONTRACT_ID.endswith(
+        "anycontact_late10_penalty3x_shaper_0p5_v2"
     )
     assert REWARD_HAND_OBJECT_THRESHOLD_N == CONTACT_FORCE_THRESHOLD == 0.2
+
+
+def test_late_contact_penalizes_any_unexpected_hand_object_contact_after_grace() -> None:
+    steps = np.asarray([110, 111, 120, 121, 121], dtype=np.int64)
+    state = _reward_state(batch=5, steps=steps)
+    forces = np.zeros((5, 16, 3), dtype=np.float64)
+    # Keypoint 7 is deliberately outside the expected-contact mask (3, 15).
+    forces[:, 7, 0] = 0.200001
+    forces[-1, 7, 0] = 0.2  # strict threshold: exactly 0.2 is not contact
+    state = replace(state, hand_object_force_on_object_world_N=forces)
+    diagnostics = compute_rewards(
+        state,
+        compatibility=CURRENT_SOURCE_COMPATIBILITY,
+        termination=_termination_for(state, CURRENT_SOURCE_COMPATIBILITY),
+    )
+
+    np.testing.assert_array_equal(diagnostics.raw_contact, 0.0)
+    np.testing.assert_allclose(diagnostics.contact, [0.0, 0.0, 0.0, -1.2, 0.0])
+    assert diagnostics.total[3] == pytest.approx(diagnostics.total[4] - 1.2)
 
 
 def test_reward_contact_preserves_nonuniform_weights_and_zero_expected_contacts() -> None:

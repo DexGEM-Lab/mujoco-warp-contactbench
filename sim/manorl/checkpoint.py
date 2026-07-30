@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, LEGACY_ENVIRONMENT_CONTRACT_IDS
-from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
+from sim.manorl.rewards import (
+    LEGACY_PPO_REWARD_CONTRACT_IDS,
+    LEGACY_REWARD_CONTRACT_IDS,
+    PPO_REWARD_CONTRACT_ID,
+    REWARD_CONTRACT_ID,
+)
 
 if TYPE_CHECKING:
     from skrl.agents.torch.ppo import PPO
@@ -243,25 +248,27 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
             )
 
 
+def _validate_inference_reward_contract(metadata: dict[str, Any]) -> None:
+    pair = (metadata["reward_contract"], metadata["ppo_reward_contract"])
+    supported = {
+        (REWARD_CONTRACT_ID, PPO_REWARD_CONTRACT_ID),
+        *zip(LEGACY_REWARD_CONTRACT_IDS, LEGACY_PPO_REWARD_CONTRACT_IDS, strict=True),
+    }
+    if pair not in supported:
+        raise CheckpointFormatError(
+            f"checkpoint inference reward contracts {pair!r} are not a supported matched pair"
+        )
+
+
 def load_skrl_checkpoint_for_inference(agent: "PPO", path: str | Path) -> Path:
-    """Load a current native checkpoint for visualization."""
+    """Load a current or legacy-reward native checkpoint for inference."""
 
     checkpoint = Path(path)
     if not checkpoint.is_file():
         raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
     _load_modules(checkpoint, device=agent.device)
     metadata = _load_metadata(checkpoint)
-    reward_contract = metadata["reward_contract"]
-    if reward_contract != REWARD_CONTRACT_ID:
-        raise CheckpointFormatError(
-            f"checkpoint reward contract {reward_contract!r} != required {REWARD_CONTRACT_ID!r}"
-        )
-    ppo_reward_contract = metadata["ppo_reward_contract"]
-    if ppo_reward_contract != PPO_REWARD_CONTRACT_ID:
-        raise CheckpointFormatError(
-            "checkpoint PPO reward contract "
-            f"{ppo_reward_contract!r} != required {PPO_REWARD_CONTRACT_ID!r}"
-        )
+    _validate_inference_reward_contract(metadata)
     _validate_environment_contract(metadata)
     _validate_model_compatibility(metadata, agent)
     _validate_environment_signature(metadata, agent)

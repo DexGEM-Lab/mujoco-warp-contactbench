@@ -510,6 +510,14 @@ def compute_device_reward_28(
         raise ValueError("device reward window vectors must be (batch,)")
     if early_phase_steps < 0:
         raise ValueError("early_phase_steps must be non-negative")
+    if (
+        not isinstance(config.late_contact_grace_frames, int)
+        or isinstance(config.late_contact_grace_frames, bool)
+        or config.late_contact_grace_frames < 0
+        or not np.isfinite(config.late_contact_penalty_multiplier)
+        or config.late_contact_penalty_multiplier < 0.0
+    ):
+        raise ValueError("late-contact grace and penalty multiplier must be non-negative")
     distance = jp.abs(obj - target)
     ungated = jp.asarray(config.distance_scales) * jp.exp(-config.distance_decay * distance)
     ax, ay, az, aw = (quat[:, i] for i in range(4))
@@ -533,7 +541,19 @@ def compute_device_reward_28(
     raw_contact = jp.where(weighted_expected > 0, weighted_correct / weighted_expected * config.max_contact_reward, 0.0)
     within = (steps >= starts) & (steps <= ends)
     valid_window = ends >= starts
-    contact = jp.where(within, raw_contact, 0.0) * config.direct_contact_reward_scale
+    any_hand_object_contact = jp.any(
+        magnitudes > config.contact_force_threshold, axis=1
+    )
+    late_contact = (
+        valid_window
+        & (steps > ends + config.late_contact_grace_frames)
+        & any_hand_object_contact
+    )
+    contact = jp.where(
+        late_contact,
+        -config.late_contact_penalty_multiplier * config.max_contact_reward,
+        jp.where(within, raw_contact, 0.0),
+    ) * config.direct_contact_reward_scale
     distance_gate = jp.where(within & valid_window, jp.where(within, raw_contact, 0.0), 0.0)
     distance_gate = jp.where((steps > ends) & valid_window, config.max_contact_reward, distance_gate)
     distance_terms = ungated * distance_gate[:, None]

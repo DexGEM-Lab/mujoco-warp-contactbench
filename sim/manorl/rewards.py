@@ -18,11 +18,23 @@ from sim.manorl.observations import (
 from sim.manorl.abi import TerminationResult
 
 
-REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_0p2n_v1"
+LEGACY_REWARD_CONTRACT_IDS: Final = (
+    "source_aligned_hand_object_contact_1x_threshold_0p2n_v1",
+)
+REWARD_CONTRACT_ID: Final = (
+    "source_aligned_hand_object_contact_1x_threshold_0p2n_"
+    "anycontact_late10_penalty3x_v2"
+)
 REWARD_HAND_OBJECT_THRESHOLD_N: Final[float] = CONTACT_FORCE_THRESHOLD
 # PPO consumes the environment reward directly, so its contract is distinct
 # because the PPO reward scale is tracked separately from the environment contract.
-PPO_REWARD_CONTRACT_ID: Final = "source_aligned_hand_object_contact_1x_threshold_0p2n_shaper_0p5_v1"
+LEGACY_PPO_REWARD_CONTRACT_IDS: Final = (
+    "source_aligned_hand_object_contact_1x_threshold_0p2n_shaper_0p5_v1",
+)
+PPO_REWARD_CONTRACT_ID: Final = (
+    "source_aligned_hand_object_contact_1x_threshold_0p2n_"
+    "anycontact_late10_penalty3x_shaper_0p5_v2"
+)
 PPO_REWARD_SCALE: Final[float] = 0.5
 
 
@@ -48,6 +60,8 @@ class RewardConfig:
     max_contact_reward: float = 0.4
     direct_contact_reward_scale: float = 1.0
     contact_force_threshold: float = REWARD_HAND_OBJECT_THRESHOLD_N
+    late_contact_grace_frames: int = 10
+    late_contact_penalty_multiplier: float = 3.0
     max_object_stability_reward: float = 0.4
     object_stability_reference_speed: float = 0.1
     survival_reward: float = 0.001
@@ -181,6 +195,14 @@ def compute_rewards(
             raise ValueError(f"{name} batch size must match object_position")
     if np.any((expected_mask != 0.0) & (expected_mask != 1.0)) or np.any(expected_weights < 0.0):
         raise ValueError("expected contact masks must be binary and weights non-negative")
+    if (
+        not isinstance(config.late_contact_grace_frames, int)
+        or isinstance(config.late_contact_grace_frames, bool)
+        or config.late_contact_grace_frames < 0
+        or not np.isfinite(config.late_contact_penalty_multiplier)
+        or config.late_contact_penalty_multiplier < 0.0
+    ):
+        raise ValueError("late-contact grace and penalty multiplier must be non-negative")
     deviation_penalty = _batch_vector("termination.deviation_penalty", termination.deviation_penalty, batch)
     deviation_reset = np.asarray(termination.deviation_reset, dtype=bool)
     reset = np.asarray(termination.reset, dtype=bool)
@@ -241,8 +263,20 @@ def compute_rewards(
     ) * config.max_contact_reward
     within_window = (steps >= starts) & (steps <= ends)
     windowed_contact = np.where(within_window, raw_contact, 0.0)
-    contact = windowed_contact * config.direct_contact_reward_scale
     valid_window = ends >= starts
+    any_hand_object_contact = np.any(
+        contact_magnitudes > config.contact_force_threshold, axis=1
+    )
+    late_contact = (
+        valid_window
+        & (steps > ends + config.late_contact_grace_frames)
+        & any_hand_object_contact
+    )
+    contact = np.where(
+        late_contact,
+        -config.late_contact_penalty_multiplier * config.max_contact_reward,
+        windowed_contact,
+    ) * config.direct_contact_reward_scale
     distance_gate = np.where(within_window & valid_window, windowed_contact, 0.0)
     distance_gate = np.where((steps > ends) & valid_window, config.max_contact_reward, distance_gate)
     distance_x, distance_y, distance_z = ungated_x * distance_gate, ungated_y * distance_gate, ungated_z * distance_gate
