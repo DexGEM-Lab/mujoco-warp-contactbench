@@ -74,6 +74,30 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
     hand_shapes = np.asarray(metadata["mano_hand_shapes"], dtype=np.float64)
     if metadata["hand_names"] != ["right"] or hand_shapes.shape != (1, 10):
         raise ValueError(f"row {row_index} must contain one active right-hand shape")
+    provenance = row["provenance"]
+    source_dataset = lance.dataset(
+        provenance["dataset_path"], version=int(provenance["dataset_version"])
+    )
+    source_row = source_dataset.take(
+        [int(provenance["row_index"])], columns=["trajectory_metadata"]
+    ).to_pylist()[0]["trajectory_metadata"]
+    source_hand_names = source_row.get("hand_names") or []
+    source_hand_shapes = source_row.get("mano_hand_shapes") or []
+    if "right" not in source_hand_names:
+        raise ValueError(f"source row for export row {row_index} has no right hand")
+    source_right_index = source_hand_names.index("right")
+    if source_right_index >= len(source_hand_shapes):
+        raise ValueError(f"source row for export row {row_index} omits right shape")
+    right_shape_error = float(
+        np.max(
+            np.abs(
+                hand_shapes[0]
+                - np.asarray(source_hand_shapes[source_right_index], dtype=np.float64)
+            )
+        )
+    )
+    if right_shape_error > 1e-7:
+        raise ValueError(f"row {row_index} right MANO shape differs from raw Lance")
     if row["hands"][1]["hand_name"] is not None:
         raise ValueError(f"row {row_index} left fixed hand slot must remain empty")
     transitions = total_frames - 1
@@ -169,6 +193,7 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         "seed": int(row["provenance"]["seed"]),
         "max_mano_global_position_error_m": global_position_error,
         "max_mano_global_rotation_error_rad": global_rotation_error,
+        "max_right_hand_shape_error": right_shape_error,
         "max_object_position_reconstruction_m": max_pos_object_error,
         "max_total_force_sum_error_N": max_force_sum_error,
         "max_object_force_rotation_error_N": max_object_force_error,
@@ -288,6 +313,9 @@ def validate_dataset(
         ),
         "max_mano_global_rotation_error_rad": max(
             (row["max_mano_global_rotation_error_rad"] for row in rows), default=0.0
+        ),
+        "max_right_hand_shape_error": max(
+            (row["max_right_hand_shape_error"] for row in rows), default=0.0
         ),
         "max_object_position_reconstruction_m": max(
             (row["max_object_position_reconstruction_m"] for row in rows), default=0.0
