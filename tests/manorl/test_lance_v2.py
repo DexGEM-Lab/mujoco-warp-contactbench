@@ -27,6 +27,9 @@ from tools.export_manorl_synthetic_lance import (
     _load_predecoded_batch,
     export_checkpoint_rollouts,
 )
+from tools.validate_manorl_synthetic_lance import (
+    _is_retryable_nested_decode_failure,
+)
 
 
 def _state() -> MaterializedState:
@@ -64,6 +67,16 @@ def _buffers() -> MaterializedContactBuffers:
         raw_metadata={},
         host_metadata={},
     )
+
+
+def test_nested_arrow_decode_exceptions_are_retryable() -> None:
+    pyarrow_error = (
+        "rows = dataset.take([row_index]).to_pylist()\n"
+        "TypeError: pyarrow.lib.FloatScalar.__new__(X): X is not a type object"
+    )
+    assert _is_retryable_nested_decode_failure(1, pyarrow_error)
+    assert _is_retryable_nested_decode_failure(139, "segmentation fault")
+    assert not _is_retryable_nested_decode_failure(1, "ValueError: schema changed")
 
 
 def test_v2_normal_force_has_no_legacy_half_scale_and_uses_actual_frames() -> None:
