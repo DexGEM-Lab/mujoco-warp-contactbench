@@ -85,7 +85,8 @@ def test_nested_arrow_decode_exceptions_are_retryable() -> None:
     assert _is_retryable_nested_decode_failure(
         1, "File /site-packages/pyarrow/compute.py: UnboundLocalError"
     )
-    assert not _is_retryable_nested_decode_failure(1, "ValueError: schema changed")
+    assert _is_retryable_nested_decode_failure(1, "ValueError: schema changed")
+    assert not _is_retryable_nested_decode_failure(0, "")
 
 
 def test_v2_normal_force_has_no_legacy_half_scale_and_uses_actual_frames() -> None:

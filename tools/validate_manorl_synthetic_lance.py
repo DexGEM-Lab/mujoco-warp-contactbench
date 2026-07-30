@@ -253,14 +253,10 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
 
 
 def _is_retryable_nested_decode_failure(returncode: int, stderr: str) -> bool:
-    return returncode < 0 or returncode in {134, 139} or (
-        returncode >= 0
-        and (
-            "dataset.take([row_index]).to_pylist()" in stderr
-            or "pyarrow.lib." in stderr
-            or "/site-packages/pyarrow/" in stderr
-        )
-    )
+    """Retry every isolated child failure; deterministic failures remain bounded."""
+
+    del stderr
+    return returncode != 0
 
 
 def validate_dataset(
