@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate corrected v2.1 Lance rows in isolated decoder subprocesses."""
+"""Validate corrected v2.2 repeated Lance rows in isolated subprocesses."""
 
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ from scipy.spatial.transform import Rotation
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
-    SYNTHETIC_LANCE_V21_CONTRACT,
+    SYNTHETIC_LANCE_V22_CONTRACT,
 )
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 
 
 def _schema_metadata(dataset: Any) -> dict[str, str]:
@@ -108,6 +109,8 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         "processed_action": (transitions, 28),
         "controller_target": (transitions, 28),
         "cumulative_joint_residual": (transitions, 22),
+        "raw_contact_reward": (transitions,),
+        "contact_reward": (transitions,),
     }
     for name, shape in rollout_shapes.items():
         values = np.asarray(rollout[name])
@@ -115,6 +118,16 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
             raise ValueError(f"row {row_index} rollout.{name} has invalid shape/values")
     if int(rollout["transition_count"]) != transitions:
         raise ValueError(f"row {row_index} transition count differs from T-1")
+    raw_contact_reward = np.asarray(rollout["raw_contact_reward"], dtype=np.float64)
+    contact_reward = np.asarray(rollout["contact_reward"], dtype=np.float64)
+    if (
+        np.any(raw_contact_reward < -1e-7)
+        or np.any(raw_contact_reward > 0.4 + 1e-6)
+        or np.any(contact_reward < -1.2 - 1e-6)
+        or np.any(contact_reward > 0.4 + 1e-6)
+    ):
+        raise ValueError(f"row {row_index} contact rewards violate the v2.2 bounds")
+    negative_contact_steps = int(np.count_nonzero(contact_reward < 0.0))
     if (
         sum(bool(value) for value in rollout["terminated"]) != 1
         or not bool(rollout["terminated"][-1])
@@ -191,6 +204,10 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         "reward_sum": float(metadata["train_info"]["reward_value"]),
         "checkpoint_sha256": row["provenance"]["checkpoint_sha256"],
         "seed": int(row["provenance"]["seed"]),
+        "episode_index": int(row["provenance"]["episode_index"]),
+        "generation_attempt": int(row["provenance"]["generation_attempt"]),
+        "negative_contact_reward_steps": negative_contact_steps,
+        "minimum_contact_reward": float(np.min(contact_reward, initial=0.0)),
         "max_mano_global_position_error_m": global_position_error,
         "max_mano_global_rotation_error_rad": global_rotation_error,
         "max_right_hand_shape_error": right_shape_error,
@@ -216,20 +233,33 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
 
 
 def validate_dataset(
-    path: Path, output: Path | None = None, *, max_attempts: int = 5
+    path: Path,
+    output: Path | None = None,
+    *,
+    max_attempts: int = 5,
+    expected_episodes_per_identity: int = 5,
+    max_generation_attempts_per_identity: int = 10,
 ) -> dict[str, Any]:
     import lance
 
     dataset = lance.dataset(str(path))
     metadata = _schema_metadata(dataset)
-    if metadata.get("schema_version") != SYNTHETIC_LANCE_V21_CONTRACT:
-        raise ValueError("dataset schema_version is not the corrected v2.1 contract")
+    if metadata.get("schema_version") != SYNTHETIC_LANCE_V22_CONTRACT:
+        raise ValueError("dataset schema_version is not the corrected v2.2 contract")
     if metadata.get("mano_global_frame_contract") != MANO_GLOBAL_FRAME_CONTRACT:
         raise ValueError("dataset MANO global-frame contract changed")
     if metadata.get("force_contract") != FORCE_DIRECTION_CONTRACT:
         raise ValueError("dataset force contract is not normal-only scale 1.0")
+    if metadata.get("reward_contract") != REWARD_CONTRACT_ID:
+        raise ValueError("dataset reward contract changed")
+    if metadata.get("ppo_reward_contract") != PPO_REWARD_CONTRACT_ID:
+        raise ValueError("dataset PPO reward contract changed")
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
+    if expected_episodes_per_identity < 1:
+        raise ValueError("expected episodes per identity must be positive")
+    if max_generation_attempts_per_identity < expected_episodes_per_identity:
+        raise ValueError("generation attempt budget is smaller than episode target")
     row_count = int(dataset.count_rows())
     rows = []
     for row_index in range(row_count):
@@ -266,19 +296,48 @@ def validate_dataset(
     identities = [row["source_identity"] for row in rows]
     uuids = [row["uuid"] for row in rows]
     source_rows = [row["source_row_index"] for row in rows]
-    if len(set(identities)) != row_count or len(set(uuids)) != row_count or len(set(source_rows)) != row_count:
-        raise ValueError("dataset contains duplicate source identities, UUIDs, or row indices")
+    if len(set(uuids)) != row_count:
+        raise ValueError("dataset contains duplicate generated UUIDs")
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    source_row_by_identity: dict[str, int] = {}
+    for row in rows:
+        identity = row["source_identity"]
+        grouped.setdefault(identity, []).append(row)
+        source_row = row["source_row_index"]
+        if identity in source_row_by_identity and source_row_by_identity[identity] != source_row:
+            raise ValueError("one source identity maps to multiple raw rows")
+        source_row_by_identity[identity] = source_row
+    if len(set(source_row_by_identity.values())) != len(grouped):
+        raise ValueError("multiple source identities map to one raw row")
+    expected_episode_indices = list(range(expected_episodes_per_identity))
+    for identity, identity_rows in grouped.items():
+        episodes = sorted(row["episode_index"] for row in identity_rows)
+        attempts = [row["generation_attempt"] for row in identity_rows]
+        if episodes != expected_episode_indices:
+            raise ValueError(
+                f"identity {identity} episodes {episodes} != {expected_episode_indices}"
+            )
+        if len(set(attempts)) != len(attempts) or any(
+            attempt < 1 or attempt > max_generation_attempts_per_identity
+            for attempt in attempts
+        ):
+            raise ValueError(f"identity {identity} has invalid generation attempts")
     checkpoint_hashes = {row["checkpoint_sha256"] for row in rows}
     seeds = {row["seed"] for row in rows}
     if len(checkpoint_hashes) != 1:
         raise ValueError("dataset rows do not share one checkpoint SHA256")
-    if len(seeds) != 1:
-        raise ValueError("dataset rows do not share one rollout seed")
     summary = {
-        "schema": SYNTHETIC_LANCE_V21_CONTRACT,
+        "schema": SYNTHETIC_LANCE_V22_CONTRACT,
         "schema_metadata": metadata,
         "rows": row_count,
-        "unique_identities": len(set(identities)),
+        "unique_identities": len(grouped),
+        "episodes_per_identity": expected_episodes_per_identity,
+        "max_generation_attempts_per_identity": max_generation_attempts_per_identity,
+        "generation_attempt_range": [
+            min(row["generation_attempt"] for row in rows),
+            max(row["generation_attempt"] for row in rows),
+        ] if rows else None,
+        "episode_seed_range": [min(seeds), max(seeds)] if rows else None,
         "source_row_range": [min(source_rows), max(source_rows)] if rows else None,
         "frame_count_min_max_sum": [
             min(row["frames"] for row in rows),
@@ -297,8 +356,13 @@ def validate_dataset(
             (row["decoder_attempts"] for row in rows), default=0
         ),
         "reward_sum_all_rows": sum(row["reward_sum"] for row in rows),
+        "negative_contact_reward_steps": sum(
+            row["negative_contact_reward_steps"] for row in rows
+        ),
+        "minimum_contact_reward": min(
+            (row["minimum_contact_reward"] for row in rows), default=0.0
+        ),
         "checkpoint_sha256": next(iter(checkpoint_hashes)) if rows else None,
-        "seed": next(iter(seeds)) if rows else None,
         "checkpoint_environment_contract": (
             rows[0].get("checkpoint_environment_contract") if rows else None
         ),
@@ -340,6 +404,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--max-attempts", type=int, default=5)
+    parser.add_argument("--expected-episodes-per-identity", type=int, default=5)
+    parser.add_argument("--max-generation-attempts-per-identity", type=int, default=10)
     parser.add_argument("--row-index", type=int, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
@@ -352,7 +418,13 @@ def main(argv: list[str] | None = None) -> int:
     print(
         json.dumps(
             validate_dataset(
-                args.dataset, args.output, max_attempts=args.max_attempts
+                args.dataset,
+                args.output,
+                max_attempts=args.max_attempts,
+                expected_episodes_per_identity=args.expected_episodes_per_identity,
+                max_generation_attempts_per_identity=(
+                    args.max_generation_attempts_per_identity
+                ),
             ),
             indent=2,
             sort_keys=True,

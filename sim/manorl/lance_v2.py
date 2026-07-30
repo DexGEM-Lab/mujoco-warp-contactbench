@@ -1,4 +1,4 @@
-"""Corrected v2.1 synthetic Lance contract for checkpoint rollouts."""
+"""Corrected v2.2 synthetic Lance contract for repeated checkpoint rollouts."""
 
 from __future__ import annotations
 
@@ -17,9 +17,10 @@ from scipy.spatial.transform import Rotation
 from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_DOF, KEYPOINT_NAMES
 from sim.manorl.environment import MaterializedContactBuffers, MaterializedState
 from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 from sim.manorl.trajectory import ReferenceTrajectory, wxyz_to_xyzw
 
-SYNTHETIC_LANCE_V21_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_1"
+SYNTHETIC_LANCE_V22_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
 FORCE_DIRECTION_CONTRACT = "normal_only_hand_to_object_world_joint_object_scale_1p0"
 MANO_GLOBAL_FRAME_CONTRACT = (
     "urdf_floating_root_translation_intrinsic_XYZ_to_rotvec_v1"
@@ -212,8 +213,12 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
     )
     metadata = {
         b"schema": b"synthetic",
-        b"schema_version": SYNTHETIC_LANCE_V21_CONTRACT.encode(),
+        b"schema_version": SYNTHETIC_LANCE_V22_CONTRACT.encode(),
         b"mano_global_frame_contract": MANO_GLOBAL_FRAME_CONTRACT.encode(),
+        b"reward_contract": REWARD_CONTRACT_ID.encode(),
+        b"ppo_reward_contract": PPO_REWARD_CONTRACT_ID.encode(),
+        b"default_episodes_per_identity": b"5",
+        b"default_max_attempts_per_identity": b"10",
         b"hand_slot_order": b"right,left",
         b"mano_dof_dim": b"28",
         b"control_timestep_seconds": str(CONTROL_TIMESTEP).encode(),
@@ -304,6 +309,8 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
                         ("processed_target", pa.list_(fixed(JOINT_DOF))),
                         ("controller_target", pa.list_(fixed(JOINT_DOF))),
                         ("reward", pa.list_(pa.float32())),
+                        ("raw_contact_reward", pa.list_(pa.float32())),
+                        ("contact_reward", pa.list_(pa.float32())),
                         ("terminated", pa.list_(pa.bool_())),
                         ("termination_reason_code", pa.list_(pa.int32())),
                     ]
@@ -326,6 +333,8 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
                         ("source_identity", pa.string()),
                         ("software_commit", pa.string()),
                         ("seed", pa.int64()),
+                        ("episode_index", pa.int64()),
+                        ("generation_attempt", pa.int64()),
                     ]
                 ),
             ),
@@ -349,7 +358,7 @@ def generated_rollout_uuid(source_uuid: str, checkpoint_sha256: str, episode: in
     return str(
         uuid.uuid5(
             namespace,
-            f"{SYNTHETIC_LANCE_V21_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
+            f"{SYNTHETIC_LANCE_V22_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
         )
     )
 
@@ -387,6 +396,10 @@ def build_v2_row(
     reference_object_rot_aa = Rotation.from_quat(trajectory.object_quat_xyzw).as_rotvec()
     mano_pose = right_urdf_trajectory_to_mano_48d(urdf_dof)
     checkpoint_sha = str(provenance["checkpoint_sha256"])
+    episode_index = int(provenance["episode_index"])
+    generation_attempt = int(provenance["generation_attempt"])
+    if episode_index < 0 or generation_attempt < 1:
+        raise ValueError("episode index must be non-negative and generation attempt positive")
     source_uuid = str(trajectory.identity.uuid)
     cap_machine = str(source_index.get("capMachine") or "manorl-mjx-warp")
     operator = str(source_index.get("operator") or "manorl")
@@ -415,7 +428,7 @@ def build_v2_row(
     }
     row = {
         "index": {
-            "uuid": generated_rollout_uuid(source_uuid, checkpoint_sha),
+            "uuid": generated_rollout_uuid(source_uuid, checkpoint_sha, episode_index),
             "seed_uuid": source_uuid,
             "capMachine": cap_machine,
             "operator": operator,
@@ -493,7 +506,7 @@ def build_v2_row(
             },
         },
         "provenance": {
-            "contract": SYNTHETIC_LANCE_V21_CONTRACT,
+            "contract": SYNTHETIC_LANCE_V22_CONTRACT,
             "force_contract": FORCE_DIRECTION_CONTRACT,
             "policy_mode": "deterministic_mean",
             "checkpoint_path": str(provenance["checkpoint_path"]),
@@ -508,6 +521,8 @@ def build_v2_row(
             "source_identity": trajectory.identity.identity,
             "software_commit": str(provenance["software_commit"]),
             "seed": int(provenance["seed"]),
+            "episode_index": episode_index,
+            "generation_attempt": generation_attempt,
         },
     }
     return row

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# GPU checkpoint -> corrected v2.1 synthetic Lance.
+# GPU checkpoint -> corrected v2.2 1:N synthetic Lance.
 # Usage:
 #   CHECKPOINT=/path/checkpoint-000500.pt ./synthesize.sh [object] [gesture] [num_envs] [gpu]
 
@@ -13,10 +13,12 @@ GPU=${4:-${MANORL_GPU:-0}}
 CHECKPOINT=${CHECKPOINT:-${MANORL_CHECKPOINT:-}}
 DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance}
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
-OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v21_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
+OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v22_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
 PYTHON=${MANORL_PYTHON:-$ROOT/.venv/bin/python}
 PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
 SEED=${MANORL_SYNTH_SEED:-42}
+EPISODES_PER_IDENTITY=${MANORL_SYNTH_EPISODES_PER_IDENTITY:-5}
+MAX_ATTEMPTS_PER_IDENTITY=${MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY:-10}
 
 if [[ -z "$CHECKPOINT" ]]; then
   echo "Set CHECKPOINT or MANORL_CHECKPOINT to a native ManoRL checkpoint." >&2
@@ -43,6 +45,15 @@ if [[ ! "$SEED" =~ ^[0-9]+$ ]]; then
   echo "seed must be a non-negative integer, got: $SEED" >&2
   exit 2
 fi
+if [[ ! "$EPISODES_PER_IDENTITY" =~ ^[1-9][0-9]*$ ]]; then
+  echo "episodes per identity must be positive, got: $EPISODES_PER_IDENTITY" >&2
+  exit 2
+fi
+if [[ ! "$MAX_ATTEMPTS_PER_IDENTITY" =~ ^[1-9][0-9]*$ ]] || \
+   (( MAX_ATTEMPTS_PER_IDENTITY < EPISODES_PER_IDENTITY )); then
+  echo "max attempts must be at least episodes per identity" >&2
+  exit 2
+fi
 
 export PYTHONPATH=$ROOT
 export CUDA_VISIBLE_DEVICES=$GPU
@@ -64,4 +75,6 @@ exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \
   --dataset-version "$DATASET_VERSION" \
   --num-envs "$NUM_ENVS" \
   --seed "$SEED" \
+  --episodes-per-identity "$EPISODES_PER_IDENTITY" \
+  --max-attempts-per-identity "$MAX_ATTEMPTS_PER_IDENTITY" \
   "${EXTRA_ARGS[@]}"

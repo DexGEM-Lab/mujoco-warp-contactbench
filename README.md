@@ -227,7 +227,7 @@ every eligible pair in the pinned Lance dataset. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
-### Corrected v2.1 checkpoint rollout synthesis
+### Corrected v2.2 repeated checkpoint rollout synthesis
 
 `./synthesize.sh` runs a deterministic checkpoint mean policy on GPU and writes
 one independent complete source-length trajectory per assigned environment:
@@ -237,8 +237,8 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \\
   ./synthesize.sh cube2 02 5 0
 ```
 
-The output is a nested Lance dataset plus a sibling `.manifest.json`. The v2.1
-contract is `synthetic_mano_28d_checkpoint_rollout_v2_1`: timestamps use the
+The output is a nested Lance dataset plus a sibling `.manifest.json`. The v2.2
+contract is `synthetic_mano_28d_checkpoint_rollout_v2_2`: timestamps use the
 actual `0.005 s` control interval (`data_fps=200`), `force_normal` contains the
 solved normal component with scale `1.0`, and all force frames use a consistent
 hand-to-object direction. `pos_joint` and `total_force_joint` use the live
@@ -249,9 +249,20 @@ contains only the raw right-hand shape declared by `hand_names=["right"]`.
 Each row also stores 28D physical and controller targets, 21 keypoints,
 reference frame indices, policy mean/processed actions, observations, rewards,
 termination codes, checkpoint SHA256, runtime sidecar, action contract, and
-source identity.
+source identity. The rollout also stores the positive raw expected-contact
+score and the final signed contact term for every transition.
 
-`--num-envs` controls the simultaneous identities; set it to the number of
+By default each raw identity must produce five accepted complete episodes within
+ten attempts. Attempts use consecutive seeds from the base `42`; successful
+rows record `episode_index`, `generation_attempt`, and the attempt seed. An
+identity that cannot reach five accepted episodes after ten attempts causes a
+nonzero exit and a `.partial` dataset/manifest instead of a misleading complete
+publication. Override the bounds with `--episodes-per-identity` and
+`--max-attempts-per-identity`, or the corresponding
+`MANORL_SYNTH_EPISODES_PER_IDENTITY` and
+`MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY` wrapper variables.
+
+`--num-envs` controls the simultaneous source identities; set it to the number of
 eligible `cube2:02` rows to export the whole pair, or use a smaller value and
 advance `--pair-assignment-cycle` across bounded batches. The exporter refuses
 to overwrite an existing dataset unless `--replace` is passed to the Python
@@ -265,6 +276,14 @@ the stochastic point-cloud observation source is fixed; override it with
 GPU contact reductions can still vary at floating-point scale, and closed-loop
 rollouts can amplify that numerical variation, so the contract does not claim
 bitwise replay across separate processes.
+
+The reward contract retains positive expected-contact reward through the raw
+`object_move.end_frame`, gives ten neutral grace frames, then applies `-1.2`
+(`-3 * max_contact_reward`) whenever any of the 16 physical hand keypoint forces
+exceeds `0.2 N`. This prevents moving lingering contact onto an unlabelled link.
+Legacy-reward checkpoints remain loadable for inference/export, but only a newly
+trained checkpoint can learn the release behavior; training resume remains
+strictly bound to the new reward contract.
 
 Finger residual increments and their cumulative caps have independent explicit
 multipliers, both defaulting to `2.0`. Wrist XYZ residuals default to a

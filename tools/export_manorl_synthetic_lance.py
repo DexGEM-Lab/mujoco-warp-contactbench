@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export complete deterministic ManoRL checkpoint episodes to corrected v2.1 Lance."""
+"""Export bounded 1:N ManoRL checkpoint episodes to corrected v2.2 Lance."""
 
 from __future__ import annotations
 
@@ -26,12 +26,13 @@ from sim.manorl.environment import (
 )
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
-    SYNTHETIC_LANCE_V21_CONTRACT,
+    SYNTHETIC_LANCE_V22_CONTRACT,
     build_v2_row,
     corrected_contact_frames,
     file_sha256,
     write_v2_lance,
 )
+from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 from sim.manorl.trajectory import (
     TrajectoryBatch,
     TrajectorySelection,
@@ -180,49 +181,43 @@ def _append_state(storage: dict[str, list[np.ndarray]], row: dict[str, np.ndarra
         storage[name].append(value.copy())
 
 
-def export_checkpoint_rollouts(
-    *,
-    checkpoint: Path,
-    output: Path,
-    selection: TrajectorySelection,
-    num_envs: int,
-    device: str,
-    replace: bool = False,
-    allow_deviation_termination: bool = False,
-    predecoded_manifest: Path | None = None,
-    seed: int = 42,
-) -> dict[str, Any]:
-    """Run one independent source-length episode per assigned trajectory."""
-
-    if seed < 0:
-        raise ValueError("seed must be non-negative")
+def _seed_attempt(seed: int, device: str) -> None:
     np.random.seed(seed)
     if device == "gpu":
         import torch
 
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-    checkpoint = _validate_checkpoint_path(checkpoint)
-    checkpoint_options = _checkpoint_environment_options(checkpoint)
-    trajectories = (
-        load_assigned_trajectory_batch(selection, num_envs=num_envs)
-        if predecoded_manifest is None
-        else _load_predecoded_batch(
-            selection, num_envs=num_envs, manifest_path=predecoded_manifest
-        )
+
+
+def _trajectory_subset(
+    batch: TrajectoryBatch, trajectories: list[Any]
+) -> TrajectoryBatch:
+    return TrajectoryBatch(
+        tuple(trajectories),
+        resolved_pairs=batch.resolved_pairs,
+        selection_mode=batch.selection_mode,
+        pair_assignment_cycle=batch.pair_assignment_cycle,
     )
-    identities = [item.identity.identity for item in trajectories.trajectories]
-    if len(set(identities)) != len(identities):
-        raise ValueError(
-            "num-envs exceeds the distinct valid identities in this assignment window; "
-            "reduce it so every exported Lance row has a unique source trajectory"
-        )
-    if trajectories.action_dim != JOINT_DOF or any(
-        item.action_layout.controlled_sides != ("right",)
-        for item in trajectories.trajectories
-    ):
-        raise ValueError("v2 checkpoint export currently requires one controlled right 28D hand")
-    metadata_by_row = _source_metadata(trajectories)
+
+
+def _run_attempt_batch(
+    *,
+    checkpoint: Path,
+    checkpoint_options: Any,
+    trajectories: TrajectoryBatch,
+    metadata_by_row: dict[int, tuple[dict[str, Any], dict[str, Any]]],
+    device: str,
+    allow_deviation_termination: bool,
+    attempt_seed: int,
+    attempt_numbers: dict[str, int],
+    episode_indices: dict[str, int],
+    provenance_base: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, str], int, int]:
+    """Run one candidate episode for each identity in one attempt round."""
+
+    _seed_attempt(attempt_seed, device)
+    num_envs = trajectories.num_envs
     environment = MujocoManoEnvironment(
         trajectories,
         EnvironmentConfig(
@@ -244,16 +239,6 @@ def export_checkpoint_rollouts(
         ),
     )
     stepper = _build_checkpoint_stepper(environment, checkpoint)
-    checkpoint_sha = file_sha256(checkpoint)
-    checkpoint_metadata = checkpoint_runtime_metadata(checkpoint)
-    provenance = {
-        "checkpoint_path": str(checkpoint.resolve()),
-        "checkpoint_sha256": checkpoint_sha,
-        "checkpoint_update": _checkpoint_update(checkpoint),
-        "checkpoint_metadata": checkpoint_metadata,
-        "software_commit": _software_commit(),
-        "seed": seed,
-    }
     right_model_index = environment.model_hand_sides.index("right")
     right_model_slice = slice(
         right_model_index * JOINT_DOF, (right_model_index + 1) * JOINT_DOF
@@ -262,6 +247,8 @@ def export_checkpoint_rollouts(
     rollout_storage = [defaultdict(list) for _ in range(num_envs)]
     contact_storage: list[list[list[dict[str, Any]]]] = [[] for _ in range(num_envs)]
     active = np.ones(num_envs, dtype=bool)
+    succeeded = np.zeros(num_envs, dtype=bool)
+    failure_reasons: dict[str, str] = {}
 
     initial_contacts = _materialized_contacts(environment)
     for env_id in range(num_envs):
@@ -290,7 +277,7 @@ def export_checkpoint_rollouts(
         for env_id in np.flatnonzero(active):
             if bool(transition.reset_applied[env_id]):
                 raise RuntimeError(
-                    f"active env {env_id} reset before its first episode was complete"
+                    f"active env {env_id} reset before its candidate episode terminated"
                 )
             post = _state_row(environment, int(env_id))
             _append_state(state_storage[env_id], post)
@@ -314,7 +301,10 @@ def export_checkpoint_rollouts(
                 np.asarray(transition.processed_actions[env_id], dtype=np.float64)
             )
             rollout["cumulative_position_residual"].append(
-                np.asarray(environment.cumulative_offset_by_side["right"][env_id], dtype=np.float64)
+                np.asarray(
+                    environment.cumulative_offset_by_side["right"][env_id],
+                    dtype=np.float64,
+                )
             )
             rollout["cumulative_joint_residual"].append(
                 np.asarray(environment.cumulative_joint_offset[env_id], dtype=np.float64)
@@ -339,26 +329,32 @@ def export_checkpoint_rollouts(
                 )
             )
             rollout["reward"].append(float(transition.reward.total[env_id]))
+            rollout["raw_contact_reward"].append(
+                float(transition.reward.raw_contact[env_id])
+            )
+            rollout["contact_reward"].append(float(transition.reward.contact[env_id]))
             terminal = bool(transition.termination.reset[env_id])
             rollout["terminated"].append(terminal)
             rollout["termination_reason_code"].append(
                 int(transition.termination.reason_code[env_id])
             )
             if terminal:
-                if not bool(transition.termination.success[env_id]):
-                    raise RuntimeError(
-                        f"trajectory {environment.trajectories[env_id].identity.identity} "
-                        "terminated by deviation before its complete source episode"
-                    )
+                identity = environment.trajectories[env_id].identity.identity
                 active[env_id] = False
+                if bool(transition.termination.success[env_id]):
+                    succeeded[env_id] = True
+                else:
+                    failure_reasons[identity] = "deviation_before_source_completion"
         if step_index % 100 == 0 or not np.any(active):
             print(
                 json.dumps(
                     {
-                        "event": "rollout_progress",
+                        "event": "rollout_attempt_progress",
+                        "seed": attempt_seed,
                         "step": step_index + 1,
                         "active": int(np.count_nonzero(active)),
-                        "completed": int(num_envs - np.count_nonzero(active)),
+                        "succeeded": int(np.count_nonzero(succeeded)),
+                        "failed": len(failure_reasons),
                     },
                     sort_keys=True,
                 ),
@@ -371,60 +367,209 @@ def export_checkpoint_rollouts(
         ]
         raise RuntimeError(f"rollout exceeded source horizon without terminal: {unresolved}")
 
-    rows: list[dict[str, Any]] = []
-    for env_id, trajectory in enumerate(environment.trajectories):
+    rows: dict[str, dict[str, Any]] = {}
+    for env_id in np.flatnonzero(succeeded):
+        trajectory = environment.trajectories[int(env_id)]
+        identity = trajectory.identity.identity
         states = {
-            name: np.asarray(values)
-            for name, values in state_storage[env_id].items()
+            name: np.asarray(values) for name, values in state_storage[env_id].items()
         }
         rollout = {
-            name: np.asarray(values)
-            for name, values in rollout_storage[env_id].items()
+            name: np.asarray(values) for name, values in rollout_storage[env_id].items()
         }
         source_index, source_metadata = metadata_by_row[trajectory.identity.row_index]
-        rows.append(
-            build_v2_row(
-                trajectory=trajectory,
-                source_index=source_index,
-                source_metadata=source_metadata,
-                states=states,
-                contacts=contact_storage[env_id],
-                rollout=rollout,
-                provenance=provenance,
-            )
+        rows[identity] = build_v2_row(
+            trajectory=trajectory,
+            source_index=source_index,
+            source_metadata=source_metadata,
+            states=states,
+            contacts=contact_storage[env_id],
+            rollout=rollout,
+            provenance={
+                **provenance_base,
+                "seed": attempt_seed,
+                "episode_index": episode_indices[identity],
+                "generation_attempt": attempt_numbers[identity],
+            },
         )
-    write_v2_lance(
-        rows,
-        output=output,
-        observation_dim=environment.observation_dim,
-        action_dim=environment.action_dim,
-        replace=replace,
-    )
-    import lance
+    return rows, failure_reasons, environment.observation_dim, environment.action_dim
 
-    dataset = lance.dataset(str(output))
-    if dataset.count_rows() != len(rows):
-        raise RuntimeError("written Lance row count differs from completed rollout count")
-    manifest_path = output.parent / f"{output.name}.manifest.json"
+
+def export_checkpoint_rollouts(
+    *,
+    checkpoint: Path,
+    output: Path,
+    selection: TrajectorySelection,
+    num_envs: int,
+    device: str,
+    replace: bool = False,
+    allow_deviation_termination: bool = False,
+    predecoded_manifest: Path | None = None,
+    seed: int = 42,
+    episodes_per_identity: int = 5,
+    max_attempts_per_identity: int = 10,
+) -> dict[str, Any]:
+    """Generate an accepted 1:N checkpoint rollout dataset per raw identity."""
+
+    if seed < 0:
+        raise ValueError("seed must be non-negative")
+    if episodes_per_identity < 1:
+        raise ValueError("episodes_per_identity must be positive")
+    if max_attempts_per_identity < episodes_per_identity:
+        raise ValueError("max attempts must be at least the target episodes per identity")
+    checkpoint = _validate_checkpoint_path(checkpoint)
+    checkpoint_options = _checkpoint_environment_options(checkpoint)
+    trajectories = (
+        load_assigned_trajectory_batch(selection, num_envs=num_envs)
+        if predecoded_manifest is None
+        else _load_predecoded_batch(
+            selection, num_envs=num_envs, manifest_path=predecoded_manifest
+        )
+    )
+    identities = [item.identity.identity for item in trajectories.trajectories]
+    if len(set(identities)) != len(identities):
+        raise ValueError(
+            "num-envs exceeds the distinct valid identities in this assignment window; "
+            "reduce it so each synthesis counter owns one raw trajectory"
+        )
+    if trajectories.action_dim != JOINT_DOF or any(
+        item.action_layout.controlled_sides != ("right",)
+        for item in trajectories.trajectories
+    ):
+        raise ValueError("checkpoint export requires one controlled right 28D hand")
+    metadata_by_row = _source_metadata(trajectories)
+    checkpoint_sha = file_sha256(checkpoint)
+    provenance_base = {
+        "checkpoint_path": str(checkpoint.resolve()),
+        "checkpoint_sha256": checkpoint_sha,
+        "checkpoint_update": _checkpoint_update(checkpoint),
+        "checkpoint_metadata": checkpoint_runtime_metadata(checkpoint),
+        "software_commit": _software_commit(),
+    }
+    counters = {
+        identity: {"attempts": 0, "saved": 0, "failures": []}
+        for identity in identities
+    }
+    trajectory_by_identity = {
+        item.identity.identity: item for item in trajectories.trajectories
+    }
+    rows: list[dict[str, Any]] = []
+    observation_dim: int | None = None
+    action_dim: int | None = None
+
+    for attempt_round in range(1, max_attempts_per_identity + 1):
+        pending = [
+            identity
+            for identity in identities
+            if counters[identity]["saved"] < episodes_per_identity
+            and counters[identity]["attempts"] < max_attempts_per_identity
+        ]
+        if not pending:
+            break
+        for identity in pending:
+            counters[identity]["attempts"] += 1
+        attempt_numbers = {
+            identity: int(counters[identity]["attempts"]) for identity in pending
+        }
+        episode_indices = {
+            identity: int(counters[identity]["saved"]) for identity in pending
+        }
+        attempt_seed = seed + attempt_round - 1
+        attempt_rows, failures, observed_dim, acted_dim = _run_attempt_batch(
+            checkpoint=checkpoint,
+            checkpoint_options=checkpoint_options,
+            trajectories=_trajectory_subset(
+                trajectories, [trajectory_by_identity[identity] for identity in pending]
+            ),
+            metadata_by_row=metadata_by_row,
+            device=device,
+            allow_deviation_termination=allow_deviation_termination,
+            attempt_seed=attempt_seed,
+            attempt_numbers=attempt_numbers,
+            episode_indices=episode_indices,
+            provenance_base=provenance_base,
+        )
+        observation_dim = observed_dim
+        action_dim = acted_dim
+        for identity in pending:
+            row = attempt_rows.get(identity)
+            if row is not None:
+                rows.append(row)
+                counters[identity]["saved"] += 1
+            else:
+                counters[identity]["failures"].append(
+                    failures.get(identity, "candidate_not_accepted")
+                )
+        print(
+            json.dumps(
+                {
+                    "event": "synthesis_progress",
+                    "attempt_round": attempt_round,
+                    "attempt_seed": attempt_seed,
+                    "saved_total": len(rows),
+                    "target_total": len(identities) * episodes_per_identity,
+                    "completed_identities": sum(
+                        counters[identity]["saved"] >= episodes_per_identity
+                        for identity in identities
+                    ),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
+    complete = all(
+        counter["saved"] == episodes_per_identity for counter in counters.values()
+    )
+    target_output = (
+        output if complete else output.parent / f"{output.name}.partial"
+    )
+    if target_output.exists() and not replace:
+        raise FileExistsError(f"output already exists: {target_output}")
+    if rows:
+        assert observation_dim is not None and action_dim is not None
+        write_v2_lance(
+            rows,
+            output=target_output,
+            observation_dim=observation_dim,
+            action_dim=action_dim,
+            replace=replace,
+        )
+        import lance
+
+        dataset = lance.dataset(str(target_output))
+        if dataset.count_rows() != len(rows):
+            raise RuntimeError("written Lance row count differs from accepted rollout count")
+    manifest_path = target_output.parent / f"{target_output.name}.manifest.json"
     manifest = {
-        "schema": SYNTHETIC_LANCE_V21_CONTRACT,
+        "schema": SYNTHETIC_LANCE_V22_CONTRACT,
         "force_contract": FORCE_DIRECTION_CONTRACT,
+        "reward_contract": REWARD_CONTRACT_ID,
+        "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "output": str(output.resolve()),
+        "output": str(target_output.resolve()),
+        "complete": complete,
         "rows": len(rows),
-        "identities": [item.identity.identity for item in environment.trajectories],
+        "source_identities": identities,
+        "row_source_identities": [row["provenance"]["source_identity"] for row in rows],
         "generated_uuids": [row["index"]["uuid"] for row in rows],
-        "checkpoint": provenance,
+        "checkpoint": provenance_base,
         "selection": {
             "object": selection.object_type,
             "gesture": selection.action_id,
             "dataset_path": str(selection.dataset_path),
             "dataset_version": selection.expected_dataset_version,
-            "num_envs": num_envs,
+            "num_source_identities": num_envs,
             "pair_assignment_cycle": selection.pair_assignment_cycle,
             "predecoded_manifest": (
                 None if predecoded_manifest is None else str(predecoded_manifest)
             ),
+        },
+        "synthesis": {
+            "episodes_per_identity": episodes_per_identity,
+            "max_attempts_per_identity": max_attempts_per_identity,
+            "base_seed": seed,
+            "counters": counters,
         },
         "runtime": {
             "device": device,
@@ -432,15 +577,31 @@ def export_checkpoint_rollouts(
             "control_timestep_seconds": 0.005,
             "normal_force_scale": 1.0,
             "deviation_termination": allow_deviation_termination,
-            "seed": seed,
+            "late_contact_grace_frames": 10,
+            "late_contact_penalty_multiplier": 3.0,
+            "late_contact_scope": "any_16_keypoint_hand_object_contact_above_0p2N",
         },
     }
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    if not complete:
+        incomplete = {
+            identity: counter
+            for identity, counter in counters.items()
+            if counter["saved"] < episodes_per_identity
+        }
+        raise RuntimeError(
+            "synthesis target incomplete after bounded attempts; "
+            f"partial={target_output}, manifest={manifest_path}, incomplete={incomplete}"
+        )
     return {
-        "output": str(output),
+        "output": str(target_output),
         "manifest": str(manifest_path),
         "rows": len(rows),
-        "identities": manifest["identities"],
+        "source_identities": identities,
+        "episodes_per_identity": episodes_per_identity,
+        "max_attempts_per_identity": max_attempts_per_identity,
         "checkpoint_sha256": checkpoint_sha,
     }
 
@@ -457,6 +618,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pair-assignment-cycle", type=int, default=0)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="gpu")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--episodes-per-identity", type=int, default=5)
+    parser.add_argument("--max-attempts-per-identity", type=int, default=10)
     parser.add_argument("--replace", action="store_true")
     parser.add_argument(
         "--predecoded-manifest",
@@ -477,6 +640,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("pair-assignment-cycle must be non-negative")
     if args.seed < 0:
         parser.error("seed must be non-negative")
+    if args.episodes_per_identity < 1:
+        parser.error("episodes-per-identity must be positive")
+    if args.max_attempts_per_identity < args.episodes_per_identity:
+        parser.error("max-attempts-per-identity must be at least episodes-per-identity")
     return args
 
 
@@ -499,6 +666,8 @@ def main(argv: list[str] | None = None) -> int:
         allow_deviation_termination=args.allow_deviation_termination,
         predecoded_manifest=args.predecoded_manifest,
         seed=args.seed,
+        episodes_per_identity=args.episodes_per_identity,
+        max_attempts_per_identity=args.max_attempts_per_identity,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0

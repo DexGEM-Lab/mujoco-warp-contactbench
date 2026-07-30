@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import json
 import pickle
+import sys
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -12,15 +13,19 @@ from sim.manorl.contracts import TrajectoryIdentity
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
-    SYNTHETIC_LANCE_V21_CONTRACT,
+    SYNTHETIC_LANCE_V22_CONTRACT,
     build_v2_row,
     build_v2_schema,
     corrected_contact_frames,
     write_v2_lance,
 )
 from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
-from sim.manorl.trajectory import ReferenceTrajectory, TrajectorySelection
-from tools.export_manorl_synthetic_lance import _load_predecoded_batch
+from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch, TrajectorySelection
+import tools.export_manorl_synthetic_lance as exporter_module
+from tools.export_manorl_synthetic_lance import (
+    _load_predecoded_batch,
+    export_checkpoint_rollouts,
+)
 
 
 def _state() -> MaterializedState:
@@ -95,13 +100,13 @@ def test_mano_48d_conversion_matches_source_layout() -> None:
 
 def test_v2_schema_has_explicit_contract_and_28d_rollout_fields() -> None:
     schema = build_v2_schema(observation_dim=480, action_dim=28)
-    assert schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V21_CONTRACT.encode()
+    assert schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V22_CONTRACT.encode()
     assert schema.metadata[b"mano_global_frame_contract"] == MANO_GLOBAL_FRAME_CONTRACT.encode()
     assert schema.field("trajectory_metadata").type[0].name == "data_fps"
     assert schema.field("hands").type.value_type[6].name == "urdf_dof_target"
     assert schema.field("rollout").type[0].name == "transition_count"
     assert schema.field("provenance").type[5].name == "checkpoint_update"
-    assert schema.field("provenance").type[-1].name == "seed"
+    assert schema.field("provenance").type[-1].name == "generation_attempt"
 
 
 def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
@@ -136,6 +141,7 @@ def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
         "command_reference_index": np.asarray([0]), "command_source_frame_index": np.asarray([10]),
         "reference_target": np.zeros((1, 28)), "processed_target": np.zeros((1, 28)),
         "controller_target": np.zeros((1, 28)), "reward": np.asarray([1.0]),
+        "raw_contact_reward": np.asarray([0.4]), "contact_reward": np.asarray([0.4]),
         "terminated": np.asarray([True]), "termination_reason_code": np.asarray([1]),
     }
     row = build_v2_row(
@@ -146,13 +152,15 @@ def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
         },
         states=states,
         contacts=[[], []], rollout=rollout,
-        provenance={"checkpoint_path": "/c.pt", "checkpoint_sha256": "abc", "checkpoint_update": 1, "checkpoint_metadata": {}, "software_commit": "deadbeef", "seed": 42},
+        provenance={"checkpoint_path": "/c.pt", "checkpoint_sha256": "abc", "checkpoint_update": 1, "checkpoint_metadata": {}, "software_commit": "deadbeef", "seed": 42, "episode_index": 0, "generation_attempt": 1},
     )
     assert row["trajectory_metadata"]["data_fps"] == 200
     assert row["trajectory_metadata"]["total_frames"] == 2
     assert row["rollout"]["transition_count"] == 1
     assert row["provenance"]["force_contract"] == FORCE_DIRECTION_CONTRACT
     assert row["provenance"]["seed"] == 42
+    assert row["provenance"]["episode_index"] == 0
+    assert row["provenance"]["generation_attempt"] == 1
     np.testing.assert_array_equal(
         row["hands"][0]["mano_global_pos"],
         np.asarray(row["hands"][0]["urdf_dof"])[:, :3],
@@ -200,10 +208,104 @@ def test_predecoded_manifest_selects_unique_hashed_identity_window(tmp_path) -> 
     assert [item.identity.identity for item in batch.trajectories] == ["cube2_02_0002"]
 
 
+def test_repeated_synthesis_saves_five_successes_within_ten_attempts(
+    tmp_path, monkeypatch
+) -> None:
+    identity = TrajectoryIdentity(
+        dataset_path=str(tmp_path / "source.lance"), dataset_version=295,
+        row_index=3, object_index=0,
+        uuid="499dab41-1e12-4595-a040-c5ec979fc3bb", file_uuid="f",
+        identity="cube2_02_0004", source_start=0, source_stop=2,
+        movement_start_raw=0, movement_end_raw=1,
+    )
+    trajectory = ReferenceTrajectory(
+        identity=identity, dataset_version=295, source_indices=np.asarray([0, 1]),
+        timestamps=np.asarray([0.0, 0.005]), q_ref=np.zeros((2, 28)),
+        object_pos_raw=np.zeros((2, 3)), object_pos=np.zeros((2, 3)),
+        object_quat_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]] * 2), object_z_shift=0.0,
+    )
+    batch = TrajectoryBatch((trajectory,))
+    checkpoint = tmp_path / "checkpoint-000500.pt"
+    captured: dict[str, object] = {}
+    successful_attempts = {1, 3, 4, 6, 7}
+
+    monkeypatch.setattr(exporter_module, "_validate_checkpoint_path", lambda path: path)
+    monkeypatch.setattr(
+        exporter_module, "_checkpoint_environment_options", lambda path: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        exporter_module, "load_assigned_trajectory_batch", lambda selection, num_envs: batch
+    )
+    monkeypatch.setattr(
+        exporter_module, "_source_metadata", lambda batch: {3: ({}, {})}
+    )
+    monkeypatch.setattr(exporter_module, "file_sha256", lambda path: "checkpoint-sha")
+    monkeypatch.setattr(exporter_module, "checkpoint_runtime_metadata", lambda path: {})
+    monkeypatch.setattr(exporter_module, "_software_commit", lambda: "commit")
+
+    def fake_attempt(**kwargs):
+        name = trajectory.identity.identity
+        attempt = kwargs["attempt_numbers"][name]
+        if attempt not in successful_attempts:
+            return {}, {name: "quality_failed"}, 480, 28
+        episode = kwargs["episode_indices"][name]
+        seed = kwargs["attempt_seed"]
+        return {
+            name: {
+                "index": {"uuid": f"generated-{episode}"},
+                "provenance": {
+                    "source_identity": name,
+                    "episode_index": episode,
+                    "generation_attempt": attempt,
+                    "seed": seed,
+                },
+            }
+        }, {}, 480, 28
+
+    def fake_write(rows, **kwargs):
+        captured["rows"] = list(rows)
+        return kwargs["output"]
+
+    monkeypatch.setattr(exporter_module, "_run_attempt_batch", fake_attempt)
+    monkeypatch.setattr(exporter_module, "write_v2_lance", fake_write)
+    monkeypatch.setitem(
+        sys.modules,
+        "lance",
+        SimpleNamespace(
+            dataset=lambda path: SimpleNamespace(
+                count_rows=lambda: len(captured["rows"])
+            )
+        ),
+    )
+    output = tmp_path / "repeated.lance"
+    result = export_checkpoint_rollouts(
+        checkpoint=checkpoint,
+        output=output,
+        selection=TrajectorySelection(
+            "cube2", "02", dataset_path=tmp_path / "source.lance",
+            expected_dataset_version=295, hand_side="right",
+        ),
+        num_envs=1,
+        device="cpu",
+        episodes_per_identity=5,
+        max_attempts_per_identity=10,
+    )
+
+    rows = captured["rows"]
+    assert result["rows"] == 5
+    assert [row["provenance"]["episode_index"] for row in rows] == list(range(5))
+    assert [row["provenance"]["generation_attempt"] for row in rows] == [1, 3, 4, 6, 7]
+    assert [row["provenance"]["seed"] for row in rows] == [42, 44, 45, 47, 48]
+    manifest = json.loads((tmp_path / "repeated.lance.manifest.json").read_text())
+    assert manifest["complete"] is True
+    assert manifest["synthesis"]["counters"][identity.identity]["attempts"] == 7
+    assert manifest["synthesis"]["counters"][identity.identity]["saved"] == 5
+
+
 def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
     # Keep this writer test deliberately small; GPU rollout tests validate the
     # full row builder and contact invariants separately.
-    output = tmp_path / "synthetic_v21.lance"
+    output = tmp_path / "synthetic_v22.lance"
     row = {
         "index": {"uuid": "u", "seed_uuid": "s", "capMachine": "m", "operator": "o", "scene": "cube2", "is_generated": True},
         "trajectory_metadata": {
@@ -215,12 +317,12 @@ def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
         "hands": [{"hand_name": "right", "mano_global_pos": [[0.0] * 3], "mano_global_rot_aa": [[0.0] * 3], "mano_hand_pose": [[0.0] * 48], "mano_joint_pos": [[[0.0] * 3] * 21], "urdf_dof": [[0.0] * 28], "urdf_dof_target": [[0.0] * 28]}, {"hand_name": None, "mano_global_pos": [], "mano_global_rot_aa": [], "mano_hand_pose": [], "mano_joint_pos": [], "urdf_dof": [], "urdf_dof_target": []}],
         "objects": [{"rot_aa": [[0.0] * 3], "pos": [[0.0] * 3]}], "contact": [[]],
         "reference": {"source_frame_index": [0], "hand_urdf_dof": [[0.0] * 28], "object_pos": [[0.0] * 3], "object_rot_aa": [[0.0] * 3]},
-        "rollout": {"transition_count": 0, "observation_t": [], "next_observation": [], "policy_mean_action": [], "processed_action": [], "cumulative_position_residual": [], "cumulative_joint_residual": [], "command_reference_index": [], "command_source_frame_index": [], "reference_target": [], "processed_target": [], "controller_target": [], "reward": [], "terminated": [], "termination_reason_code": []},
-        "provenance": {"contract": SYNTHETIC_LANCE_V21_CONTRACT, "force_contract": FORCE_DIRECTION_CONTRACT, "policy_mode": "deterministic_mean", "checkpoint_path": "p", "checkpoint_sha256": "h", "checkpoint_update": 1, "checkpoint_metadata_json": "{}", "dataset_path": "d", "dataset_version": 1, "row_index": 0, "source_identity": "id", "software_commit": "c", "seed": 42},
+        "rollout": {"transition_count": 0, "observation_t": [], "next_observation": [], "policy_mean_action": [], "processed_action": [], "cumulative_position_residual": [], "cumulative_joint_residual": [], "command_reference_index": [], "command_source_frame_index": [], "reference_target": [], "processed_target": [], "controller_target": [], "reward": [], "raw_contact_reward": [], "contact_reward": [], "terminated": [], "termination_reason_code": []},
+        "provenance": {"contract": SYNTHETIC_LANCE_V22_CONTRACT, "force_contract": FORCE_DIRECTION_CONTRACT, "policy_mode": "deterministic_mean", "checkpoint_path": "p", "checkpoint_sha256": "h", "checkpoint_update": 1, "checkpoint_metadata_json": "{}", "dataset_path": "d", "dataset_version": 1, "row_index": 0, "source_identity": "id", "software_commit": "c", "seed": 42, "episode_index": 0, "generation_attempt": 1},
     }
     write_v2_lance([row], output=output, observation_dim=480, action_dim=28)
     import lance
     dataset = lance.dataset(str(output))
     assert dataset.count_rows() == 1
-    assert dataset.schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V21_CONTRACT.encode()
+    assert dataset.schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V22_CONTRACT.encode()
     assert dataset.take([0]).to_pylist()[0]["trajectory_metadata"]["data_fps"] == 200
