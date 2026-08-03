@@ -231,12 +231,20 @@ deviation handling, and deterministic evaluation that covers every selected
 object/action pair. A single-pair run uses one evaluation world; a multi-pair
 run automatically uses at least one world per pair, bounded at 128. This is
 786,432,000 transitions; it has no wall-clock cutoff unless one is explicitly
-requested. Physics remains fixed at 400 Hz (`0.0025 s`) and the policy/control
-loop remains at 200 Hz (two physics substeps). `--reference-fps {100,120}`
-selects the uniform source-trajectory clock; hand angular coordinates are
-unwrapped before linear interpolation, object position is linearly interpolated,
-and object orientation uses quaternion SLERP on the 200 Hz control grid. The
-default is 120 Hz:
+requested. `--reference-fps {100,120}` selects a coupled source/reference and
+policy/control clock. The 100 Hz mode uses 400 Hz physics; the 120 Hz mode uses
+480 Hz physics. Both execute exactly four equal physics substeps per policy
+inference, so 120 Hz never uses a jittered 3/3/4 schedule. Hand angular
+coordinates are unwrapped before interpolation, object position is linearly
+interpolated, and object orientation uses quaternion SLERP. Because source and
+control rates match in both public modes, one source frame maps to one policy
+transition. The default is 120 Hz. The 30-step residual warm-up, 48-step PPO
+rollout, action recurrence/scales, reward, and PPO gamma/lambda retain their
+per-transition definitions; their duration in seconds therefore differs between
+100 and 120 Hz. New selections use exactly 180 source/policy steps of
+pre-padding and 250 post-padding steps. If a capture ends before either margin,
+the missing interval holds its first or last captured pose; repeated
+`source_indices` expose those synthetic stationary slots instead of hiding them.
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
@@ -250,10 +258,10 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
 The two stable repository entrypoints cover routine training and checkpoint viewing without rewriting launch scripts:
 
 ```bash
-# Train every eligible gesture for one object at the default 120 Hz reference clock.
+# Train every eligible gesture at the default coupled 120 Hz source/policy clock.
 ./train.sh cube1 2048 0
 
-# Select the 100 Hz acquisition clock explicitly.
+# Select coupled 100 Hz source/policy control with 400 Hz physics.
 MANORL_REFERENCE_FPS=100 ./train.sh cube1 2048 0
 
 # Render 20 cube1/action-01 trajectories. Omitting MANORL_REFERENCE_FPS restores
@@ -266,7 +274,7 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
 ./test.sh 0
 ```
 
-`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `MANORL_REFERENCE_FPS=100|120` selects the source clock, defaulting to 120 for new training. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`; it restores the checkpoint reference FPS when the environment variable is omitted and rejects a conflicting explicit value. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
+`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `MANORL_REFERENCE_FPS=100|120` selects the coupled source/policy clock, defaulting to 120 for new training. `MANORL_WARM_START_CHECKPOINT` and `MANORL_WARM_START_PRIOR_UPDATES` must be supplied together to transfer policy/value/normalizers while resetting optimizer, scheduler, memory, and run progress. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`; it restores both checkpoint clocks when the environment variable is omitted and rejects a conflicting explicit value. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
 
 The trainer also accepts exact multi-object/action selection. Use
 `--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
@@ -274,7 +282,7 @@ every eligible pair in the pinned Lance dataset. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
-### Corrected v2.2 repeated checkpoint rollout synthesis
+### Clock-aware v2.3 repeated checkpoint rollout synthesis
 
 `./synthesize.sh` runs a deterministic checkpoint mean policy on GPU and writes
 one independent complete source-length trajectory per assigned environment:
@@ -285,11 +293,14 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \\
 ```
 
 The output is a nested Lance dataset plus a sibling `.manifest.json`. Synthesis
-restores the checkpoint's 100/120 Hz reference clock; `MANORL_REFERENCE_FPS`
-may state the same value explicitly, but conflicts are rejected. The v2.2
-contract is `synthetic_mano_28d_checkpoint_rollout_v2_2`: output timestamps use
-the actual `0.005 s` control interval (`data_fps=200`), `force_normal` contains the
-solved normal component with scale `1.0`, and all force frames use a consistent
+restores the checkpoint's reference, policy/control, and physics clocks;
+`MANORL_REFERENCE_FPS` may state the same source clock explicitly, but conflicts
+are rejected. New output uses
+`synthetic_mano_28d_checkpoint_rollout_v2_3`: schema metadata, row provenance,
+`data_fps`, and timestamps record the actual 100, 120, or legacy 200 Hz control
+clock together with its physics rate and substep count. The validator retains
+read support for fixed-200-Hz v2.2 datasets. `force_normal` contains the solved
+normal component with scale `1.0`, and all force frames use a consistent
 hand-to-object direction. `pos_joint` and `total_force_joint` use the live
 collision-link transform rather than the historical wrist fallback. MANO global
 translation is exactly `urdf_dof[:, :3]`; global axis-angle is derived from the

@@ -190,7 +190,7 @@ CURRENT_SOURCE_COMPATIBILITY: Final = ObservationCompatibility(
     point_template_mode="static_seed_42",
 )
 SOURCE_ALIGNED_COMPATIBILITY: Final = ObservationCompatibility(
-    name="mujoco_28dof", early_phase_steps=30, movement_pre_padding=100,
+    name="mujoco_28dof", early_phase_steps=30, movement_pre_padding=180,
     point_template_mode="dynamic_reset",
 )
 

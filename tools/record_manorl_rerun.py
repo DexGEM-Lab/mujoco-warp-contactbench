@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 import subprocess
@@ -18,7 +19,7 @@ from sim.manorl.environment import (
     MujocoManoEnvironment,
     recommended_warp_contact_capacity,
 )
-from sim.manorl.observations import observation_layout
+from sim.manorl.observations import SOURCE_ALIGNED_COMPATIBILITY, observation_layout
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.trajectory import (
     SUPPORTED_REFERENCE_FPS,
@@ -175,8 +176,11 @@ def main(argv: list[str] | None = None) -> int:
     selection_kwargs = {
         "object_type": args.object_type,
         "gesture": args.gesture,
+        "pre_padding": checkpoint_options.pre_padding,
+        "post_padding": checkpoint_options.post_padding,
         "hand_side": args.hand_side,
         "reference_fps": reference_fps,
+        "control_fps": checkpoint_options.control_fps,
     }
     if args.dataset_path is not None:
         selection_kwargs["dataset_path"] = args.dataset_path
@@ -198,11 +202,17 @@ def main(argv: list[str] | None = None) -> int:
             num_envs=args.num_envs,
             residual_enabled=args.use_residual,
             residual_action=checkpoint_options.residual_action,
+            compatibility=replace(
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=checkpoint_options.pre_padding,
+            ),
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if args.terminal else 1_000_000.0,
             contact_capacity=recommended_warp_contact_capacity(
                 args.num_envs, getattr(trajectories, "hand_sides", ("right",))
             ),
             reference_fps=reference_fps,
+            control_fps=checkpoint_options.control_fps,
+            post_padding=checkpoint_options.post_padding,
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side=args.hand_side,

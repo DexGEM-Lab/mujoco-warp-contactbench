@@ -370,6 +370,30 @@ def test_training_cli_parses_pair_assignment_cycle(
     assert captured[0].evaluation_num_envs == 0
 
 
+def test_training_cli_parses_explicit_warm_start_lineage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    captured: list[object] = []
+    monkeypatch.setattr(tool, "run", lambda _output, budget: captured.append(budget) or {})
+    checkpoint = tmp_path / "source.pt"
+
+    assert tool.main([
+        "--output", str(tmp_path / "training"),
+        "--warm-start-checkpoint", str(checkpoint),
+        "--warm-start-prior-updates", "7100",
+    ]) == 0
+    assert captured[0].warm_start_checkpoint == str(checkpoint.resolve())
+    assert captured[0].warm_start_prior_updates == 7100
+    assert captured[0].resume_checkpoint is None
+
+    with pytest.raises(SystemExit, match="2"):
+        tool.main([
+            "--output", str(tmp_path / "invalid"),
+            "--warm-start-checkpoint", str(checkpoint),
+        ])
+
+
 def test_training_cli_enables_narrow_device_transition(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

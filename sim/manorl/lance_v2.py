@@ -1,4 +1,4 @@
-"""Corrected v2.2 synthetic Lance contract for repeated checkpoint rollouts."""
+"""Clock-aware synthetic Lance contracts for repeated checkpoint rollouts."""
 
 from __future__ import annotations
 
@@ -14,13 +14,15 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
-from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_DOF, KEYPOINT_NAMES
+from sim.manorl.contracts import JOINT_DOF, KEYPOINT_NAMES, simulation_clock
 from sim.manorl.environment import MaterializedContactBuffers, MaterializedState
 from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 from sim.manorl.trajectory import ReferenceTrajectory, wxyz_to_xyzw
 
 SYNTHETIC_LANCE_V22_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
+SYNTHETIC_LANCE_V23_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_3"
+SYNTHETIC_LANCE_CONTRACT = SYNTHETIC_LANCE_V23_CONTRACT
 FORCE_DIRECTION_CONTRACT = "normal_only_hand_to_object_world_joint_object_scale_1p0"
 MANO_GLOBAL_FRAME_CONTRACT = (
     "urdf_floating_root_translation_intrinsic_XYZ_to_rotvec_v1"
@@ -168,13 +170,24 @@ def corrected_contact_frames(
     return output
 
 
-def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
+def build_v2_schema(
+    *,
+    observation_dim: int,
+    action_dim: int,
+    control_fps: int = 200,
+    reference_fps: int | None = None,
+) -> Any:
     """Build the explicit Arrow schema; no empty-list field is inferred as null."""
 
     import pyarrow as pa
 
     if observation_dim < 1 or action_dim < 1:
         raise ValueError("v2 schema dimensions must be positive")
+    clock = simulation_clock(control_fps)
+    if reference_fps not in (None, 100, 120):
+        raise ValueError("synthetic reference_fps must be 100, 120, or None")
+    if control_fps in (100, 120) and reference_fps != control_fps:
+        raise ValueError("public synthetic clocks require reference_fps == control_fps")
     fixed = lambda size: pa.list_(pa.float32(), size)
     contact_pair = pa.struct(
         [
@@ -213,7 +226,7 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
     )
     metadata = {
         b"schema": b"synthetic",
-        b"schema_version": SYNTHETIC_LANCE_V22_CONTRACT.encode(),
+        b"schema_version": SYNTHETIC_LANCE_CONTRACT.encode(),
         b"mano_global_frame_contract": MANO_GLOBAL_FRAME_CONTRACT.encode(),
         b"reward_contract": REWARD_CONTRACT_ID.encode(),
         b"ppo_reward_contract": PPO_REWARD_CONTRACT_ID.encode(),
@@ -221,7 +234,14 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
         b"default_max_attempts_per_identity": b"10",
         b"hand_slot_order": b"right,left",
         b"mano_dof_dim": b"28",
-        b"control_timestep_seconds": str(CONTROL_TIMESTEP).encode(),
+        b"reference_fps": (
+            b"none" if reference_fps is None else str(reference_fps).encode()
+        ),
+        b"control_fps": str(clock.policy_fps).encode(),
+        b"control_timestep_seconds": str(clock.control_timestep).encode(),
+        b"physics_fps": str(clock.physics_fps).encode(),
+        b"physics_timestep_seconds": str(clock.physics_timestep).encode(),
+        b"physics_substeps_per_control": str(clock.physics_substeps_per_control).encode(),
         b"force_contract": FORCE_DIRECTION_CONTRACT.encode(),
     }
     return pa.schema(
@@ -322,6 +342,12 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
                     [
                         ("contract", pa.string()),
                         ("force_contract", pa.string()),
+                        ("reference_fps", pa.int64()),
+                        ("control_fps", pa.int64()),
+                        ("control_timestep_seconds", pa.float64()),
+                        ("physics_fps", pa.int64()),
+                        ("physics_timestep_seconds", pa.float64()),
+                        ("physics_substeps_per_control", pa.int64()),
                         ("policy_mode", pa.string()),
                         ("checkpoint_path", pa.string()),
                         ("checkpoint_sha256", pa.string()),
@@ -358,7 +384,7 @@ def generated_rollout_uuid(source_uuid: str, checkpoint_sha256: str, episode: in
     return str(
         uuid.uuid5(
             namespace,
-            f"{SYNTHETIC_LANCE_V22_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
+            f"{SYNTHETIC_LANCE_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
         )
     )
 
@@ -375,6 +401,7 @@ def build_v2_row(
 ) -> dict[str, Any]:
     """Assemble one independent complete trajectory row."""
 
+    clock = simulation_clock(getattr(trajectory, "control_fps", None))
     urdf_dof = np.asarray(states["urdf_dof"], dtype=np.float64)
     total_frames = len(urdf_dof)
     if total_frames != len(trajectory.q_ref) or len(contacts) != total_frames:
@@ -436,7 +463,7 @@ def build_v2_row(
             "is_generated": True,
         },
         "trajectory_metadata": {
-            "data_fps": int(round(1.0 / CONTROL_TIMESTEP)),
+            "data_fps": clock.policy_fps,
             "total_frames": total_frames,
             "gesture": str(source_metadata.get("gesture") or trajectory.identity.identity.split("_")[1]),
             "hand_names": ["right"],
@@ -464,7 +491,9 @@ def build_v2_row(
                 "reward_value": float(np.sum(np.asarray(rollout["reward"], dtype=np.float64))),
             },
         },
-        "timestamp": (np.arange(total_frames, dtype=np.float64) * CONTROL_TIMESTEP).tolist(),
+        "timestamp": (
+            np.arange(total_frames, dtype=np.float64) * clock.control_timestep
+        ).tolist(),
         "hands": [
             {
                 "hand_name": "right",
@@ -506,8 +535,14 @@ def build_v2_row(
             },
         },
         "provenance": {
-            "contract": SYNTHETIC_LANCE_V22_CONTRACT,
+            "contract": SYNTHETIC_LANCE_CONTRACT,
             "force_contract": FORCE_DIRECTION_CONTRACT,
+            "reference_fps": getattr(trajectory, "reference_fps", None),
+            "control_fps": clock.policy_fps,
+            "control_timestep_seconds": clock.control_timestep,
+            "physics_fps": clock.physics_fps,
+            "physics_timestep_seconds": clock.physics_timestep,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
             "policy_mode": "deterministic_mean",
             "checkpoint_path": str(provenance["checkpoint_path"]),
             "checkpoint_sha256": checkpoint_sha,
@@ -543,6 +578,28 @@ def write_v2_lance(
     output_path = Path(output)
     if not rows:
         raise ValueError("cannot write an empty v2 rollout dataset")
+    control_fps_values = {
+        row.get("trajectory_metadata", {}).get("data_fps") for row in rows
+    }
+    if len(control_fps_values) != 1:
+        raise ValueError("one synthetic Lance dataset cannot mix control clocks")
+    control_fps = next(iter(control_fps_values))
+    if not isinstance(control_fps, int) or isinstance(control_fps, bool):
+        raise ValueError("synthetic Lance rows must record integer data_fps")
+    try:
+        clock = simulation_clock(control_fps)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("synthetic Lance rows record an invalid data_fps") from exc
+    reference_fps_values = {
+        row.get("provenance", {}).get("reference_fps") for row in rows
+    }
+    if len(reference_fps_values) != 1:
+        raise ValueError("one synthetic Lance dataset cannot mix reference clocks")
+    reference_fps = next(iter(reference_fps_values))
+    if reference_fps not in (None, 100, 120):
+        raise ValueError("synthetic Lance rows record an invalid reference_fps")
+    if control_fps in (100, 120) and reference_fps != control_fps:
+        raise ValueError("public synthetic clocks require reference_fps == control_fps")
     if append and replace:
         raise ValueError("append and replace are mutually exclusive")
     if output_path.exists() and not append:
@@ -551,9 +608,30 @@ def write_v2_lance(
         shutil.rmtree(output_path)
     if append and not output_path.exists():
         raise FileNotFoundError(f"append target does not exist: {output_path}")
+    if append:
+        existing_metadata = {
+            key.decode(): value.decode()
+            for key, value in (lance.dataset(str(output_path)).schema.metadata or {}).items()
+        }
+        if existing_metadata.get("schema_version") != SYNTHETIC_LANCE_CONTRACT:
+            raise ValueError("append target does not use the current synthetic Lance contract")
+        if int(existing_metadata.get("control_fps", -1)) != clock.policy_fps:
+            raise ValueError("append target uses a different control clock")
+        recorded_reference_fps = existing_metadata.get("reference_fps")
+        expected_reference_fps = (
+            "none" if reference_fps is None else str(reference_fps)
+        )
+        if recorded_reference_fps != expected_reference_fps:
+            raise ValueError("append target uses a different reference clock")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(
-        list(rows), schema=build_v2_schema(observation_dim=observation_dim, action_dim=action_dim)
+        list(rows),
+        schema=build_v2_schema(
+            observation_dim=observation_dim,
+            action_dim=action_dim,
+            control_fps=clock.policy_fps,
+            reference_fps=reference_fps,
+        ),
     )
     lance.write_dataset(
         table, str(output_path), mode="append" if append else "create"

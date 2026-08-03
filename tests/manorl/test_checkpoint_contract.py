@@ -236,6 +236,13 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
         "observation_dim": 480,
         "model_action_dim": 56,
         "reference_fps": 120,
+        "control_fps": 120,
+        "control_timestep_seconds": 1.0 / 120.0,
+        "physics_fps": 480,
+        "physics_timestep_seconds": 1.0 / 480.0,
+        "physics_substeps_per_control": 4,
+        "pre_padding": 180,
+        "post_padding": 250,
         "warp_ccd": {
             "ccd_iterations": None,
             "contacts_per_world": 16,
@@ -281,6 +288,24 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     with pytest.raises(CheckpointFormatError, match="reference_fps"):
         load_skrl_checkpoint(agent, checkpoint)
 
+    mismatched_control_fps = copy.deepcopy(metadata)
+    mismatched_control_fps["runtime_config"]["environment"]["control_fps"] = 100
+    sidecar.write_text(json.dumps(mismatched_control_fps), encoding="utf-8")
+    with pytest.raises(CheckpointFormatError, match="control_fps"):
+        load_skrl_checkpoint(agent, checkpoint)
+
+    mismatched_pre_padding = copy.deepcopy(metadata)
+    mismatched_pre_padding["runtime_config"]["environment"]["pre_padding"] = 100
+    sidecar.write_text(json.dumps(mismatched_pre_padding), encoding="utf-8")
+    with pytest.raises(CheckpointFormatError, match="pre_padding"):
+        load_skrl_checkpoint(agent, checkpoint)
+
+    mismatched_post_padding = copy.deepcopy(metadata)
+    mismatched_post_padding["runtime_config"]["environment"]["post_padding"] = 100
+    sidecar.write_text(json.dumps(mismatched_post_padding), encoding="utf-8")
+    with pytest.raises(CheckpointFormatError, match="post_padding"):
+        load_skrl_checkpoint(agent, checkpoint)
+
     mismatched_ccd = copy.deepcopy(metadata)
     mismatched_ccd["runtime_config"]["environment"]["warp_ccd"][
         "contacts_per_world"
@@ -308,7 +333,17 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     # The current runtime no longer accepts pre-28-DoF sidecars without a hand
     # signature, even if their tensor shapes happen to load.
     legacy = copy.deepcopy(metadata)
-    legacy["runtime_config"]["environment"] = {}
+    legacy_environment = legacy["runtime_config"]["environment"]
+    for field in (
+        "resolved_hand_side",
+        "available_hand_sides",
+        "controlled_hand_sides",
+        "reference_following_hand_sides",
+        "action_dim",
+        "observation_dim",
+        "model_action_dim",
+    ):
+        legacy_environment.pop(field)
     sidecar.write_text(json.dumps(legacy), encoding="utf-8")
     agent.loaded = None
     with pytest.raises(CheckpointFormatError, match="missing current MuJoCo hand signature"):
@@ -377,3 +412,114 @@ def test_native_checkpoint_restores_all_required_modules_into_evaluator_and_trai
     for destination in (evaluator, training):
         for name, source_module in source.modules.items():
             assert_state_equal(source_module.state_dict(), destination.modules[name].state_dict())
+
+
+def test_warm_start_transfers_models_and_normalizers_but_not_optimizer(tmp_path) -> None:
+    import torch
+
+    from sim.manorl.checkpoint import (
+        load_skrl_checkpoint_for_warm_start,
+        save_skrl_checkpoint,
+    )
+
+    class Agent:
+        device = "cpu"
+
+        def __init__(self) -> None:
+            self.policy = torch.nn.Linear(2, 2)
+            self.value = torch.nn.Linear(2, 1)
+            self.observation_preprocessor = torch.nn.Linear(2, 2)
+            self.value_preprocessor = torch.nn.Linear(1, 1)
+            self.optimizer = torch.optim.Adam(
+                [*self.policy.parameters(), *self.value.parameters()], lr=0.01
+            )
+            self.checkpoint_modules = {
+                "policy": self.policy,
+                "value": self.value,
+                "optimizer": self.optimizer,
+                "observation_preprocessor": self.observation_preprocessor,
+                "value_preprocessor": self.value_preprocessor,
+            }
+
+        def save(self, path: str) -> None:
+            torch.save(
+                {
+                    name: module.state_dict()
+                    for name, module in self.checkpoint_modules.items()
+                },
+                path,
+            )
+
+    source = Agent()
+    loss = source.policy(torch.ones((1, 2))).sum() + source.value(
+        torch.ones((1, 2))
+    ).sum()
+    loss.backward()
+    source.optimizer.step()
+    checkpoint = save_skrl_checkpoint(
+        source,
+        tmp_path / "source.pt",
+        runtime_config={"model": {}},
+    )
+    target = Agent()
+    assert not target.optimizer.state_dict()["state"]
+
+    load_skrl_checkpoint_for_warm_start(target, checkpoint)
+
+    for name in (
+        "policy",
+        "value",
+        "observation_preprocessor",
+        "value_preprocessor",
+    ):
+        source_state = source.checkpoint_modules[name].state_dict()
+        target_state = target.checkpoint_modules[name].state_dict()
+        assert source_state.keys() == target_state.keys()
+        for key in source_state:
+            torch.testing.assert_close(source_state[key], target_state[key])
+    assert source.optimizer.state_dict()["state"]
+    assert not target.optimizer.state_dict()["state"]
+
+
+def test_checkpoint_clock_distinguishes_current_and_legacy_contracts() -> None:
+    import pytest
+
+    from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, LEGACY_ENVIRONMENT_CONTRACT_IDS
+    from sim.manorl.checkpoint import CheckpointFormatError, checkpoint_simulation_clock
+
+    current = {
+        "environment_contract": ENVIRONMENT_CONTRACT_ID,
+        "runtime_config": {
+            "environment": {"reference_fps": 120, "control_fps": 120}
+        },
+    }
+    clock = checkpoint_simulation_clock(current)
+    assert (clock.policy_fps, clock.physics_fps, clock.physics_substeps_per_control) == (
+        120,
+        480,
+        4,
+    )
+
+    mixed = {
+        "environment_contract": ENVIRONMENT_CONTRACT_ID,
+        "runtime_config": {
+            "environment": {"reference_fps": 100, "control_fps": 120}
+        },
+    }
+    with pytest.raises(CheckpointFormatError, match="reference_fps == control_fps"):
+        checkpoint_simulation_clock(mixed)
+
+    for contract in LEGACY_ENVIRONMENT_CONTRACT_IDS:
+        legacy_clock = checkpoint_simulation_clock(
+            {
+                "environment_contract": contract,
+                "runtime_config": {
+                    "environment": {"reference_fps": 100}
+                },
+            }
+        )
+        assert (
+            legacy_clock.policy_fps,
+            legacy_clock.physics_fps,
+            legacy_clock.physics_substeps_per_control,
+        ) == (200, 400, 2)

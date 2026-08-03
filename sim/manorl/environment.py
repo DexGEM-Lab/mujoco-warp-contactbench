@@ -52,10 +52,11 @@ from sim.manorl.contracts import (
     FLOOR_TOP_Z,
     KEYPOINT_NAMES,
     OBJECT_TYPE,
-    PHYSICS_SUBSTEPS_PER_TARGET,
+    SimulationClock,
     ServoConfig,
     canonical_hand_sides,
     normalize_hand_side,
+    simulation_clock,
 )
 from sim.manorl.hand_layout import HandActionLayout
 from sim.manorl.mjx_sim import CONTACT_CAPACITY, CONSTRAINT_CAPACITY, command_target
@@ -74,6 +75,7 @@ from sim.manorl.observations import (
 )
 from sim.manorl.rewards import RewardConfig, RewardDiagnostics, RewardState, compute_rewards
 from sim.manorl.trajectory import (
+    DEFAULT_POST_PADDING,
     SUPPORTED_REFERENCE_FPS,
     ReferenceTrajectory,
     TrajectoryBatch,
@@ -193,6 +195,8 @@ class EnvironmentConfig:
     point_seed: int = 42
     point_sampling_backend: str = POINT_SAMPLING_AUTO
     reference_fps: int | None = None
+    control_fps: int | None = None
+    post_padding: int = DEFAULT_POST_PADDING
     device_resident_controls: bool = False
     # This removes only the private contact-buffer host transfer. It is not a
     # device-resident rollout mode: state, observation, reward, and Gymnasium
@@ -248,6 +252,20 @@ class EnvironmentConfig:
             raise ValueError(
                 f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS} when provided"
             )
+        if self.control_fps is not None and (
+            not isinstance(self.control_fps, int)
+            or isinstance(self.control_fps, bool)
+            or self.control_fps not in (*SUPPORTED_REFERENCE_FPS, 200)
+        ):
+            raise ValueError("control_fps must be 100, 120, 200, or None")
+        if self.control_fps in SUPPORTED_REFERENCE_FPS and self.reference_fps != self.control_fps:
+            raise ValueError("public environment modes require reference_fps == control_fps")
+        if (
+            not isinstance(self.post_padding, int)
+            or isinstance(self.post_padding, bool)
+            or self.post_padding < 0
+        ):
+            raise ValueError("post_padding must be a non-negative integer")
         if self.point_sampling_backend == POINT_SAMPLING_AUTO:
             object.__setattr__(
                 self,
@@ -311,6 +329,26 @@ class EnvironmentConfig:
         if self.warp_persistent_ccd_workspace and not self.unified_object_batch:
             raise ValueError("warp_persistent_ccd_workspace requires unified_object_batch=True")
         normalize_hand_side(self.hand_side)
+
+    @property
+    def resolved_control_fps(self) -> int | None:
+        return self.reference_fps if self.control_fps is None else self.control_fps
+
+    @property
+    def clock(self) -> SimulationClock:
+        return simulation_clock(self.resolved_control_fps)
+
+    @property
+    def control_timestep(self) -> float:
+        return self.clock.control_timestep
+
+    @property
+    def physics_timestep(self) -> float:
+        return self.clock.physics_timestep
+
+    @property
+    def physics_substeps_per_control(self) -> int:
+        return self.clock.physics_substeps_per_control
 
     @property
     def warp_ccd_explicit(self) -> bool:
@@ -1524,6 +1562,15 @@ class MujocoManoEnvironment:
                 f"trajectory={sorted(trajectory_reference_fps, key=lambda value: -1 if value is None else value)!r}, "
                 f"config={config.reference_fps!r}"
             )
+        trajectory_control_fps = {
+            simulation_clock(item.control_fps).policy_fps for item in trajectories
+        }
+        if trajectory_control_fps != {config.clock.policy_fps}:
+            raise ValueError(
+                "trajectory control_fps does not match EnvironmentConfig: "
+                f"trajectory={sorted(trajectory_control_fps)!r}, "
+                f"config={config.clock.policy_fps!r}"
+            )
         try:
             import jax
             from mujoco import mjx
@@ -1632,6 +1679,7 @@ class MujocoManoEnvironment:
             config.servo,
             object_type=self.object_type,
             hand_side=self.model_hand_side,
+            physics_timestep=config.physics_timestep,
         )
         minimum_contact_capacity = minimum_warp_contact_capacity(
             config.num_envs, self.hand_sides
@@ -1666,7 +1714,7 @@ class MujocoManoEnvironment:
         self._physics_loop_fn = jax.jit(
             lambda data: jax.lax.fori_loop(
                 0,
-                PHYSICS_SUBSTEPS_PER_TARGET,
+                config.physics_substeps_per_control,
                 lambda _index, state: self._step_fn(state),
                 data,
             )
@@ -1824,6 +1872,7 @@ class MujocoManoEnvironment:
             config.servo,
             object_types=names,
             hand_side=self.model_hand_side,
+            physics_timestep=config.physics_timestep,
         )
         if config.warp_ccd_iterations is not None:
             self.model.opt.ccd_iterations = config.warp_ccd_iterations
@@ -1870,7 +1919,7 @@ class MujocoManoEnvironment:
         self._physics_loop_fn = jax.jit(
             lambda data: jax.lax.fori_loop(
                 0,
-                PHYSICS_SUBSTEPS_PER_TARGET,
+                config.physics_substeps_per_control,
                 lambda _index, state: self._step_fn(state),
                 data,
             )
@@ -3232,7 +3281,7 @@ class MujocoManoEnvironment:
         if self.config.device_transition and not self._warp_ccd_overflow_guard_available:
             self.data = self._physics_loop_fn(self.data)
         else:
-            for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
+            for _ in range(self.config.physics_substeps_per_control):
                 self.data = self._step_fn(self.data)
                 self._check_warp_ccd_overflow()
         self._phase_stop("mjx_physics", physics_phase)

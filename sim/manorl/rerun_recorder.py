@@ -17,7 +17,7 @@ from sim.manorl.abi import (
     TERMINATION_REASON_NONE,
     TERMINATION_REASON_SUCCESS,
 )
-from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_NAMES, KEYPOINT_NAMES, PHYSICS_SUBSTEPS_PER_TARGET
+from sim.manorl.contracts import JOINT_NAMES, KEYPOINT_NAMES
 from sim.manorl.environment import (
     MujocoManoEnvironment,
     TransitionSnapshot,
@@ -507,8 +507,13 @@ class ManoRerunRecorder:
                 "series": self.hand_object_force_series_table,
             },
             "object_gravity_world_N": environment.object_gravity_world_force.tolist(),
-            "control_timestep_s": CONTROL_TIMESTEP,
-            "physics_substeps": PHYSICS_SUBSTEPS_PER_TARGET,
+            "control_fps": environment.config.clock.policy_fps,
+            "control_timestep_s": environment.config.control_timestep,
+            "physics_fps": environment.config.clock.physics_fps,
+            "physics_timestep_s": environment.config.physics_timestep,
+            "physics_substeps": environment.config.physics_substeps_per_control,
+            "pre_padding": environment.config.compatibility.movement_pre_padding,
+            "post_padding": environment.config.post_padding,
             "residual_enabled": environment.config.residual_enabled,
             "residual_action": {
                 "position_scale": list(environment.config.residual_action.position_scale),
@@ -628,7 +633,10 @@ class ManoRerunRecorder:
         trajectory_complete = bool(termination.success[env_id])
         target_distance = float(np.linalg.norm(object_position - target_position))
         self.recording.set_time("step", sequence=snapshot.control_call)
-        self.recording.set_time("simulation", duration=snapshot.control_call * CONTROL_TIMESTEP)
+        self.recording.set_time(
+            "simulation",
+            duration=snapshot.control_call * self.environment.config.control_timestep,
+        )
 
         self.recording.log(
             "world/object",
