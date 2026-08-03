@@ -113,9 +113,23 @@ def test_environment_config_accepts_unified_batch_with_explicit_ccd() -> None:
     assert config.unified_object_batch is True
     assert config.warp_ccd_explicit is True
     assert config.reference_fps == 100
-    assert EnvironmentConfig(reference_fps=120).reference_fps == 120
+    assert config.clock.policy_fps == 100
+    assert config.clock.physics_fps == 400
+    assert config.physics_substeps_per_control == 4
+    assert config.control_timestep == pytest.approx(0.01)
+    assert config.post_padding == 250
+    config_120 = EnvironmentConfig(reference_fps=120)
+    assert config_120.clock.policy_fps == 120
+    assert config_120.clock.physics_fps == 480
+    assert config_120.physics_substeps_per_control == 4
+    assert config_120.control_timestep == pytest.approx(1.0 / 120.0)
+    legacy = EnvironmentConfig()
+    assert (legacy.clock.policy_fps, legacy.clock.physics_fps) == (200, 400)
+    assert legacy.physics_substeps_per_control == 2
     with pytest.raises(ValueError, match="reference_fps"):
         EnvironmentConfig(reference_fps=200)
+    with pytest.raises(ValueError, match="reference_fps == control_fps"):
+        EnvironmentConfig(reference_fps=100, control_fps=120)
 
 
 def test_persistent_ccd_workspace_config_requires_unified_gpu_explicit_capacity() -> None:

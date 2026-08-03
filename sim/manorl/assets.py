@@ -1635,6 +1635,7 @@ def build_scene_xml(
     object_type: str = OBJECT_TYPE,
     visual_meshes: bool = False,
     hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> str:
     """Build one homogeneous scene from a materialized object runtime."""
 
@@ -1649,7 +1650,7 @@ def build_scene_xml(
     ET.SubElement(
         root,
         "option",
-        timestep=str(PHYSICS_TIMESTEP),
+        timestep=str(physics_timestep),
         gravity="0 0 -9.81",
         integrator="implicitfast",
     )
@@ -1713,6 +1714,7 @@ def build_unified_scene_xml(
     object_types: Iterable[str],
     visual_meshes: bool = False,
     hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> str:
     """Build one fixed-topology scene containing several real object meshes.
 
@@ -1737,7 +1739,7 @@ def build_unified_scene_xml(
     ET.SubElement(
         root,
         "option",
-        timestep=str(PHYSICS_TIMESTEP),
+        timestep=str(physics_timestep),
         gravity="0 0 -9.81",
         integrator="implicitfast",
     )
@@ -1823,6 +1825,7 @@ def validate_compiled_model(
     *,
     object_type: str = OBJECT_TYPE,
     hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> None:
     side = normalize_hand_side(hand_side, allow_auto=False, allow_both=True)
     scene_sides = ACTION_SIDE_ORDER if side == "both" else (side,)
@@ -1849,7 +1852,7 @@ def validate_compiled_model(
         raise ValueError(
             f"compiled dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}"
         )
-    if not np.isclose(model.opt.timestep, PHYSICS_TIMESTEP):
+    if not np.isclose(model.opt.timestep, physics_timestep):
         raise ValueError(f"compiled timestep mismatch: {model.opt.timestep}")
     for actuator_id, (name, effort, kp, dampratio) in enumerate(
         zip(
@@ -1958,6 +1961,7 @@ def compile_model(
     object_type: str = OBJECT_TYPE,
     visual_meshes: bool = False,
     hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> tuple[Any, Any]:
     """Compile and validate one bounded native-servo scene."""
 
@@ -1971,10 +1975,16 @@ def compile_model(
             object_type=object_type,
             visual_meshes=visual_meshes,
             hand_side=hand_side,
+            physics_timestep=physics_timestep,
         )
     )
     validate_compiled_model(
-        mujoco, model, servo, object_type=object_type, hand_side=hand_side
+        mujoco,
+        model,
+        servo,
+        object_type=object_type,
+        hand_side=hand_side,
+        physics_timestep=physics_timestep,
     )
     validate_static_fk(mujoco, model, object_type=object_type, hand_side=hand_side)
     return mujoco, model
@@ -1987,6 +1997,7 @@ def validate_unified_compiled_model(
     *,
     object_types: Iterable[str],
     hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> None:
     """Validate the fixed hand topology and every real object in a superset scene."""
 
@@ -2018,7 +2029,7 @@ def validate_unified_compiled_model(
             f"unified dimensions mismatch: nq={model.nq}, nv={model.nv}, nu={model.nu}; "
             f"expected nq={expected_nq}, nv={expected_nv}, nu={expected_dof}"
         )
-    if not np.isclose(model.opt.timestep, PHYSICS_TIMESTEP):
+    if not np.isclose(model.opt.timestep, physics_timestep):
         raise ValueError(f"unified timestep mismatch: {model.opt.timestep}")
     for actuator_id, (name, effort, kp, dampratio) in enumerate(
         zip(
@@ -2113,6 +2124,7 @@ def compile_unified_model(
     object_types: Iterable[str],
     visual_meshes: bool = False,
     hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> tuple[Any, Any]:
     """Compile one fixed-topology model containing the requested real objects."""
 
@@ -2129,10 +2141,16 @@ def compile_unified_model(
             object_types=names,
             visual_meshes=visual_meshes,
             hand_side=hand_side,
+            physics_timestep=physics_timestep,
         )
     )
     validate_unified_compiled_model(
-        mujoco, model, servo, object_types=names, hand_side=hand_side
+        mujoco,
+        model,
+        servo,
+        object_types=names,
+        hand_side=hand_side,
+        physics_timestep=physics_timestep,
     )
     return mujoco, model
 

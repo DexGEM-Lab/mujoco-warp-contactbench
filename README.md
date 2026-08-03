@@ -231,12 +231,20 @@ deviation handling, and deterministic evaluation that covers every selected
 object/action pair. A single-pair run uses one evaluation world; a multi-pair
 run automatically uses at least one world per pair, bounded at 128. This is
 786,432,000 transitions; it has no wall-clock cutoff unless one is explicitly
-requested. Physics remains fixed at 400 Hz (`0.0025 s`) and the policy/control
-loop remains at 200 Hz (two physics substeps). `--reference-fps {100,120}`
-selects the uniform source-trajectory clock; hand angular coordinates are
-unwrapped before linear interpolation, object position is linearly interpolated,
-and object orientation uses quaternion SLERP on the 200 Hz control grid. The
-default is 120 Hz:
+requested. `--reference-fps {100,120}` selects a coupled source/reference and
+policy/control clock. The 100 Hz mode uses 400 Hz physics; the 120 Hz mode uses
+480 Hz physics. Both execute exactly four equal physics substeps per policy
+inference, so 120 Hz never uses a jittered 3/3/4 schedule. Hand angular
+coordinates are unwrapped before interpolation, object position is linearly
+interpolated, and object orientation uses quaternion SLERP. Because source and
+control rates match in both public modes, one source frame maps to one policy
+transition. The default is 120 Hz. The 30-step residual warm-up, 48-step PPO
+rollout, action recurrence/scales, reward, and PPO gamma/lambda retain their
+per-transition definitions; their duration in seconds therefore differs between
+100 and 120 Hz. New selections use exactly 180 source/policy steps of
+pre-padding and 250 post-padding steps. If a capture ends before either margin,
+the missing interval holds its first or last captured pose; repeated
+`source_indices` expose those synthetic stationary slots instead of hiding them.
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
@@ -250,10 +258,10 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
 The two stable repository entrypoints cover routine training and checkpoint viewing without rewriting launch scripts:
 
 ```bash
-# Train every eligible gesture for one object at the default 120 Hz reference clock.
+# Train every eligible gesture at the default coupled 120 Hz source/policy clock.
 ./train.sh cube1 2048 0
 
-# Select the 100 Hz acquisition clock explicitly.
+# Select coupled 100 Hz source/policy control with 400 Hz physics.
 MANORL_REFERENCE_FPS=100 ./train.sh cube1 2048 0
 
 # Render 20 cube1/action-01 trajectories. Omitting MANORL_REFERENCE_FPS restores
@@ -266,7 +274,7 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
 ./test.sh 0
 ```
 
-`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `MANORL_REFERENCE_FPS=100|120` selects the source clock, defaulting to 120 for new training. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`; it restores the checkpoint reference FPS when the environment variable is omitted and rejects a conflicting explicit value. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
+`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `MANORL_REFERENCE_FPS=100|120` selects the coupled source/policy clock, defaulting to 120 for new training. `MANORL_WARM_START_CHECKPOINT` and `MANORL_WARM_START_PRIOR_UPDATES` must be supplied together to transfer policy/value/normalizers while resetting optimizer, scheduler, memory, and run progress. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`; it restores both checkpoint clocks when the environment variable is omitted and rejects a conflicting explicit value. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
 
 The trainer also accepts exact multi-object/action selection. Use
 `--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
@@ -276,60 +284,69 @@ remain single-object modes.
 
 ### Compact synthetic Lance synthesis
 
-`./synthesize.sh` now defaults to the compact replay/visual contract
-`synthetic_mano_target_replay_visual_v1`. It writes one independent complete
-source-length trajectory per assigned environment while retaining only target
-replay, object-pose comparison, MANO visualization, and lineage fields. The
-full checkpoint runtime metadata is recorded once in the sibling manifest and
-represented in each row by its SHA256 plus the scalar Warp CCD settings; it is
-never repeated as a per-row JSON blob.
+`./synthesize.sh` defaults to the compact replay/visual contract
+`synthetic_mano_target_replay_visual_v1`. It retains target/recorded DOF,
+object poses, MANO global pose, 48D hand pose, 21-joint visual frames, and
+minimal lineage. Full checkpoint runtime metadata is recorded once in the
+sibling manifest or catalog; each row keeps its canonical metadata SHA256,
+checkpoint identity, and explicit Warp CCD settings. Compact rows carry the
+source v2.2/v2.3 clock contract and are directly consumable by target replay.
 
 ```bash
 CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \
   ./synthesize.sh cube2 02 5 0
 
-# Explicit audit/full v2.2 output, including contact/reference/rollout fields:
+# Explicit full/audit output with contact, reference, rollout, and observations:
 MANORL_SYNTH_OUTPUT_FORMAT=full \
 CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \
   ./synthesize.sh cube2 02 5 0
 ```
 
-The compact output is intended for direct target-DOF replay and visualization,
-not offline policy training. Use `MANORL_SYNTH_OUTPUT_FORMAT=full` when
-observations, actions, rewards, contact forces, or reference trajectories are
-required.
+Compact output is for replay and visualization, not offline policy training.
+Use `MANORL_SYNTH_OUTPUT_FORMAT=full` or
+`--output-format full` when observations, actions, rewards, contact forces, or
+reference trajectories are required. Existing full v2.2 and v2.3 datasets are
+never rewritten by synthesis; project an existing full dataset with:
 
-### Corrected v2.2 repeated checkpoint rollout synthesis
+```bash
+python tools/compact_manorl_synthetic_lance.py \\
+  --input /path/full.lance --output /path/compact.lance
+```
 
-The Python exporter retains the explicit full/audit mode and accepts
-`--output-format {full,compact-replay-visual}`. Both formats use the same
-physics, checkpoint, action, and source-identity contracts; the format only
-controls the persisted Lance projection.
+The exporter accepts `--output-format {full,compact-replay-visual}`. Full mode
+remains the explicit audit contract; compact mode changes only persisted fields,
+not physics, action semantics, checkpoint restoration, or source identity.
 
-`./synthesize.sh` runs a deterministic checkpoint mean policy on GPU and writes
+### Clock-aware v2.3 repeated checkpoint rollout synthesis
+
+The explicit `full` mode runs a deterministic checkpoint mean policy on GPU and writes
 one independent complete source-length trajectory per assigned environment:
 
 ```bash
+MANORL_SYNTH_OUTPUT_FORMAT=full \\
 CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \\
   ./synthesize.sh cube2 02 5 0
 ```
 
 The output is a nested Lance dataset plus a sibling `.manifest.json`. Synthesis
-restores the checkpoint's 100/120 Hz reference clock; `MANORL_REFERENCE_FPS`
-may state the same value explicitly, but conflicts are rejected. Both output
-formats use `0.005 s` timestamps (`data_fps=200`), the corrected MANO global
-frame contract, the `1.0` normal-force contract, consistent hand-to-object
-force direction, and the raw right-hand shape. Compact rows persist target DOF,
-recorded DOF, object pose, MANO global pose, hand pose, 21-joint visual frames,
-and minimal lineage. They omit contact, reference, rollout, and the repeated
-runtime JSON by design.
-
-The explicit `full` format uses contract
-`synthetic_mano_28d_checkpoint_rollout_v2_2` and additionally stores contact
-forces, reference frame indices, policy mean/processed actions, observations,
-rewards, termination codes, and all audit fields. Use it when those fields are
-needed for offline training or forensic validation; it is not the compact
-replay format.
+restores the checkpoint's reference, policy/control, and physics clocks;
+`MANORL_REFERENCE_FPS` may state the same source clock explicitly, but conflicts
+are rejected. New output uses
+`synthetic_mano_28d_checkpoint_rollout_v2_3`: schema metadata, row provenance,
+`data_fps`, and timestamps record the actual 100, 120, or legacy 200 Hz control
+clock together with its physics rate and substep count. The validator retains
+read support for fixed-200-Hz v2.2 datasets. `force_normal` contains the solved
+normal component with scale `1.0`, and all force frames use a consistent
+hand-to-object direction. `pos_joint` and `total_force_joint` use the live
+collision-link transform rather than the historical wrist fallback. MANO global
+translation is exactly `urdf_dof[:, :3]`; global axis-angle is derived from the
+URDF floating-root intrinsic `XYZ` composition `Rx @ Ry @ Rz`. Shape metadata
+contains only the raw right-hand shape declared by `hand_names=["right"]`.
+Each row also stores 28D physical and controller targets, 21 keypoints,
+reference frame indices, policy mean/processed actions, observations, rewards,
+termination codes, checkpoint SHA256, runtime sidecar, action contract, and
+source identity. The rollout also stores the positive raw expected-contact
+score and the final signed contact term for every transition.
 
 By default each raw identity must produce five accepted complete episodes within
 ten attempts. Attempts use consecutive seeds from the base `42`; successful

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate full v2.2 or compact replay/visual Lance rows in subprocesses."""
+"""Validate full v2.2/v2.3 or compact replay Lance rows in subprocesses."""
 
 from __future__ import annotations
 
@@ -14,10 +14,13 @@ from typing import Any
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from sim.manorl.contracts import simulation_clock
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
     SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+    SYNTHETIC_LANCE_CONTRACT,
+    SYNTHETIC_LANCE_SOURCE_CONTRACTS,
     SYNTHETIC_LANCE_V22_CONTRACT,
 )
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
@@ -44,11 +47,20 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
     rollout = row["rollout"]
     hand = row["hands"][0]
     obj = row["objects"][0]
-    if metadata["data_fps"] != 200 or len(row["timestamp"]) != total_frames:
-        raise ValueError(f"row {row_index} has invalid 200 Hz frame metadata")
+    data_fps = metadata["data_fps"]
+    if (
+        not isinstance(data_fps, int)
+        or isinstance(data_fps, bool)
+        or data_fps not in (100, 120, 200)
+        or len(row["timestamp"]) != total_frames
+    ):
+        raise ValueError(f"row {row_index} has invalid frame-clock metadata")
+    expected_timestep = simulation_clock(data_fps).control_timestep
     timestamp = np.asarray(row["timestamp"], dtype=np.float64)
-    if not np.allclose(np.diff(timestamp), 0.005, rtol=0.0, atol=1e-12):
-        raise ValueError(f"row {row_index} timestamp spacing differs from 0.005 s")
+    if not np.allclose(np.diff(timestamp), expected_timestep, rtol=0.0, atol=1e-12):
+        raise ValueError(
+            f"row {row_index} timestamp spacing differs from {expected_timestep} s"
+        )
     expected_shapes = {
         "urdf_dof": (total_frames, 28),
         "urdf_dof_target": (total_frames, 28),
@@ -81,6 +93,37 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
     if metadata["hand_names"] != ["right"] or hand_shapes.shape != (1, 10):
         raise ValueError(f"row {row_index} must contain one active right-hand shape")
     provenance = row["provenance"]
+    dataset_contract = _schema_metadata(dataset).get("schema_version")
+    if dataset_contract not in (SYNTHETIC_LANCE_V22_CONTRACT, SYNTHETIC_LANCE_CONTRACT):
+        raise ValueError(f"row {row_index} belongs to an unsupported schema contract")
+    if provenance["contract"] != dataset_contract:
+        raise ValueError(f"row {row_index} provenance contract differs from its schema")
+    if dataset_contract == SYNTHETIC_LANCE_V22_CONTRACT:
+        if data_fps != 200:
+            raise ValueError(f"legacy v2.2 row {row_index} must use 200 Hz")
+    else:
+        clock = simulation_clock(data_fps)
+        reference_fps = provenance["reference_fps"]
+        if reference_fps not in (None, 100, 120):
+            raise ValueError(f"row {row_index} provenance reference_fps is invalid")
+        if data_fps in (100, 120) and reference_fps != data_fps:
+            raise ValueError(
+                f"row {row_index} public reference/control clocks are not coupled"
+            )
+        expected_clock_fields = {
+            "control_fps": clock.policy_fps,
+            "physics_fps": clock.physics_fps,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
+        }
+        for field, expected in expected_clock_fields.items():
+            if provenance[field] != expected:
+                raise ValueError(f"row {row_index} provenance {field} is inconsistent")
+        for field, expected in (
+            ("control_timestep_seconds", clock.control_timestep),
+            ("physics_timestep_seconds", clock.physics_timestep),
+        ):
+            if not np.isclose(float(provenance[field]), expected, rtol=0.0, atol=1e-15):
+                raise ValueError(f"row {row_index} provenance {field} is inconsistent")
     source_dataset = lance.dataset(
         provenance["dataset_path"], version=int(provenance["dataset_version"])
     )
@@ -131,7 +174,9 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         or np.any(contact_reward < -1.2 - 1e-6)
         or np.any(contact_reward > 0.4 + 1e-6)
     ):
-        raise ValueError(f"row {row_index} contact rewards violate the v2.2 bounds")
+        raise ValueError(
+            f"row {row_index} contact rewards violate the synthetic bounds"
+        )
     movement = metadata["trajectory_info"]["object_move"][0]
     contact_start = int(movement["start_frame"])
     contact_end = int(movement["end_frame"])
@@ -219,6 +264,9 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         "uuid": row["index"]["uuid"],
         "source_identity": row["provenance"]["source_identity"],
         "source_row_index": int(row["provenance"]["row_index"]),
+        "schema": dataset_contract,
+        "reference_fps": provenance.get("reference_fps"),
+        "data_fps": data_fps,
         "frames": total_frames,
         "transitions": transitions,
         "contact_frames": contact_frames,
@@ -260,7 +308,7 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
 
 
 def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
-    """Validate one compact replay/visual row without requiring full v2 fields."""
+    """Validate one compact replay/visual row and its clock contract."""
 
     import lance
 
@@ -295,15 +343,14 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
         dataset_version=int(dataset.version),
         row_index=row_index,
     )
-    metadata = row["trajectory_metadata"]
     if source.warp_ccd_iterations is None or source.warp_ccd_contacts_per_world is None:
         raise ValueError(
             f"row {row_index} compact provenance lacks explicit Warp CCD settings"
         )
-    hand_slots = metadata.get("hand_slots")
-    if hand_slots != ["right", "left"] or len(row["hands"]) != 2:
+    metadata = row["trajectory_metadata"]
+    if metadata.get("hand_slots") != ["right", "left"] or len(row["hands"]) != 2:
         raise ValueError(f"row {row_index} compact hand-slot contract changed")
-    hand = row["hands"][hand_slots.index("right")]
+    hand = row["hands"][metadata["hand_slots"].index("right")]
     for name, shape in {
         "mano_global_pos": (source.frames, 3),
         "mano_global_rot_aa": (source.frames, 3),
@@ -332,17 +379,18 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
         "row_index": row_index,
         "uuid": row["index"]["uuid"],
         "source_identity": source.source_identity,
+        "source_row_index": source.source_row_index,
+        "source_contract": source.source_contract,
+        "reference_fps": source.reference_fps,
+        "data_fps": source.control_fps,
         "frames": source.frames,
         "transitions": source.transitions,
         "object": row["index"]["scene"],
         "checkpoint_sha256": source.checkpoint_sha256,
-        "checkpoint_metadata_sha256": row["provenance"].get(
-            "checkpoint_metadata_sha256"
-        ),
+        "checkpoint_metadata_sha256": metadata_hash,
         "checkpoint_update": source.checkpoint_update,
         "warp_ccd_iterations": source.warp_ccd_iterations,
         "warp_ccd_contacts_per_world": source.warp_ccd_contacts_per_world,
-        "data_fps": metadata["data_fps"],
     }
 
 
@@ -352,7 +400,7 @@ def validate_compact_dataset(
     *,
     max_attempts: int = 5,
 ) -> dict[str, Any]:
-    """Validate the compact schema and its replay/visual row contract."""
+    """Validate compact schema, external metadata, and replay clocks."""
 
     import lance
 
@@ -362,8 +410,35 @@ def validate_compact_dataset(
         raise ValueError(
             "dataset schema_version is not the compact replay/visual contract"
         )
-    if metadata.get("source_contract") != SYNTHETIC_LANCE_V22_CONTRACT:
-        raise ValueError("compact dataset source_contract is not v2.2")
+    source_contract = metadata.get("source_contract")
+    if source_contract not in SYNTHETIC_LANCE_SOURCE_CONTRACTS:
+        raise ValueError("compact source_contract is not v2.2 or v2.3")
+    try:
+        control_fps = int(metadata["control_fps"])
+        clock = simulation_clock(control_fps)
+        raw_reference = metadata["reference_fps"]
+        reference_fps = None if raw_reference == "none" else int(raw_reference)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("compact schema has invalid clock metadata") from exc
+    if source_contract == SYNTHETIC_LANCE_V22_CONTRACT:
+        if control_fps != 200 or reference_fps is not None:
+            raise ValueError("v2.2 compact schema must use legacy 200 Hz clock")
+    elif control_fps in (100, 120) and reference_fps != control_fps:
+        raise ValueError("v2.3 compact reference/control clocks are not coupled")
+    for field, expected in {
+        "physics_fps": clock.physics_fps,
+        "physics_substeps_per_control": clock.physics_substeps_per_control,
+    }.items():
+        if int(metadata.get(field, -1)) != expected:
+            raise ValueError(f"compact schema {field} is inconsistent")
+    for field, expected in (
+        ("control_timestep_seconds", clock.control_timestep),
+        ("physics_timestep_seconds", clock.physics_timestep),
+    ):
+        if not np.isclose(
+            float(metadata.get(field, "nan")), expected, rtol=0.0, atol=1e-15
+        ):
+            raise ValueError(f"compact schema {field} is inconsistent")
     expected_fields = [
         "index",
         "trajectory_metadata",
@@ -405,14 +480,21 @@ def validate_compact_dataset(
                 f"isolated compact validation failed for row {row_index} after "
                 f"{len(failures)} attempt(s), final exit {code}: {error}"
             )
+    if any(
+        row["source_contract"] != source_contract
+        or row["data_fps"] != control_fps
+        or row["reference_fps"] != reference_fps
+        for row in rows
+    ):
+        raise ValueError("compact rows differ from schema clock/source contract")
     uuids = [row["uuid"] for row in rows]
     identities = [row["source_identity"] for row in rows]
     checkpoints = {row["checkpoint_sha256"] for row in rows}
+    metadata_hashes = {row["checkpoint_metadata_sha256"] for row in rows}
     if len(set(uuids)) != row_count:
         raise ValueError("compact dataset contains duplicate generated UUIDs")
     if len(checkpoints) > 1:
         raise ValueError("compact dataset rows do not share one checkpoint SHA256")
-    metadata_hashes = {row["checkpoint_metadata_sha256"] for row in rows}
     catalog_path = path.parent / f"{path.name}.checkpoint-metadata.json"
     manifest_path = path.parent / f"{path.name}.manifest.json"
     if catalog_path.exists():
@@ -420,7 +502,7 @@ def validate_compact_dataset(
         entries = catalog.get("entries")
         if (
             catalog.get("schema") != "manorl.synthetic_checkpoint_metadata_catalog.v1"
-            or catalog.get("source_contract") != SYNTHETIC_LANCE_V22_CONTRACT
+            or catalog.get("source_contract") != source_contract
             or not isinstance(entries, dict)
         ):
             raise ValueError("compact checkpoint metadata catalog has invalid schema")
@@ -453,11 +535,12 @@ def validate_compact_dataset(
                 checkpoint_metadata, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
         ).hexdigest()
-        if metadata_hashes and metadata_hashes != {calculated}:
+        if metadata_hashes != {calculated}:
             raise ValueError("compact manifest checkpoint metadata hash mismatch")
         metadata_source = str(manifest_path)
     summary = {
         "schema": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+        "source_contract": source_contract,
         "schema_metadata": metadata,
         "rows": row_count,
         "unique_source_identities": len(set(identities)),
@@ -470,6 +553,12 @@ def validate_compact_dataset(
         "checkpoint_sha256": next(iter(checkpoints)) if checkpoints else None,
         "checkpoint_metadata_sha256": sorted(metadata_hashes),
         "checkpoint_metadata_source": metadata_source,
+        "clock": {
+            "reference_fps": reference_fps,
+            "control_fps": control_fps,
+            "physics_fps": clock.physics_fps,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
+        },
         "warp_ccd": sorted(
             {
                 (row["warp_ccd_iterations"], row["warp_ccd_contacts_per_world"])
@@ -505,10 +594,50 @@ def validate_dataset(
 
     dataset = lance.dataset(str(path))
     metadata = _schema_metadata(dataset)
-    if metadata.get("schema_version") == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+    schema_contract = metadata.get("schema_version")
+    if schema_contract == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
         return validate_compact_dataset(path, output, max_attempts=max_attempts)
-    if metadata.get("schema_version") != SYNTHETIC_LANCE_V22_CONTRACT:
-        raise ValueError("dataset schema_version is not the corrected v2.2 contract")
+    if schema_contract not in (SYNTHETIC_LANCE_V22_CONTRACT, SYNTHETIC_LANCE_CONTRACT):
+        raise ValueError("dataset schema_version is not a supported synthetic contract")
+    if schema_contract == SYNTHETIC_LANCE_V22_CONTRACT:
+        schema_clock = simulation_clock(200)
+        schema_reference_fps = None
+    else:
+        try:
+            schema_control_fps = int(metadata["control_fps"])
+            schema_clock = simulation_clock(schema_control_fps)
+            recorded_reference_fps = metadata["reference_fps"]
+            schema_reference_fps = (
+                None
+                if recorded_reference_fps == "none"
+                else int(recorded_reference_fps)
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("v2.3 schema has invalid clock metadata") from exc
+        if schema_reference_fps not in (None, 100, 120):
+            raise ValueError("v2.3 schema reference_fps is invalid")
+        if (
+            schema_clock.policy_fps in (100, 120)
+            and schema_reference_fps != schema_clock.policy_fps
+        ):
+            raise ValueError("v2.3 public reference/control clocks are not coupled")
+        expected_integer_metadata = {
+            "physics_fps": schema_clock.physics_fps,
+            "physics_substeps_per_control": schema_clock.physics_substeps_per_control,
+        }
+        for field, expected in expected_integer_metadata.items():
+            if int(metadata.get(field, -1)) != expected:
+                raise ValueError(f"v2.3 schema {field} is inconsistent")
+        for field, expected in (
+            ("control_timestep_seconds", schema_clock.control_timestep),
+            ("physics_timestep_seconds", schema_clock.physics_timestep),
+        ):
+            try:
+                recorded = float(metadata[field])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"v2.3 schema has invalid {field}") from exc
+            if not np.isclose(recorded, expected, rtol=0.0, atol=1e-15):
+                raise ValueError(f"v2.3 schema {field} is inconsistent")
     if metadata.get("mano_global_frame_contract") != MANO_GLOBAL_FRAME_CONTRACT:
         raise ValueError("dataset MANO global-frame contract changed")
     if metadata.get("force_contract") != FORCE_DIRECTION_CONTRACT:
@@ -557,6 +686,12 @@ def validate_dataset(
                 f"isolated Lance validation failed for row {row_index} after "
                 f"{len(failures)} attempt(s), final exit {code}: {error}"
             )
+    if any(row["data_fps"] != schema_clock.policy_fps for row in rows):
+        raise ValueError("row clocks differ from the dataset schema clock")
+    if schema_contract == SYNTHETIC_LANCE_CONTRACT and any(
+        row["reference_fps"] != schema_reference_fps for row in rows
+    ):
+        raise ValueError("row reference clocks differ from the dataset schema clock")
     identities = [row["source_identity"] for row in rows]
     uuids = [row["uuid"] for row in rows]
     source_rows = [row["source_row_index"] for row in rows]
@@ -594,7 +729,7 @@ def validate_dataset(
     if len(checkpoint_hashes) != 1:
         raise ValueError("dataset rows do not share one checkpoint SHA256")
     summary = {
-        "schema": SYNTHETIC_LANCE_V22_CONTRACT,
+        "schema": schema_contract,
         "schema_metadata": metadata,
         "rows": row_count,
         "unique_identities": len(grouped),
@@ -692,10 +827,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.row_index is not None:
         import lance
 
-        metadata = _schema_metadata(lance.dataset(str(args.dataset)))
+        schema = _schema_metadata(lance.dataset(str(args.dataset))).get(
+            "schema_version"
+        )
         row_result = (
             validate_compact_row(args.dataset, args.row_index)
-            if metadata.get("schema_version") == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+            if schema == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
             else validate_row(args.dataset, args.row_index)
         )
         print(json.dumps(row_result, sort_keys=True))

@@ -172,7 +172,7 @@ def test_point_cloud_contracts_are_explicit_and_transform_source_frames() -> Non
     current = build_observation(state, compatibility=CURRENT_SOURCE_COMPATIBILITY)
     np.testing.assert_allclose(current.raw[0, OBSERVATION_SLICES["object_point_cloud_raw"]][:3], [-8.9, 0.2, 0.3])
     assert (CURRENT_SOURCE_COMPATIBILITY.early_phase_steps, CURRENT_SOURCE_COMPATIBILITY.movement_pre_padding) == (100, 250)
-    assert (SOURCE_ALIGNED_COMPATIBILITY.early_phase_steps, SOURCE_ALIGNED_COMPATIBILITY.movement_pre_padding) == (30, 100)
+    assert (SOURCE_ALIGNED_COMPATIBILITY.early_phase_steps, SOURCE_ALIGNED_COMPATIBILITY.movement_pre_padding) == (30, 180)
     dynamic_points = np.zeros((2, POINT_COUNT, 3))
     dynamic_points[0, 0] = [0.1, 0.0, 0.0]
     dynamic_points[1, 0] = [0.2, 0.0, 0.0]

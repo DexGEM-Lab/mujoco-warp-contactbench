@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export bounded 1:N ManoRL checkpoint episodes to corrected v2.2 Lance."""
+"""Export bounded 1:N ManoRL checkpoint episodes to clock-aware v2.3 Lance."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import numpy as np
 
 from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.checkpoint import checkpoint_runtime_metadata
-from sim.manorl.contracts import JOINT_DOF
+from sim.manorl.contracts import JOINT_DOF, simulation_clock
 from sim.manorl.environment import (
     EnvironmentConfig,
     MujocoManoEnvironment,
@@ -30,10 +30,10 @@ from sim.manorl.environment import (
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+    SYNTHETIC_LANCE_CONTRACT,
     SYNTHETIC_LANCE_OUTPUT_FORMAT_COMPACT,
     SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
     SYNTHETIC_LANCE_OUTPUT_FORMATS,
-    SYNTHETIC_LANCE_V22_CONTRACT,
     build_compact_row,
     build_v2_row,
     corrected_contact_frames,
@@ -41,6 +41,7 @@ from sim.manorl.lance_v2 import (
     write_compact_lance,
     write_v2_lance,
 )
+from sim.manorl.observations import SOURCE_ALIGNED_COMPATIBILITY
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 from sim.manorl.trajectory import (
     SUPPORTED_REFERENCE_FPS,
@@ -86,7 +87,7 @@ def _projection_manifest(output_format: str) -> dict[str, Any]:
             "checkpoint_metadata": "embedded_once_in_manifest",
         }
     return {
-        "kept_top_level": "all_v2_2_fields",
+        "kept_top_level": "all_v2_3_fields",
         "dropped_top_level": [],
         "checkpoint_metadata": "embedded_per_row",
     }
@@ -160,7 +161,9 @@ def _load_predecoded_batch(
             raise RuntimeError(f"predecoded trajectory identity changed: {path}")
         if selection.reference_fps is not None:
             trajectory = resample_reference_trajectory(
-                trajectory, reference_fps=selection.reference_fps
+                trajectory,
+                reference_fps=selection.reference_fps,
+                control_fps=selection.resolved_control_fps,
             )
         trajectories.append(trajectory)
     return TrajectoryBatch(
@@ -297,6 +300,10 @@ def _run_attempt_batch(
             num_envs=num_envs,
             residual_enabled=True,
             residual_action=checkpoint_options.residual_action,
+            compatibility=dataclass_replace(
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=checkpoint_options.pre_padding,
+            ),
             max_deviation_distance=(
                 TARGET_MAX_DEVIATION_DISTANCE
                 if allow_deviation_termination
@@ -306,6 +313,8 @@ def _run_attempt_batch(
                 num_envs, trajectories.hand_sides
             ),
             reference_fps=checkpoint_options.reference_fps,
+            control_fps=checkpoint_options.control_fps,
+            post_padding=checkpoint_options.post_padding,
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side="right",
@@ -509,6 +518,7 @@ def _export_isolated_repeated_rollouts(
     """Run each attempt round in a fresh process and append accepted rows."""
 
     checkpoint = _validate_checkpoint_path(checkpoint)
+    clock = simulation_clock(selection.resolved_control_fps)
     trajectories = (
         load_assigned_trajectory_batch(selection, num_envs=num_envs)
         if predecoded_manifest is None
@@ -663,12 +673,12 @@ def _export_isolated_repeated_rollouts(
     manifest_path = published.parent / f"{published.name}.manifest.json"
     manifest = {
         "schema": (
-            SYNTHETIC_LANCE_V22_CONTRACT
+            SYNTHETIC_LANCE_CONTRACT
             if output_format == SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL
             else SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
         ),
         "output_format": output_format,
-        "source_schema": SYNTHETIC_LANCE_V22_CONTRACT,
+        "source_schema": SYNTHETIC_LANCE_CONTRACT,
         "force_contract": FORCE_DIRECTION_CONTRACT,
         "reward_contract": REWARD_CONTRACT_ID,
         "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
@@ -703,7 +713,12 @@ def _export_isolated_repeated_rollouts(
         "runtime": {
             "device": device,
             "policy_mode": "deterministic_mean",
-            "control_timestep_seconds": 0.005,
+            "reference_fps": selection.reference_fps,
+            "control_fps": clock.policy_fps,
+            "control_timestep_seconds": clock.control_timestep,
+            "physics_fps": clock.physics_fps,
+            "physics_timestep_seconds": clock.physics_timestep,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
             "normal_force_scale": 1.0,
             "deviation_termination": allow_deviation_termination,
             "late_contact_grace_frames": 10,
@@ -774,7 +789,14 @@ def export_checkpoint_rollouts(
         checkpoint_options=checkpoint_options,
         has_checkpoint=True,
     )
-    selection = dataclass_replace(selection, reference_fps=reference_fps)
+    selection = dataclass_replace(
+        selection,
+        reference_fps=reference_fps,
+        control_fps=checkpoint_options.control_fps,
+        pre_padding=checkpoint_options.pre_padding,
+        post_padding=checkpoint_options.post_padding,
+    )
+    clock = simulation_clock(selection.resolved_control_fps)
     if episodes_per_identity > 1 and internal_attempt_control is None:
         return _export_isolated_repeated_rollouts(
             checkpoint=checkpoint,
@@ -958,12 +980,12 @@ def export_checkpoint_rollouts(
     manifest_path = target_output.parent / f"{target_output.name}.manifest.json"
     manifest = {
         "schema": (
-            SYNTHETIC_LANCE_V22_CONTRACT
+            SYNTHETIC_LANCE_CONTRACT
             if output_format == SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL
             else SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
         ),
         "output_format": output_format,
-        "source_schema": SYNTHETIC_LANCE_V22_CONTRACT,
+        "source_schema": SYNTHETIC_LANCE_CONTRACT,
         "force_contract": FORCE_DIRECTION_CONTRACT,
         "reward_contract": REWARD_CONTRACT_ID,
         "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
@@ -997,7 +1019,12 @@ def export_checkpoint_rollouts(
         "runtime": {
             "device": device,
             "policy_mode": "deterministic_mean",
-            "control_timestep_seconds": 0.005,
+            "reference_fps": selection.reference_fps,
+            "control_fps": clock.policy_fps,
+            "control_timestep_seconds": clock.control_timestep,
+            "physics_fps": clock.physics_fps,
+            "physics_timestep_seconds": clock.physics_timestep,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
             "normal_force_scale": 1.0,
             "deviation_termination": allow_deviation_termination,
             "late_contact_grace_frames": 10,
@@ -1058,7 +1085,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output-format",
         choices=SYNTHETIC_LANCE_OUTPUT_FORMATS,
         default=SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
-        help="full v2.2 audit rows or compact replay/visual rows",
+        help="full v2.3 audit rows or compact replay/visual rows",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--episodes-per-identity", type=int, default=5)

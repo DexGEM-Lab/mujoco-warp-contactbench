@@ -4,8 +4,8 @@ set -Eeuo pipefail
 # Usage: ./train.sh [object|all] [num_envs] [physical_gpu]
 # Example: ./train.sh cube1 2048 0
 # Every eligible gesture for the selected object is trained. Use "all" for all
-# materialized object/action pairs. MANORL_REFERENCE_FPS selects the 100 or 120
-# Hz source clock (default: 120); policy/control remains fixed at 200 Hz.
+# materialized object/action pairs. MANORL_REFERENCE_FPS couples source and
+# policy/control at 100 or 120 Hz (default: 120), with four physics substeps.
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 OBJECT=${1:-${MANORL_TRAIN_OBJECT:-cube1}}
@@ -23,6 +23,8 @@ DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
 REFERENCE_FPS=${MANORL_REFERENCE_FPS:-120}
 UPDATES=${MANORL_UPDATES:-5000}
 CHECKPOINT_INTERVAL=${MANORL_CHECKPOINT_INTERVAL:-100}
+WARM_START_CHECKPOINT=${MANORL_WARM_START_CHECKPOINT:-}
+WARM_START_PRIOR_UPDATES=${MANORL_WARM_START_PRIOR_UPDATES:-}
 HAND_SIDE=${MANORL_HAND_SIDE:-right}
 WANDB_ENABLED=${MANORL_WANDB:-true}
 WANDB_ENTITY=${WANDB_ENTITY:-sunjay45711-dexerto}
@@ -49,6 +51,29 @@ fi
 if [[ "$REFERENCE_FPS" != "100" && "$REFERENCE_FPS" != "120" ]]; then
   echo "MANORL_REFERENCE_FPS must be 100 or 120, got: $REFERENCE_FPS" >&2
   exit 2
+fi
+if [[ -n "$WARM_START_CHECKPOINT" || -n "$WARM_START_PRIOR_UPDATES" ]]; then
+  if [[ -z "$WARM_START_CHECKPOINT" || ! -f "$WARM_START_CHECKPOINT" ]]; then
+    echo "MANORL_WARM_START_CHECKPOINT must name an existing checkpoint" >&2
+    exit 2
+  fi
+  if [[ ! "$WARM_START_PRIOR_UPDATES" =~ ^[0-9]+$ ]]; then
+    echo "MANORL_WARM_START_PRIOR_UPDATES must be a non-negative integer" >&2
+    exit 2
+  fi
+  WARM_START_CHECKPOINT=$(realpath -e "$WARM_START_CHECKPOINT")
+  WARM_START_CHECKPOINT_JSON=$(
+    "$PYTHON" -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$WARM_START_CHECKPOINT"
+  )
+  WARM_START_PRIOR_UPDATES_JSON=$WARM_START_PRIOR_UPDATES
+  CHECKPOINT_ARGS=(
+    --warm-start-checkpoint "$WARM_START_CHECKPOINT"
+    --warm-start-prior-updates "$WARM_START_PRIOR_UPDATES"
+  )
+else
+  WARM_START_CHECKPOINT_JSON=null
+  WARM_START_PRIOR_UPDATES_JSON=null
+  CHECKPOINT_ARGS=()
 fi
 
 export PYTHONPATH=$ROOT
@@ -91,7 +116,7 @@ PY
 fi
 
 SAFE_OBJECT=${OBJECT//[^[:alnum:]_-]/_}
-RUN_DIR=${MANORL_OUTPUT:-$ROOT/outputs/manorl/train_${SAFE_OBJECT}_all_gestures_rf${REFERENCE_FPS}_n${NUM_ENVS}_g${GPU}/run-$STAMP}
+RUN_DIR=${MANORL_OUTPUT:-$ROOT/outputs/manorl/train_${SAFE_OBJECT}_all_gestures_f${REFERENCE_FPS}_n${NUM_ENVS}_g${GPU}/run-$STAMP}
 mkdir -p "$RUN_DIR"
 cat > "$RUN_DIR/run_manifest.json" <<EOF
 {
@@ -103,6 +128,13 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "dataset_path": "$DATASET",
   "dataset_version": $DATASET_VERSION,
   "reference_fps": $REFERENCE_FPS,
+  "control_fps": $REFERENCE_FPS,
+  "physics_fps": $((REFERENCE_FPS * 4)),
+  "physics_substeps_per_control": 4,
+  "pre_padding": 180,
+  "post_padding": 250,
+  "warm_start_checkpoint": $WARM_START_CHECKPOINT_JSON,
+  "warm_start_prior_updates": $WARM_START_PRIOR_UPDATES_JSON,
   "hand_side": "$HAND_SIDE",
   "updates": $UPDATES,
   "checkpoint_interval_updates": $CHECKPOINT_INTERVAL,
@@ -139,6 +171,7 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
   --reference-fps "$REFERENCE_FPS" \
+  "${CHECKPOINT_ARGS[@]}" \
   --hand-side "$HAND_SIDE" \
   "${SELECTION_ARGS[@]}" \
   --pair-assignment-cycle 0 \
@@ -160,7 +193,7 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --wandb-project "$WANDB_PROJECT" \
   --wandb-entity "$WANDB_ENTITY" \
   --wandb-group "${SAFE_OBJECT}-all-gestures" \
-  --wandb-name "manorl-${SAFE_OBJECT}-all-gestures-rf${REFERENCE_FPS}-u${UPDATES}-n${NUM_ENVS}-g${GPU}-${STAMP}" \
+  --wandb-name "manorl-${SAFE_OBJECT}-all-gestures-f${REFERENCE_FPS}-u${UPDATES}-n${NUM_ENVS}-g${GPU}-${STAMP}" \
   2>&1 | tee "$RUN_DIR/console.log"
 RC=${PIPESTATUS[0]}
 set -e

@@ -49,24 +49,31 @@ current native checkpoint contracts. The file-by-file implementation map is in
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
-- Physics is fixed at 400 Hz (`0.0025 s`) and policy/control at 200 Hz (two
-  physics substeps). `--reference-fps {100,120}` independently selects the
-  uniform source clock, defaulting to 120 Hz. References are resampled onto the
-  5 ms control grid with angular unwrapping, linear joint/position interpolation,
-  and quaternion SLERP; changing reference FPS never changes PPO, residual,
-  servo, or physics
-  frequency.
+- `--reference-fps {100,120}` selects one coupled source/reference and
+  policy/control clock, defaulting to 120 Hz. At 100 Hz, physics is 400 Hz
+  (`0.0025 s`); at 120 Hz, physics is 480 Hz (`1/480 s`). Both modes execute
+  exactly four equal physics substeps per policy inference, with no 3/3/4
+  control jitter. Angular references are unwrapped before interpolation, object
+  position is linearly interpolated, and object orientation uses quaternion
+  SLERP. One source frame maps to one policy transition in both public modes.
 - Training defaults to `--use_residual true` and `--terminal true`. Pass
   `--use_residual false` only for source-reference diagnostics, or
   `--terminal false` for formal source-horizon termination. Target training uses
-  the validated early phase of 30 steps, movement pre-padding 100, and the
+  the validated early phase of 30 steps, movement pre-padding 180, and the
   `0.10 m` deviation threshold. Its normalized action Box is 28-wide for one
   controlled hand and 56-wide for two controlled hands. XYZ residual actions
   use a per-step scale of `0.003 m`, gamma `0.9`, and cap `+/-0.03 m`. The six
   thumb joint base scales are `(0.02, 0.02, 0.008, 0.02, 0.01, 0.005)` with caps
   `(0.2, 0.2, 0.08, 0.2, 0.1, 0.05)`; each other finger uses base scales
   `(0.01, 0.0025, 0.015, 0.005)` and base caps `(0.1, 0.025, 0.15, 0.1)`. Both
-  joint vectors use default multiplier `2.0`.
+  joint vectors use default multiplier `2.0`. The 30-step early phase,
+  48-step PPO rollout, residual recurrence/scales, reward, and PPO gamma/lambda
+  intentionally retain per-source-transition semantics rather than the former
+  200 Hz durations. Thus early phase lasts 0.30 s at 100 Hz and 0.25 s at
+  120 Hz; a rollout spans 0.48 s or 0.40 s. Post-padding remains exactly 250
+  steps. Captures missing either requested margin hold their first/last pose;
+  repeated source indices make those stationary edge slots explicit. This
+  preserves all 75 eligible object/action pairs under pre180/post250.
   FiLM and dynamic PointNet are enabled by default; GPU sampling uses the
   global CUDA Torch RNG.
 - PPO records the terminal transition and its terminal observation. Before the
@@ -247,11 +254,20 @@ divisor; `--minibatch-size` remains an explicit override. Any selected value
 must divide the rollout batch and is recorded in metrics and native checkpoint
 runtime configuration.
 
-The selected reference FPS is checkpoint-bound. Training resume and inference
-must use the recorded value; inference restores it when omitted and rejects an
-explicit 100/120 Hz conflict. Checkpoints predating this clock contract retain
-their legacy one-source-frame-per-control-step behavior and cannot be overridden
-with the new selector.
+Reference FPS, policy/control FPS, physics FPS, both timesteps, substeps per
+control, and source pre/post-padding are checkpoint-bound. Strict training resume and
+inference validate all recorded fields; inference restores them when omitted and
+rejects an explicit 100/120 Hz conflict. Legacy v6/v7 checkpoints reconstruct
+200 Hz control, 400 Hz physics with two substeps, and pre-padding 100. They
+cannot strictly resume into the new public MDP.
+
+`--warm-start-checkpoint` is the explicit migration path. It loads only policy,
+value, observation normalizer, and value normalizer, while leaving optimizer,
+learning-rate scheduler, rollout memory, and progress fresh. It must be paired
+with `--warm-start-prior-updates`; checkpoint metadata records the source path
+and SHA256, source clock/padding, source-recorded updates, conceptual prior
+updates, loaded modules, and reset state. Conceptual update totals do not claim
+equal simulated seconds across the old and new clocks.
 
 The default checkpoint cadence is 200 updates. After every 200 completed PPO
 updates, the output-prefix namespace receives

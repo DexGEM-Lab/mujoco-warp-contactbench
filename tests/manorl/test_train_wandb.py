@@ -212,6 +212,13 @@ def test_wandb_config_is_complete_and_json_serializable() -> None:
     assert config["reward"]["ppo_scale"] == 0.5
     assert config["reward"]["contact_force_threshold_N"] == 0.2
     assert config["environment"]["contract"] == tool.ENVIRONMENT_CONTRACT_ID
+    assert config["environment"]["reference_fps"] == 120
+    assert config["environment"]["control_fps"] == 120
+    assert config["environment"]["control_timestep_seconds"] == 1.0 / 120.0
+    assert config["environment"]["physics_fps"] == 480
+    assert config["environment"]["physics_substeps_per_control"] == 4
+    assert config["environment"]["pre_padding"] == 180
+    assert config["environment"]["post_padding"] == 250
     assert config["environment"]["observation_contact_threshold_N"] == 0.2
     assert config["environment"]["residual_action"]["position_scale"] == [0.003, 0.003, 0.003]
     assert config["environment"]["residual_action"]["max_position_offset"] == [0.03, 0.03, 0.03]

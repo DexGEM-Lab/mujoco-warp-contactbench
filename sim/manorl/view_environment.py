@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 import math
 import os
 from pathlib import Path
@@ -27,14 +27,17 @@ from sim.manorl.assets import (
     compile_unified_model,
 )
 from sim.manorl.cli import parse_cli_bool
-from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_DOF
+from sim.manorl.contracts import JOINT_DOF
 from sim.manorl.environment import (
     EnvironmentConfig,
     MujocoManoEnvironment,
     recommended_warp_contact_capacity,
 )
+from sim.manorl.observations import SOURCE_ALIGNED_COMPATIBILITY
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.trajectory import (
+    DEFAULT_POST_PADDING,
+    DEFAULT_PRE_PADDING,
     DEFAULT_REFERENCE_FPS,
     SUPPORTED_REFERENCE_FPS,
     TrajectoryBatch,
@@ -140,6 +143,9 @@ def _inference_ppo_config(num_envs: int, *, use_film: bool = True) -> ManoPPOCon
 class _CheckpointEnvironmentOptions:
     residual_action: ResidualActionConfig = ResidualActionConfig()
     reference_fps: int | None = None
+    control_fps: int = DEFAULT_REFERENCE_FPS
+    pre_padding: int = DEFAULT_PRE_PADDING
+    post_padding: int = DEFAULT_POST_PADDING
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
 
@@ -177,11 +183,18 @@ def _resolve_reference_fps(
 
 
 def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentOptions:
-    """Restore action and per-world CCD semantics from native checkpoint metadata."""
+    """Restore trajectory, clocks, action, and per-world CCD semantics."""
 
-    from sim.manorl.checkpoint import CheckpointFormatError, checkpoint_runtime_metadata
+    from sim.manorl.checkpoint import (
+        CheckpointFormatError,
+        checkpoint_post_padding,
+        checkpoint_pre_padding,
+        checkpoint_runtime_metadata,
+        checkpoint_simulation_clock,
+    )
 
     metadata = checkpoint_runtime_metadata(checkpoint)
+    checkpoint_clock = checkpoint_simulation_clock(metadata)
     runtime_config = metadata.get("runtime_config")
     environment = (
         runtime_config.get("environment")
@@ -189,7 +202,13 @@ def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentO
         else None
     )
     if not isinstance(environment, dict):
-        return _CheckpointEnvironmentOptions()
+        return _CheckpointEnvironmentOptions(
+            control_fps=checkpoint_clock.policy_fps,
+            pre_padding=checkpoint_pre_padding(metadata),
+            post_padding=checkpoint_post_padding(metadata),
+        )
+    pre_padding = checkpoint_pre_padding(metadata)
+    post_padding = checkpoint_post_padding(metadata)
 
     residual_values = environment.get("residual_action")
     if residual_values is None:
@@ -236,6 +255,9 @@ def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentO
     return _CheckpointEnvironmentOptions(
         residual_action=residual_action,
         reference_fps=reference_fps,
+        control_fps=checkpoint_clock.policy_fps,
+        pre_padding=pre_padding,
+        post_padding=post_padding,
         warp_ccd_iterations=warp_ccd.get("ccd_iterations"),
         warp_ccd_contacts_per_world=warp_ccd.get("contacts_per_world"),
     )
@@ -421,6 +443,7 @@ def _compile_native_viewer_model(
             object_types=environment._unified_object_types,
             visual_meshes=True,
             hand_side=hand_side,
+            physics_timestep=environment.config.physics_timestep,
         )
     else:
         mujoco, model = compile_model(
@@ -428,6 +451,7 @@ def _compile_native_viewer_model(
             object_type=environment.object_type,
             visual_meshes=True,
             hand_side=hand_side,
+            physics_timestep=environment.config.physics_timestep,
         )
     _validate_native_viewer_abi(mujoco, environment.model, model)
     return mujoco, model
@@ -660,7 +684,7 @@ def _view_tiled(
     scene = mujoco.MjvScene(viewer_model, maxgeom=10_000)
     context = mujoco.MjrContext(viewer_model, mujoco.mjtFontScale.mjFONTSCALE_150)
     viewer_data = [mujoco.MjData(viewer_model) for _ in range(tile_envs)]
-    sleep_seconds = CONTROL_TIMESTEP / speed
+    sleep_seconds = environment.config.control_timestep / speed
     viewports = _tile_layout(tile_envs, width=width, height=height)
     _install_tiled_controls(
         glfw=glfw,
@@ -752,7 +776,7 @@ def _view_single(
         render_data,
         environment.host_data(render_env),
     )
-    sleep_seconds = CONTROL_TIMESTEP / speed
+    sleep_seconds = environment.config.control_timestep / speed
     with mujoco_viewer.launch_passive(
         viewer_model, render_data, show_left_ui=True, show_right_ui=True
     ) as viewer:
@@ -849,8 +873,10 @@ def view_environment(
         checkpoint_options=checkpoint_options,
         has_checkpoint=checkpoint is not None,
     )
+    resolved_control_fps = checkpoint_options.control_fps
     if not uses_dataset_selection and reference_fps is None and checkpoint is None:
         resolved_reference_fps = None
+        resolved_control_fps = 200
     if resolved_reference_fps is not None and not uses_dataset_selection:
         raise ValueError(
             "reference_fps requires a dataset trajectory selected with --object/--gesture "
@@ -866,8 +892,11 @@ def view_environment(
                 gesture=selected_gesture,
                 dataset_path=(dataset_path if dataset_path is not None else TrajectorySelection().dataset_path),
                 expected_dataset_version=dataset_version,
+                pre_padding=checkpoint_options.pre_padding,
+                post_padding=checkpoint_options.post_padding,
                 hand_side=hand_side,
                 reference_fps=resolved_reference_fps,
+                control_fps=resolved_control_fps,
             ),
             num_envs=num_envs,
         )
@@ -898,9 +927,15 @@ def view_environment(
             num_envs=num_envs,
             residual_enabled=use_residual,
             residual_action=checkpoint_options.residual_action,
+            compatibility=replace(
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=checkpoint_options.pre_padding,
+            ),
             max_deviation_distance=max_deviation_distance,
             contact_capacity=contact_capacity,
             reference_fps=resolved_reference_fps,
+            control_fps=resolved_control_fps,
+            post_padding=checkpoint_options.post_padding,
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side=hand_side,

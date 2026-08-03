@@ -247,7 +247,7 @@ def test_native_visual_model_mirrors_collision_only_state_and_hides_collision_ge
 
     _, physics_model = compile_model()
     environment = SimpleNamespace(
-        config=SimpleNamespace(servo=ServoConfig()),
+        config=SimpleNamespace(servo=ServoConfig(), physics_timestep=0.0025),
         is_heterogeneous=False,
         model=physics_model,
         object_type="cube1",
@@ -369,7 +369,7 @@ def test_passive_viewer_lock_guards_native_mirror_and_sync(
     monkeypatch.setattr(viewer, "_telemetry", lambda *_args: "telemetry")
 
     environment = SimpleNamespace(
-        config=SimpleNamespace(num_envs=1),
+        config=SimpleNamespace(num_envs=1, control_timestep=0.005),
         progress=np.array([1]),
         host_data=lambda _env_id: events.append("host") or object(),
     )
@@ -717,9 +717,13 @@ def test_checkpoint_environment_options_restore_residual_and_per_world_ccd(
         checkpoint_module,
         "checkpoint_runtime_metadata",
         lambda path: {
+            "environment_contract": checkpoint_module.ENVIRONMENT_CONTRACT_ID,
             "runtime_config": {
                 "environment": {
                     "reference_fps": 100,
+                    "control_fps": 100,
+                    "pre_padding": 180,
+                    "post_padding": 250,
                     "residual_action": {
                         "joint_scale_multiplier": 1.5,
                         "joint_max_offset_multiplier": 1.5,
@@ -738,8 +742,32 @@ def test_checkpoint_environment_options_restore_residual_and_per_world_ccd(
     assert options.residual_action.joint_scale_multiplier == 1.5
     assert options.residual_action.joint_max_offset_multiplier == 1.5
     assert options.reference_fps == 100
+    assert options.control_fps == 100
+    assert options.pre_padding == 180
+    assert options.post_padding == 250
     assert options.warp_ccd_iterations is None
     assert options.warp_ccd_contacts_per_world == 16
+
+    monkeypatch.setattr(
+        checkpoint_module,
+        "checkpoint_runtime_metadata",
+        lambda path: {
+            "environment_contract": sorted(
+                checkpoint_module.LEGACY_ENVIRONMENT_CONTRACT_IDS
+            )[-1],
+            "runtime_config": {
+                "environment": {
+                    "reference_fps": 100,
+                    "compatibility": {"movement_pre_padding": 100},
+                }
+            },
+        },
+    )
+    legacy = _checkpoint_environment_options(checkpoint)
+    assert legacy.reference_fps == 100
+    assert legacy.control_fps == 200
+    assert legacy.pre_padding == 100
+    assert legacy.post_padding == 250
 
 
 def test_stochastic_record_stepper_uses_sidecar_model_variant(
@@ -869,6 +897,9 @@ def test_checkpoint_viewer_applies_sidecar_options_and_dataset_version(
             joint_max_offset_multiplier=1.5,
         ),
         reference_fps=100,
+        control_fps=100,
+        pre_padding=180,
+        post_padding=250,
         warp_ccd_contacts_per_world=16,
     )
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
@@ -902,8 +933,14 @@ def test_checkpoint_viewer_applies_sidecar_options_and_dataset_version(
     selection = created["selection"]
     assert selection.expected_dataset_version == 978
     assert selection.reference_fps == 100
+    assert selection.control_fps == 100
+    assert selection.pre_padding == 180
+    assert selection.post_padding == 250
     config = created["config"]
     assert config.reference_fps == 100
+    assert config.control_fps == 100
+    assert config.compatibility.movement_pre_padding == 180
+    assert config.post_padding == 250
     assert config.residual_action.joint_scale_multiplier == 1.5
     assert config.residual_action.joint_max_offset_multiplier == 1.5
     assert config.warp_ccd_contacts_per_world == 16

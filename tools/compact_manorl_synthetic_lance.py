@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stream a full v2.2 synthetic Lance dataset into compact replay/visual rows."""
+"""Stream a full v2.2/v2.3 Lance dataset into compact replay/visual rows."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import lance
 
 from sim.manorl.lance_v2 import (
     SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
-    SYNTHETIC_LANCE_V22_CONTRACT,
+    SYNTHETIC_LANCE_SOURCE_CONTRACTS,
     build_compact_row,
     file_sha256,
     write_compact_lance_stream,
@@ -27,13 +27,11 @@ def _ccd_settings(metadata: Mapping[str, Any]) -> tuple[int, int]:
     environment = runtime.get("environment") if isinstance(runtime, dict) else None
     warp = environment.get("warp_ccd") if isinstance(environment, dict) else None
     if not isinstance(warp, dict):
-        raise ValueError("full v2.2 checkpoint metadata lacks Warp CCD settings")
+        raise ValueError("full checkpoint metadata lacks Warp CCD settings")
     iterations = warp.get("ccd_iterations", warp.get("warp_ccd_iterations"))
     contacts = warp.get("contacts_per_world", warp.get("warp_ccd_contacts_per_world"))
     if iterations is None or contacts is None:
-        raise ValueError(
-            "full v2.2 checkpoint metadata has incomplete Warp CCD settings"
-        )
+        raise ValueError("full checkpoint metadata has incomplete Warp CCD settings")
     return int(iterations), int(contacts)
 
 
@@ -66,8 +64,9 @@ def compact_dataset(
         key.decode(): value.decode()
         for key, value in (source.schema.metadata or {}).items()
     }
-    if source_metadata.get("schema_version") != SYNTHETIC_LANCE_V22_CONTRACT:
-        raise ValueError("compact input must use the full corrected v2.2 schema")
+    source_contract = source_metadata.get("schema_version")
+    if source_contract not in SYNTHETIC_LANCE_SOURCE_CONTRACTS:
+        raise ValueError("compact input must use a full v2.2/v2.3 schema")
     source_rows = int(source.count_rows())
     if source_rows < 1:
         raise ValueError("compact input cannot be empty")
@@ -97,7 +96,7 @@ def compact_dataset(
                 provenance = row.get("provenance") or {}
                 raw_metadata = provenance.get("checkpoint_metadata_json")
                 if not isinstance(raw_metadata, str) or not raw_metadata:
-                    raise ValueError("full v2.2 row lacks checkpoint_metadata_json")
+                    raise ValueError("full row lacks checkpoint_metadata_json")
                 checkpoint_metadata = json.loads(raw_metadata)
                 if not isinstance(checkpoint_metadata, dict):
                     raise ValueError(
@@ -112,15 +111,13 @@ def compact_dataset(
                         for character in checkpoint_hash
                     )
                 ):
-                    raise ValueError("full v2.2 row has an invalid checkpoint SHA256")
+                    raise ValueError("full row has an invalid checkpoint SHA256")
                 metadata_hash = hashlib.sha256(
                     json.dumps(
                         checkpoint_metadata, sort_keys=True, separators=(",", ":")
                     ).encode("utf-8")
                 ).hexdigest()
                 metadata_by_hash.setdefault(metadata_hash, checkpoint_metadata)
-                if checkpoint_hash is None:
-                    raise ValueError("full v2.2 row lacks checkpoint_sha256")
                 iterations, contacts = _ccd_settings(checkpoint_metadata)
                 seen += 1
                 if seen % 100 == 0:
@@ -144,6 +141,7 @@ def compact_dataset(
         int(compact.count_rows()) != source_rows
         or compact.schema.metadata.get(b"schema_version")
         != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT.encode()
+        or compact.schema.metadata.get(b"source_contract") != source_contract.encode()
     ):
         raise RuntimeError("compact projection row count or schema contract failed")
 
@@ -156,7 +154,7 @@ def compact_dataset(
         json.dumps(
             {
                 "schema": "manorl.synthetic_checkpoint_metadata_catalog.v1",
-                "source_contract": SYNTHETIC_LANCE_V22_CONTRACT,
+                "source_contract": source_contract,
                 "entries": metadata_by_hash,
             },
             indent=2,
@@ -176,7 +174,7 @@ def compact_dataset(
         "input": {
             "dataset": str(input_path.resolve()),
             "version": source.version,
-            "schema": SYNTHETIC_LANCE_V22_CONTRACT,
+            "schema": source_contract,
             "rows": source_rows,
         },
         "output": {

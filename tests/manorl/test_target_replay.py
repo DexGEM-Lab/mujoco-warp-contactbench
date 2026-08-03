@@ -13,6 +13,7 @@ from sim.manorl.target_replay import (
     LANCE_TARGET_REPLAY_COLUMNS,
     TARGET_REPLAY_COMPACT_ROW_CONTRACT,
     TARGET_REPLAY_ROW_CONTRACT,
+    TARGET_REPLAY_V23_ROW_CONTRACT,
     TargetDofReplay,
     TargetReplaySourceError,
     load_target_replay_source,
@@ -37,7 +38,7 @@ def _row() -> dict[str, object]:
         },
         "trajectory_metadata": {
             "total_frames": frames,
-            "data_fps": 200.0,
+            "data_fps": 200,
             "hand_names": ["right"],
             "hand_slots": ["right", "left"],
             "object_names": ["cube1"],
@@ -115,6 +116,8 @@ def test_direct_row_preserves_generated_and_source_lineage() -> None:
     assert source.movement_start == 1 and source.movement_end == 2
     assert source.warp_ccd_iterations == 16
     assert source.warp_ccd_contacts_per_world == 16
+    assert source.control_fps == 200
+    assert source.physics_substeps_per_control == 2
     assert not source.target_qpos.flags.writeable
 
 
@@ -122,7 +125,15 @@ def test_compact_row_uses_direct_warp_ccd_provenance() -> None:
     row = _row()
     provenance = row["provenance"]
     provenance["contract"] = TARGET_REPLAY_COMPACT_ROW_CONTRACT
+    provenance["source_contract"] = TARGET_REPLAY_V23_ROW_CONTRACT
     provenance.pop("checkpoint_metadata_json")
+    provenance["reference_fps"] = None
+    provenance["control_fps"] = 200
+    provenance["control_timestep_seconds"] = 0.005
+    provenance["physics_fps"] = 400
+    provenance["physics_timestep_seconds"] = 0.0025
+    provenance["physics_substeps_per_control"] = 2
+    provenance["checkpoint_metadata_sha256"] = "b" * 64
     provenance["warp_ccd_iterations"] = 16
     provenance["warp_ccd_contacts_per_world"] = 16
 
@@ -131,6 +142,28 @@ def test_compact_row_uses_direct_warp_ccd_provenance() -> None:
     assert source.row_contract == TARGET_REPLAY_COMPACT_ROW_CONTRACT
     assert source.warp_ccd_iterations == 16
     assert source.warp_ccd_contacts_per_world == 16
+    assert source.source_contract == TARGET_REPLAY_V23_ROW_CONTRACT
+    assert source.control_fps == 200
+
+
+def test_v23_row_uses_dynamic_120hz_clock() -> None:
+    row = _row()
+    row["trajectory_metadata"]["data_fps"] = 120
+    row["timestamp"] = (np.arange(4, dtype=np.float64) / 120.0).tolist()
+    row["provenance"]["contract"] = TARGET_REPLAY_V23_ROW_CONTRACT
+    row["provenance"].update(
+        reference_fps=120,
+        control_fps=120,
+        control_timestep_seconds=1.0 / 120.0,
+        physics_fps=480,
+        physics_timestep_seconds=1.0 / 480.0,
+        physics_substeps_per_control=4,
+    )
+    source = _source(row)
+    assert source.source_contract == TARGET_REPLAY_V23_ROW_CONTRACT
+    assert source.reference_fps == 120
+    assert source.control_fps == 120
+    assert source.physics_substeps_per_control == 4
 
 
 def test_direct_loader_requests_only_replay_columns(

@@ -188,14 +188,75 @@ KEYPOINT_NAMES = (
 SOURCE_OBJECT_ROTATION = "axis_angle_xyz_radians"
 TASK_QUATERNION_ORDER = "xyzw"
 MUJOCO_QUATERNION_ORDER = "wxyz"
+# Historical accepted replay clock. Production 100/120 Hz policy runs use
+# ``simulation_clock`` below; legacy replay modules retain these aliases.
 PHYSICS_TIMESTEP = 0.0025
 PHYSICS_SUBSTEPS_PER_TARGET = 2
 CONTROL_TIMESTEP = PHYSICS_TIMESTEP * PHYSICS_SUBSTEPS_PER_TARGET
+SUPPORTED_POLICY_FPS: Final = (100, 120)
+DEFAULT_POLICY_FPS: Final = 120
+SELECTED_POLICY_PHYSICS_SUBSTEPS: Final = 4
 RESIDUAL_ENABLED = False
 FLOOR_TOP_Z = -0.001
 OBJECT_CLEARANCE = 0.001
 JOINT_FRICTIONLOSS = 0.1
 JOINT_ARMATURE = 0.01
+
+
+@dataclass(frozen=True)
+class SimulationClock:
+    """Uniform policy clock and its exact integer physics subdivision."""
+
+    policy_fps: int
+    control_timestep: float
+    physics_fps: int
+    physics_timestep: float
+    physics_substeps_per_control: int
+    legacy: bool = False
+
+    def __post_init__(self) -> None:
+        if self.policy_fps < 1 or self.physics_fps < 1:
+            raise ValueError("simulation clock frequencies must be positive")
+        if self.physics_substeps_per_control < 1:
+            raise ValueError("simulation clock substeps must be positive")
+        if not np.isclose(
+            self.control_timestep,
+            self.physics_timestep * self.physics_substeps_per_control,
+            rtol=0.0,
+            atol=1e-15,
+        ):
+            raise ValueError("simulation clock physics steps do not equal one control period")
+        if self.physics_fps != self.policy_fps * self.physics_substeps_per_control:
+            raise ValueError("simulation clock frequencies do not match its substep ratio")
+
+
+def simulation_clock(policy_fps: int | None) -> SimulationClock:
+    """Resolve new coupled source/policy modes or the internal legacy clock."""
+
+    if policy_fps is None or policy_fps == 200:
+        return SimulationClock(
+            policy_fps=200,
+            control_timestep=CONTROL_TIMESTEP,
+            physics_fps=400,
+            physics_timestep=PHYSICS_TIMESTEP,
+            physics_substeps_per_control=PHYSICS_SUBSTEPS_PER_TARGET,
+            legacy=True,
+        )
+    if (
+        not isinstance(policy_fps, int)
+        or isinstance(policy_fps, bool)
+        or policy_fps not in SUPPORTED_POLICY_FPS
+    ):
+        raise ValueError(f"policy FPS must be one of {SUPPORTED_POLICY_FPS}")
+    substeps = SELECTED_POLICY_PHYSICS_SUBSTEPS
+    physics_fps = policy_fps * substeps
+    return SimulationClock(
+        policy_fps=policy_fps,
+        control_timestep=1.0 / policy_fps,
+        physics_fps=physics_fps,
+        physics_timestep=1.0 / physics_fps,
+        physics_substeps_per_control=substeps,
+    )
 
 
 @dataclass(frozen=True)

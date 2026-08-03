@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# GPU checkpoint -> compact replay/visual or explicit full 1:N synthetic Lance.
+# GPU checkpoint -> compact replay/visual or explicit full v2.3 synthetic Lance.
 # Usage:
 #   CHECKPOINT=/path/checkpoint-000500.pt ./synthesize.sh [object] [gesture] [num_envs] [gpu]
 

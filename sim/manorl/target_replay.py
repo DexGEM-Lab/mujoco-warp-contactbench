@@ -22,10 +22,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from sim.manorl.contracts import (
-    CONTROL_TIMESTEP,
     JOINT_DOF,
-    PHYSICS_SUBSTEPS_PER_TARGET,
+    SimulationClock,
     TrajectoryIdentity,
+    simulation_clock,
 )
 from sim.manorl.trajectory import (
     ReferenceTrajectory,
@@ -34,10 +34,15 @@ from sim.manorl.trajectory import (
     xyzw_to_wxyz,
 )
 
-TARGET_REPLAY_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
+TARGET_REPLAY_V22_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
+TARGET_REPLAY_V23_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_3"
+TARGET_REPLAY_ROW_CONTRACT = TARGET_REPLAY_V22_ROW_CONTRACT
 TARGET_REPLAY_COMPACT_ROW_CONTRACT = "synthetic_mano_target_replay_visual_v1"
+TARGET_REPLAY_FULL_ROW_CONTRACTS = frozenset(
+    (TARGET_REPLAY_V22_ROW_CONTRACT, TARGET_REPLAY_V23_ROW_CONTRACT)
+)
 TARGET_REPLAY_ROW_CONTRACTS = frozenset(
-    (TARGET_REPLAY_ROW_CONTRACT, TARGET_REPLAY_COMPACT_ROW_CONTRACT)
+    (*TARGET_REPLAY_FULL_ROW_CONTRACTS, TARGET_REPLAY_COMPACT_ROW_CONTRACT)
 )
 LANCE_TARGET_REPLAY_COLUMNS = (
     "index",
@@ -98,6 +103,66 @@ def _optional_positive_int(value: Any, *, context: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise TargetReplaySourceError(f"{context} must be a positive integer or null")
     return int(value)
+
+
+def _row_clock(
+    contract: str,
+    provenance: Mapping[str, Any],
+    data_fps: Any,
+) -> tuple[str, int | None, SimulationClock]:
+    if isinstance(data_fps, bool) or not isinstance(data_fps, int):
+        raise TargetReplaySourceError("trajectory_metadata.data_fps must be an integer")
+    try:
+        clock = simulation_clock(data_fps)
+    except (TypeError, ValueError) as exc:
+        raise TargetReplaySourceError(
+            "trajectory_metadata.data_fps is not a supported replay clock"
+        ) from exc
+    source_contract = (
+        _required_string(provenance, "source_contract", context="provenance")
+        if contract == TARGET_REPLAY_COMPACT_ROW_CONTRACT
+        else contract
+    )
+    if source_contract not in TARGET_REPLAY_FULL_ROW_CONTRACTS:
+        raise TargetReplaySourceError(
+            f"unsupported target replay source contract: {source_contract!r}"
+        )
+    explicit = contract in (
+        TARGET_REPLAY_V23_ROW_CONTRACT,
+        TARGET_REPLAY_COMPACT_ROW_CONTRACT,
+    )
+    reference_fps = provenance.get("reference_fps")
+    if source_contract == TARGET_REPLAY_V22_ROW_CONTRACT:
+        if clock.policy_fps != 200 or reference_fps is not None:
+            raise TargetReplaySourceError("legacy v2.2 replay rows must use 200 Hz")
+        reference_fps = None
+    else:
+        if reference_fps not in (None, 100, 120):
+            raise TargetReplaySourceError("provenance.reference_fps is invalid")
+        if clock.policy_fps in (100, 120) and reference_fps != clock.policy_fps:
+            raise TargetReplaySourceError(
+                "public reference/control replay clocks must be coupled"
+            )
+    if explicit:
+        for name, expected in (
+            ("control_fps", clock.policy_fps),
+            ("physics_fps", clock.physics_fps),
+            ("physics_substeps_per_control", clock.physics_substeps_per_control),
+        ):
+            if provenance.get(name) != expected:
+                raise TargetReplaySourceError(f"provenance.{name} is inconsistent")
+        for name, expected in (
+            ("control_timestep_seconds", clock.control_timestep),
+            ("physics_timestep_seconds", clock.physics_timestep),
+        ):
+            value = provenance.get(name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isclose(float(value), expected, rel_tol=0.0, abs_tol=1e-15)
+            ):
+                raise TargetReplaySourceError(f"provenance.{name} is inconsistent")
+    return source_contract, reference_fps, clock
 
 
 def _checkpoint_warp_ccd(
@@ -253,6 +318,9 @@ class TargetReplaySource:
     checkpoint_update: int
     checkpoint_sha256: str
     row_contract: str
+    source_contract: str
+    reference_fps: int | None
+    clock: SimulationClock
     warp_ccd_iterations: int | None
     warp_ccd_contacts_per_world: int | None
     movement_start: int
@@ -270,6 +338,18 @@ class TargetReplaySource:
     @property
     def transitions(self) -> int:
         return self.frames - 1
+
+    @property
+    def control_fps(self) -> int:
+        return self.clock.policy_fps
+
+    @property
+    def control_timestep(self) -> float:
+        return self.clock.control_timestep
+
+    @property
+    def physics_substeps_per_control(self) -> int:
+        return self.clock.physics_substeps_per_control
 
 
 def target_replay_source_from_row(
@@ -356,14 +436,7 @@ def target_replay_source_from_row(
             f"trajectory_metadata.total_frames={total_frames!r} does not match {frames} timestamps"
         )
     data_fps = metadata.get("data_fps")
-    if isinstance(data_fps, bool) or not isinstance(data_fps, (int, float)):
-        raise TargetReplaySourceError("trajectory_metadata.data_fps must be numeric")
-    if not math.isclose(
-        float(data_fps), 1.0 / CONTROL_TIMESTEP, rel_tol=0.0, abs_tol=1e-12
-    ):
-        raise TargetReplaySourceError(
-            "trajectory_metadata.data_fps disagrees with the control timestep"
-        )
+    source_contract, reference_fps, clock = _row_clock(contract, provenance, data_fps)
     hand = _right_hand(row, metadata)
     object_state = _object_state(row, metadata, object_type)
     recorded_qpos = np.asarray(hand.get("urdf_dof", ()), dtype=np.float64)
@@ -395,10 +468,10 @@ def target_replay_source_from_row(
         raise TargetReplaySourceError("timestamps must start at zero")
     deltas = np.diff(timestamps)
     if np.any(deltas <= 0) or not np.allclose(
-        deltas, CONTROL_TIMESTEP, rtol=0.0, atol=1e-10
+        deltas, clock.control_timestep, rtol=0.0, atol=1e-10
     ):
         raise TargetReplaySourceError(
-            f"timestamps must advance strictly by {CONTROL_TIMESTEP} seconds"
+            f"timestamps must advance strictly by {clock.control_timestep} seconds"
         )
     object_quaternion = Rotation.from_rotvec(object_rotvec).as_quat()
     quaternion_norms = np.linalg.norm(object_quaternion, axis=1)
@@ -422,6 +495,9 @@ def target_replay_source_from_row(
         checkpoint_update=checkpoint_update,
         checkpoint_sha256=checkpoint_sha256,
         row_contract=contract,
+        source_contract=source_contract,
+        reference_fps=reference_fps,
+        clock=clock,
         warp_ccd_iterations=ccd_iterations,
         warp_ccd_contacts_per_world=ccd_contacts,
         movement_start=movement_start,
@@ -493,6 +569,10 @@ def _trajectory_for_source(source: TargetReplaySource) -> ReferenceTrajectory:
         hand_sides=("right",),
         q_ref_by_side={"right": source.recorded_qpos},
         selected_hand_sides=("right",),
+        reference_fps=source.reference_fps,
+        control_fps=source.control_fps,
+        movement_start_step=source.movement_start,
+        movement_end_step=source.movement_end,
     )
 
 
@@ -548,6 +628,9 @@ class TargetDofReplay:
                 residual_enabled=False,
                 point_sampling_backend="numpy_per_env",
                 capture_transition_diagnostics=False,
+                reference_fps=source.reference_fps,
+                control_fps=source.control_fps,
+                post_padding=0,
                 contact_capacity=recommended_warp_contact_capacity(1, ("right",)),
                 warp_ccd_iterations=ccd_iterations,
                 warp_ccd_contacts_per_world=ccd_contacts,
@@ -609,7 +692,7 @@ class TargetDofReplay:
         return ReplayState(qpos, object_position, object_quaternion)
 
     def step(self) -> ReplayState:
-        """Apply the next row target and exactly two MJX-Warp substeps."""
+        """Apply the next row target and its recorded MJX-Warp substeps."""
 
         if self._frame >= self.source.transitions:
             raise IndexError("target replay is at its final frame; call reset()")
@@ -621,7 +704,7 @@ class TargetDofReplay:
                 environment.jp.asarray(ctrl), environment.device
             )
         )
-        for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
+        for _ in range(self.source.physics_substeps_per_control):
             environment.data = environment._step_fn(environment.data)
             environment._check_warp_ccd_overflow()
         self._frame += 1
@@ -707,12 +790,19 @@ class TargetDofReplay:
             "source_identity": self.source.source_identity,
             "checkpoint_update": self.source.checkpoint_update,
             "checkpoint_sha256": self.source.checkpoint_sha256,
+            "row_contract": self.source.row_contract,
+            "source_contract": self.source.source_contract,
             "object": self.source.object_type,
             "device": self.device,
             "states": transitions + 1,
             "transitions": transitions,
-            "physics_substeps_per_target": PHYSICS_SUBSTEPS_PER_TARGET,
-            "control_timestep_seconds": CONTROL_TIMESTEP,
+            "reference_fps": self.source.reference_fps,
+            "control_fps": self.source.control_fps,
+            "control_timestep_seconds": self.source.control_timestep,
+            "physics_fps": self.source.clock.physics_fps,
+            "physics_timestep_seconds": self.source.clock.physics_timestep,
+            "physics_substeps_per_control": self.source.physics_substeps_per_control,
+            "physics_substeps_per_target": self.source.physics_substeps_per_control,
             "physics_overrides": list(self.physics_overrides),
             "initial_max_qpos_abs_error": initial_qpos_error,
             "initial_object_position_error_m": initial_object_position_error,
@@ -823,7 +913,8 @@ def render_target_replay(
                 time.sleep(
                     max(
                         0.0,
-                        CONTROL_TIMESTEP / speed - (time.perf_counter() - started),
+                        replay.source.control_timestep / speed
+                        - (time.perf_counter() - started),
                     )
                 )
             if not loop:

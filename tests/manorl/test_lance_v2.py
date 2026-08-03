@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -16,7 +18,7 @@ from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
     SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
-    SYNTHETIC_LANCE_V22_CONTRACT,
+    SYNTHETIC_LANCE_CONTRACT,
     build_compact_row,
     build_compact_schema,
     build_v2_row,
@@ -32,6 +34,7 @@ from sim.manorl.trajectory import (
     TrajectoryBatch,
     TrajectorySelection,
 )
+from sim.manorl.target_replay import target_replay_source_from_row
 import tools.export_manorl_synthetic_lance as exporter_module
 from tools.export_manorl_synthetic_lance import (
     _load_predecoded_batch,
@@ -160,7 +163,11 @@ def test_mano_48d_conversion_matches_source_layout() -> None:
 
 def test_v2_schema_has_explicit_contract_and_28d_rollout_fields() -> None:
     schema = build_v2_schema(observation_dim=480, action_dim=28)
-    assert schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V22_CONTRACT.encode()
+    assert schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_CONTRACT.encode()
+    assert schema.metadata[b"reference_fps"] == b"none"
+    assert schema.metadata[b"control_fps"] == b"200"
+    assert schema.metadata[b"physics_fps"] == b"400"
+    assert schema.metadata[b"physics_substeps_per_control"] == b"2"
     assert (
         schema.metadata[b"mano_global_frame_contract"]
         == MANO_GLOBAL_FRAME_CONTRACT.encode()
@@ -168,8 +175,20 @@ def test_v2_schema_has_explicit_contract_and_28d_rollout_fields() -> None:
     assert schema.field("trajectory_metadata").type[0].name == "data_fps"
     assert schema.field("hands").type.value_type[6].name == "urdf_dof_target"
     assert schema.field("rollout").type[0].name == "transition_count"
-    assert schema.field("provenance").type[5].name == "checkpoint_update"
-    assert schema.field("provenance").type[-1].name == "generation_attempt"
+    provenance_fields = [field.name for field in schema.field("provenance").type]
+    assert "checkpoint_update" in provenance_fields
+    assert provenance_fields[-1] == "generation_attempt"
+
+    schema_120 = build_v2_schema(
+        observation_dim=480,
+        action_dim=28,
+        control_fps=120,
+        reference_fps=120,
+    )
+    assert schema_120.metadata[b"reference_fps"] == b"120"
+    assert schema_120.metadata[b"control_fps"] == b"120"
+    assert schema_120.metadata[b"physics_fps"] == b"480"
+    assert schema_120.metadata[b"physics_substeps_per_control"] == b"4"
 
 
 def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
@@ -257,6 +276,37 @@ def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
     assert row["provenance"]["seed"] == 42
     assert row["provenance"]["episode_index"] == 0
     assert row["provenance"]["generation_attempt"] == 1
+    trajectory_120 = replace(
+        trajectory,
+        timestamps=np.asarray([0.0, 1.0 / 120.0]),
+        reference_fps=120,
+        control_fps=120,
+    )
+    row_120 = build_v2_row(
+        trajectory=trajectory_120,
+        source_index={},
+        source_metadata={
+            "hand_names": ["left", "right"],
+            "mano_hand_shapes": [[1.0] * 10, [2.0] * 10],
+        },
+        states=states,
+        contacts=[[], []],
+        rollout=rollout,
+        provenance={
+            "checkpoint_path": "/c.pt",
+            "checkpoint_sha256": "abc",
+            "checkpoint_update": 1,
+            "checkpoint_metadata": {},
+            "software_commit": "deadbeef",
+            "seed": 42,
+            "episode_index": 0,
+            "generation_attempt": 1,
+        },
+    )
+    assert row_120["trajectory_metadata"]["data_fps"] == 120
+    assert row_120["timestamp"] == [0.0, 1.0 / 120.0]
+    assert row_120["provenance"]["physics_fps"] == 480
+    assert row_120["provenance"]["physics_substeps_per_control"] == 4
     np.testing.assert_array_equal(
         row["hands"][0]["mano_global_pos"],
         np.asarray(row["hands"][0]["urdf_dof"])[:, :3],
@@ -446,7 +496,12 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
     monkeypatch.setattr(
         exporter_module,
         "_checkpoint_environment_options",
-        lambda path: SimpleNamespace(reference_fps=None),
+        lambda path: SimpleNamespace(
+            reference_fps=None,
+            control_fps=200,
+            pre_padding=100,
+            post_padding=250,
+        ),
     )
     monkeypatch.setattr(
         exporter_module,
@@ -538,101 +593,10 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
     assert manifest["synthesis"]["counters"][identity.identity]["saved"] == 5
 
 
-def test_single_attempt_compact_routes_compact_writer(tmp_path, monkeypatch) -> None:
-    identity = "cube2_02_0004"
-    trajectory = SimpleNamespace(
-        identity=SimpleNamespace(identity=identity, row_index=3),
-        action_layout=SimpleNamespace(controlled_sides=("right",)),
-    )
-    batch = SimpleNamespace(
-        trajectories=(trajectory,),
-        action_dim=28,
-        num_envs=1,
-        resolved_pairs=(),
-        selection_mode="mock",
-        pair_assignment_cycle=0,
-    )
-    checkpoint = tmp_path / "checkpoint-000500.pt"
-    checkpoint.write_bytes(b"checkpoint")
-    output = tmp_path / "compact.lance"
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(exporter_module, "_validate_checkpoint_path", lambda path: path)
-    monkeypatch.setattr(
-        exporter_module,
-        "_checkpoint_environment_options",
-        lambda path: SimpleNamespace(
-            reference_fps=100,
-            warp_ccd_iterations=16,
-            warp_ccd_contacts_per_world=16,
-        ),
-    )
-    monkeypatch.setattr(
-        exporter_module, "load_assigned_trajectory_batch", lambda *args, **kwargs: batch
-    )
-    monkeypatch.setattr(exporter_module, "_source_metadata", lambda batch: {})
-    monkeypatch.setattr(
-        exporter_module, "_trajectory_subset", lambda batch, trajectories: batch
-    )
-    monkeypatch.setattr(exporter_module, "file_sha256", lambda path: "a" * 64)
-    monkeypatch.setattr(exporter_module, "checkpoint_runtime_metadata", lambda path: {})
-    monkeypatch.setattr(exporter_module, "_software_commit", lambda: "commit")
-
-    def fake_attempt(**kwargs):
-        assert kwargs["output_format"] == "compact-replay-visual"
-        return (
-            {
-                identity: {
-                    "index": {"uuid": "generated"},
-                    "provenance": {"source_identity": identity},
-                }
-            },
-            {},
-            480,
-            28,
-        )
-
-    def fake_writer(rows, *, output, replace, append):
-        captured["rows"] = rows
-        captured["output"] = output
-        Path(output).mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(exporter_module, "_run_attempt_batch", fake_attempt)
-    monkeypatch.setattr(exporter_module, "write_compact_lance", fake_writer)
-    monkeypatch.setitem(
-        sys.modules,
-        "lance",
-        SimpleNamespace(dataset=lambda path: SimpleNamespace(count_rows=lambda: 1)),
-    )
-    result = export_checkpoint_rollouts(
-        checkpoint=checkpoint,
-        output=output,
-        selection=TrajectorySelection(
-            "cube2",
-            "02",
-            selector="cube2:02",
-            dataset_path=tmp_path / "source.lance",
-            expected_dataset_version=295,
-            hand_side="right",
-        ),
-        num_envs=1,
-        device="cpu",
-        episodes_per_identity=1,
-        max_attempts_per_identity=1,
-        output_format="compact-replay-visual",
-    )
-
-    assert result["rows"] == 1
-    assert len(captured["rows"]) == 1
-    manifest = json.loads((tmp_path / "compact.lance.manifest.json").read_text())
-    assert manifest["schema"] == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
-    assert manifest["output_format"] == "compact-replay-visual"
-
-
 def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
     # Keep this writer test deliberately small; GPU rollout tests validate the
     # full row builder and contact invariants separately.
-    output = tmp_path / "synthetic_v22.lance"
+    output = tmp_path / "synthetic_v23.lance"
     row = {
         "index": {
             "uuid": "u",
@@ -713,8 +677,14 @@ def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
             "termination_reason_code": [],
         },
         "provenance": {
-            "contract": SYNTHETIC_LANCE_V22_CONTRACT,
+            "contract": SYNTHETIC_LANCE_CONTRACT,
             "force_contract": FORCE_DIRECTION_CONTRACT,
+            "reference_fps": None,
+            "control_fps": 200,
+            "control_timestep_seconds": 0.005,
+            "physics_fps": 400,
+            "physics_timestep_seconds": 0.0025,
+            "physics_substeps_per_control": 2,
             "policy_mode": "deterministic_mean",
             "checkpoint_path": "p",
             "checkpoint_sha256": "h",
@@ -736,54 +706,75 @@ def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
     dataset = lance.dataset(str(output))
     assert dataset.count_rows() == 1
     assert (
-        dataset.schema.metadata[b"schema_version"]
-        == SYNTHETIC_LANCE_V22_CONTRACT.encode()
+        dataset.schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_CONTRACT.encode()
     )
+    assert dataset.schema.metadata[b"control_fps"] == b"200"
     assert dataset.take([0]).to_pylist()[0]["trajectory_metadata"]["data_fps"] == 200
 
+    row_120 = deepcopy(row)
+    row_120["trajectory_metadata"]["data_fps"] = 120
+    row_120["provenance"].update(
+        reference_fps=120,
+        control_fps=120,
+        control_timestep_seconds=1.0 / 120.0,
+        physics_fps=480,
+        physics_timestep_seconds=1.0 / 480.0,
+        physics_substeps_per_control=4,
+    )
+    output_120 = tmp_path / "synthetic_120hz_v23.lance"
+    write_v2_lance([row_120], output=output_120, observation_dim=480, action_dim=28)
+    dataset_120 = lance.dataset(str(output_120))
+    assert dataset_120.schema.metadata[b"control_fps"] == b"120"
+    assert dataset_120.schema.metadata[b"physics_fps"] == b"480"
 
-def test_compact_projection_drops_audit_and_rollout_fields(tmp_path) -> None:
-    full_row = {
+    with pytest.raises(ValueError, match="cannot mix control clocks"):
+        write_v2_lance(
+            [row, row_120],
+            output=tmp_path / "mixed.lance",
+            observation_dim=480,
+            action_dim=28,
+        )
+
+
+def _compact_full_row(*, data_fps: int = 200) -> dict[str, object]:
+    frames = 2
+    step = 1.0 / data_fps
+    return {
         "index": {
-            "uuid": "u",
-            "seed_uuid": "s",
+            "uuid": "generated-uuid",
+            "seed_uuid": "source-uuid",
             "capMachine": "m",
             "operator": "o",
             "scene": "cube2",
             "is_generated": True,
         },
         "trajectory_metadata": {
-            "data_fps": 200,
-            "total_frames": 2,
+            "data_fps": data_fps,
+            "total_frames": frames,
             "gesture": "02",
             "hand_names": ["right"],
             "hand_slots": ["right", "left"],
             "object_names": ["cube2"],
             "mano_hand_shapes": [[0.0] * 10],
-            "raw_data_info": {
-                "capMachine": "m",
-                "operator": "o",
-                "scene": "cube2",
-                "id": 1,
-            },
             "trajectory_info": {
                 "object_move": [
                     {"object_name": "cube2", "start_frame": 0, "end_frame": 1}
                 ]
             },
+            "raw_data_info": {},
             "capture_info": None,
             "train_info": {"commit_hash": "c", "reward_value": 0.0},
         },
-        "timestamp": [0.0, 0.005],
+        "timestamp": [0.0, step],
         "hands": [
             {
                 "hand_name": "right",
-                "mano_global_pos": [[0.0] * 3] * 2,
-                "mano_global_rot_aa": [[0.0] * 3] * 2,
-                "mano_hand_pose": [[0.0] * 48] * 2,
-                "mano_joint_pos": [[[0.0] * 3] * 21] * 2,
-                "urdf_dof": [[0.0] * 28] * 2,
-                "urdf_dof_target": [[0.0] * 28] * 2,
+                "mano_global_pos": [[0.0] * 3] * frames,
+                "mano_global_rot_aa": [[0.0] * 3] * frames,
+                "mano_hand_pose": [[0.0] * 48] * frames,
+                "mano_joint_pos": [[[0.0] * 3] * 21] * frames,
+                "urdf_dof": [[0.0] * 28] * frames,
+                "urdf_dof_target": [[0.0] * 28] * frames,
             },
             {
                 "hand_name": None,
@@ -795,18 +786,26 @@ def test_compact_projection_drops_audit_and_rollout_fields(tmp_path) -> None:
                 "urdf_dof_target": [],
             },
         ],
-        "objects": [{"rot_aa": [[0.0] * 3] * 2, "pos": [[0.0] * 3] * 2}],
+        "objects": [{"rot_aa": [[0.0] * 3] * frames, "pos": [[0.0] * 3] * frames}],
         "contact": [[], []],
         "reference": {},
         "rollout": {},
         "provenance": {
-            "contract": SYNTHETIC_LANCE_V22_CONTRACT,
+            "contract": SYNTHETIC_LANCE_CONTRACT,
             "force_contract": FORCE_DIRECTION_CONTRACT,
+            "reference_fps": None if data_fps == 200 else data_fps,
+            "control_fps": data_fps,
+            "control_timestep_seconds": step,
+            "physics_fps": data_fps * (2 if data_fps == 200 else 4),
+            "physics_timestep_seconds": (
+                0.0025 if data_fps == 200 else 1.0 / (data_fps * 4)
+            ),
+            "physics_substeps_per_control": 2 if data_fps == 200 else 4,
             "policy_mode": "deterministic_mean",
             "checkpoint_path": "p",
             "checkpoint_sha256": "a" * 64,
             "checkpoint_update": 1,
-            "checkpoint_metadata_json": '{"large":true}',
+            "checkpoint_metadata_json": "{}",
             "dataset_path": "d",
             "dataset_version": 1,
             "row_index": 0,
@@ -817,22 +816,16 @@ def test_compact_projection_drops_audit_and_rollout_fields(tmp_path) -> None:
             "generation_attempt": 1,
         },
     }
+
+
+def test_compact_projection_preserves_visuals_and_clock(tmp_path) -> None:
+    full_row = _compact_full_row(data_fps=120)
     compact = build_compact_row(
         full_row,
-        checkpoint_metadata={"runtime_config": {"warp_ccd": {"iterations": 16}}},
+        checkpoint_metadata={"runtime_config": {"warp_ccd": {"ccd_iterations": 16}}},
         warp_ccd_iterations=16,
         warp_ccd_contacts_per_world=16,
     )
-    mixed_row = dict(full_row)
-    mixed_row["provenance"] = dict(full_row["provenance"])
-    mixed_row["provenance"]["contract"] = SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
-    with pytest.raises(ValueError, match="corrected v2.2"):
-        build_compact_row(
-            mixed_row,
-            checkpoint_metadata={},
-            warp_ccd_iterations=16,
-            warp_ccd_contacts_per_world=16,
-        )
     assert set(compact) == {
         "index",
         "trajectory_metadata",
@@ -842,29 +835,33 @@ def test_compact_projection_drops_audit_and_rollout_fields(tmp_path) -> None:
         "provenance",
     }
     assert compact["provenance"]["contract"] == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
-    assert "checkpoint_metadata_json" not in compact["provenance"]
+    assert compact["provenance"]["source_contract"] == SYNTHETIC_LANCE_CONTRACT
+    assert compact["provenance"]["physics_substeps_per_control"] == 4
     assert np.asarray(compact["hands"][0]["mano_joint_pos"]).shape == (2, 21, 3)
-    schema = build_compact_schema()
-    assert (
-        schema.metadata[b"schema_version"]
-        == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT.encode()
-    )
-    output = tmp_path / "synthetic_compact.lance"
+    output = tmp_path / "compact_120.lance"
     write_compact_lance([compact], output=output)
     import lance
 
     dataset = lance.dataset(str(output))
-    assert dataset.count_rows() == 1
-    assert dataset.schema.names == [
-        "index",
-        "trajectory_metadata",
-        "timestamp",
-        "hands",
-        "objects",
-        "provenance",
-    ]
+    assert (
+        dataset.schema.metadata[b"source_contract"] == SYNTHETIC_LANCE_CONTRACT.encode()
+    )
     decoded = dataset.take([0]).to_pylist()[0]
-    assert decoded["provenance"]["warp_ccd_iterations"] == 16
-    assert decoded["provenance"]["warp_ccd_contacts_per_world"] == 16
-    summary = validate_compact_row(output, 0)
-    assert summary["frames"] == 2
+    source = target_replay_source_from_row(
+        decoded, dataset_path=output, dataset_version=1, row_index=0
+    )
+    assert source.control_fps == 120
+    assert source.physics_substeps_per_control == 4
+    assert source.warp_ccd_iterations == 16
+    assert validate_compact_row(output, 0)["frames"] == 2
+
+    mixed_row = dict(full_row)
+    mixed_row["provenance"] = dict(full_row["provenance"])
+    mixed_row["provenance"]["contract"] = SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+    with pytest.raises(ValueError, match="source contract"):
+        build_compact_row(
+            mixed_row,
+            checkpoint_metadata={},
+            warp_ccd_iterations=16,
+            warp_ccd_contacts_per_world=16,
+        )

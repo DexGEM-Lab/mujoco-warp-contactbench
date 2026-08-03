@@ -1,4 +1,4 @@
-"""Corrected v2.2 synthetic Lance contract for repeated checkpoint rollouts."""
+"""Clock-aware synthetic Lance contracts for repeated checkpoint rollouts."""
 
 from __future__ import annotations
 
@@ -14,13 +14,24 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
-from sim.manorl.contracts import CONTROL_TIMESTEP, JOINT_DOF, KEYPOINT_NAMES
+from sim.manorl.contracts import (
+    JOINT_DOF,
+    KEYPOINT_NAMES,
+    SimulationClock,
+    simulation_clock,
+)
 from sim.manorl.environment import MaterializedContactBuffers, MaterializedState
 from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 from sim.manorl.trajectory import ReferenceTrajectory, wxyz_to_xyzw
 
 SYNTHETIC_LANCE_V22_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
+SYNTHETIC_LANCE_V23_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_3"
+SYNTHETIC_LANCE_CONTRACT = SYNTHETIC_LANCE_V23_CONTRACT
+SYNTHETIC_LANCE_SOURCE_CONTRACTS = (
+    SYNTHETIC_LANCE_V22_CONTRACT,
+    SYNTHETIC_LANCE_V23_CONTRACT,
+)
 SYNTHETIC_LANCE_COMPACT_V1_CONTRACT = "synthetic_mano_target_replay_visual_v1"
 SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL = "full"
 SYNTHETIC_LANCE_OUTPUT_FORMAT_COMPACT = "compact-replay-visual"
@@ -31,6 +42,66 @@ SYNTHETIC_LANCE_OUTPUT_FORMATS = (
 FORCE_DIRECTION_CONTRACT = "normal_only_hand_to_object_world_joint_object_scale_1p0"
 MANO_GLOBAL_FRAME_CONTRACT = "urdf_floating_root_translation_intrinsic_XYZ_to_rotvec_v1"
 HAND_SLOT_ORDER = ("right", "left")
+
+
+def _source_clock(
+    source_contract: str,
+    control_fps: Any,
+    provenance: Mapping[str, Any],
+) -> tuple[SimulationClock, int | None]:
+    if source_contract not in SYNTHETIC_LANCE_SOURCE_CONTRACTS:
+        raise ValueError(f"unsupported compact source contract: {source_contract!r}")
+    if isinstance(control_fps, bool) or not isinstance(control_fps, int):
+        raise ValueError("synthetic rows must record integer data_fps")
+    clock = simulation_clock(control_fps)
+    if source_contract == SYNTHETIC_LANCE_V22_CONTRACT:
+        if clock.policy_fps != 200:
+            raise ValueError("legacy v2.2 compact sources must use 200 Hz")
+        if provenance.get("reference_fps") is not None:
+            raise ValueError("legacy v2.2 compact sources cannot record reference_fps")
+        for name, expected in (
+            ("control_fps", clock.policy_fps),
+            ("physics_fps", clock.physics_fps),
+            ("physics_substeps_per_control", clock.physics_substeps_per_control),
+        ):
+            if name in provenance and provenance.get(name) != expected:
+                raise ValueError(f"legacy v2.2 compact source has inconsistent {name}")
+        for name, expected in (
+            ("control_timestep_seconds", clock.control_timestep),
+            ("physics_timestep_seconds", clock.physics_timestep),
+        ):
+            value = provenance.get(name)
+            if name in provenance and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not np.isclose(float(value), expected, rtol=0.0, atol=1e-15)
+            ):
+                raise ValueError(f"legacy v2.2 compact source has inconsistent {name}")
+        return clock, None
+    reference_fps = provenance.get("reference_fps")
+    if reference_fps not in (None, 100, 120):
+        raise ValueError("v2.3 compact source has invalid reference_fps")
+    if clock.policy_fps in (100, 120) and reference_fps != clock.policy_fps:
+        raise ValueError("v2.3 public reference/control clocks must be coupled")
+    for name, expected in (
+        ("control_fps", clock.policy_fps),
+        ("physics_fps", clock.physics_fps),
+        ("physics_substeps_per_control", clock.physics_substeps_per_control),
+    ):
+        if provenance.get(name) != expected:
+            raise ValueError(f"v2.3 compact source has inconsistent {name}")
+    for name, expected in (
+        ("control_timestep_seconds", clock.control_timestep),
+        ("physics_timestep_seconds", clock.physics_timestep),
+    ):
+        value = provenance.get(name)
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not np.isclose(float(value), expected, rtol=0.0, atol=1e-15)
+        ):
+            raise ValueError(f"v2.3 compact source has inconsistent {name}")
+    return clock, reference_fps
 
 
 def file_sha256(path: str | Path) -> str:
@@ -187,13 +258,24 @@ def corrected_contact_frames(
     return output
 
 
-def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
+def build_v2_schema(
+    *,
+    observation_dim: int,
+    action_dim: int,
+    control_fps: int = 200,
+    reference_fps: int | None = None,
+) -> Any:
     """Build the explicit Arrow schema; no empty-list field is inferred as null."""
 
     import pyarrow as pa
 
     if observation_dim < 1 or action_dim < 1:
         raise ValueError("v2 schema dimensions must be positive")
+    clock = simulation_clock(control_fps)
+    if reference_fps not in (None, 100, 120):
+        raise ValueError("synthetic reference_fps must be 100, 120, or None")
+    if control_fps in (100, 120) and reference_fps != control_fps:
+        raise ValueError("public synthetic clocks require reference_fps == control_fps")
     fixed = lambda size: pa.list_(pa.float32(), size)
     contact_pair = pa.struct(
         [
@@ -236,7 +318,7 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
     )
     metadata = {
         b"schema": b"synthetic",
-        b"schema_version": SYNTHETIC_LANCE_V22_CONTRACT.encode(),
+        b"schema_version": SYNTHETIC_LANCE_CONTRACT.encode(),
         b"mano_global_frame_contract": MANO_GLOBAL_FRAME_CONTRACT.encode(),
         b"reward_contract": REWARD_CONTRACT_ID.encode(),
         b"ppo_reward_contract": PPO_REWARD_CONTRACT_ID.encode(),
@@ -244,7 +326,16 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
         b"default_max_attempts_per_identity": b"10",
         b"hand_slot_order": b"right,left",
         b"mano_dof_dim": b"28",
-        b"control_timestep_seconds": str(CONTROL_TIMESTEP).encode(),
+        b"reference_fps": (
+            b"none" if reference_fps is None else str(reference_fps).encode()
+        ),
+        b"control_fps": str(clock.policy_fps).encode(),
+        b"control_timestep_seconds": str(clock.control_timestep).encode(),
+        b"physics_fps": str(clock.physics_fps).encode(),
+        b"physics_timestep_seconds": str(clock.physics_timestep).encode(),
+        b"physics_substeps_per_control": str(
+            clock.physics_substeps_per_control
+        ).encode(),
         b"force_contract": FORCE_DIRECTION_CONTRACT.encode(),
     }
     return pa.schema(
@@ -353,6 +444,12 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
                     [
                         ("contract", pa.string()),
                         ("force_contract", pa.string()),
+                        ("reference_fps", pa.int64()),
+                        ("control_fps", pa.int64()),
+                        ("control_timestep_seconds", pa.float64()),
+                        ("physics_fps", pa.int64()),
+                        ("physics_timestep_seconds", pa.float64()),
+                        ("physics_substeps_per_control", pa.int64()),
                         ("policy_mode", pa.string()),
                         ("checkpoint_path", pa.string()),
                         ("checkpoint_sha256", pa.string()),
@@ -374,11 +471,28 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
     )
 
 
-def build_compact_schema() -> Any:
-    """Build the replay/visual schema without audit and rollout intermediates."""
+def build_compact_schema(
+    *,
+    source_contract: str = SYNTHETIC_LANCE_CONTRACT,
+    control_fps: int = 200,
+    reference_fps: int | None = None,
+) -> Any:
+    """Build a clock-explicit replay/visual schema without audit intermediates."""
 
     import pyarrow as pa
 
+    clock = simulation_clock(control_fps)
+    source_provenance = {
+        "reference_fps": reference_fps,
+        "control_fps": clock.policy_fps,
+        "control_timestep_seconds": clock.control_timestep,
+        "physics_fps": clock.physics_fps,
+        "physics_timestep_seconds": clock.physics_timestep,
+        "physics_substeps_per_control": clock.physics_substeps_per_control,
+    }
+    clock, reference_fps = _source_clock(
+        source_contract, control_fps, source_provenance
+    )
     fixed = lambda size: pa.list_(pa.float32(), size)
     hand = pa.struct(
         [
@@ -401,11 +515,20 @@ def build_compact_schema() -> Any:
     metadata = {
         b"schema": b"synthetic",
         b"schema_version": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT.encode(),
-        b"source_contract": SYNTHETIC_LANCE_V22_CONTRACT.encode(),
+        b"source_contract": source_contract.encode(),
         b"mano_global_frame_contract": MANO_GLOBAL_FRAME_CONTRACT.encode(),
         b"hand_slot_order": b"right,left",
         b"mano_dof_dim": b"28",
-        b"control_timestep_seconds": str(CONTROL_TIMESTEP).encode(),
+        b"reference_fps": (
+            b"none" if reference_fps is None else str(reference_fps).encode()
+        ),
+        b"control_fps": str(clock.policy_fps).encode(),
+        b"control_timestep_seconds": str(clock.control_timestep).encode(),
+        b"physics_fps": str(clock.physics_fps).encode(),
+        b"physics_timestep_seconds": str(clock.physics_timestep).encode(),
+        b"physics_substeps_per_control": str(
+            clock.physics_substeps_per_control
+        ).encode(),
         b"compact_projection": b"replay_visual_v1",
         b"full_checkpoint_metadata": b"external_manifest_only",
     }
@@ -457,7 +580,14 @@ def build_compact_schema() -> Any:
                 pa.struct(
                     [
                         ("contract", pa.string()),
+                        ("source_contract", pa.string()),
                         ("force_contract", pa.string()),
+                        ("reference_fps", pa.int64()),
+                        ("control_fps", pa.int64()),
+                        ("control_timestep_seconds", pa.float64()),
+                        ("physics_fps", pa.int64()),
+                        ("physics_timestep_seconds", pa.float64()),
+                        ("physics_substeps_per_control", pa.int64()),
                         ("policy_mode", pa.string()),
                         ("checkpoint_path", pa.string()),
                         ("checkpoint_sha256", pa.string()),
@@ -493,14 +623,16 @@ def build_compact_row(
     warp_ccd_iterations: int,
     warp_ccd_contacts_per_world: int,
 ) -> dict[str, Any]:
-    """Project one full v2 row into the explicit compact replay/visual contract."""
+    """Project one v2.2/v2.3 full row into the compact replay/visual contract."""
 
     if warp_ccd_iterations is None or warp_ccd_contacts_per_world is None:
         raise ValueError("compact projection requires explicit Warp CCD settings")
     provenance = dict(full_row.get("provenance") or {})
-    if provenance.get("contract") != SYNTHETIC_LANCE_V22_CONTRACT:
-        raise ValueError("compact projection requires a corrected v2.2 source row")
+    source_contract = provenance.get("contract")
     metadata = dict(full_row.get("trajectory_metadata") or {})
+    clock, reference_fps = _source_clock(
+        str(source_contract), metadata.get("data_fps"), provenance
+    )
     compact_metadata = {
         name: metadata[name]
         for name in (
@@ -530,7 +662,14 @@ def build_compact_row(
         )
     compact_provenance = {
         "contract": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+        "source_contract": source_contract,
         "force_contract": provenance.get("force_contract"),
+        "reference_fps": reference_fps,
+        "control_fps": clock.policy_fps,
+        "control_timestep_seconds": clock.control_timestep,
+        "physics_fps": clock.physics_fps,
+        "physics_timestep_seconds": clock.physics_timestep,
+        "physics_substeps_per_control": clock.physics_substeps_per_control,
         "policy_mode": provenance.get("policy_mode"),
         "checkpoint_path": provenance.get("checkpoint_path"),
         "checkpoint_sha256": provenance.get("checkpoint_sha256"),
@@ -557,6 +696,20 @@ def build_compact_row(
     }
 
 
+def _compact_row_clock(
+    row: Mapping[str, Any]
+) -> tuple[str, SimulationClock, int | None]:
+    provenance = dict(row.get("provenance") or {})
+    if provenance.get("contract") != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+        raise ValueError("compact writer requires compact replay/visual rows")
+    metadata = dict(row.get("trajectory_metadata") or {})
+    source_contract = str(provenance.get("source_contract"))
+    clock, reference_fps = _source_clock(
+        source_contract, metadata.get("data_fps"), provenance
+    )
+    return source_contract, clock, reference_fps
+
+
 def write_compact_lance_stream(
     rows: Iterable[dict[str, Any]],
     *,
@@ -565,7 +718,7 @@ def write_compact_lance_stream(
     append: bool = False,
     batch_size: int = 16,
 ) -> Path:
-    """Stream compact rows to Lance without materializing the episode set."""
+    """Stream homogeneous compact rows without materializing the episode set."""
 
     import lance
     import pyarrow as pa
@@ -582,16 +735,43 @@ def write_compact_lance_stream(
     if append and not output_path.exists():
         raise FileNotFoundError(f"append target does not exist: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    schema = build_compact_schema()
     iterator = iter(rows)
     try:
         first = next(iterator)
     except StopIteration as exc:
         raise ValueError("cannot write an empty compact rollout dataset") from exc
+    source_contract, clock, reference_fps = _compact_row_clock(first)
+    schema = build_compact_schema(
+        source_contract=source_contract,
+        control_fps=clock.policy_fps,
+        reference_fps=reference_fps,
+    )
+    expected_identity = (source_contract, clock.policy_fps, reference_fps)
+    if append:
+        existing_metadata = {
+            key.decode(): value.decode()
+            for key, value in (
+                lance.dataset(str(output_path)).schema.metadata or {}
+            ).items()
+        }
+        expected_reference = "none" if reference_fps is None else str(reference_fps)
+        if (
+            existing_metadata.get("schema_version")
+            != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+            or existing_metadata.get("source_contract") != source_contract
+            or int(existing_metadata.get("control_fps", -1)) != clock.policy_fps
+            or existing_metadata.get("reference_fps") != expected_reference
+        ):
+            raise ValueError("append target uses a different compact clock/contract")
 
     def batches():
         pending = [first]
         for row in iterator:
+            row_source, row_clock, row_reference = _compact_row_clock(row)
+            if (row_source, row_clock.policy_fps, row_reference) != expected_identity:
+                raise ValueError(
+                    "one compact Lance dataset cannot mix clocks/contracts"
+                )
             pending.append(row)
             if len(pending) >= batch_size:
                 yield pa.RecordBatch.from_pylist(pending, schema=schema)
@@ -611,7 +791,7 @@ def write_compact_lance(
     replace: bool = False,
     append: bool = False,
 ) -> Path:
-    """Write compact replay/visual rows with an explicit non-v2.2 schema."""
+    """Write compact replay/visual rows with a clock-explicit schema."""
 
     return write_compact_lance_stream(
         rows,
@@ -639,7 +819,7 @@ def generated_rollout_uuid(
     return str(
         uuid.uuid5(
             namespace,
-            f"{SYNTHETIC_LANCE_V22_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
+            f"{SYNTHETIC_LANCE_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
         )
     )
 
@@ -657,6 +837,7 @@ def build_v2_row(
 ) -> dict[str, Any]:
     """Assemble one independent complete trajectory row."""
 
+    clock = simulation_clock(getattr(trajectory, "control_fps", None))
     urdf_dof = np.asarray(states["urdf_dof"], dtype=np.float64)
     total_frames = len(urdf_dof)
     if total_frames != len(trajectory.q_ref) or len(contacts) != total_frames:
@@ -730,7 +911,7 @@ def build_v2_row(
             "is_generated": True,
         },
         "trajectory_metadata": {
-            "data_fps": int(round(1.0 / CONTROL_TIMESTEP)),
+            "data_fps": clock.policy_fps,
             "total_frames": total_frames,
             "gesture": str(
                 source_metadata.get("gesture")
@@ -764,7 +945,7 @@ def build_v2_row(
             },
         },
         "timestamp": (
-            np.arange(total_frames, dtype=np.float64) * CONTROL_TIMESTEP
+            np.arange(total_frames, dtype=np.float64) * clock.control_timestep
         ).tolist(),
         "hands": [
             {
@@ -811,8 +992,14 @@ def build_v2_row(
             },
         },
         "provenance": {
-            "contract": SYNTHETIC_LANCE_V22_CONTRACT,
+            "contract": SYNTHETIC_LANCE_CONTRACT,
             "force_contract": FORCE_DIRECTION_CONTRACT,
+            "reference_fps": getattr(trajectory, "reference_fps", None),
+            "control_fps": clock.policy_fps,
+            "control_timestep_seconds": clock.control_timestep,
+            "physics_fps": clock.physics_fps,
+            "physics_timestep_seconds": clock.physics_timestep,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
             "policy_mode": "deterministic_mean",
             "checkpoint_path": str(provenance["checkpoint_path"]),
             "checkpoint_sha256": checkpoint_sha,
@@ -854,6 +1041,28 @@ def write_v2_lance(
     output_path = Path(output)
     if not rows:
         raise ValueError("cannot write an empty v2 rollout dataset")
+    control_fps_values = {
+        row.get("trajectory_metadata", {}).get("data_fps") for row in rows
+    }
+    if len(control_fps_values) != 1:
+        raise ValueError("one synthetic Lance dataset cannot mix control clocks")
+    control_fps = next(iter(control_fps_values))
+    if not isinstance(control_fps, int) or isinstance(control_fps, bool):
+        raise ValueError("synthetic Lance rows must record integer data_fps")
+    try:
+        clock = simulation_clock(control_fps)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("synthetic Lance rows record an invalid data_fps") from exc
+    reference_fps_values = {
+        row.get("provenance", {}).get("reference_fps") for row in rows
+    }
+    if len(reference_fps_values) != 1:
+        raise ValueError("one synthetic Lance dataset cannot mix reference clocks")
+    reference_fps = next(iter(reference_fps_values))
+    if reference_fps not in (None, 100, 120):
+        raise ValueError("synthetic Lance rows record an invalid reference_fps")
+    if control_fps in (100, 120) and reference_fps != control_fps:
+        raise ValueError("public synthetic clocks require reference_fps == control_fps")
     if append and replace:
         raise ValueError("append and replace are mutually exclusive")
     if output_path.exists() and not append:
@@ -862,10 +1071,32 @@ def write_v2_lance(
         shutil.rmtree(output_path)
     if append and not output_path.exists():
         raise FileNotFoundError(f"append target does not exist: {output_path}")
+    if append:
+        existing_metadata = {
+            key.decode(): value.decode()
+            for key, value in (
+                lance.dataset(str(output_path)).schema.metadata or {}
+            ).items()
+        }
+        if existing_metadata.get("schema_version") != SYNTHETIC_LANCE_CONTRACT:
+            raise ValueError(
+                "append target does not use the current synthetic Lance contract"
+            )
+        if int(existing_metadata.get("control_fps", -1)) != clock.policy_fps:
+            raise ValueError("append target uses a different control clock")
+        recorded_reference_fps = existing_metadata.get("reference_fps")
+        expected_reference_fps = "none" if reference_fps is None else str(reference_fps)
+        if recorded_reference_fps != expected_reference_fps:
+            raise ValueError("append target uses a different reference clock")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(
         list(rows),
-        schema=build_v2_schema(observation_dim=observation_dim, action_dim=action_dim),
+        schema=build_v2_schema(
+            observation_dim=observation_dim,
+            action_dim=action_dim,
+            control_fps=clock.policy_fps,
+            reference_fps=reference_fps,
+        ),
     )
     lance.write_dataset(table, str(output_path), mode="append" if append else "create")
     return output_path
