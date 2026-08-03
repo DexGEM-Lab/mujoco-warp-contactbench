@@ -1,16 +1,15 @@
-"""Versioned target-DOF replay packages and MJX-Warp playback.
+"""Direct Lance-row target-DOF replay in MJX-Warp.
 
-A target replay package is deliberately smaller than a Lance row.  It contains
-only the recorded physical state needed to initialize and score a replay, the
-post-controller target vectors to apply as ``data.ctrl``, and inspectable JSON
-metadata.  The loader never opens Lance or a policy checkpoint.
+The source of truth is one explicit synthetic Lance row.  The decoder extracts
+only the arrays and lineage needed for replay, then applies the row's
+post-controller targets directly to ``data.ctrl``.  No NPZ/JSON package or
+policy checkpoint is involved.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
 import json
 import math
 import os
@@ -35,211 +34,225 @@ from sim.manorl.trajectory import (
     xyzw_to_wxyz,
 )
 
-# Keep the first validated package spelling stable; it is already used by the
-# Server1→Server2 replay artifact and is part of the external package contract.
-TARGET_REPLAY_PACKAGE_SCHEMA = "manorl_target_dof_replay_package_v1"
-TARGET_REPLAY_TARGET_SEMANTICS = (
-    "hands[0].urdf_dof_target is the post-command_target controller ctrl vector"
-)
-_REQUIRED_ARRAYS = (
-    "timestamps",
-    "recorded_qpos",
-    "target_qpos",
-    "object_position",
-    "object_quaternion_xyzw",
+TARGET_REPLAY_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
+LANCE_TARGET_REPLAY_COLUMNS = (
+    "index",
+    "trajectory_metadata",
+    "timestamp",
+    "hands",
+    "objects",
+    "provenance",
 )
 _IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*_[0-9]{1,2}_[0-9]+$")
 
 
-class TargetReplayPackageError(ValueError):
-    """Raised when a replay package violates its versioned contract."""
-
-
-def sha256_file(path: Path) -> str:
-    """Return the SHA256 digest of one package payload or sidecar."""
-
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def metadata_path_for(package_path: Path) -> Path:
-    """Resolve the required human-readable sidecar for an NPZ package."""
-
-    if package_path.suffix.lower() != ".npz":
-        raise TargetReplayPackageError(
-            f"target replay package must have a .npz suffix: {package_path}"
-        )
-    return package_path.with_suffix(".json")
+class TargetReplaySourceError(ValueError):
+    """Raised when a Lance row cannot satisfy the target replay contract."""
 
 
 def _readonly(
-    values: np.ndarray, *, dtype: np.dtype[Any] = np.dtype(np.float64)
+    values: Any, *, dtype: np.dtype[Any] = np.dtype(np.float64)
 ) -> np.ndarray:
     result = np.ascontiguousarray(values, dtype=dtype)
     result.setflags(write=False)
     return result
 
 
-def _required_string(metadata: Mapping[str, Any], name: str) -> str:
-    value = metadata.get(name)
-    if not isinstance(value, str) or not value.strip():
-        raise TargetReplayPackageError(f"metadata.{name} must be a non-empty string")
+def _mapping(row: Mapping[str, Any], name: str) -> dict[str, Any]:
+    value = row.get(name)
+    if not isinstance(value, dict):
+        raise TargetReplaySourceError(f"Lance row field {name!r} must be a mapping")
     return value
 
 
-def _optional_positive_int(metadata: Mapping[str, Any], name: str) -> int | None:
-    value = metadata.get(name)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise TargetReplayPackageError(
-            f"metadata.{name} must be a positive integer or null"
+def _list(row: Mapping[str, Any], name: str) -> list[Any]:
+    value = row.get(name)
+    if not isinstance(value, list):
+        raise TargetReplaySourceError(f"Lance row field {name!r} must be a list")
+    return value
+
+
+def _required_string(values: Mapping[str, Any], name: str, *, context: str) -> str:
+    value = values.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise TargetReplaySourceError(f"{context}.{name} must be a non-empty string")
+    return value
+
+
+def _nonnegative_int(values: Mapping[str, Any], name: str, *, context: str) -> int:
+    value = values.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise TargetReplaySourceError(
+            f"{context}.{name} must be a non-negative integer"
         )
     return int(value)
 
 
-def _validate_metadata(
-    metadata: Mapping[str, Any], package_path: Path
+def _optional_positive_int(value: Any, *, context: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise TargetReplaySourceError(f"{context} must be a positive integer or null")
+    return int(value)
+
+
+def _checkpoint_warp_ccd(
+    provenance: Mapping[str, Any]
+) -> tuple[int | None, int | None]:
+    """Extract per-world CCD settings from serialized checkpoint metadata."""
+
+    candidates: list[Mapping[str, Any]] = []
+    direct = provenance.get("warp_ccd")
+    if isinstance(direct, dict):
+        candidates.append(direct)
+    raw_metadata = provenance.get("checkpoint_metadata_json")
+    if isinstance(raw_metadata, str) and raw_metadata:
+        try:
+            decoded = json.loads(raw_metadata)
+        except json.JSONDecodeError as exc:
+            raise TargetReplaySourceError(
+                "provenance.checkpoint_metadata_json is invalid JSON"
+            ) from exc
+        if isinstance(decoded, dict):
+            runtime = decoded.get("runtime_config")
+            environment = (
+                runtime.get("environment") if isinstance(runtime, dict) else None
+            )
+            warp = (
+                environment.get("warp_ccd") if isinstance(environment, dict) else None
+            )
+            if isinstance(warp, dict):
+                candidates.append(warp)
+    candidates.append(provenance)
+    for candidate in candidates:
+        raw_iterations = candidate.get(
+            "ccd_iterations", candidate.get("warp_ccd_iterations")
+        )
+        raw_contacts = candidate.get(
+            "contacts_per_world", candidate.get("warp_ccd_contacts_per_world")
+        )
+        if raw_iterations is None and raw_contacts is None:
+            continue
+        iterations = _optional_positive_int(
+            raw_iterations, context="Warp CCD iterations"
+        )
+        contacts = _optional_positive_int(
+            raw_contacts, context="Warp CCD contacts_per_world"
+        )
+        if iterations is None or contacts is None:
+            raise TargetReplaySourceError(
+                "Warp CCD provenance must provide both iterations and contacts_per_world"
+            )
+        return iterations, contacts
+    return None, None
+
+
+def _right_hand(row: Mapping[str, Any], metadata: Mapping[str, Any]) -> dict[str, Any]:
+    hands = _list(row, "hands")
+    slots = metadata.get("hand_slots")
+    names = metadata.get("hand_names")
+    hand_index: int | None = None
+    if isinstance(slots, list) and len(slots) == len(hands) and "right" in slots:
+        hand_index = slots.index("right")
+    elif isinstance(names, list) and len(names) == len(hands) and "right" in names:
+        hand_index = names.index("right")
+    elif isinstance(names, list) and names == ["right"] and hands:
+        # Corrected v2.2 stores canonical right/left slots while hand_names lists
+        # only active hands.  The right slot is canonical index zero.
+        hand_index = 0
+    if hand_index is None or not 0 <= hand_index < len(hands):
+        raise TargetReplaySourceError("Lance row has no resolvable right-hand slot")
+    hand = hands[hand_index]
+    if not isinstance(hand, dict):
+        raise TargetReplaySourceError("resolved right-hand slot must be a mapping")
+    hand_name = hand.get("hand_name")
+    if hand_name not in (None, "right"):
+        raise TargetReplaySourceError(
+            f"resolved right-hand slot reports incompatible hand_name={hand_name!r}"
+        )
+    return hand
+
+
+def _object_state(
+    row: Mapping[str, Any], metadata: Mapping[str, Any], object_type: str
 ) -> dict[str, Any]:
-    if metadata.get("schema") != TARGET_REPLAY_PACKAGE_SCHEMA:
-        raise TargetReplayPackageError(
-            f"unsupported target replay schema: {metadata.get('schema')!r}"
+    objects = _list(row, "objects")
+    names = metadata.get("object_names")
+    if not isinstance(names, list) or object_type not in names:
+        raise TargetReplaySourceError(
+            "trajectory_metadata.object_names does not identify index.scene"
         )
-    result = dict(metadata)
-    for name in (
-        "object",
-        "source_identity",
-        "source_uuid",
-        "target_semantics",
-        "npz_sha256",
+    object_index = names.index(object_type)
+    if not 0 <= object_index < len(objects) or not isinstance(
+        objects[object_index], dict
     ):
-        _required_string(result, name)
-    if result["target_semantics"] != TARGET_REPLAY_TARGET_SEMANTICS:
-        raise TargetReplayPackageError(
-            "package target_semantics does not identify post-command_target controller vectors"
-        )
-    if not _IDENTITY_RE.fullmatch(result["source_identity"]):
-        raise TargetReplayPackageError(
-            "metadata.source_identity must be object_action_sequence, for example cube1_01_1614"
-        )
-    if result["object"] != result["source_identity"].split("_", 1)[0]:
-        raise TargetReplayPackageError("metadata.object disagrees with source_identity")
-    for name in ("source_dataset_version", "source_row_index"):
-        value = result.get(name)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise TargetReplayPackageError(
-                f"metadata.{name} must be a non-negative integer"
-            )
-    control_timestep = result.get("control_timestep_seconds")
-    if isinstance(control_timestep, bool) or not isinstance(
-        control_timestep, (int, float)
-    ):
-        raise TargetReplayPackageError(
-            "metadata.control_timestep_seconds must be numeric"
-        )
-    if not math.isfinite(float(control_timestep)) or float(control_timestep) <= 0:
-        raise TargetReplayPackageError(
-            "metadata.control_timestep_seconds must be finite and positive"
-        )
-    if not math.isclose(
-        float(control_timestep), CONTROL_TIMESTEP, rel_tol=0.0, abs_tol=1e-12
-    ):
-        raise TargetReplayPackageError(
-            f"package control timestep {control_timestep} does not match project timestep {CONTROL_TIMESTEP}"
-        )
-    substeps = result.get("physics_substeps_per_target")
-    if substeps != PHYSICS_SUBSTEPS_PER_TARGET:
-        raise TargetReplayPackageError(
-            f"package physics_substeps_per_target={substeps!r} does not match {PHYSICS_SUBSTEPS_PER_TARGET}"
-        )
-    frames = result.get("frames")
-    transitions = result.get("transitions")
-    if isinstance(frames, bool) or not isinstance(frames, int) or frames < 2:
-        raise TargetReplayPackageError("metadata.frames must be an integer >= 2")
-    if transitions != frames - 1:
-        raise TargetReplayPackageError("metadata.transitions must equal frames - 1")
-    _optional_positive_int(result, "warp_ccd_iterations")
-    _optional_positive_int(result, "warp_ccd_contacts_per_world")
-    if len(result["npz_sha256"]) != hashlib.sha256().digest_size * 2:
-        raise TargetReplayPackageError(
-            "metadata.npz_sha256 must be a hexadecimal SHA256 digest"
-        )
-    try:
-        int(result["npz_sha256"], 16)
-    except ValueError as exc:
-        raise TargetReplayPackageError(
-            "metadata.npz_sha256 must be hexadecimal"
-        ) from exc
-    if not package_path.is_file():
-        raise TargetReplayPackageError(
-            f"target replay payload does not exist: {package_path}"
-        )
-    actual_sha256 = sha256_file(package_path)
-    if actual_sha256 != result["npz_sha256"]:
-        raise TargetReplayPackageError(
-            f"target replay payload SHA256 mismatch: expected {result['npz_sha256']}, got {actual_sha256}"
-        )
-    return result
+        raise TargetReplaySourceError("Lance row lacks the selected object state")
+    return objects[object_index]
 
 
-def _validate_arrays(
-    arrays: Mapping[str, Any], metadata: Mapping[str, Any]
-) -> dict[str, np.ndarray]:
-    missing = [name for name in _REQUIRED_ARRAYS if name not in arrays]
-    if missing:
-        raise TargetReplayPackageError(f"target replay payload omits arrays: {missing}")
-    values = {
-        name: np.asarray(arrays[name], dtype=np.float64) for name in _REQUIRED_ARRAYS
-    }
-    timestamps = values["timestamps"]
-    recorded_qpos = values["recorded_qpos"]
-    target_qpos = values["target_qpos"]
-    object_position = values["object_position"]
-    object_quaternion = values["object_quaternion_xyzw"]
-    frames = int(metadata["frames"])
-    expected = {
-        "timestamps": (frames,),
-        "recorded_qpos": (frames, JOINT_DOF),
-        "target_qpos": (frames, JOINT_DOF),
-        "object_position": (frames, 3),
-        "object_quaternion_xyzw": (frames, 4),
-    }
-    for name, shape in expected.items():
-        if values[name].shape != shape:
-            raise TargetReplayPackageError(
-                f"payload.{name} shape {values[name].shape} does not match {shape}"
-            )
-        if not np.all(np.isfinite(values[name])):
-            raise TargetReplayPackageError(f"payload.{name} contains non-finite values")
-    deltas = np.diff(timestamps)
-    if np.any(deltas <= 0):
-        raise TargetReplayPackageError("payload.timestamps must be strictly increasing")
-    if not np.allclose(
-        deltas,
-        float(metadata["control_timestep_seconds"]),
-        rtol=0.0,
-        atol=1e-10,
+def _movement_range(
+    metadata: Mapping[str, Any], object_type: str, frames: int
+) -> tuple[int, int]:
+    trajectory_info = metadata.get("trajectory_info")
+    movement = (
+        trajectory_info.get("object_move")
+        if isinstance(trajectory_info, dict)
+        else None
+    )
+    entry = (
+        next(
+            (
+                candidate
+                for candidate in movement
+                if isinstance(candidate, dict)
+                and candidate.get("object_name") == object_type
+            ),
+            None,
+        )
+        if isinstance(movement, list)
+        else None
+    )
+    start_value = entry.get("start_frame", 0) if entry is not None else 0
+    end_value = entry.get("end_frame", frames - 1) if entry is not None else frames - 1
+    if (
+        isinstance(start_value, bool)
+        or not isinstance(start_value, int)
+        or isinstance(end_value, bool)
+        or not isinstance(end_value, int)
     ):
-        raise TargetReplayPackageError(
-            "payload.timestamps must advance by metadata.control_timestep_seconds"
+        raise TargetReplaySourceError(
+            "object movement range must contain integer frames"
         )
-    quaternion_norms = np.linalg.norm(object_quaternion, axis=1)
-    if not np.allclose(quaternion_norms, 1.0, rtol=0.0, atol=1e-6):
-        raise TargetReplayPackageError(
-            "payload.object_quaternion_xyzw must contain normalized quaternions"
+    start = int(start_value)
+    end = int(end_value)
+    if not 0 <= start <= end < frames:
+        raise TargetReplaySourceError(
+            f"object movement range [{start}, {end}] is outside {frames} replay frames"
         )
-    return {name: _readonly(value) for name, value in values.items()}
+    return start, end
 
 
 @dataclass(frozen=True)
-class TargetReplayPackage:
-    """Validated immutable arrays and metadata for one target replay."""
+class TargetReplaySource:
+    """Validated direct Lance row and its generated/source lineage."""
 
-    path: Path
-    metadata: Mapping[str, Any]
+    dataset_path: Path
+    dataset_version: int
+    row_index: int
+    object_type: str
+    generated_uuid: str
+    source_dataset_path: str
+    source_dataset_version: int
+    source_row_index: int
+    source_uuid: str
+    source_identity: str
+    checkpoint_update: int
+    checkpoint_sha256: str
+    row_contract: str
+    warp_ccd_iterations: int | None
+    warp_ccd_contacts_per_world: int | None
+    movement_start: int
+    movement_end: int
     timestamps: np.ndarray
     recorded_qpos: np.ndarray
     target_qpos: np.ndarray
@@ -254,223 +267,227 @@ class TargetReplayPackage:
     def transitions(self) -> int:
         return self.frames - 1
 
-    @property
-    def source_identity(self) -> str:
-        return str(self.metadata["source_identity"])
 
-    @property
-    def object_type(self) -> str:
-        return str(self.metadata["object"])
-
-
-def load_target_replay_package(path: str | Path) -> TargetReplayPackage:
-    """Load and validate one NPZ package plus its JSON sidecar.
-
-    This function intentionally has no Lance, checkpoint, JAX, or MuJoCo
-    imports.  It is safe to use on a replay-only host before allocating a GPU.
-    """
-
-    package_path = Path(path).expanduser().resolve()
-    sidecar = metadata_path_for(package_path)
-    if not sidecar.is_file():
-        raise TargetReplayPackageError(
-            f"target replay metadata sidecar is missing: {sidecar}"
-        )
-    try:
-        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise TargetReplayPackageError(
-            f"could not read target replay metadata: {sidecar}"
-        ) from exc
-    if not isinstance(metadata, dict):
-        raise TargetReplayPackageError("target replay metadata must be a JSON object")
-    metadata = _validate_metadata(metadata, package_path)
-    try:
-        with np.load(package_path, allow_pickle=False) as payload:
-            arrays = {name: payload[name] for name in payload.files}
-    except (OSError, ValueError) as exc:
-        raise TargetReplayPackageError(
-            f"could not read target replay payload: {package_path}"
-        ) from exc
-    validated = _validate_arrays(arrays, metadata)
-    return TargetReplayPackage(
-        path=package_path,
-        metadata=metadata,
-        timestamps=validated["timestamps"],
-        recorded_qpos=validated["recorded_qpos"],
-        target_qpos=validated["target_qpos"],
-        object_position=validated["object_position"],
-        object_quaternion_xyzw=validated["object_quaternion_xyzw"],
-    )
-
-
-def _json_safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    result = dict(metadata)
-    if "schema" in result and result["schema"] != TARGET_REPLAY_PACKAGE_SCHEMA:
-        raise TargetReplayPackageError(
-            f"metadata.schema must be {TARGET_REPLAY_PACKAGE_SCHEMA!r}"
-        )
-    if (
-        "target_semantics" in result
-        and result["target_semantics"] != TARGET_REPLAY_TARGET_SEMANTICS
-    ):
-        raise TargetReplayPackageError(
-            "metadata.target_semantics is not the target-DOF contract"
-        )
-    result["schema"] = TARGET_REPLAY_PACKAGE_SCHEMA
-    result["target_semantics"] = TARGET_REPLAY_TARGET_SEMANTICS
-    return result
-
-
-def write_target_replay_package(
-    path: str | Path,
+def target_replay_source_from_row(
+    row: Mapping[str, Any],
     *,
-    metadata: Mapping[str, Any],
-    timestamps: Any,
-    recorded_qpos: Any,
-    target_qpos: Any,
-    object_position: Any,
-    object_quaternion_xyzw: Any,
-    replace: bool = False,
-) -> TargetReplayPackage:
-    """Atomically write a validated NPZ package and JSON sidecar.
+    dataset_path: str | Path,
+    dataset_version: int,
+    row_index: int,
+) -> TargetReplaySource:
+    """Validate one decoded synthetic row without opening Lance."""
 
-    The payload and sidecar are written through process-local partial names;
-    a failed write never publishes a package that the loader can mistake for
-    complete.
-    """
-
-    package_path = Path(path).expanduser().resolve()
-    if package_path.suffix.lower() != ".npz":
-        raise TargetReplayPackageError("target replay output must have a .npz suffix")
-    sidecar = metadata_path_for(package_path)
-    if (package_path.exists() or sidecar.exists()) and not replace:
-        raise FileExistsError(
-            f"target replay output exists; pass replace=True explicitly: {package_path}"
-        )
-    arrays = {
-        "timestamps": np.asarray(timestamps, dtype=np.float64),
-        "recorded_qpos": np.asarray(recorded_qpos, dtype=np.float64),
-        "target_qpos": np.asarray(target_qpos, dtype=np.float64),
-        "object_position": np.asarray(object_position, dtype=np.float64),
-        "object_quaternion_xyzw": np.asarray(object_quaternion_xyzw, dtype=np.float64),
-    }
-    normalized_metadata = _json_safe_metadata(metadata)
-    # The writer needs the frame count before the loader can validate the arrays.
-    normalized_metadata["frames"] = int(arrays["timestamps"].shape[0])
-    normalized_metadata["transitions"] = normalized_metadata["frames"] - 1
-    normalized_metadata["npz_sha256"] = "0" * 64
-    # Validate all metadata except the payload digest before writing.
-    _validate_metadata_without_payload_digest(normalized_metadata)
-    normalized_arrays = _validate_arrays(arrays, normalized_metadata)
-    package_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_payload = package_path.with_name(
-        f".{package_path.name}.{os.getpid()}.partial"
-    )
-    temporary_sidecar = sidecar.with_name(f".{sidecar.name}.{os.getpid()}.partial")
-    try:
-        with temporary_payload.open("wb") as stream:
-            np.savez_compressed(stream, **normalized_arrays)
-        normalized_metadata["npz_sha256"] = sha256_file(temporary_payload)
-        temporary_sidecar.write_text(
-            json.dumps(normalized_metadata, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        if not replace and (package_path.exists() or sidecar.exists()):
-            raise FileExistsError(
-                f"target replay output appeared during write: {package_path}"
-            )
-        os.replace(temporary_payload, package_path)
-        os.replace(temporary_sidecar, sidecar)
-    except BaseException:
-        for temporary in (temporary_payload, temporary_sidecar):
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-        raise
-    return load_target_replay_package(package_path)
-
-
-def _validate_metadata_without_payload_digest(metadata: Mapping[str, Any]) -> None:
-    """Validate writer metadata without requiring a digest that is not known yet."""
-
-    if metadata.get("npz_sha256") != "0" * 64:
-        raise TargetReplayPackageError("internal writer digest sentinel is invalid")
-    for name in (
-        "object",
-        "source_identity",
-        "source_uuid",
-        "target_semantics",
-    ):
-        _required_string(metadata, name)
-    if metadata["target_semantics"] != TARGET_REPLAY_TARGET_SEMANTICS:
-        raise TargetReplayPackageError(
-            "metadata target_semantics is not the target-DOF contract"
-        )
-    if not _IDENTITY_RE.fullmatch(str(metadata["source_identity"])):
-        raise TargetReplayPackageError(
-            "metadata.source_identity is not object_action_sequence"
-        )
-    if str(metadata["object"]) != str(metadata["source_identity"]).split("_", 1)[0]:
-        raise TargetReplayPackageError("metadata.object disagrees with source_identity")
-    for name in ("source_dataset_version", "source_row_index"):
-        value = metadata.get(name)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise TargetReplayPackageError(
-                f"metadata.{name} must be a non-negative integer"
-            )
-    timestep = metadata.get("control_timestep_seconds")
-    if not isinstance(timestep, (int, float)) or isinstance(timestep, bool):
-        raise TargetReplayPackageError(
-            "metadata.control_timestep_seconds must be numeric"
-        )
-    if not math.isclose(float(timestep), CONTROL_TIMESTEP, rel_tol=0.0, abs_tol=1e-12):
-        raise TargetReplayPackageError(
-            "metadata control timestep does not match project timestep"
-        )
-    if metadata.get("physics_substeps_per_target") != PHYSICS_SUBSTEPS_PER_TARGET:
-        raise TargetReplayPackageError(
-            "metadata physics substep count does not match project contract"
-        )
+    if not isinstance(row, Mapping):
+        raise TargetReplaySourceError("decoded Lance row must be a mapping")
+    path = Path(dataset_path).expanduser().resolve()
     if (
-        int(metadata["frames"]) < 2
-        or int(metadata["transitions"]) != int(metadata["frames"]) - 1
+        isinstance(dataset_version, bool)
+        or not isinstance(dataset_version, int)
+        or dataset_version < 1
     ):
-        raise TargetReplayPackageError("metadata frames/transitions are inconsistent")
-    _optional_positive_int(metadata, "warp_ccd_iterations")
-    _optional_positive_int(metadata, "warp_ccd_contacts_per_world")
-
-
-def _trajectory_for_package(package: TargetReplayPackage) -> ReferenceTrajectory:
-    metadata = package.metadata
-    identity = TrajectoryIdentity(
-        dataset_path=str(metadata.get("source_dataset", "predecoded://target-replay")),
-        dataset_version=int(metadata["source_dataset_version"]),
-        row_index=int(metadata["source_row_index"]),
-        object_index=0,
-        uuid=str(metadata["source_uuid"]),
-        file_uuid=str(metadata.get("source_file_uuid", "")),
-        identity=package.source_identity,
-        source_start=0,
-        source_stop=package.frames,
-        movement_start_raw=int(metadata.get("movement_start_raw", 0)),
-        movement_end_raw=int(metadata.get("movement_end_raw", package.frames - 1)),
+        raise TargetReplaySourceError("dataset_version must be a positive integer")
+    if isinstance(row_index, bool) or not isinstance(row_index, int) or row_index < 0:
+        raise TargetReplaySourceError("row_index must be a non-negative integer")
+    index = _mapping(row, "index")
+    metadata = _mapping(row, "trajectory_metadata")
+    provenance = _mapping(row, "provenance")
+    contract = _required_string(provenance, "contract", context="provenance")
+    if contract != TARGET_REPLAY_ROW_CONTRACT:
+        raise TargetReplaySourceError(
+            f"unsupported target replay row contract: {contract!r}"
+        )
+    object_type = _required_string(index, "scene", context="index")
+    if index.get("is_generated") is not True:
+        raise TargetReplaySourceError("index.is_generated must be true")
+    generated_uuid = _required_string(index, "uuid", context="index")
+    source_uuid = _required_string(index, "seed_uuid", context="index")
+    source_identity = _required_string(
+        provenance, "source_identity", context="provenance"
     )
-    if identity.movement_start_raw < 0 or identity.movement_end_raw >= package.frames:
-        raise TargetReplayPackageError("movement range is outside the replay package")
+    if not _IDENTITY_RE.fullmatch(source_identity):
+        raise TargetReplaySourceError(
+            "provenance.source_identity must be object_action_sequence"
+        )
+    if source_identity.split("_", 1)[0] != object_type:
+        raise TargetReplaySourceError(
+            "index.scene disagrees with provenance.source_identity"
+        )
+    source_dataset_path = _required_string(
+        provenance, "dataset_path", context="provenance"
+    )
+    source_dataset_version = _nonnegative_int(
+        provenance, "dataset_version", context="provenance"
+    )
+    source_row_index = _nonnegative_int(provenance, "row_index", context="provenance")
+    checkpoint_update = _nonnegative_int(
+        provenance, "checkpoint_update", context="provenance"
+    )
+    checkpoint_sha256 = _required_string(
+        provenance, "checkpoint_sha256", context="provenance"
+    )
+    if len(checkpoint_sha256) != 64:
+        raise TargetReplaySourceError(
+            "provenance.checkpoint_sha256 must be a 64-character digest"
+        )
+    try:
+        int(checkpoint_sha256, 16)
+    except ValueError as exc:
+        raise TargetReplaySourceError(
+            "provenance.checkpoint_sha256 must be hexadecimal"
+        ) from exc
+
+    timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
+    if timestamps.ndim != 1 or len(timestamps) < 2:
+        raise TargetReplaySourceError(
+            "timestamp must be a one-dimensional array with at least two frames"
+        )
+    frames = len(timestamps)
+    total_frames = metadata.get("total_frames")
+    if (
+        isinstance(total_frames, bool)
+        or not isinstance(total_frames, int)
+        or total_frames != frames
+    ):
+        raise TargetReplaySourceError(
+            f"trajectory_metadata.total_frames={total_frames!r} does not match {frames} timestamps"
+        )
+    data_fps = metadata.get("data_fps")
+    if isinstance(data_fps, bool) or not isinstance(data_fps, (int, float)):
+        raise TargetReplaySourceError("trajectory_metadata.data_fps must be numeric")
+    if not math.isclose(
+        float(data_fps), 1.0 / CONTROL_TIMESTEP, rel_tol=0.0, abs_tol=1e-12
+    ):
+        raise TargetReplaySourceError(
+            "trajectory_metadata.data_fps disagrees with the control timestep"
+        )
+    hand = _right_hand(row, metadata)
+    object_state = _object_state(row, metadata, object_type)
+    recorded_qpos = np.asarray(hand.get("urdf_dof", ()), dtype=np.float64)
+    target_qpos = np.asarray(hand.get("urdf_dof_target", ()), dtype=np.float64)
+    object_position = np.asarray(object_state.get("pos", ()), dtype=np.float64)
+    object_rotvec = np.asarray(object_state.get("rot_aa", ()), dtype=np.float64)
+    expected = {
+        "timestamp": (frames,),
+        "urdf_dof": (frames, JOINT_DOF),
+        "urdf_dof_target": (frames, JOINT_DOF),
+        "object_position": (frames, 3),
+        "object_rot_aa": (frames, 3),
+    }
+    values = {
+        "timestamp": timestamps,
+        "urdf_dof": recorded_qpos,
+        "urdf_dof_target": target_qpos,
+        "object_position": object_position,
+        "object_rot_aa": object_rotvec,
+    }
+    for name, shape in expected.items():
+        if values[name].shape != shape:
+            raise TargetReplaySourceError(
+                f"{name} shape {values[name].shape} does not match {shape}"
+            )
+        if not np.all(np.isfinite(values[name])):
+            raise TargetReplaySourceError(f"{name} contains non-finite values")
+    if not math.isclose(float(timestamps[0]), 0.0, rel_tol=0.0, abs_tol=1e-12):
+        raise TargetReplaySourceError("timestamps must start at zero")
+    deltas = np.diff(timestamps)
+    if np.any(deltas <= 0) or not np.allclose(
+        deltas, CONTROL_TIMESTEP, rtol=0.0, atol=1e-10
+    ):
+        raise TargetReplaySourceError(
+            f"timestamps must advance strictly by {CONTROL_TIMESTEP} seconds"
+        )
+    object_quaternion = Rotation.from_rotvec(object_rotvec).as_quat()
+    quaternion_norms = np.linalg.norm(object_quaternion, axis=1)
+    if not np.allclose(quaternion_norms, 1.0, rtol=0.0, atol=1e-10):
+        raise TargetReplaySourceError(
+            "object rotations did not produce unit quaternions"
+        )
+    movement_start, movement_end = _movement_range(metadata, object_type, frames)
+    ccd_iterations, ccd_contacts = _checkpoint_warp_ccd(provenance)
+    return TargetReplaySource(
+        dataset_path=path,
+        dataset_version=dataset_version,
+        row_index=row_index,
+        object_type=object_type,
+        generated_uuid=generated_uuid,
+        source_dataset_path=source_dataset_path,
+        source_dataset_version=source_dataset_version,
+        source_row_index=source_row_index,
+        source_uuid=source_uuid,
+        source_identity=source_identity,
+        checkpoint_update=checkpoint_update,
+        checkpoint_sha256=checkpoint_sha256,
+        row_contract=contract,
+        warp_ccd_iterations=ccd_iterations,
+        warp_ccd_contacts_per_world=ccd_contacts,
+        movement_start=movement_start,
+        movement_end=movement_end,
+        timestamps=_readonly(timestamps),
+        recorded_qpos=_readonly(recorded_qpos),
+        target_qpos=_readonly(target_qpos),
+        object_position=_readonly(object_position),
+        object_quaternion_xyzw=_readonly(object_quaternion),
+    )
+
+
+def load_target_replay_source(
+    dataset_path: str | Path,
+    *,
+    dataset_version: int,
+    row_index: int,
+) -> TargetReplaySource:
+    """Read exactly one target trajectory directly from Lance."""
+
+    path = Path(dataset_path).expanduser().resolve()
+    try:
+        import lance
+
+        dataset = lance.dataset(str(path), version=dataset_version)
+        rows = dataset.take(
+            [row_index], columns=list(LANCE_TARGET_REPLAY_COLUMNS)
+        ).to_pylist()
+    except Exception as exc:
+        raise TargetReplaySourceError(
+            f"could not decode Lance row {row_index} from {path} at version {dataset_version}"
+        ) from exc
+    if len(rows) != 1:
+        raise TargetReplaySourceError(
+            f"Lance take returned {len(rows)} rows for requested row {row_index}"
+        )
+    return target_replay_source_from_row(
+        rows[0],
+        dataset_path=path,
+        dataset_version=dataset_version,
+        row_index=row_index,
+    )
+
+
+def _trajectory_for_source(source: TargetReplaySource) -> ReferenceTrajectory:
+    identity = TrajectoryIdentity(
+        dataset_path=source.source_dataset_path,
+        dataset_version=source.source_dataset_version,
+        row_index=source.source_row_index,
+        object_index=0,
+        uuid=source.source_uuid,
+        file_uuid="",
+        identity=source.source_identity,
+        source_start=0,
+        source_stop=source.frames,
+        movement_start_raw=source.movement_start,
+        movement_end_raw=source.movement_end,
+    )
     return ReferenceTrajectory(
         identity=identity,
         dataset_version=identity.dataset_version,
-        source_indices=_readonly(np.arange(package.frames), dtype=np.dtype(np.int64)),
-        timestamps=package.timestamps,
-        q_ref=package.recorded_qpos,
-        object_pos_raw=package.object_position,
-        object_pos=package.object_position,
-        object_quat_xyzw=package.object_quaternion_xyzw,
+        source_indices=_readonly(np.arange(source.frames), dtype=np.dtype(np.int64)),
+        timestamps=source.timestamps,
+        q_ref=source.recorded_qpos,
+        object_pos_raw=source.object_position,
+        object_pos=source.object_position,
+        object_quat_xyzw=source.object_quaternion_xyzw,
         object_z_shift=0.0,
         hand_sides=("right",),
-        q_ref_by_side={"right": package.recorded_qpos},
+        q_ref_by_side={"right": source.recorded_qpos},
         selected_hand_sides=("right",),
     )
 
@@ -485,30 +502,30 @@ class ReplayState:
 
 
 class TargetDofReplay:
-    """Apply a validated target package to the existing MJX-Warp environment."""
+    """Apply one direct Lance target sequence to the MJX-Warp environment."""
 
     def __init__(
         self,
-        package: TargetReplayPackage,
+        source: TargetReplaySource,
         *,
         device: str = "gpu",
         allow_physics_override: bool = False,
     ) -> None:
         if device not in {"cpu", "gpu"}:
             raise ValueError("device must be 'cpu' or 'gpu'")
-        self.package = package
+        self.source = source
         self.device = device
         self.physics_overrides: list[str] = []
-        ccd_iterations = package.metadata.get("warp_ccd_iterations")
-        ccd_contacts = package.metadata.get("warp_ccd_contacts_per_world")
+        ccd_iterations = source.warp_ccd_iterations
+        ccd_contacts = source.warp_ccd_contacts_per_world
         if device == "cpu" and (ccd_iterations is not None or ccd_contacts is not None):
             if not allow_physics_override:
-                raise TargetReplayPackageError(
-                    "this package records explicit Warp CCD settings that require device='gpu'; "
-                    "rerun with --allow-physics-override for an explicitly non-identical CPU diagnostic"
+                raise TargetReplaySourceError(
+                    "this Lance row records explicit Warp CCD settings that require device='gpu'; "
+                    "rerun with --allow-physics-override for a non-identical CPU diagnostic"
                 )
             self.physics_overrides.append(
-                "CPU replay omitted package Warp CCD allocation"
+                "CPU replay omitted Lance row Warp CCD allocation"
             )
             ccd_iterations = None
             ccd_contacts = None
@@ -518,9 +535,8 @@ class TargetDofReplay:
             recommended_warp_contact_capacity,
         )
 
-        trajectory = _trajectory_for_package(package)
         self.environment = MujocoManoEnvironment(
-            TrajectoryBatch((trajectory,)),
+            TrajectoryBatch((_trajectory_for_source(source),)),
             EnvironmentConfig(
                 device=device,
                 num_envs=1,
@@ -538,12 +554,10 @@ class TargetDofReplay:
 
     @property
     def frame(self) -> int:
-        """Current state index, where frame zero is the initialized package state."""
-
         return self._frame
 
     def reset(self) -> ReplayState:
-        """Restore the recorded frame-0 physical state without a native physics step."""
+        """Restore the row's recorded frame-0 reset state."""
 
         environment = self.environment
         qpos = np.asarray(environment.data.qpos, dtype=np.float64).copy()
@@ -551,12 +565,12 @@ class TargetDofReplay:
         ctrl = np.asarray(environment.data.ctrl, dtype=np.float64).copy()
         hand_slice = environment.producer.hand_qpos_slices["right"]
         object_address = environment.producer.object_qpos_address
-        qpos[0, hand_slice] = self.package.recorded_qpos[0]
-        qpos[0, object_address : object_address + 3] = self.package.object_position[0]
+        qpos[0, hand_slice] = self.source.recorded_qpos[0]
+        qpos[0, object_address : object_address + 3] = self.source.object_position[0]
         qpos[0, object_address + 3 : object_address + 7] = xyzw_to_wxyz(
-            self.package.object_quaternion_xyzw[0]
+            self.source.object_quaternion_xyzw[0]
         )
-        ctrl[0, :JOINT_DOF] = self.package.target_qpos[0]
+        ctrl[0, :JOINT_DOF] = self.source.target_qpos[0]
         environment.data = environment.data.replace(
             qpos=environment.jax.device_put(
                 environment.jp.asarray(qpos), environment.device
@@ -573,8 +587,6 @@ class TargetDofReplay:
         return self.state()
 
     def state(self) -> ReplayState:
-        """Materialize the current hand qpos and object pose."""
-
         environment = self.environment
         qpos = np.asarray(
             environment.data.qpos[0, environment.producer.hand_qpos_slices["right"]],
@@ -593,22 +605,18 @@ class TargetDofReplay:
         return ReplayState(qpos, object_position, object_quaternion)
 
     def step(self) -> ReplayState:
-        """Apply the next post-controller target and exactly two Warp substeps."""
+        """Apply the next row target and exactly two MJX-Warp substeps."""
 
-        if self._frame >= self.package.transitions:
-            raise IndexError(
-                "target replay is at its final frame; call reset() before stepping again"
-            )
+        if self._frame >= self.source.transitions:
+            raise IndexError("target replay is at its final frame; call reset()")
         environment = self.environment
         ctrl = np.asarray(environment.data.ctrl, dtype=np.float64).copy()
-        ctrl[0, :JOINT_DOF] = self.package.target_qpos[self._frame]
+        ctrl[0, :JOINT_DOF] = self.source.target_qpos[self._frame]
         environment.data = environment.data.replace(
             ctrl=environment.jax.device_put(
                 environment.jp.asarray(ctrl), environment.device
             )
         )
-        # These are intentionally the existing environment's private compiled
-        # kernels: no second native simulation is allowed to advance the state.
         for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
             environment.data = environment._step_fn(environment.data)
             environment._check_warp_ccd_overflow()
@@ -616,8 +624,6 @@ class TargetDofReplay:
         return self.state()
 
     def host_data(self) -> Any:
-        """Return one native snapshot for visualization-only mirroring."""
-
         return self.environment.host_data(0)
 
     def headless_report(
@@ -628,61 +634,55 @@ class TargetDofReplay:
         max_object_rotation_error_rad: float = 0.25,
         max_qpos_abs_error: float = 1.0,
     ) -> dict[str, Any]:
-        """Replay a bounded prefix and compare it with recorded physical states."""
-
         if transitions is None:
-            transitions = self.package.transitions
+            transitions = self.source.transitions
         if (
             isinstance(transitions, bool)
             or not isinstance(transitions, int)
-            or not 1 <= transitions <= self.package.transitions
+            or not 1 <= transitions <= self.source.transitions
         ):
-            raise ValueError(
-                f"transitions must be an integer in [1, {self.package.transitions}]"
-            )
+            raise ValueError(f"transitions must be in [1, {self.source.transitions}]")
         initial_state = self.reset()
         initial_qpos_error = float(
-            np.max(np.abs(initial_state.qpos - self.package.recorded_qpos[0]))
+            np.max(np.abs(initial_state.qpos - self.source.recorded_qpos[0]))
         )
         initial_object_position_error = float(
             np.linalg.norm(
-                initial_state.object_position - self.package.object_position[0]
+                initial_state.object_position - self.source.object_position[0]
             )
         )
         initial_object_rotation_error = _rotation_error_rad(
             initial_state.object_quaternion_xyzw,
-            self.package.object_quaternion_xyzw[0],
+            self.source.object_quaternion_xyzw[0],
         )
         q_errors: list[float] = []
         object_errors: list[float] = []
         rotation_errors: list[float] = []
-        replay_z = [float(self.state().object_position[2])]
+        replay_z = [float(initial_state.object_position[2])]
         for index in range(transitions):
             state = self.step()
             replay_z.append(float(state.object_position[2]))
             q_errors.append(
-                float(
-                    np.max(np.abs(state.qpos - self.package.recorded_qpos[index + 1]))
-                )
+                float(np.max(np.abs(state.qpos - self.source.recorded_qpos[index + 1])))
             )
             object_errors.append(
                 float(
                     np.linalg.norm(
-                        state.object_position - self.package.object_position[index + 1]
+                        state.object_position - self.source.object_position[index + 1]
                     )
                 )
             )
             rotation_errors.append(
                 _rotation_error_rad(
                     state.object_quaternion_xyzw,
-                    self.package.object_quaternion_xyzw[index + 1],
+                    self.source.object_quaternion_xyzw[index + 1],
                 )
             )
         q_values = np.asarray(q_errors, dtype=np.float64)
         object_values = np.asarray(object_errors, dtype=np.float64)
         rotation_values = np.asarray(rotation_errors, dtype=np.float64)
-        report: dict[str, Any] = {
-            "schema": "manorl.target_dof_replay_result.v1",
+        return {
+            "schema": "manorl.target_dof_lance_replay_result.v1",
             "status": (
                 "pass"
                 if (
@@ -692,11 +692,18 @@ class TargetDofReplay:
                 )
                 else "fail"
             ),
-            "package": str(self.package.path),
-            "package_schema": self.package.metadata["schema"],
-            "source_identity": self.package.source_identity,
-            "source_uuid": self.package.metadata["source_uuid"],
-            "object": self.package.object_type,
+            "lance_dataset": str(self.source.dataset_path),
+            "lance_dataset_version": self.source.dataset_version,
+            "lance_row_index": self.source.row_index,
+            "generated_uuid": self.source.generated_uuid,
+            "source_dataset": self.source.source_dataset_path,
+            "source_dataset_version": self.source.source_dataset_version,
+            "source_row_index": self.source.source_row_index,
+            "source_uuid": self.source.source_uuid,
+            "source_identity": self.source.source_identity,
+            "checkpoint_update": self.source.checkpoint_update,
+            "checkpoint_sha256": self.source.checkpoint_sha256,
+            "object": self.source.object_type,
             "device": self.device,
             "states": transitions + 1,
             "transitions": transitions,
@@ -717,11 +724,11 @@ class TargetDofReplay:
             "max_object_rotation_error_rad": float(np.max(rotation_values)),
             "mean_object_rotation_error_rad": float(np.mean(rotation_values)),
             "recorded_max_lift_m": float(
-                np.max(self.package.object_position[: transitions + 1, 2])
-                - self.package.object_position[0, 2]
+                np.max(self.source.object_position[: transitions + 1, 2])
+                - self.source.object_position[0, 2]
             ),
             "replay_max_lift_m": float(
-                max(replay_z) - self.package.object_position[0, 2]
+                max(replay_z) - self.source.object_position[0, 2]
             ),
             "thresholds": {
                 "max_object_position_error_m": max_object_position_error_m,
@@ -730,7 +737,6 @@ class TargetDofReplay:
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        return report
 
 
 def _rotation_error_rad(first_xyzw: np.ndarray, second_xyzw: np.ndarray) -> float:
@@ -751,20 +757,20 @@ def render_target_replay(
     distance: float = 0.65,
     lookat: tuple[float, float, float] = (0.0, 0.0, 0.08),
 ) -> None:
-    """Open a passive MuJoCo viewer while MJX-Warp remains the sole simulator."""
+    """Open a native viewer while MJX-Warp remains the sole simulator."""
 
-    if speed <= 0 or not math.isfinite(speed):
+    if not math.isfinite(speed) or speed <= 0:
         raise ValueError("speed must be finite and positive")
     if print_every < 1:
         raise ValueError("print_every must be positive")
     if transitions is None:
-        transitions = replay.package.transitions
+        transitions = replay.source.transitions
     if (
         not isinstance(transitions, int)
         or isinstance(transitions, bool)
-        or not 1 <= transitions <= replay.package.transitions
+        or not 1 <= transitions <= replay.source.transitions
     ):
-        raise ValueError(f"transitions must be in [1, {replay.package.transitions}]")
+        raise ValueError(f"transitions must be in [1, {replay.source.transitions}]")
     from mujoco import viewer as mujoco_viewer
     from sim.manorl.assets import COLLISION_GEOM_GROUP
     from sim.manorl.view_environment import (
@@ -821,8 +827,6 @@ def render_target_replay(
 
 
 def write_report(path: str | Path, report: Mapping[str, Any]) -> None:
-    """Atomically write one JSON replay result."""
-
     destination = Path(path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{os.getpid()}.partial")
