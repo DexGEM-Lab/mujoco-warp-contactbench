@@ -23,8 +23,11 @@ Training defaults new runs to 120 Hz and accepts `--reference-fps {100,120}` / `
 ## Remaining domain uncertainty
 Raw acquisition is reported as 100 fps, while cleaned Lance v295 timestamps/metadata encode approximately 120 Hz. The selector makes that scientific choice explicit but does not establish which clock is authoritative. Until raw-to-Lance processing provenance resolves the discrepancy, 100 Hz and 120 Hz runs represent distinct hypotheses rather than interchangeable configurations.
 
+## Operational state
+The feature is integrated into `dev` and immediately visible on server1 because `/mnt/user-home/jay/.../manoRL_mujoco` and `/home/jay/.../manoRL_mujoco` are the same bind-mounted inode tree. Server1 trainer and viewer help expose `--reference-fps {100,120}`. The active GPU-1 process was launched before integration without this selector and remains alive in its already-imported legacy runtime; at the post-integration sample it was progressing through update 2194/5000 with no checkpoint yet.
+
 ## Current claim
-The requested selectable clock is implemented without changing physics or control frequency. Any training process started before this change still uses the legacy one-frame-per-control-step schedule; it cannot be converted in place and must be restarted from scratch to test either corrected clock.
+The requested selectable clock is implemented and operational for new training/inference without changing physics or control frequency. Any process started before this change still uses the legacy one-frame-per-control-step schedule; it cannot be converted in place and must be restarted from scratch to test either corrected clock.
 
 ## Highest-value next action
-Integrate and deploy the committed branch, then start a fresh run with an explicitly named reference clock. If raw 100 fps is the intended physical truth, use 100 Hz and treat the already-running legacy-clock experiment as invalid for that hypothesis. Preserve a 120 Hz run only as the processed-Lance-clock comparison.
+Choose the hypothesis for the replacement training run. If raw 100 fps is the intended physical truth, launch with `MANORL_REFERENCE_FPS=100` and treat the already-running legacy-clock experiment as invalid for that hypothesis. Use 120 Hz only as the processed-Lance-clock comparison. Stopping the active run remains a separate user decision.
