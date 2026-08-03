@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, LEGACY_ENVIRONMENT_CONTRACT_IDS
+from sim.manorl.contracts import SimulationClock, simulation_clock
 from sim.manorl.rewards import (
     LEGACY_PPO_REWARD_CONTRACT_IDS,
     LEGACY_REWARD_CONTRACT_IDS,
@@ -31,6 +32,13 @@ _ENVIRONMENT_SIGNATURE_FIELDS = (
     "observation_dim",
     "model_action_dim",
     "reference_fps",
+    "control_fps",
+    "control_timestep_seconds",
+    "physics_fps",
+    "physics_timestep_seconds",
+    "physics_substeps_per_control",
+    "pre_padding",
+    "post_padding",
     "warp_ccd",
 )
 _ENVIRONMENT_SIDE_SEQUENCE_FIELDS = frozenset(
@@ -177,6 +185,104 @@ def _canonical_warp_ccd(value: object) -> object:
     return normalized
 
 
+def checkpoint_simulation_clock(metadata: dict[str, Any]) -> SimulationClock:
+    """Resolve selected clocks while preserving every supported legacy ABI."""
+
+    contract = metadata.get("environment_contract")
+    if contract in LEGACY_ENVIRONMENT_CONTRACT_IDS:
+        return simulation_clock(None)
+    runtime_config = metadata.get("runtime_config")
+    environment = (
+        runtime_config.get("environment")
+        if isinstance(runtime_config, dict)
+        else None
+    )
+    control_fps = (
+        environment.get("control_fps")
+        if isinstance(environment, dict)
+        else None
+    )
+    if not isinstance(control_fps, int) or isinstance(control_fps, bool):
+        raise CheckpointFormatError("current checkpoint is missing integer control_fps")
+    if control_fps not in (100, 120):
+        raise CheckpointFormatError(
+            "current checkpoint control_fps must be 100 or 120"
+        )
+    reference_fps = environment.get("reference_fps")
+    if reference_fps != control_fps:
+        raise CheckpointFormatError(
+            "current checkpoint requires reference_fps == control_fps"
+        )
+    try:
+        return simulation_clock(control_fps)
+    except ValueError as exc:
+        raise CheckpointFormatError(f"checkpoint control clock is invalid: {exc}") from exc
+
+
+def _checkpoint_padding(
+    metadata: dict[str, Any],
+    *,
+    field: str,
+    legacy_default: int,
+) -> int:
+    """Resolve one checkpoint-bound source padding field across sidecar generations."""
+
+    runtime_config = metadata.get("runtime_config")
+    environment = (
+        runtime_config.get("environment")
+        if isinstance(runtime_config, dict)
+        else None
+    )
+    candidates: list[tuple[str, object]] = []
+    if isinstance(environment, dict) and field in environment:
+        candidates.append((f"environment.{field}", environment[field]))
+    if field == "pre_padding" and isinstance(environment, dict):
+        compatibility = environment.get("compatibility")
+        if isinstance(compatibility, dict) and "movement_pre_padding" in compatibility:
+            candidates.append(
+                (
+                    "environment.compatibility.movement_pre_padding",
+                    compatibility["movement_pre_padding"],
+                )
+            )
+    if isinstance(runtime_config, dict):
+        selection = runtime_config.get("trajectory_selection")
+        if isinstance(selection, dict) and field in selection:
+            candidates.append((f"trajectory_selection.{field}", selection[field]))
+
+    normalized: list[tuple[str, int]] = []
+    for source, value in candidates:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise CheckpointFormatError(
+                f"checkpoint {source} must be a non-negative integer"
+            )
+        normalized.append((source, value))
+    values = {value for _, value in normalized}
+    if len(values) > 1:
+        raise CheckpointFormatError(
+            f"checkpoint records inconsistent {field} values: {normalized!r}"
+        )
+    if values:
+        return values.pop()
+    if metadata.get("environment_contract") == ENVIRONMENT_CONTRACT_ID:
+        raise CheckpointFormatError(
+            f"current checkpoint environment is missing {field}"
+        )
+    return legacy_default
+
+
+def checkpoint_pre_padding(metadata: dict[str, Any]) -> int:
+    """Resolve checkpoint-bound pre-padding; legacy v6/v7 used 100 frames."""
+
+    return _checkpoint_padding(metadata, field="pre_padding", legacy_default=100)
+
+
+def checkpoint_post_padding(metadata: dict[str, Any]) -> int:
+    """Resolve checkpoint-bound post-padding; legacy v6/v7 used 250 frames."""
+
+    return _checkpoint_padding(metadata, field="post_padding", legacy_default=250)
+
+
 def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> None:
     """Reject side/layout mismatches when a checkpoint records the new fields.
 
@@ -192,10 +298,27 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
     checkpoint_environment = runtime_config.get("environment")
     if not isinstance(checkpoint_environment, dict):
         return
+    checkpoint_environment = dict(checkpoint_environment)
 
     target = getattr(agent, "manorl_environment_signature", None)
     if isinstance(target, dict):
         target_environment = target
+        if target_environment.get("pre_padding") is not None:
+            checkpoint_environment["pre_padding"] = checkpoint_pre_padding(metadata)
+        if target_environment.get("post_padding") is not None:
+            checkpoint_environment["post_padding"] = checkpoint_post_padding(metadata)
+        if metadata.get("environment_contract") in LEGACY_ENVIRONMENT_CONTRACT_IDS:
+            legacy_clock = checkpoint_simulation_clock(metadata)
+            checkpoint_environment.update(
+                {
+                    "reference_fps": checkpoint_environment.get("reference_fps"),
+                    "control_fps": legacy_clock.policy_fps,
+                    "control_timestep_seconds": legacy_clock.control_timestep,
+                    "physics_fps": legacy_clock.physics_fps,
+                    "physics_timestep_seconds": legacy_clock.physics_timestep,
+                    "physics_substeps_per_control": legacy_clock.physics_substeps_per_control,
+                }
+            )
         missing = [
             field
             for field in _ENVIRONMENT_SIGNATURE_FIELDS
@@ -275,6 +398,49 @@ def load_skrl_checkpoint_for_inference(agent: "PPO", path: str | Path) -> Path:
     _validate_model_compatibility(metadata, agent)
     _validate_environment_signature(metadata, agent)
     agent.load(str(checkpoint))
+    return checkpoint
+
+
+def load_skrl_checkpoint_for_warm_start(agent: "PPO", path: str | Path) -> Path:
+    """Transfer learned models and normalizers without stale optimizer state.
+
+    Environment-signature differences are intentional at this boundary. Model
+    architecture, known checkpoint/reward families, tensor finiteness, and exact
+    state-dict shapes remain fail-closed. The newly constructed agent retains its
+    fresh optimizer, scheduler, memory, and training progress.
+    """
+
+    checkpoint = Path(path)
+    if not checkpoint.is_file():
+        raise CheckpointFormatError(f"checkpoint does not exist: {checkpoint}")
+    modules = _load_modules(checkpoint, device=agent.device)
+    metadata = _load_metadata(checkpoint)
+    _validate_inference_reward_contract(metadata)
+    _validate_environment_contract(metadata)
+    _validate_model_compatibility(metadata, agent)
+    targets = getattr(agent, "checkpoint_modules", None)
+    if not isinstance(targets, dict):
+        raise CheckpointFormatError(
+            "target agent does not expose checkpoint_modules for warm start"
+        )
+    transfer_names = (
+        "policy",
+        "value",
+        "observation_preprocessor",
+        "value_preprocessor",
+    )
+    missing_targets = [name for name in transfer_names if name not in targets]
+    if missing_targets:
+        raise CheckpointFormatError(
+            f"target agent is missing warm-start modules: {missing_targets}"
+        )
+    try:
+        for name in transfer_names:
+            targets[name].load_state_dict(modules[name])
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        raise CheckpointFormatError(
+            f"checkpoint warm-start module is incompatible: {exc}"
+        ) from exc
     return checkpoint
 
 

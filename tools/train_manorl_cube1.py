@@ -27,9 +27,17 @@ from sim.manorl.abi import (
     TERMINATION_REASON_NONE,
     TERMINATION_REASON_SUCCESS,
 )
-from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
+from sim.manorl.checkpoint import (
+    checkpoint_post_padding,
+    checkpoint_pre_padding,
+    checkpoint_runtime_metadata,
+    checkpoint_simulation_clock,
+    load_skrl_checkpoint,
+    load_skrl_checkpoint_for_warm_start,
+    save_skrl_checkpoint,
+)
 from sim.manorl.cli import parse_cli_bool
-from sim.manorl.contracts import CONTROL_TIMESTEP, DATASET_PATH, JOINT_DOF
+from sim.manorl.contracts import DATASET_PATH, JOINT_DOF, simulation_clock
 from sim.manorl.environment import (
     EnvironmentConfig,
     MujocoManoEnvironment,
@@ -37,6 +45,7 @@ from sim.manorl.environment import (
 )
 from sim.manorl.gymnasium_env import ACTION_DIM, ManoGymnasiumVectorEnv
 from sim.manorl.hand_layout import HandActionLayout
+from sim.manorl.lance_v2 import file_sha256
 from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, observation_layout
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.rewards import (
@@ -47,6 +56,8 @@ from sim.manorl.rewards import (
 )
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 from sim.manorl.trajectory import (
+    DEFAULT_POST_PADDING,
+    DEFAULT_PRE_PADDING,
     DEFAULT_REFERENCE_FPS,
     REFERENCE_RESAMPLING_ID,
     SUPPORTED_REFERENCE_FPS,
@@ -207,6 +218,8 @@ class TrainingBudget:
     wandb: WandbOptions = WandbOptions()
     checkpoint_interval_updates: int | None = 200
     resume_checkpoint: str | None = None
+    warm_start_checkpoint: str | None = None
+    warm_start_prior_updates: int | None = None
     minibatch_size: int | None = None
     # Evaluation is intentionally one fixed trajectory by default.  A larger
     # count is an explicit diagnostic mode and must not be mistaken for the
@@ -554,6 +567,7 @@ def _wandb_config(
     device: dict[str, object],
 ) -> dict[str, object]:
     residual_action = budget.residual_action_config
+    clock = simulation_clock(budget.reference_fps)
     config = {
         "training_budget": {
             **asdict(budget),
@@ -596,7 +610,13 @@ def _wandb_config(
         "environment": {
             "contract": ENVIRONMENT_CONTRACT_ID,
             "reference_fps": budget.reference_fps,
-            "control_timestep_seconds": CONTROL_TIMESTEP,
+            "control_fps": clock.policy_fps,
+            "control_timestep_seconds": clock.control_timestep,
+            "physics_fps": clock.physics_fps,
+            "physics_timestep_seconds": clock.physics_timestep,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
+            "pre_padding": DEFAULT_PRE_PADDING,
+            "post_padding": DEFAULT_POST_PADDING,
             "reference_resampling": REFERENCE_RESAMPLING_ID,
             "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
             "residual_action": {
@@ -1601,7 +1621,70 @@ def _checkpoint_runtime_config(
     }
     if trajectory_selection is not None:
         config["trajectory_selection"] = trajectory_selection
+    warm_start_metadata = getattr(runtime, "warm_start_metadata", None)
+    if warm_start_metadata is not None:
+        config["warm_start"] = warm_start_metadata
     return config
+
+
+def _warm_start_lineage(
+    checkpoint: Path,
+    *,
+    prior_completed_updates: int,
+) -> dict[str, object]:
+    metadata = checkpoint_runtime_metadata(checkpoint)
+    runtime_config = metadata.get("runtime_config")
+    progress = (
+        runtime_config.get("training_progress")
+        if isinstance(runtime_config, dict)
+        else None
+    )
+    source_completed_updates = (
+        progress.get("completed_updates")
+        if isinstance(progress, dict)
+        else None
+    )
+    if not isinstance(source_completed_updates, int) or source_completed_updates < 0:
+        raise ValueError(
+            "warm-start checkpoint must record non-negative completed_updates"
+        )
+    if prior_completed_updates < source_completed_updates:
+        raise ValueError(
+            "warm-start prior updates cannot be smaller than the source checkpoint's "
+            f"recorded updates ({source_completed_updates})"
+        )
+    environment = (
+        runtime_config.get("environment")
+        if isinstance(runtime_config, dict)
+        else None
+    )
+    source_reference_fps = (
+        environment.get("reference_fps")
+        if isinstance(environment, dict)
+        else None
+    )
+    source_clock = checkpoint_simulation_clock(metadata)
+    return {
+        "mode": "models_and_preprocessors_reset_optimizer_v1",
+        "source_checkpoint": str(checkpoint),
+        "source_checkpoint_sha256": file_sha256(checkpoint),
+        "source_environment_contract": metadata.get("environment_contract"),
+        "source_reference_fps": source_reference_fps,
+        "source_control_fps": source_clock.policy_fps,
+        "source_physics_fps": source_clock.physics_fps,
+        "source_physics_substeps_per_control": source_clock.physics_substeps_per_control,
+        "source_pre_padding": checkpoint_pre_padding(metadata),
+        "source_post_padding": checkpoint_post_padding(metadata),
+        "source_recorded_updates": source_completed_updates,
+        "prior_completed_updates": prior_completed_updates,
+        "loaded_modules": [
+            "policy",
+            "value",
+            "observation_preprocessor",
+            "value_preprocessor",
+        ],
+        "reset_state": ["optimizer", "learning_rate_scheduler", "memory", "progress"],
+    }
 
 
 def _checkpoint_sidecar_path(checkpoint: Path) -> Path:
@@ -1656,6 +1739,18 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
             item.selected_hand_sides,
             dof_per_hand=JOINT_DOF,
         )
+        movement_start_step = (
+            item.movement_start_step
+            if item.movement_start_step is not None
+            else item.identity.movement_start_raw - item.identity.source_start
+        )
+        movement_end_step = (
+            item.movement_end_step
+            if item.movement_end_step is not None
+            else item.identity.movement_end_raw - item.identity.source_start
+        )
+        captured_pre_steps = item.identity.movement_start_raw - item.identity.source_start
+        captured_post_steps = item.identity.source_stop - 1 - item.identity.movement_end_raw
         assignments.append({
             "env_id": env_id,
             "identity": item.identity.identity,
@@ -1665,7 +1760,15 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
             "uuid": item.identity.uuid,
             "source_slice": [item.identity.source_start, item.identity.source_stop],
             "reference_fps": item.reference_fps,
+            "control_fps": simulation_clock(item.control_fps).policy_fps,
             "control_frames": len(item.q_ref),
+            "movement_start_step": movement_start_step,
+            "movement_end_step": movement_end_step,
+            "pre_edge_hold_steps": max(0, movement_start_step - captured_pre_steps),
+            "post_edge_hold_steps": max(
+                0,
+                len(item.q_ref) - 1 - movement_end_step - captured_post_steps,
+            ),
             "available_hand_sides": list(item.hand_sides),
             "controlled_hand_sides": list(item.action_layout.controlled_sides),
             "reference_following_hand_sides": list(item.action_layout.reference_sides),
@@ -1705,16 +1808,23 @@ def _trajectory_selection_metadata(
             {"object": object_type, "action": action_id}
             for object_type, action_id in sorted(pairs)
         ]
+    clock = simulation_clock(selection.resolved_control_fps)
     return {
         "selector": selection.canonical_selector,
         "mode": selection.mode,
         "include_suffix_files": False,
         "identity_schema": TRAJECTORY_IDENTITY_SCHEMA,
-        "padding_policy": "full" if selection.require_full_padding else "clip_to_source",
+        "padding_policy": "exact_requested_edge_hold_if_source_margin_missing",
+        "pre_padding": selection.pre_padding,
+        "post_padding": selection.post_padding,
         "dataset_path": str(selection.dataset_path),
         "dataset_version": selection.expected_dataset_version,
         "reference_fps": selection.reference_fps,
-        "control_timestep_seconds": CONTROL_TIMESTEP,
+        "control_fps": clock.policy_fps,
+        "control_timestep_seconds": clock.control_timestep,
+        "physics_fps": clock.physics_fps,
+        "physics_timestep_seconds": clock.physics_timestep,
+        "physics_substeps_per_control": clock.physics_substeps_per_control,
         "reference_resampling": REFERENCE_RESAMPLING_ID,
         "pair_assignment_cycle": selection.pair_assignment_cycle,
         "requested_hand_side": selection.hand_side,
@@ -1923,6 +2033,14 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         raise ValueError("--output must be a prefix without a suffix")
     if budget.rerun_output is not None and budget.rerun_grpc_url is not None:
         raise ValueError("rerun_output and rerun_grpc_url are mutually exclusive")
+    if budget.resume_checkpoint is not None and budget.warm_start_checkpoint is not None:
+        raise ValueError("resume_checkpoint and warm_start_checkpoint are mutually exclusive")
+    if (budget.warm_start_checkpoint is None) != (
+        budget.warm_start_prior_updates is None
+    ):
+        raise ValueError(
+            "warm_start_checkpoint and warm_start_prior_updates must be supplied together"
+        )
     if budget.device_resident_controls and (
         budget.rerun_output is not None
         or budget.rerun_grpc_url is not None
@@ -1966,6 +2084,19 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)
     torch.cuda.manual_seed_all(budget.seed)
+    warm_start_checkpoint = (
+        None
+        if budget.warm_start_checkpoint is None
+        else Path(budget.warm_start_checkpoint).expanduser().resolve()
+    )
+    warm_start_metadata = (
+        None
+        if warm_start_checkpoint is None
+        else _warm_start_lineage(
+            warm_start_checkpoint,
+            prior_completed_updates=int(budget.warm_start_prior_updates),
+        )
+    )
 
     selection = TrajectorySelection(
         object_type=budget.object_type,
@@ -2037,6 +2168,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     )
     if resume_checkpoint is not None:
         load_skrl_checkpoint(runtime.agent, resume_checkpoint)
+    if warm_start_checkpoint is not None:
+        load_skrl_checkpoint_for_warm_start(runtime.agent, warm_start_checkpoint)
+        runtime.warm_start_metadata = warm_start_metadata
     trajectory_assignments = _trajectory_assignments(trajectories)
     if budget.evaluation_enabled:
         if evaluation_num_envs is None:  # pragma: no cover - resolved above
@@ -2076,6 +2210,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         trajectory_selection=trajectory_selection,
         device=device,
     )
+    if warm_start_metadata is not None:
+        wandb_config["warm_start"] = warm_start_metadata
     with _wandb_run(output=output, budget=budget, config=wandb_config) as (wandb_run, wandb):
         with _owned_initial_checkpoint(output) as initial_checkpoint:
             _save_checkpoint_atomically(
@@ -2239,6 +2375,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
                 "actor_mean": "source_default",
                 "initial_log_std": -0.99,
                 "ppo_learning_rate": ppo_config.learning_rate,
+                "warm_start": warm_start_metadata,
             },
             "reward": {
                 "environment_contract": REWARD_CONTRACT_ID,
@@ -2352,7 +2489,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--resume-checkpoint",
         type=Path,
-        help="continue policy, value, optimizer, and normalizers from a native ManoRL checkpoint",
+        help="strictly continue policy, value, optimizer, and normalizers under the same runtime contract",
+    )
+    parser.add_argument(
+        "--warm-start-checkpoint",
+        type=Path,
+        help="transfer policy, value, and normalizers while resetting optimizer/scheduler/progress",
+    )
+    parser.add_argument(
+        "--warm-start-prior-updates",
+        type=int,
+        help="conceptual completed updates represented by the warm-start lineage",
     )
     parser.add_argument("--num-envs", type=int, default=2048)
     parser.add_argument("--evaluation-num-envs", type=int, default=1)
@@ -2380,8 +2527,8 @@ def main(argv: list[str] | None = None) -> int:
         choices=SUPPORTED_REFERENCE_FPS,
         default=DEFAULT_REFERENCE_FPS,
         help=(
-            "interpret source trajectory frames at 100 or 120 Hz, then interpolate "
-            "onto the fixed 200 Hz control grid"
+            "run source reference and policy/control together at 100 or 120 Hz "
+            "with four exact physics substeps per inference"
         ),
     )
     parser.add_argument(
@@ -2533,6 +2680,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wandb-name")
     parser.add_argument("--wandb-tags", action="append", default=[], metavar="TAG[,TAG...]")
     args = parser.parse_args(argv)
+    if args.resume_checkpoint is not None and args.warm_start_checkpoint is not None:
+        parser.error("--resume-checkpoint and --warm-start-checkpoint are mutually exclusive")
+    if (args.warm_start_checkpoint is None) != (
+        args.warm_start_prior_updates is None
+    ):
+        parser.error(
+            "--warm-start-checkpoint and --warm-start-prior-updates must be supplied together"
+        )
+    if args.warm_start_prior_updates is not None and args.warm_start_prior_updates < 0:
+        parser.error("--warm-start-prior-updates must be non-negative")
     selector = (
         "all"
         if args.all_pairs
@@ -2684,6 +2841,12 @@ def main(argv: list[str] | None = None) -> int:
                 if args.resume_checkpoint is None
                 else str(args.resume_checkpoint.expanduser().resolve())
             ),
+            warm_start_checkpoint=(
+                None
+                if args.warm_start_checkpoint is None
+                else str(args.warm_start_checkpoint.expanduser().resolve())
+            ),
+            warm_start_prior_updates=args.warm_start_prior_updates,
             minibatch_size=args.minibatch_size,
             evaluation_num_envs=args.evaluation_num_envs,
             evaluation_enabled=args.evaluation_enabled,

@@ -2,21 +2,28 @@ from __future__ import annotations
 
 import pytest
 
-from sim.manorl.contracts import PHYSICS_SUBSTEPS_PER_TARGET
 from tools import benchmark_manorl_mjx_throughput as benchmark
 
 
 def test_throughput_reports_control_and_substep_rates() -> None:
-    metrics = benchmark._throughput(elapsed_seconds=2.0, control_steps=10, num_envs=4)
+    metrics = benchmark._throughput(
+        elapsed_seconds=2.0,
+        control_steps=10,
+        num_envs=4,
+        physics_substeps_per_control=4,
+    )
 
     assert metrics["batch_control_steps_per_second"] == 5.0
     assert metrics["per_env_control_steps_per_second"] == 5.0
     assert metrics["aggregate_world_control_steps_per_second"] == 20.0
-    assert metrics["aggregate_physics_substeps_per_second"] == 20.0 * PHYSICS_SUBSTEPS_PER_TARGET
-    assert metrics["physics_substeps_per_control_step"] == PHYSICS_SUBSTEPS_PER_TARGET
+    assert metrics["aggregate_physics_substeps_per_second"] == 80.0
+    assert metrics["physics_substeps_per_control_step"] == 4
 
 
-def test_physics_loop_executes_exactly_two_substeps_per_control_step() -> None:
+@pytest.mark.parametrize("physics_substeps_per_control", (2, 4))
+def test_physics_loop_executes_selected_substeps_per_control_step(
+    physics_substeps_per_control: int,
+) -> None:
     calls: list[int] = []
     synchronized: list[int] = []
     ticks = iter((100.0, 102.5))
@@ -30,11 +37,12 @@ def test_physics_loop_executes_exactly_two_substeps_per_control_step() -> None:
         step_fn=step_fn,
         synchronize=synchronized.append,
         control_steps=3,
+        physics_substeps_per_control=physics_substeps_per_control,
         clock=lambda: next(ticks),
     )
 
-    assert data == 3 * PHYSICS_SUBSTEPS_PER_TARGET
-    assert len(calls) == 3 * PHYSICS_SUBSTEPS_PER_TARGET
+    assert data == 3 * physics_substeps_per_control
+    assert len(calls) == 3 * physics_substeps_per_control
     assert synchronized == [0, data]
     assert elapsed == 2.5
 

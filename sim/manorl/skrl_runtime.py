@@ -306,6 +306,7 @@ class ManoSkrlRuntime:
             raise TypeError("config must be a ManoPPOConfig")
         self.gymnasium_env = environment
         self.config = config
+        self.warm_start_metadata: dict[str, object] | None = None
         self.env = (
             DeviceTransitionGymnasiumWrapper(environment)
             if environment.environment.config.device_transition
@@ -375,6 +376,7 @@ class ManoSkrlRuntime:
         physical = self.gymnasium_env.environment
         available_sides = tuple(physical.hand_sides)
         controlled_sides = tuple(physical.hand_layout.controlled_sides)
+        clock = physical.config.clock
         return {
             "requested_hand_side": physical.config.hand_side,
             "resolved_hand_side": (
@@ -389,6 +391,13 @@ class ManoSkrlRuntime:
             "observation_dim": int(physical.observation_dim),
             "model_action_dim": int(physical.model_action_dim),
             "reference_fps": physical.config.reference_fps,
+            "control_fps": clock.policy_fps,
+            "control_timestep_seconds": clock.control_timestep,
+            "physics_fps": clock.physics_fps,
+            "physics_timestep_seconds": clock.physics_timestep,
+            "physics_substeps_per_control": clock.physics_substeps_per_control,
+            "pre_padding": physical.config.compatibility.movement_pre_padding,
+            "post_padding": physical.config.post_padding,
             "warp_ccd": physical.warp_ccd_metadata(),
             "residual_action": asdict(physical.config.residual_action),
         }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -7,6 +9,7 @@ import pickle
 import sys
 
 import numpy as np
+import pytest
 from scipy.spatial.transform import Rotation
 
 from sim.manorl.environment import MaterializedContactBuffers, MaterializedState
@@ -14,7 +17,7 @@ from sim.manorl.contracts import TrajectoryIdentity
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
-    SYNTHETIC_LANCE_V22_CONTRACT,
+    SYNTHETIC_LANCE_CONTRACT,
     build_v2_row,
     build_v2_schema,
     corrected_contact_frames,
@@ -138,13 +141,29 @@ def test_mano_48d_conversion_matches_source_layout() -> None:
 
 def test_v2_schema_has_explicit_contract_and_28d_rollout_fields() -> None:
     schema = build_v2_schema(observation_dim=480, action_dim=28)
-    assert schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V22_CONTRACT.encode()
+    assert schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_CONTRACT.encode()
+    assert schema.metadata[b"reference_fps"] == b"none"
+    assert schema.metadata[b"control_fps"] == b"200"
+    assert schema.metadata[b"physics_fps"] == b"400"
+    assert schema.metadata[b"physics_substeps_per_control"] == b"2"
     assert schema.metadata[b"mano_global_frame_contract"] == MANO_GLOBAL_FRAME_CONTRACT.encode()
     assert schema.field("trajectory_metadata").type[0].name == "data_fps"
     assert schema.field("hands").type.value_type[6].name == "urdf_dof_target"
     assert schema.field("rollout").type[0].name == "transition_count"
-    assert schema.field("provenance").type[5].name == "checkpoint_update"
-    assert schema.field("provenance").type[-1].name == "generation_attempt"
+    provenance_fields = [field.name for field in schema.field("provenance").type]
+    assert "checkpoint_update" in provenance_fields
+    assert provenance_fields[-1] == "generation_attempt"
+
+    schema_120 = build_v2_schema(
+        observation_dim=480,
+        action_dim=28,
+        control_fps=120,
+        reference_fps=120,
+    )
+    assert schema_120.metadata[b"reference_fps"] == b"120"
+    assert schema_120.metadata[b"control_fps"] == b"120"
+    assert schema_120.metadata[b"physics_fps"] == b"480"
+    assert schema_120.metadata[b"physics_substeps_per_control"] == b"4"
 
 
 def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
@@ -199,6 +218,37 @@ def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
     assert row["provenance"]["seed"] == 42
     assert row["provenance"]["episode_index"] == 0
     assert row["provenance"]["generation_attempt"] == 1
+    trajectory_120 = replace(
+        trajectory,
+        timestamps=np.asarray([0.0, 1.0 / 120.0]),
+        reference_fps=120,
+        control_fps=120,
+    )
+    row_120 = build_v2_row(
+        trajectory=trajectory_120,
+        source_index={},
+        source_metadata={
+            "hand_names": ["left", "right"],
+            "mano_hand_shapes": [[1.0] * 10, [2.0] * 10],
+        },
+        states=states,
+        contacts=[[], []],
+        rollout=rollout,
+        provenance={
+            "checkpoint_path": "/c.pt",
+            "checkpoint_sha256": "abc",
+            "checkpoint_update": 1,
+            "checkpoint_metadata": {},
+            "software_commit": "deadbeef",
+            "seed": 42,
+            "episode_index": 0,
+            "generation_attempt": 1,
+        },
+    )
+    assert row_120["trajectory_metadata"]["data_fps"] == 120
+    assert row_120["timestamp"] == [0.0, 1.0 / 120.0]
+    assert row_120["provenance"]["physics_fps"] == 480
+    assert row_120["provenance"]["physics_substeps_per_control"] == 4
     np.testing.assert_array_equal(
         row["hands"][0]["mano_global_pos"],
         np.asarray(row["hands"][0]["urdf_dof"])[:, :3],
@@ -330,7 +380,12 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(
     monkeypatch.setattr(
         exporter_module,
         "_checkpoint_environment_options",
-        lambda path: SimpleNamespace(reference_fps=None),
+        lambda path: SimpleNamespace(
+            reference_fps=None,
+            control_fps=200,
+            pre_padding=100,
+            post_padding=250,
+        ),
     )
     monkeypatch.setattr(
         exporter_module, "load_assigned_trajectory_batch", lambda selection, num_envs: batch
@@ -398,10 +453,11 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(
     assert manifest["synthesis"]["counters"][identity.identity]["attempts"] == 5
     assert manifest["synthesis"]["counters"][identity.identity]["saved"] == 5
 
+
 def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
     # Keep this writer test deliberately small; GPU rollout tests validate the
     # full row builder and contact invariants separately.
-    output = tmp_path / "synthetic_v22.lance"
+    output = tmp_path / "synthetic_v23.lance"
     row = {
         "index": {"uuid": "u", "seed_uuid": "s", "capMachine": "m", "operator": "o", "scene": "cube2", "is_generated": True},
         "trajectory_metadata": {
@@ -414,11 +470,38 @@ def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
         "objects": [{"rot_aa": [[0.0] * 3], "pos": [[0.0] * 3]}], "contact": [[]],
         "reference": {"source_frame_index": [0], "hand_urdf_dof": [[0.0] * 28], "object_pos": [[0.0] * 3], "object_rot_aa": [[0.0] * 3]},
         "rollout": {"transition_count": 0, "observation_t": [], "next_observation": [], "policy_mean_action": [], "processed_action": [], "cumulative_position_residual": [], "cumulative_joint_residual": [], "command_reference_index": [], "command_source_frame_index": [], "reference_target": [], "processed_target": [], "controller_target": [], "reward": [], "raw_contact_reward": [], "contact_reward": [], "terminated": [], "termination_reason_code": []},
-        "provenance": {"contract": SYNTHETIC_LANCE_V22_CONTRACT, "force_contract": FORCE_DIRECTION_CONTRACT, "policy_mode": "deterministic_mean", "checkpoint_path": "p", "checkpoint_sha256": "h", "checkpoint_update": 1, "checkpoint_metadata_json": "{}", "dataset_path": "d", "dataset_version": 1, "row_index": 0, "source_identity": "id", "software_commit": "c", "seed": 42, "episode_index": 0, "generation_attempt": 1},
+        "provenance": {"contract": SYNTHETIC_LANCE_CONTRACT, "force_contract": FORCE_DIRECTION_CONTRACT, "reference_fps": None, "control_fps": 200, "control_timestep_seconds": 0.005, "physics_fps": 400, "physics_timestep_seconds": 0.0025, "physics_substeps_per_control": 2, "policy_mode": "deterministic_mean", "checkpoint_path": "p", "checkpoint_sha256": "h", "checkpoint_update": 1, "checkpoint_metadata_json": "{}", "dataset_path": "d", "dataset_version": 1, "row_index": 0, "source_identity": "id", "software_commit": "c", "seed": 42, "episode_index": 0, "generation_attempt": 1},
     }
     write_v2_lance([row], output=output, observation_dim=480, action_dim=28)
     import lance
     dataset = lance.dataset(str(output))
     assert dataset.count_rows() == 1
-    assert dataset.schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_V22_CONTRACT.encode()
+    assert dataset.schema.metadata[b"schema_version"] == SYNTHETIC_LANCE_CONTRACT.encode()
+    assert dataset.schema.metadata[b"control_fps"] == b"200"
     assert dataset.take([0]).to_pylist()[0]["trajectory_metadata"]["data_fps"] == 200
+
+    row_120 = deepcopy(row)
+    row_120["trajectory_metadata"]["data_fps"] = 120
+    row_120["provenance"].update(
+        reference_fps=120,
+        control_fps=120,
+        control_timestep_seconds=1.0 / 120.0,
+        physics_fps=480,
+        physics_timestep_seconds=1.0 / 480.0,
+        physics_substeps_per_control=4,
+    )
+    output_120 = tmp_path / "synthetic_120hz_v23.lance"
+    write_v2_lance(
+        [row_120], output=output_120, observation_dim=480, action_dim=28
+    )
+    dataset_120 = lance.dataset(str(output_120))
+    assert dataset_120.schema.metadata[b"control_fps"] == b"120"
+    assert dataset_120.schema.metadata[b"physics_fps"] == b"480"
+
+    with pytest.raises(ValueError, match="cannot mix control clocks"):
+        write_v2_lance(
+            [row, row_120],
+            output=tmp_path / "mixed.lance",
+            observation_dim=480,
+            action_dim=28,
+        )

@@ -39,13 +39,17 @@ LEGACY_ENVIRONMENT_CONTRACT_IDS: Final = frozenset(
         "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
         "action3mm_max30mm_joint2x_thumbtwist0p008_fingermcpflex0p0025_"
         "observation_contact_0p2n_deviation_0p10_v6",
+        "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
+        "action3mm_max30mm_joint2x_thumbtwist0p008_fingermcpflex0p0025_"
+        "reference_fps_100_or_120_unwrap_linear_slerp_control200_"
+        "observation_contact_0p2n_deviation_0p10_v7",
     }
 )
 ENVIRONMENT_CONTRACT_ID: Final = (
-    "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre100_"
+    "mujoco_28dof_hand_side_film_dynamic_residual_early30_pre180_"
     "action3mm_max30mm_joint2x_thumbtwist0p008_fingermcpflex0p0025_"
-    "reference_fps_100_or_120_unwrap_linear_slerp_control200_"
-    "observation_contact_0p2n_deviation_0p10_v7"
+    "source_policy_fps_100_or_120_physics4x_edgehold_padding_unwrap_linear_slerp_"
+    "observation_contact_0p2n_deviation_0p10_v8"
 )
 TARGET_MAX_DEVIATION_DISTANCE: Final[float] = 0.10
 

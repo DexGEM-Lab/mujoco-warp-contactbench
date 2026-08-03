@@ -58,6 +58,26 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     assert palm_mesh is not None and palm_mesh.get("scale") == "0.7 0.7 0.7"
 
 
+@pytest.mark.parametrize(
+    ("policy_fps", "physics_timestep"),
+    ((100, 1.0 / 400.0), (120, 1.0 / 480.0)),
+)
+def test_selected_clock_compiles_exact_physics_timestep(
+    policy_fps: int, physics_timestep: float
+) -> None:
+    assert physics_timestep == pytest.approx(1.0 / (4 * policy_fps))
+    root = ET.fromstring(build_scene_xml(physics_timestep=physics_timestep))
+    assert float(root.find("./option").get("timestep")) == pytest.approx(
+        physics_timestep
+    )
+    mujoco, model = compile_model(physics_timestep=physics_timestep)
+    assert model.opt.timestep == pytest.approx(physics_timestep)
+    data = mujoco.MjData(model)
+    for _ in range(4):
+        mujoco.mj_step(model, data)
+    assert data.time == pytest.approx(1.0 / policy_fps)
+
+
 @pytest.mark.parametrize("unified", (False, True))
 def test_generated_scene_uses_checkerboard_floor_material(unified: bool) -> None:
     xml = (

@@ -10,7 +10,7 @@ Examples:
     --warp-persistent-ccd-workspace --output outputs/manorl/bench_unified_4096.json
 
 The physics measurement contains only the batched JIT MJX-Warp step function.
-Each reported control step always performs PHYSICS_SUBSTEPS_PER_TARGET substeps.
+Each reported control step performs the selected runtime's exact substep count.
 """
 
 from __future__ import annotations
@@ -29,11 +29,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sim.manorl.contracts import DEFAULT_HAND_DATASET_PATH, EXPECTED_DATASET_VERSION, PHYSICS_SUBSTEPS_PER_TARGET
+from sim.manorl.contracts import DEFAULT_HAND_DATASET_PATH, EXPECTED_DATASET_VERSION
 from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment, recommended_warp_contact_capacity
-from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
+from sim.manorl.trajectory import (
+    DEFAULT_REFERENCE_FPS,
+    SUPPORTED_REFERENCE_FPS,
+    TrajectorySelection,
+    load_assigned_trajectory_batch,
+)
 
-SCHEMA = "manorl.mjx_throughput.v1"
+SCHEMA = "manorl.mjx_throughput.v2"
 T = TypeVar("T")
 
 
@@ -55,11 +60,17 @@ def _write_json_atomically(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
-def _throughput(*, elapsed_seconds: float, control_steps: int, num_envs: int) -> dict[str, float | int]:
+def _throughput(
+    *,
+    elapsed_seconds: float,
+    control_steps: int,
+    num_envs: int,
+    physics_substeps_per_control: int,
+) -> dict[str, float | int]:
     if elapsed_seconds <= 0:
         raise ValueError("elapsed_seconds must be positive")
-    if control_steps < 1 or num_envs < 1:
-        raise ValueError("control_steps and num_envs must be positive")
+    if control_steps < 1 or num_envs < 1 or physics_substeps_per_control < 1:
+        raise ValueError("control steps, environments, and physics substeps must be positive")
     batch_rate = control_steps / elapsed_seconds
     return {
         "elapsed_seconds": elapsed_seconds,
@@ -67,8 +78,10 @@ def _throughput(*, elapsed_seconds: float, control_steps: int, num_envs: int) ->
         "batch_control_steps_per_second": batch_rate,
         "aggregate_world_control_steps_per_second": batch_rate * num_envs,
         "per_env_control_steps_per_second": batch_rate,
-        "aggregate_physics_substeps_per_second": batch_rate * num_envs * PHYSICS_SUBSTEPS_PER_TARGET,
-        "physics_substeps_per_control_step": PHYSICS_SUBSTEPS_PER_TARGET,
+        "aggregate_physics_substeps_per_second": (
+            batch_rate * num_envs * physics_substeps_per_control
+        ),
+        "physics_substeps_per_control_step": physics_substeps_per_control,
     }
 
 
@@ -78,16 +91,17 @@ def _run_physics_loop(
     step_fn: Callable[[T], T],
     synchronize: Callable[[T], Any],
     control_steps: int,
+    physics_substeps_per_control: int,
     clock: Callable[[], float] = time.perf_counter,
 ) -> tuple[T, float]:
     """Run exactly the configured physics substeps for each control step."""
 
-    if control_steps < 1:
-        raise ValueError("control_steps must be positive")
+    if control_steps < 1 or physics_substeps_per_control < 1:
+        raise ValueError("control_steps and physics_substeps_per_control must be positive")
     synchronize(data)
     started = clock()
     for _ in range(control_steps):
-        for _ in range(PHYSICS_SUBSTEPS_PER_TARGET):
+        for _ in range(physics_substeps_per_control):
             data = step_fn(data)
     synchronize(data)
     return data, clock() - started
@@ -102,6 +116,7 @@ def _physics_warmup(environment: MujocoManoEnvironment, control_steps: int) -> N
         step_fn=environment._step_fn,
         synchronize=lambda data: environment.jax.block_until_ready(data.qpos),
         control_steps=control_steps,
+        physics_substeps_per_control=environment.config.physics_substeps_per_control,
     )
 
 
@@ -125,9 +140,13 @@ def _measure_physics(environment: MujocoManoEnvironment, args: argparse.Namespac
         step_fn=environment._step_fn,
         synchronize=lambda data: environment.jax.block_until_ready(data.qpos),
         control_steps=args.measurement_steps,
+        physics_substeps_per_control=environment.config.physics_substeps_per_control,
     )
     result = _throughput(
-        elapsed_seconds=elapsed, control_steps=args.measurement_steps, num_envs=args.num_envs
+        elapsed_seconds=elapsed,
+        control_steps=args.measurement_steps,
+        num_envs=args.num_envs,
+        physics_substeps_per_control=environment.config.physics_substeps_per_control,
     )
     result.update({"mode": "physics", "finite_qpos_qvel": _finite_state(environment)})
     if not result["finite_qpos_qvel"]:
@@ -158,7 +177,10 @@ def _measure_environment(environment: MujocoManoEnvironment, args: argparse.Name
     environment.jax.block_until_ready(environment.data.qpos)
     elapsed = time.perf_counter() - started
     result = _throughput(
-        elapsed_seconds=elapsed, control_steps=args.measurement_steps, num_envs=args.num_envs
+        elapsed_seconds=elapsed,
+        control_steps=args.measurement_steps,
+        num_envs=args.num_envs,
+        physics_substeps_per_control=environment.config.physics_substeps_per_control,
     )
     result.update(
         {
@@ -184,6 +206,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-version", type=int, default=EXPECTED_DATASET_VERSION)
     parser.add_argument("--selector", default="cube1:01", help="OBJECT:ACTION[,OBJECT:ACTION...] or all")
     parser.add_argument("--hand-side", choices=("auto", "right", "left", "both"), default="auto")
+    parser.add_argument(
+        "--reference-fps",
+        type=int,
+        choices=SUPPORTED_REFERENCE_FPS,
+        default=DEFAULT_REFERENCE_FPS,
+        help="coupled source/policy clock; physics uses four exact substeps",
+    )
     parser.add_argument("--num-envs", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup-steps", type=int, default=32)
@@ -220,6 +249,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         dataset_path=args.dataset_path,
         expected_dataset_version=args.dataset_version,
         hand_side=args.hand_side,
+        reference_fps=args.reference_fps,
     )
 
 
@@ -235,15 +265,21 @@ def main(argv: list[str] | None = None) -> int:
 
     build_started = time.perf_counter()
     selection = TrajectorySelection(
-        selector=args.selector, dataset_path=args.dataset_path,
-        expected_dataset_version=args.dataset_version, hand_side=args.hand_side,
+        selector=args.selector,
+        dataset_path=args.dataset_path,
+        expected_dataset_version=args.dataset_version,
+        hand_side=args.hand_side,
+        reference_fps=args.reference_fps,
     )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=args.num_envs)
     contact_capacity = recommended_warp_contact_capacity(args.num_envs, trajectories.hand_sides)
     environment = MujocoManoEnvironment(
         trajectories,
         EnvironmentConfig(
-            num_envs=args.num_envs, device=args.device, hand_side=args.hand_side,
+            num_envs=args.num_envs,
+            device=args.device,
+            hand_side=args.hand_side,
+            reference_fps=args.reference_fps,
             contact_capacity=contact_capacity,
             device_resident_controls=args.device_resident_controls,
             capture_transition_diagnostics=False,
@@ -274,6 +310,12 @@ def main(argv: list[str] | None = None) -> int:
             "mode": args.mode, "dataset_path": str(args.dataset_path),
             "dataset_version": args.dataset_version, "selector": selection.canonical_selector,
             "hand_side": args.hand_side, "num_envs": args.num_envs, "seed": args.seed,
+            "reference_fps": args.reference_fps,
+            "control_fps": environment.config.clock.policy_fps,
+            "control_timestep_seconds": environment.config.control_timestep,
+            "physics_fps": environment.config.clock.physics_fps,
+            "physics_timestep_seconds": environment.config.physics_timestep,
+            "physics_substeps_per_control": environment.config.physics_substeps_per_control,
             "warmup_steps": args.warmup_steps, "measurement_steps": args.measurement_steps,
             "device": args.device, "unified_object_batch": args.unified_object_batch,
             "contact_capacity": contact_capacity, "warp_ccd_iterations": args.warp_ccd_iterations,

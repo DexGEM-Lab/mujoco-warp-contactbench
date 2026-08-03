@@ -12,8 +12,8 @@ from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation, Slerp
 
 from sim.manorl.contracts import (
-    CONTROL_TIMESTEP,
     DEFAULT_HAND_DATASET_PATH,
+    DEFAULT_POLICY_FPS,
     DATASET_ROW_INDEX,
     EXPECTED_DATASET_VERSION,
     JOINT_DOF,
@@ -25,8 +25,10 @@ from sim.manorl.contracts import (
     SOURCE_DATA_FPS,
     SOURCE_FRAME_COUNT,
     SOURCE_SLICE,
+    SUPPORTED_POLICY_FPS,
     TRAJECTORY_IDENTITY,
     TrajectoryIdentity,
+    simulation_clock,
 )
 from sim.manorl.hand_layout import HandActionLayout
 
@@ -44,11 +46,14 @@ GENERATED_CUBE1_ROW_INDEX = 507
 GENERATED_CUBE1_UUID = "00f45dd5-6699-5be1-8948-d6f7b623da48"
 GENERATED_CUBE1_MOVEMENT = (267, 541)
 GENERATED_PADDING = 250
-DEFAULT_PRE_PADDING = 100
+LEGACY_PRE_PADDING = 100
+DEFAULT_PRE_PADDING = 180
 DEFAULT_POST_PADDING = 250
-SUPPORTED_REFERENCE_FPS = (100, 120)
-DEFAULT_REFERENCE_FPS = 120
-REFERENCE_RESAMPLING_ID = "uniform_source_clock_unwrapped_linear_slerp_to_control_200hz_v1"
+SUPPORTED_REFERENCE_FPS = SUPPORTED_POLICY_FPS
+DEFAULT_REFERENCE_FPS = DEFAULT_POLICY_FPS
+REFERENCE_RESAMPLING_ID = (
+    "coupled_source_policy_clock_edge_hold_padding_unwrapped_linear_slerp_v3"
+)
 CUBE1_ACTION_01_BATCH_ROWS = (
     (0, "97f4b8a1-19f4-5c1c-a051-162f21fcfc84", "cube1_01_003", 1481, 681, 971),
     (1, "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3", "cube1_01_009", 1373, 690, 982),
@@ -112,6 +117,7 @@ class ReferenceTrajectory:
     q_ref_by_side: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     selected_hand_sides: tuple[str, ...] = ()
     reference_fps: int | None = None
+    control_fps: int | None = None
     movement_start_step: int | None = None
     movement_end_step: int | None = None
 
@@ -158,6 +164,14 @@ class ReferenceTrajectory:
             raise ValueError(
                 f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS} when provided"
             )
+        if self.control_fps is not None and (
+            not isinstance(self.control_fps, int)
+            or isinstance(self.control_fps, bool)
+            or self.control_fps not in (*SUPPORTED_REFERENCE_FPS, 200)
+        ):
+            raise ValueError("control_fps must be 100, 120, 200, or None")
+        if self.control_fps in SUPPORTED_REFERENCE_FPS and self.reference_fps != self.control_fps:
+            raise ValueError("public trajectory modes require reference_fps == control_fps")
         movement_steps = (self.movement_start_step, self.movement_end_step)
         if (movement_steps[0] is None) != (movement_steps[1] is None):
             raise ValueError("movement control steps must be provided together")
@@ -233,14 +247,12 @@ def resample_reference_trajectory(
     trajectory: ReferenceTrajectory,
     *,
     reference_fps: int,
+    control_fps: int | None = None,
 ) -> ReferenceTrajectory:
-    """Map a uniform source clock onto the fixed 200 Hz control grid.
+    """Map a uniform source clock onto the matching policy/control grid.
 
-    Lance timestamps remain useful provenance, but the explicit ``reference_fps``
-    is the physical source clock selected by the caller. The final source pose is
-    always retained; when 120 Hz does not divide the 5 ms control period exactly,
-    the endpoint is held for the final partial source interval (less than one
-    control step).
+    Lance timestamps remain provenance; ``reference_fps`` selects both source
+    playback and policy inference frequency. The final source pose is retained.
     """
 
     if not isinstance(trajectory, ReferenceTrajectory):
@@ -251,20 +263,41 @@ def resample_reference_trajectory(
         or reference_fps not in SUPPORTED_REFERENCE_FPS
     ):
         raise ValueError(f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS}")
-    if trajectory.reference_fps is not None:
-        if trajectory.reference_fps == reference_fps:
+    resolved_control_fps = reference_fps if control_fps is None else control_fps
+    if resolved_control_fps not in (*SUPPORTED_REFERENCE_FPS, 200):
+        raise ValueError("control_fps must be 100, 120, or legacy 200")
+    if resolved_control_fps != reference_fps and resolved_control_fps != 200:
+        raise ValueError("public trajectory modes require reference_fps == control_fps")
+    existing_reference_fps = getattr(trajectory, "reference_fps", None)
+    existing_control_fps = getattr(trajectory, "control_fps", None)
+    if existing_reference_fps is not None:
+        # Pre-v8 predecoded pickles recorded reference FPS while the 200 Hz
+        # control clock was still implicit. Canonicalize that historical field
+        # absence rather than mistaking it for a new coupled public clock.
+        if existing_control_fps is None:
+            existing_control_fps = 200
+            trajectory = replace(trajectory, control_fps=existing_control_fps)
+        if (
+            existing_reference_fps == reference_fps
+            and existing_control_fps == resolved_control_fps
+        ):
             return trajectory
         raise ValueError(
-            f"trajectory is already resampled at {trajectory.reference_fps} Hz"
+            "trajectory is already resampled with clock "
+            f"reference={existing_reference_fps}, control={existing_control_fps}"
         )
 
+    clock = simulation_clock(resolved_control_fps)
     source_count = len(trajectory.q_ref)
     source_times = np.arange(source_count, dtype=np.float64) / float(reference_fps)
     source_duration = float(source_times[-1])
     control_intervals = int(
-        np.ceil(source_duration / CONTROL_TIMESTEP - 1e-12)
+        np.ceil(source_duration / clock.control_timestep - 1e-12)
     )
-    control_times = np.arange(control_intervals + 1, dtype=np.float64) * CONTROL_TIMESTEP
+    control_times = (
+        np.arange(control_intervals + 1, dtype=np.float64)
+        * clock.control_timestep
+    )
     query_times = np.minimum(control_times, source_duration)
 
     q_ref_by_side = {
@@ -294,21 +327,27 @@ def resample_reference_trajectory(
     )
     source_indices = np.floor(source_coordinates + 1e-10).astype(np.int64)
     source_indices[-1] = int(trajectory.source_indices[-1])
-    movement_start_step = int(
-        np.searchsorted(
-            source_coordinates,
-            trajectory.identity.movement_start_raw,
-            side="left",
-        )
+    source_movement_start_step = (
+        trajectory.movement_start_step
+        if trajectory.movement_start_step is not None
+        else trajectory.identity.movement_start_raw - trajectory.identity.source_start
     )
-    movement_end_step = int(
-        np.searchsorted(
-            source_coordinates,
-            trajectory.identity.movement_end_raw,
-            side="right",
-        )
-        - 1
+    source_movement_end_step = (
+        trajectory.movement_end_step
+        if trajectory.movement_end_step is not None
+        else trajectory.identity.movement_end_raw - trajectory.identity.source_start
     )
+    if not (
+        0
+        <= source_movement_start_step
+        <= source_movement_end_step
+        < source_count
+    ):
+        raise ValueError("source movement window does not map into the selected trajectory")
+    movement_start_ratio = source_times[source_movement_start_step] / clock.control_timestep
+    movement_end_ratio = source_times[source_movement_end_step] / clock.control_timestep
+    movement_start_step = int(np.ceil(movement_start_ratio - 1e-10))
+    movement_end_step = int(np.floor(movement_end_ratio + 1e-10))
     if not 0 <= movement_start_step <= movement_end_step < len(control_times):
         raise ValueError("source movement window does not map onto the control grid")
 
@@ -323,6 +362,7 @@ def resample_reference_trajectory(
         object_pos=_immutable(object_pos),
         object_quat_xyzw=_immutable(object_quat_xyzw),
         reference_fps=reference_fps,
+        control_fps=resolved_control_fps,
         movement_start_step=movement_start_step,
         movement_end_step=movement_end_step,
     )
@@ -445,6 +485,7 @@ class TrajectorySelection:
     post_padding: int = DEFAULT_POST_PADDING
     hand_side: str = "auto"
     reference_fps: int | None = None
+    control_fps: int | None = None
     pair_assignment_cycle: int = 0
 
     def __post_init__(self) -> None:
@@ -477,6 +518,14 @@ class TrajectorySelection:
             raise ValueError(
                 f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS} when provided"
             )
+        if self.control_fps is not None and (
+            not isinstance(self.control_fps, int)
+            or isinstance(self.control_fps, bool)
+            or self.control_fps not in (*SUPPORTED_REFERENCE_FPS, 200)
+        ):
+            raise ValueError("control_fps must be 100, 120, 200, or None")
+        if self.control_fps in SUPPORTED_REFERENCE_FPS and self.reference_fps != self.control_fps:
+            raise ValueError("public trajectory modes require reference_fps == control_fps")
         if (
             not isinstance(self.pair_assignment_cycle, int)
             or isinstance(self.pair_assignment_cycle, bool)
@@ -484,6 +533,10 @@ class TrajectorySelection:
         ):
             raise ValueError("pair_assignment_cycle must be a non-negative integer")
         normalize_hand_side(self.hand_side)
+
+    @property
+    def resolved_control_fps(self) -> int | None:
+        return self.reference_fps if self.control_fps is None else self.control_fps
 
     @property
     def action_id(self) -> str:
@@ -787,13 +840,33 @@ def trajectory_from_lance_row(
         raise ValueError(
             "object movement range must be an inclusive interval within total_frames"
         )
-    start = max(0, movement_start - int(pre_padding))
-    # Lance movement metadata names an inclusive ``end_frame``.  Convert it
-    # once at the Python slice boundary so zero-padding selections retain the
-    # final movement frame.
-    stop = min(source_count, movement_end + 1 + int(post_padding))
+    if (
+        not isinstance(pre_padding, int)
+        or isinstance(pre_padding, bool)
+        or pre_padding < 0
+        or not isinstance(post_padding, int)
+        or isinstance(post_padding, bool)
+        or post_padding < 0
+    ):
+        raise ValueError("trajectory padding must use non-negative integers")
+    requested_start = movement_start - pre_padding
+    # Lance movement metadata names an inclusive ``end_frame``. Convert it
+    # once at the Python slice boundary; missing capture margins become a
+    # stationary edge hold so every selected pair receives the requested
+    # policy-duration padding.
+    requested_stop = movement_end + 1 + post_padding
+    start = max(0, requested_start)
+    stop = min(source_count, requested_stop)
+    left_edge_hold = start - requested_start
+    right_edge_hold = requested_stop - stop
     if stop - start < 2:
-        raise ValueError("selected row window must contain at least two frames")
+        raise ValueError("selected row window must contain at least two captured frames")
+
+    def edge_hold(values: NDArray[np.float64]) -> NDArray[np.float64]:
+        pad_width = ((left_edge_hold, right_edge_hold),) + (
+            (0, 0),
+        ) * (values.ndim - 1)
+        return np.pad(values, pad_width, mode="edge")
 
     q_by_side: dict[str, NDArray[np.float64]] = {}
     dof_dim: int | None = None
@@ -807,10 +880,12 @@ def trajectory_from_lance_row(
             raise ValueError("all hand references must share one finite DOF width")
         values = q_all[start:stop].copy()
         values[:, 3:6] = np.unwrap(values[:, 3:6], axis=0, period=2.0 * np.pi)
-        q_by_side[side] = _immutable(values)
+        q_by_side[side] = _immutable(edge_hold(values))
     assert dof_dim is not None
-    object_pos_raw = object_pos_all[start:stop].copy()
-    object_quat_xyzw = rotvec_to_xyzw(object_rotvec_all[start:stop])
+    object_pos_raw = edge_hold(object_pos_all[start:stop].copy())
+    object_quat_xyzw = edge_hold(
+        rotvec_to_xyzw(object_rotvec_all[start:stop])
+    )
     z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0], object_type)
     object_pos = object_pos_raw.copy()
     object_pos[:, 2] += z_shift
@@ -830,11 +905,29 @@ def trajectory_from_lance_row(
         movement_start_raw=int(movement_start),
         movement_end_raw=int(movement_end),
     )
+    captured_timestamps = timestamps[start:stop]
+    source_timestep = float(np.median(np.diff(timestamps)))
+    padded_timestamps = np.concatenate(
+        [
+            captured_timestamps[0]
+            - source_timestep * np.arange(left_edge_hold, 0, -1),
+            captured_timestamps,
+            captured_timestamps[-1]
+            + source_timestep * np.arange(1, right_edge_hold + 1),
+        ]
+    )
+    source_indices = np.pad(
+        np.arange(start, stop, dtype=np.int64),
+        (left_edge_hold, right_edge_hold),
+        mode="edge",
+    )
+    movement_start_step = left_edge_hold + movement_start - start
+    movement_end_step = left_edge_hold + movement_end - start
     return ReferenceTrajectory(
         identity=trajectory_identity,
         dataset_version=int(dataset_version),
-        source_indices=_immutable(np.arange(start, stop), dtype=np.int64),
-        timestamps=_immutable(timestamps[start:stop]),
+        source_indices=_immutable(source_indices, dtype=np.int64),
+        timestamps=_immutable(padded_timestamps),
         q_ref=q_by_side[primary],
         object_pos_raw=_immutable(object_pos_raw),
         object_pos=_immutable(object_pos),
@@ -843,6 +936,8 @@ def trajectory_from_lance_row(
         hand_sides=sides,
         q_ref_by_side=q_by_side,
         selected_hand_sides=selected,
+        movement_start_step=movement_start_step,
+        movement_end_step=movement_end_step,
     )
 
 
@@ -1336,7 +1431,7 @@ def _candidate_from_metadata_row(
     except (KeyError, TypeError, ValueError, StopIteration):
         return None
     requested_start = start_raw - selection.pre_padding
-    if requested_start < 0:
+    if requested_start < 0 and source_path:
         return None
     requested_stop = end_raw + selection.post_padding
     if not source_path:
@@ -1443,7 +1538,9 @@ def _selected_trajectory_from_row(
             trajectory
             if selection.reference_fps is None
             else resample_reference_trajectory(
-                trajectory, reference_fps=selection.reference_fps
+                trajectory,
+                reference_fps=selection.reference_fps,
+                control_fps=selection.resolved_control_fps,
             )
         )
     identity = _derive_identity(row)
@@ -1537,7 +1634,9 @@ def _selected_trajectory_from_row(
         trajectory
         if selection.reference_fps is None
         else resample_reference_trajectory(
-            trajectory, reference_fps=selection.reference_fps
+            trajectory,
+            reference_fps=selection.reference_fps,
+            control_fps=selection.resolved_control_fps,
         )
     )
 
