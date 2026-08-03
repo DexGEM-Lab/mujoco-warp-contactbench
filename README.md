@@ -179,6 +179,54 @@ JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
   --object cube1 --gesture 01 --num-envs 1 --render-env 0 --no-loop
 ```
 
+### Standalone target-DOF replay
+
+`tools/replay_manorl_target_dof.py` replays a versioned, predecoded target
+package without opening Lance, loading a policy checkpoint, or running a
+training process. The package contains the recorded 28D physical hand state,
+the post-`command_target` 28D controller targets, timestamps, and object pose.
+The adjacent JSON sidecar records source/checkpoint lineage, the fixed 5 ms
+control interval, two MJX-Warp physics substeps, and a SHA256 digest of the
+NPZ payload. The loader rejects schema, shape, timestamp, quaternion, digest,
+and physics-contract mismatches; it never silently regenerates targets.
+
+Create a package on a healthy machine with Lance access:
+
+```bash
+PYTHONPATH=. python tools/export_manorl_target_replay_package.py \\
+  --dataset /path/to/source.lance --dataset-version 295 --row-index 2239 \\
+  --output outputs/manorl/replay/cube1_row2239_target_dof.npz
+```
+
+Copy both the `.npz` and adjacent `.json` to the replay host. Run a bounded
+headless parity check:
+
+```bash
+JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false \\
+PYTHONPATH=. python tools/replay_manorl_target_dof.py \\
+  --package /path/to/cube1_row2239_target_dof.npz \\
+  --device gpu --headless --output outputs/manorl/replay/report.json
+```
+
+Open the same MJX-Warp state in the native MuJoCo viewer:
+
+```bash
+DISPLAY=:1 XAUTHORITY=/home/jay/.Xauthority \\
+JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false \\
+PYTHONPATH=. python tools/replay_manorl_target_dof.py \\
+  --package /path/to/cube1_row2239_target_dof.npz \\
+  --device gpu --speed 0.25 --loop
+```
+
+The viewer mirrors MJX-Warp state into a native visual model; it does not run a
+second native simulation. A package containing explicit Warp CCD scratch
+settings requires `--device gpu`. `--device cpu --allow-physics-override` is
+available only as an explicitly non-identical diagnostic and reports the
+physics override. This is useful for Server2 because the replay host can use a
+small predecoded package while avoiding its disqualified Lance/PyArrow decode
+path. A successful replay does not qualify Server2 for production training;
+its physical DIMM/channel/CPU-IMC isolation requirement remains unchanged.
+
 ### ManoRL PPO Training
 
 The Cube1 production training contract is documented in
