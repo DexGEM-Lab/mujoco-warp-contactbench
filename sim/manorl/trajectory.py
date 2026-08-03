@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
 from typing import Any, Mapping
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 
 from sim.manorl.contracts import (
+    CONTROL_TIMESTEP,
     DEFAULT_HAND_DATASET_PATH,
     DATASET_ROW_INDEX,
     EXPECTED_DATASET_VERSION,
@@ -45,6 +46,9 @@ GENERATED_CUBE1_MOVEMENT = (267, 541)
 GENERATED_PADDING = 250
 DEFAULT_PRE_PADDING = 100
 DEFAULT_POST_PADDING = 250
+SUPPORTED_REFERENCE_FPS = (100, 120)
+DEFAULT_REFERENCE_FPS = 120
+REFERENCE_RESAMPLING_ID = "uniform_source_clock_unwrapped_linear_slerp_to_control_200hz_v1"
 CUBE1_ACTION_01_BATCH_ROWS = (
     (0, "97f4b8a1-19f4-5c1c-a051-162f21fcfc84", "cube1_01_003", 1481, 681, 971),
     (1, "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3", "cube1_01_009", 1373, 690, 982),
@@ -107,6 +111,9 @@ class ReferenceTrajectory:
     hand_sides: tuple[str, ...] = ("right",)
     q_ref_by_side: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     selected_hand_sides: tuple[str, ...] = ()
+    reference_fps: int | None = None
+    movement_start_step: int | None = None
+    movement_end_step: int | None = None
 
     def __post_init__(self) -> None:
         expected = int(self.source_indices.shape[0])
@@ -143,6 +150,23 @@ class ReferenceTrajectory:
         object.__setattr__(self, "hand_sides", sides)
         object.__setattr__(self, "q_ref_by_side", normalized_map)
         object.__setattr__(self, "selected_hand_sides", selected)
+        if self.reference_fps is not None and (
+            not isinstance(self.reference_fps, int)
+            or isinstance(self.reference_fps, bool)
+            or self.reference_fps not in SUPPORTED_REFERENCE_FPS
+        ):
+            raise ValueError(
+                f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS} when provided"
+            )
+        movement_steps = (self.movement_start_step, self.movement_end_step)
+        if (movement_steps[0] is None) != (movement_steps[1] is None):
+            raise ValueError("movement control steps must be provided together")
+        if movement_steps[0] is not None and not (
+            0 <= movement_steps[0] <= movement_steps[1] < expected
+        ):
+            raise ValueError("movement control steps must be an inclusive interval in the trajectory")
+        if np.any(np.diff(self.source_indices) < 0):
+            raise ValueError("source_indices must be non-decreasing")
         for name in (
             "timestamps",
             "q_ref",
@@ -177,6 +201,131 @@ class ReferenceTrajectory:
             return self.q_ref_by_side[side]
         except KeyError as exc:
             raise KeyError(f"trajectory has no {side} hand reference") from exc
+
+
+def _interpolate_rows(
+    values: NDArray[np.float64],
+    source_times: NDArray[np.float64],
+    query_times: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Linearly interpolate a finite ``(frames, features)`` trajectory."""
+
+    array = np.asarray(values, dtype=np.float64)
+    return np.stack(
+        [np.interp(query_times, source_times, array[:, column]) for column in range(array.shape[1])],
+        axis=1,
+    )
+
+
+def _interpolate_hand_qpos(
+    values: NDArray[np.float64],
+    source_times: NDArray[np.float64],
+    query_times: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Interpolate translation directly and angular coordinates after unwrap."""
+
+    unwrapped = np.asarray(values, dtype=np.float64).copy()
+    unwrapped[:, 3:] = np.unwrap(unwrapped[:, 3:], axis=0)
+    return _interpolate_rows(unwrapped, source_times, query_times)
+
+
+def resample_reference_trajectory(
+    trajectory: ReferenceTrajectory,
+    *,
+    reference_fps: int,
+) -> ReferenceTrajectory:
+    """Map a uniform source clock onto the fixed 200 Hz control grid.
+
+    Lance timestamps remain useful provenance, but the explicit ``reference_fps``
+    is the physical source clock selected by the caller. The final source pose is
+    always retained; when 120 Hz does not divide the 5 ms control period exactly,
+    the endpoint is held for the final partial source interval (less than one
+    control step).
+    """
+
+    if not isinstance(trajectory, ReferenceTrajectory):
+        raise TypeError("trajectory must be a ReferenceTrajectory")
+    if (
+        not isinstance(reference_fps, int)
+        or isinstance(reference_fps, bool)
+        or reference_fps not in SUPPORTED_REFERENCE_FPS
+    ):
+        raise ValueError(f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS}")
+    if trajectory.reference_fps is not None:
+        if trajectory.reference_fps == reference_fps:
+            return trajectory
+        raise ValueError(
+            f"trajectory is already resampled at {trajectory.reference_fps} Hz"
+        )
+
+    source_count = len(trajectory.q_ref)
+    source_times = np.arange(source_count, dtype=np.float64) / float(reference_fps)
+    source_duration = float(source_times[-1])
+    control_intervals = int(
+        np.ceil(source_duration / CONTROL_TIMESTEP - 1e-12)
+    )
+    control_times = np.arange(control_intervals + 1, dtype=np.float64) * CONTROL_TIMESTEP
+    query_times = np.minimum(control_times, source_duration)
+
+    q_ref_by_side = {
+        side: _immutable(_interpolate_hand_qpos(values, source_times, query_times))
+        for side, values in trajectory.q_ref_by_side.items()
+    }
+    primary_side = (
+        "right"
+        if "right" in trajectory.selected_hand_sides
+        else trajectory.selected_hand_sides[0]
+    )
+    object_pos_raw = _interpolate_rows(
+        trajectory.object_pos_raw, source_times, query_times
+    )
+    object_pos = object_pos_raw.copy()
+    object_pos[:, 2] += trajectory.object_z_shift
+    object_quat_xyzw = Slerp(
+        source_times,
+        Rotation.from_quat(trajectory.object_quat_xyzw),
+    )(query_times).as_quat()
+    object_quat_xyzw /= np.linalg.norm(object_quat_xyzw, axis=1, keepdims=True)
+
+    source_coordinates = np.interp(
+        query_times,
+        source_times,
+        np.asarray(trajectory.source_indices, dtype=np.float64),
+    )
+    source_indices = np.floor(source_coordinates + 1e-10).astype(np.int64)
+    source_indices[-1] = int(trajectory.source_indices[-1])
+    movement_start_step = int(
+        np.searchsorted(
+            source_coordinates,
+            trajectory.identity.movement_start_raw,
+            side="left",
+        )
+    )
+    movement_end_step = int(
+        np.searchsorted(
+            source_coordinates,
+            trajectory.identity.movement_end_raw,
+            side="right",
+        )
+        - 1
+    )
+    if not 0 <= movement_start_step <= movement_end_step < len(control_times):
+        raise ValueError("source movement window does not map onto the control grid")
+
+    timestamp_origin = float(trajectory.source_indices[0]) / float(reference_fps)
+    return replace(
+        trajectory,
+        source_indices=_immutable(source_indices, dtype=np.int64),
+        timestamps=_immutable(timestamp_origin + control_times),
+        q_ref=q_ref_by_side[primary_side],
+        q_ref_by_side=q_ref_by_side,
+        object_pos_raw=_immutable(object_pos_raw),
+        object_pos=_immutable(object_pos),
+        object_quat_xyzw=_immutable(object_quat_xyzw),
+        reference_fps=reference_fps,
+        movement_start_step=movement_start_step,
+        movement_end_step=movement_end_step,
+    )
 
 
 @dataclass(frozen=True)
@@ -295,6 +444,7 @@ class TrajectorySelection:
     pre_padding: int = DEFAULT_PRE_PADDING
     post_padding: int = DEFAULT_POST_PADDING
     hand_side: str = "auto"
+    reference_fps: int | None = None
     pair_assignment_cycle: int = 0
 
     def __post_init__(self) -> None:
@@ -319,6 +469,14 @@ class TrajectorySelection:
             raise ValueError("expected_dataset_version must be a positive integer")
         if self.pre_padding < 0 or self.post_padding < 0:
             raise ValueError("trajectory padding must be non-negative")
+        if self.reference_fps is not None and (
+            not isinstance(self.reference_fps, int)
+            or isinstance(self.reference_fps, bool)
+            or self.reference_fps not in SUPPORTED_REFERENCE_FPS
+        ):
+            raise ValueError(
+                f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS} when provided"
+            )
         if (
             not isinstance(self.pair_assignment_cycle, int)
             or isinstance(self.pair_assignment_cycle, bool)
@@ -1273,13 +1431,20 @@ def _selected_trajectory_from_row(
             raise ValueError(f"row {row_index} is not {expected_pair.canonical}")
         modern_row = dict(row)
         modern_row["dataset_path"] = str(selection.dataset_path)
-        return trajectory_from_lance_row(
+        trajectory = trajectory_from_lance_row(
             modern_row,
             dataset_version,
             row_index=row_index,
             hand_side=selection.hand_side,
             pre_padding=selection.pre_padding,
             post_padding=selection.post_padding,
+        )
+        return (
+            trajectory
+            if selection.reference_fps is None
+            else resample_reference_trajectory(
+                trajectory, reference_fps=selection.reference_fps
+            )
         )
     identity = _derive_identity(row)
     object_type, action_id, _ = identity.split("_")
@@ -1345,7 +1510,7 @@ def _selected_trajectory_from_row(
     )
     object_pos = object_pos_raw.copy()
     object_pos[:, 2] += z_shift
-    return ReferenceTrajectory(
+    trajectory = ReferenceTrajectory(
         identity=TrajectoryIdentity(
             dataset_path=str(selection.dataset_path),
             dataset_version=dataset_version,
@@ -1367,6 +1532,13 @@ def _selected_trajectory_from_row(
         object_pos=_immutable(object_pos),
         object_quat_xyzw=_immutable(object_quat_xyzw),
         object_z_shift=z_shift,
+    )
+    return (
+        trajectory
+        if selection.reference_fps is None
+        else resample_reference_trajectory(
+            trajectory, reference_fps=selection.reference_fps
+        )
     )
 
 

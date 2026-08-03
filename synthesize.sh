@@ -13,6 +13,7 @@ GPU=${4:-${MANORL_GPU:-0}}
 CHECKPOINT=${CHECKPOINT:-${MANORL_CHECKPOINT:-}}
 DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance}
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
+REFERENCE_FPS=${MANORL_REFERENCE_FPS:-}
 OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v22_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
 PYTHON=${MANORL_PYTHON:-$ROOT/.venv/bin/python}
 PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
@@ -41,6 +42,10 @@ if [[ ! "$GPU" =~ ^[0-9]+$ ]]; then
   echo "physical_gpu must be a non-negative integer, got: $GPU" >&2
   exit 2
 fi
+if [[ -n "$REFERENCE_FPS" && "$REFERENCE_FPS" != "100" && "$REFERENCE_FPS" != "120" ]]; then
+  echo "MANORL_REFERENCE_FPS must be 100 or 120, got: $REFERENCE_FPS" >&2
+  exit 2
+fi
 if [[ ! "$SEED" =~ ^[0-9]+$ ]]; then
   echo "seed must be a non-negative integer, got: $SEED" >&2
   exit 2
@@ -60,6 +65,9 @@ export CUDA_VISIBLE_DEVICES=$GPU
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 EXTRA_ARGS=()
+if [[ -n "$REFERENCE_FPS" ]]; then
+  EXTRA_ARGS+=(--reference-fps "$REFERENCE_FPS")
+fi
 if [[ -n "$PREDECODED_MANIFEST" ]]; then
   PREDECODED_MANIFEST=$(realpath -e "$PREDECODED_MANIFEST")
   EXTRA_ARGS+=(--predecoded-manifest "$PREDECODED_MANIFEST")

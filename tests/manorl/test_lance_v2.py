@@ -37,6 +37,20 @@ from tools.validate_manorl_synthetic_lance import (
 )
 
 
+def test_synthetic_export_cli_accepts_reference_fps_selection() -> None:
+    args = exporter_module.parse_args(
+        [
+            "--checkpoint",
+            "policy.pt",
+            "--output",
+            "rollout.lance",
+            "--reference-fps",
+            "100",
+        ]
+    )
+    assert args.reference_fps == 100
+
+
 def _state() -> MaterializedState:
     body_count = 4
     xpos = np.zeros((1, body_count, 3), dtype=np.float64)
@@ -313,6 +327,11 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(
     observed_controls: list[dict[str, object]] = []
 
     monkeypatch.setattr(exporter_module, "_validate_checkpoint_path", lambda path: path)
+    monkeypatch.setattr(
+        exporter_module,
+        "_checkpoint_environment_options",
+        lambda path: SimpleNamespace(reference_fps=None),
+    )
     monkeypatch.setattr(
         exporter_module, "load_assigned_trajectory_batch", lambda selection, num_envs: batch
     )

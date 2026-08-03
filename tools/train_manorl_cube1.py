@@ -29,7 +29,7 @@ from sim.manorl.abi import (
 )
 from sim.manorl.checkpoint import load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.cli import parse_cli_bool
-from sim.manorl.contracts import DATASET_PATH, JOINT_DOF
+from sim.manorl.contracts import CONTROL_TIMESTEP, DATASET_PATH, JOINT_DOF
 from sim.manorl.environment import (
     EnvironmentConfig,
     MujocoManoEnvironment,
@@ -47,6 +47,9 @@ from sim.manorl.rewards import (
 )
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 from sim.manorl.trajectory import (
+    DEFAULT_REFERENCE_FPS,
+    REFERENCE_RESAMPLING_ID,
+    SUPPORTED_REFERENCE_FPS,
     TRAJECTORY_IDENTITY_SCHEMA,
     TrajectorySelection,
     load_assigned_trajectory_batch,
@@ -192,6 +195,7 @@ class TrainingBudget:
     pair_assignment_cycle: int = 0
     dataset_path: str = DATASET_PATH
     dataset_version: int | None = None
+    reference_fps: int = DEFAULT_REFERENCE_FPS
     hand_side: str = "auto"
     residual_enabled: bool = True
     position_scale: float = 0.003
@@ -591,6 +595,9 @@ def _wandb_config(
         },
         "environment": {
             "contract": ENVIRONMENT_CONTRACT_ID,
+            "reference_fps": budget.reference_fps,
+            "control_timestep_seconds": CONTROL_TIMESTEP,
+            "reference_resampling": REFERENCE_RESAMPLING_ID,
             "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
             "residual_action": {
                 "position_scale": list(residual_action.position_scale),
@@ -1657,6 +1664,8 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
             "row_index": item.identity.row_index,
             "uuid": item.identity.uuid,
             "source_slice": [item.identity.source_start, item.identity.source_stop],
+            "reference_fps": item.reference_fps,
+            "control_frames": len(item.q_ref),
             "available_hand_sides": list(item.hand_sides),
             "controlled_hand_sides": list(item.action_layout.controlled_sides),
             "reference_following_hand_sides": list(item.action_layout.reference_sides),
@@ -1704,6 +1713,9 @@ def _trajectory_selection_metadata(
         "padding_policy": "full" if selection.require_full_padding else "clip_to_source",
         "dataset_path": str(selection.dataset_path),
         "dataset_version": selection.expected_dataset_version,
+        "reference_fps": selection.reference_fps,
+        "control_timestep_seconds": CONTROL_TIMESTEP,
+        "reference_resampling": REFERENCE_RESAMPLING_ID,
         "pair_assignment_cycle": selection.pair_assignment_cycle,
         "requested_hand_side": selection.hand_side,
         "resolved_hand_side": (
@@ -1786,6 +1798,7 @@ def _build_evaluation_runtime(
             contact_capacity=recommended_warp_contact_capacity(
                 num_envs, trajectories.hand_sides
             ),
+            reference_fps=budget.reference_fps,
             unified_object_batch=budget.unified_object_batch,
             hand_side=budget.hand_side,
         ),
@@ -1961,6 +1974,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         dataset_path=Path(budget.dataset_path),
         expected_dataset_version=budget.dataset_version,
         hand_side=budget.hand_side,
+        reference_fps=budget.reference_fps,
         pair_assignment_cycle=budget.pair_assignment_cycle,
     )
     trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
@@ -1999,6 +2013,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             device_transition=budget.device_transition,
             capture_transition_diagnostics=budget.resolved_capture_transition_diagnostics,
             profile_phases=budget.profile_phases,
+            reference_fps=budget.reference_fps,
             unified_object_batch=budget.unified_object_batch,
             warp_ccd_iterations=budget.warp_ccd_iterations,
             warp_ccd_contacts_per_world=budget.warp_ccd_contacts_per_world,
@@ -2360,6 +2375,16 @@ def main(argv: list[str] | None = None) -> int:
         help="open this exact historical Lance version instead of the latest version",
     )
     parser.add_argument(
+        "--reference-fps",
+        type=int,
+        choices=SUPPORTED_REFERENCE_FPS,
+        default=DEFAULT_REFERENCE_FPS,
+        help=(
+            "interpret source trajectory frames at 100 or 120 Hz, then interpolate "
+            "onto the fixed 200 Hz control grid"
+        ),
+    )
+    parser.add_argument(
         "--hand-side",
         choices=("auto", "both", "right", "left"),
         default="auto",
@@ -2529,6 +2554,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset_path=args.dataset_path,
             expected_dataset_version=args.dataset_version,
             hand_side=args.hand_side,
+            reference_fps=args.reference_fps,
             pair_assignment_cycle=args.pair_assignment_cycle,
         )
     except ValueError as exc:
@@ -2635,6 +2661,7 @@ def main(argv: list[str] | None = None) -> int:
             pair_assignment_cycle=args.pair_assignment_cycle,
             dataset_path=str(args.dataset_path.resolve()),
             dataset_version=args.dataset_version,
+            reference_fps=args.reference_fps,
             hand_side=args.hand_side,
             residual_enabled=args.use_residual,
             position_scale=args.position_scale,

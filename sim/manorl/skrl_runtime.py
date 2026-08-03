@@ -388,6 +388,7 @@ class ManoSkrlRuntime:
             "action_dim": int(physical.action_dim),
             "observation_dim": int(physical.observation_dim),
             "model_action_dim": int(physical.model_action_dim),
+            "reference_fps": physical.config.reference_fps,
             "warp_ccd": physical.warp_ccd_metadata(),
             "residual_action": asdict(physical.config.residual_action),
         }

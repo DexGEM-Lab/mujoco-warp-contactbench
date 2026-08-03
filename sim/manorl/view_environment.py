@@ -35,6 +35,8 @@ from sim.manorl.environment import (
 )
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.trajectory import (
+    DEFAULT_REFERENCE_FPS,
+    SUPPORTED_REFERENCE_FPS,
     TrajectoryBatch,
     TrajectorySelection,
     load_assigned_trajectory_batch,
@@ -137,8 +139,41 @@ def _inference_ppo_config(num_envs: int, *, use_film: bool = True) -> ManoPPOCon
 @dataclass(frozen=True)
 class _CheckpointEnvironmentOptions:
     residual_action: ResidualActionConfig = ResidualActionConfig()
+    reference_fps: int | None = None
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
+
+
+def _resolve_reference_fps(
+    requested: int | None,
+    *,
+    checkpoint_options: _CheckpointEnvironmentOptions,
+    has_checkpoint: bool,
+) -> int | None:
+    """Resolve a requested source clock without silently changing a checkpoint ABI."""
+
+    if requested is not None and (
+        not isinstance(requested, int)
+        or isinstance(requested, bool)
+        or requested not in SUPPORTED_REFERENCE_FPS
+    ):
+        raise ValueError(f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS}")
+    if not has_checkpoint:
+        return DEFAULT_REFERENCE_FPS if requested is None else requested
+    checkpoint_fps = checkpoint_options.reference_fps
+    if checkpoint_fps is None:
+        if requested is not None:
+            raise ValueError(
+                "checkpoint predates the reference_fps contract; an explicit 100/120 Hz "
+                "override would change its training clock"
+            )
+        return None
+    if requested is not None and requested != checkpoint_fps:
+        raise ValueError(
+            f"reference_fps {requested} conflicts with checkpoint reference_fps "
+            f"{checkpoint_fps}"
+        )
+    return checkpoint_fps
 
 
 def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentOptions:
@@ -184,6 +219,15 @@ def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentO
     else:
         raise CheckpointFormatError("checkpoint residual_action must be a mapping")
 
+    reference_fps = environment.get("reference_fps")
+    if reference_fps is not None and (
+        not isinstance(reference_fps, int)
+        or isinstance(reference_fps, bool)
+        or reference_fps not in SUPPORTED_REFERENCE_FPS
+    ):
+        raise CheckpointFormatError(
+            f"checkpoint reference_fps must be one of {SUPPORTED_REFERENCE_FPS}"
+        )
     warp_ccd = environment.get("warp_ccd")
     if warp_ccd is None:
         warp_ccd = {}
@@ -191,6 +235,7 @@ def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentO
         raise CheckpointFormatError("checkpoint warp_ccd must be a mapping")
     return _CheckpointEnvironmentOptions(
         residual_action=residual_action,
+        reference_fps=reference_fps,
         warp_ccd_iterations=warp_ccd.get("ccd_iterations"),
         warp_ccd_contacts_per_world=warp_ccd.get("contacts_per_world"),
     )
@@ -767,6 +812,7 @@ def view_environment(
     checkpoint: Path | None,
     dataset_path: Path | None = None,
     dataset_version: int | None = None,
+    reference_fps: int | None = None,
     hand_side: str = "auto",
 ) -> None:
     """Run a batched production environment and render its first world."""
@@ -794,11 +840,24 @@ def view_environment(
 
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-    _require_graphical_session()
 
     if (object_type is None) != (gesture is None):
         raise ValueError("--object and --gesture must be supplied together")
-    if dataset_path is not None or object_type is not None:
+    uses_dataset_selection = dataset_path is not None or object_type is not None
+    resolved_reference_fps = _resolve_reference_fps(
+        reference_fps,
+        checkpoint_options=checkpoint_options,
+        has_checkpoint=checkpoint is not None,
+    )
+    if not uses_dataset_selection and reference_fps is None and checkpoint is None:
+        resolved_reference_fps = None
+    if resolved_reference_fps is not None and not uses_dataset_selection:
+        raise ValueError(
+            "reference_fps requires a dataset trajectory selected with --object/--gesture "
+            "or --dataset-path"
+        )
+    _require_graphical_session()
+    if uses_dataset_selection:
         selected_object = object_type or "banana"
         selected_gesture = gesture or "01"
         trajectory = load_assigned_trajectory_batch(
@@ -808,6 +867,7 @@ def view_environment(
                 dataset_path=(dataset_path if dataset_path is not None else TrajectorySelection().dataset_path),
                 expected_dataset_version=dataset_version,
                 hand_side=hand_side,
+                reference_fps=resolved_reference_fps,
             ),
             num_envs=num_envs,
         )
@@ -840,6 +900,7 @@ def view_environment(
             residual_action=checkpoint_options.residual_action,
             max_deviation_distance=max_deviation_distance,
             contact_capacity=contact_capacity,
+            reference_fps=resolved_reference_fps,
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side=hand_side,
@@ -912,6 +973,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dataset-version",
         type=int,
         help="open this exact historical Lance version instead of the latest version",
+    )
+    parser.add_argument(
+        "--reference-fps",
+        type=int,
+        choices=SUPPORTED_REFERENCE_FPS,
+        help=(
+            "source trajectory clock; omitted checkpoint inference restores the sidecar "
+            "value, while dataset-only viewing defaults to 120 Hz"
+        ),
     )
     parser.add_argument(
         "--hand-side",
@@ -987,6 +1057,7 @@ def main(argv: list[str] | None = None) -> int:
         gesture=args.gesture,
         dataset_path=args.dataset_path,
         dataset_version=args.dataset_version,
+        reference_fps=args.reference_fps,
         hand_side=args.hand_side,
         rerun_output=args.rerun_output,
         use_residual=args.use_residual,

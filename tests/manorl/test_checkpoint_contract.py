@@ -235,6 +235,7 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
         "action_dim": 28,
         "observation_dim": 480,
         "model_action_dim": 56,
+        "reference_fps": 120,
         "warp_ccd": {
             "ccd_iterations": None,
             "contacts_per_world": 16,
@@ -273,6 +274,12 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     with pytest.raises(CheckpointFormatError, match="controlled_hand_sides"):
         load_skrl_checkpoint_for_inference(agent, checkpoint)
     assert agent.loaded is None
+
+    mismatched_reference_fps = copy.deepcopy(metadata)
+    mismatched_reference_fps["runtime_config"]["environment"]["reference_fps"] = 100
+    sidecar.write_text(json.dumps(mismatched_reference_fps), encoding="utf-8")
+    with pytest.raises(CheckpointFormatError, match="reference_fps"):
+        load_skrl_checkpoint(agent, checkpoint)
 
     mismatched_ccd = copy.deepcopy(metadata)
     mismatched_ccd["runtime_config"]["environment"]["warp_ccd"][

@@ -74,6 +74,7 @@ from sim.manorl.observations import (
 )
 from sim.manorl.rewards import RewardConfig, RewardDiagnostics, RewardState, compute_rewards
 from sim.manorl.trajectory import (
+    SUPPORTED_REFERENCE_FPS,
     ReferenceTrajectory,
     TrajectoryBatch,
     resolve_hand_selection,
@@ -191,6 +192,7 @@ class EnvironmentConfig:
     constraint_capacity: int = CONSTRAINT_CAPACITY
     point_seed: int = 42
     point_sampling_backend: str = POINT_SAMPLING_AUTO
+    reference_fps: int | None = None
     device_resident_controls: bool = False
     # This removes only the private contact-buffer host transfer. It is not a
     # device-resident rollout mode: state, observation, reward, and Gymnasium
@@ -238,6 +240,14 @@ class EnvironmentConfig:
             raise ValueError("MJX contact and constraint capacities must be positive")
         if self.compatibility.point_template_mode == "static_seed_42" and self.point_seed != 42:
             raise ValueError("static_seed_42 compatibility requires point_seed=42")
+        if self.reference_fps is not None and (
+            not isinstance(self.reference_fps, int)
+            or isinstance(self.reference_fps, bool)
+            or self.reference_fps not in SUPPORTED_REFERENCE_FPS
+        ):
+            raise ValueError(
+                f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS} when provided"
+            )
         if self.point_sampling_backend == POINT_SAMPLING_AUTO:
             object.__setattr__(
                 self,
@@ -1507,6 +1517,13 @@ class MujocoManoEnvironment:
             raise ValueError("trajectory batch size must equal config.num_envs")
         if any(len(item.q_ref) < 2 for item in trajectories):
             raise ValueError("environment requires at least two source references per environment")
+        trajectory_reference_fps = {item.reference_fps for item in trajectories}
+        if trajectory_reference_fps != {config.reference_fps}:
+            raise ValueError(
+                "trajectory reference_fps does not match EnvironmentConfig: "
+                f"trajectory={sorted(trajectory_reference_fps, key=lambda value: -1 if value is None else value)!r}, "
+                f"config={config.reference_fps!r}"
+            )
         try:
             import jax
             from mujoco import mjx
@@ -2260,7 +2277,11 @@ class MujocoManoEnvironment:
         )
         self.contact_start_frames = np.asarray(
             [
-                item.identity.movement_start_raw - int(item.source_indices[0])
+                (
+                    item.movement_start_step
+                    if item.movement_start_step is not None
+                    else item.identity.movement_start_raw - int(item.source_indices[0])
+                )
                 for item in self.trajectories
             ],
             dtype=np.int64,
@@ -2270,7 +2291,11 @@ class MujocoManoEnvironment:
         # Python slice stop while retaining this raw inclusive identity value.
         self.contact_end_frames = np.asarray(
             [
-                item.identity.movement_end_raw - int(item.source_indices[0])
+                (
+                    item.movement_end_step
+                    if item.movement_end_step is not None
+                    else item.identity.movement_end_raw - int(item.source_indices[0])
+                )
                 for item in self.trajectories
             ],
             dtype=np.int64,

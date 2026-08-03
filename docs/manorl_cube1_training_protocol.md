@@ -49,6 +49,13 @@ current native checkpoint contracts. The file-by-file implementation map is in
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
+- Physics is fixed at 400 Hz (`0.0025 s`) and policy/control at 200 Hz (two
+  physics substeps). `--reference-fps {100,120}` independently selects the
+  uniform source clock, defaulting to 120 Hz. References are resampled onto the
+  5 ms control grid with angular unwrapping, linear joint/position interpolation,
+  and quaternion SLERP; changing reference FPS never changes PPO, residual,
+  servo, or physics
+  frequency.
 - Training defaults to `--use_residual true` and `--terminal true`. Pass
   `--use_residual false` only for source-reference diagnostics, or
   `--terminal false` for formal source-horizon termination. Target training uses
@@ -193,6 +200,7 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --output outputs/manorl/cube1_01_default \
   --object cube1 \
   --gesture 01 \
+  --reference-fps 120 \
   --num-envs 2048 \
   --updates 8000 \
   --checkpoint-interval-updates 200 \
@@ -238,6 +246,12 @@ explicit diagnostic world counts, omission resolves to the largest valid
 divisor; `--minibatch-size` remains an explicit override. Any selected value
 must divide the rollout batch and is recorded in metrics and native checkpoint
 runtime configuration.
+
+The selected reference FPS is checkpoint-bound. Training resume and inference
+must use the recorded value; inference restores it when omitted and rejects an
+explicit 100/120 Hz conflict. Checkpoints predating this clock contract retain
+their legacy one-source-frame-per-control-step behavior and cannot be overridden
+with the new selector.
 
 The default checkpoint cadence is 200 updates. After every 200 completed PPO
 updates, the output-prefix namespace receives

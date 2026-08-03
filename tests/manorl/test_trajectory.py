@@ -8,11 +8,17 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from sim.manorl.assets import object_collision_vertices
-from sim.manorl.contracts import DATASET_PATH, EXPECTED_DATASET_VERSION
+from sim.manorl.contracts import (
+    CONTROL_TIMESTEP,
+    DATASET_PATH,
+    EXPECTED_DATASET_VERSION,
+    TrajectoryIdentity,
+)
 from sim.manorl.trajectory import (
     CUBE1_ACTION_01_BATCH_ROWS,
     LANCE_COLUMNS,
     ObjectActionPair,
+    ReferenceTrajectory,
     TrajectorySelection,
     _candidate_from_metadata_row,
     _selected_trajectory_from_row,
@@ -20,6 +26,7 @@ from sim.manorl.trajectory import (
     load_cube1_action_01_batch10,
     load_reference_trajectory,
     parse_trajectory_selector,
+    resample_reference_trajectory,
     trajectory_from_row,
 )
 
@@ -115,9 +122,89 @@ def test_pair_selector_normalizes_and_preserves_exact_pairs() -> None:
 def test_trajectory_selection_defaults_to_100_pre_and_250_post_padding() -> None:
     selection = TrajectorySelection()
     assert (selection.pre_padding, selection.post_padding) == (100, 250)
+    assert selection.reference_fps is None
+    assert TrajectorySelection(reference_fps=100).reference_fps == 100
+    assert TrajectorySelection(reference_fps=120).reference_fps == 120
     assert selection.pair_assignment_cycle == 0
+    with pytest.raises(ValueError, match="reference_fps"):
+        TrajectorySelection(reference_fps=200)
     with pytest.raises(ValueError, match="pair_assignment_cycle"):
         TrajectorySelection(pair_assignment_cycle=-1)
+
+
+def _four_frame_reference() -> ReferenceTrajectory:
+    q_ref = np.zeros((4, 28), dtype=np.float64)
+    q_ref[:, 0] = np.arange(4, dtype=np.float64)
+    q_ref[:, 3] = np.deg2rad([170.0, 179.0, -179.0, -170.0])
+    object_pos = np.zeros((4, 3), dtype=np.float64)
+    object_pos[:, 0] = np.arange(4, dtype=np.float64)
+    object_quat = Rotation.from_euler(
+        "z", np.asarray([0.0, 30.0, 60.0, 90.0])[:, None], degrees=True
+    ).as_quat()
+    return ReferenceTrajectory(
+        identity=TrajectoryIdentity(
+            dataset_path="fixture.lance",
+            dataset_version=1,
+            row_index=0,
+            object_index=0,
+            uuid="fixture",
+            file_uuid="fixture-file",
+            identity="cube1_01_001",
+            source_start=10,
+            source_stop=14,
+            movement_start_raw=11,
+            movement_end_raw=12,
+        ),
+        dataset_version=1,
+        source_indices=np.arange(10, 14, dtype=np.int64),
+        timestamps=np.asarray([0.10, 0.11, 0.12, 0.13]),
+        q_ref=q_ref,
+        object_pos_raw=object_pos,
+        object_pos=object_pos,
+        object_quat_xyzw=object_quat,
+        object_z_shift=0.0,
+    )
+
+
+def test_reference_resampling_maps_100hz_source_to_200hz_control_grid() -> None:
+    trajectory = resample_reference_trajectory(
+        _four_frame_reference(), reference_fps=100
+    )
+
+    assert trajectory.reference_fps == 100
+    assert len(trajectory.q_ref) == 7
+    assert trajectory.timestamps.tolist() == pytest.approx(
+        (0.10 + np.arange(7) * CONTROL_TIMESTEP).tolist()
+    )
+    np.testing.assert_allclose(trajectory.q_ref[:, 0], np.arange(7) * 0.5)
+    assert np.rad2deg(trajectory.q_ref[3, 3]) == pytest.approx(180.0)
+    np.testing.assert_array_equal(
+        trajectory.source_indices, [10, 10, 11, 11, 12, 12, 13]
+    )
+    assert (trajectory.movement_start_step, trajectory.movement_end_step) == (2, 4)
+    midpoint_angle = Rotation.from_quat(trajectory.object_quat_xyzw[1]).as_euler(
+        "xyz", degrees=True
+    )[2]
+    assert midpoint_angle == pytest.approx(15.0)
+
+
+def test_reference_resampling_maps_120hz_source_without_changing_control_dt() -> None:
+    trajectory = resample_reference_trajectory(
+        _four_frame_reference(), reference_fps=120
+    )
+
+    assert trajectory.reference_fps == 120
+    assert len(trajectory.q_ref) == 6
+    assert np.diff(trajectory.timestamps).tolist() == pytest.approx(
+        [CONTROL_TIMESTEP] * 5
+    )
+    np.testing.assert_allclose(
+        trajectory.q_ref[:, 0], [0.0, 0.6, 1.2, 1.8, 2.4, 3.0]
+    )
+    np.testing.assert_array_equal(
+        trajectory.source_indices, [10, 10, 11, 11, 12, 13]
+    )
+    assert (trajectory.movement_start_step, trajectory.movement_end_step) == (2, 3)
 
 
 @pytest.mark.parametrize(

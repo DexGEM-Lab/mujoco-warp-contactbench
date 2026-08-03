@@ -107,10 +107,15 @@ def test_environment_config_accepts_unified_batch_with_explicit_ccd() -> None:
         unified_object_batch=True,
         warp_ccd_iterations=8,
         warp_ccd_contacts_per_world=12,
+        reference_fps=100,
     )
 
     assert config.unified_object_batch is True
     assert config.warp_ccd_explicit is True
+    assert config.reference_fps == 100
+    assert EnvironmentConfig(reference_fps=120).reference_fps == 120
+    with pytest.raises(ValueError, match="reference_fps"):
+        EnvironmentConfig(reference_fps=200)
 
 
 def test_persistent_ccd_workspace_config_requires_unified_gpu_explicit_capacity() -> None:
