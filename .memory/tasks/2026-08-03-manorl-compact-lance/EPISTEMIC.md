@@ -18,4 +18,4 @@ Compact rows preserve target/replayed DOF alignment, object pose, MANO visual fr
 - Broad ManoRL suite remains environment-limited by absent materialized assets/historical datasets and unrelated pre-existing failures.
 
 ## Remaining uncertainty
-Compact data deliberately excludes observations, actions, rewards, contact forces, and reference trajectories. Any offline-training consumer needs a separately named training schema. The feature branch still needs its merge commit reviewed and then fast-forward integration into `dev`; published NAS data remains untouched.
+Compact data deliberately excludes observations, actions, rewards, contact forces, and reference trajectories. Any offline-training consumer needs a separately named training schema. The feature is integrated into authoritative `dev`. Published NAS data remains untouched; any migration of the 5,425-row canonical dataset requires separate approval and guarded publication.
