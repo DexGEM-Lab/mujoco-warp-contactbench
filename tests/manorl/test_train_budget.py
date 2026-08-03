@@ -1045,6 +1045,7 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     assert captured[-1][1].wandb.enabled is True
     assert captured[-1][1].dataset_path == tool.DATASET_PATH
     assert captured[-1][1].dataset_version is None
+    assert captured[-1][1].reference_fps == 120
 
     assert tool.main([
         "--output", str(tmp_path / "capped"),
@@ -1053,6 +1054,12 @@ def test_cli_omits_wall_clock_cap_and_preserves_explicit_cap(
     ]) == 0
     assert captured[-1][1].wall_clock_seconds == 17.5
     assert captured[-1][1].checkpoint_interval_updates == 100
+
+    assert tool.main([
+        "--output", str(tmp_path / "reference-100"),
+        "--reference-fps", "100",
+    ]) == 0
+    assert captured[-1][1].reference_fps == 100
 
     assert tool.main([
         "--output", str(tmp_path / "server2"), "--num-envs", "4096", "--minibatch-size", "4096",

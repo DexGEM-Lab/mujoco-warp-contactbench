@@ -231,23 +231,33 @@ deviation handling, and deterministic evaluation that covers every selected
 object/action pair. A single-pair run uses one evaluation world; a multi-pair
 run automatically uses at least one world per pair, bounded at 128. This is
 786,432,000 transitions; it has no wall-clock cutoff unless one is explicitly
-requested:
+requested. Physics remains fixed at 400 Hz (`0.0025 s`) and the policy/control
+loop remains at 200 Hz (two physics substeps). `--reference-fps {100,120}`
+selects the uniform source-trajectory clock; hand angular coordinates are
+unwrapped before linear interpolation, object position is linearly interpolated,
+and object orientation uses quaternion SLERP on the 200 Hz control grid. The
+default is 120 Hz:
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
   --output outputs/manorl/cube1_01_default \
-  --object cube1 --gesture 01 --num-envs 2048 --updates 8000 \
+  --object cube1 --gesture 01 --reference-fps 120 \
+  --num-envs 2048 --updates 8000 \
   --checkpoint-interval-updates 200 --evaluation-num-envs 1
 ```
 
 The two stable repository entrypoints cover routine training and checkpoint viewing without rewriting launch scripts:
 
 ```bash
-# Train every eligible gesture for one object on physical GPU 0.
+# Train every eligible gesture for one object at the default 120 Hz reference clock.
 ./train.sh cube1 2048 0
 
-# Render 20 cube1/action-01 trajectories from one checkpoint on physical GPU 0.
+# Select the 100 Hz acquisition clock explicitly.
+MANORL_REFERENCE_FPS=100 ./train.sh cube1 2048 0
+
+# Render 20 cube1/action-01 trajectories. Omitting MANORL_REFERENCE_FPS restores
+# the checkpoint clock; an explicit conflicting value is rejected.
 CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
   ./inference.sh cube1 01 20 0
 
@@ -256,7 +266,7 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
 ./test.sh 0
 ```
 
-`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
+`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `MANORL_REFERENCE_FPS=100|120` selects the source clock, defaulting to 120 for new training. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`; it restores the checkpoint reference FPS when the environment variable is omitted and rejects a conflicting explicit value. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
 
 The trainer also accepts exact multi-object/action selection. Use
 `--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
@@ -274,9 +284,11 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \\
   ./synthesize.sh cube2 02 5 0
 ```
 
-The output is a nested Lance dataset plus a sibling `.manifest.json`. The v2.2
-contract is `synthetic_mano_28d_checkpoint_rollout_v2_2`: timestamps use the
-actual `0.005 s` control interval (`data_fps=200`), `force_normal` contains the
+The output is a nested Lance dataset plus a sibling `.manifest.json`. Synthesis
+restores the checkpoint's 100/120 Hz reference clock; `MANORL_REFERENCE_FPS`
+may state the same value explicitly, but conflicts are rejected. The v2.2
+contract is `synthetic_mano_28d_checkpoint_rollout_v2_2`: output timestamps use
+the actual `0.005 s` control interval (`data_fps=200`), `force_normal` contains the
 solved normal component with scale `1.0`, and all force frames use a consistent
 hand-to-object direction. `pos_joint` and `total_force_joint` use the live
 collision-link transform rather than the historical wrist fallback. MANO global

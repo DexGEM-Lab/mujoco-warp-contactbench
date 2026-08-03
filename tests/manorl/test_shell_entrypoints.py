@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -31,6 +32,17 @@ def test_generic_train_rejects_nonpositive_environment_count() -> None:
     assert "num_envs must be a positive integer" in result.stderr
 
 
+def test_generic_train_rejects_unsupported_reference_fps() -> None:
+    result = subprocess.run(
+        [str(ROOT / "train.sh"), "cube1", "1", "0"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "MANORL_REFERENCE_FPS": "200"},
+    )
+    assert result.returncode == 2
+    assert "MANORL_REFERENCE_FPS must be 100 or 120" in result.stderr
+
+
 def test_generic_inference_requires_checkpoint() -> None:
     result = subprocess.run(
         [str(ROOT / "inference.sh"), "cube1", "01", "20", "0"],
@@ -59,3 +71,14 @@ def test_reference_test_rejects_invalid_gpu() -> None:
     )
     assert result.returncode == 2
     assert "physical_gpu must be a non-negative integer" in result.stderr
+
+
+def test_reference_test_rejects_unsupported_reference_fps() -> None:
+    result = subprocess.run(
+        [str(ROOT / "test.sh"), "0"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "MANORL_REFERENCE_FPS": "200"},
+    )
+    assert result.returncode == 2
+    assert "MANORL_REFERENCE_FPS must be 100 or 120" in result.stderr

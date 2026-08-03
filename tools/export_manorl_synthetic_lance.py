@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 import json
 import os
@@ -36,13 +37,16 @@ from sim.manorl.lance_v2 import (
 )
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 from sim.manorl.trajectory import (
+    SUPPORTED_REFERENCE_FPS,
     TrajectoryBatch,
     TrajectorySelection,
     load_assigned_trajectory_batch,
+    resample_reference_trajectory,
 )
 from sim.manorl.view_environment import (
     _build_checkpoint_stepper,
     _checkpoint_environment_options,
+    _resolve_reference_fps,
     _validate_checkpoint_path,
 )
 
@@ -113,6 +117,10 @@ def _load_predecoded_batch(
             trajectory = pickle.load(stream)
         if trajectory.identity.identity != record["identity"]:
             raise RuntimeError(f"predecoded trajectory identity changed: {path}")
+        if selection.reference_fps is not None:
+            trajectory = resample_reference_trajectory(
+                trajectory, reference_fps=selection.reference_fps
+            )
         trajectories.append(trajectory)
     return TrajectoryBatch(
         tuple(trajectories),
@@ -240,6 +248,7 @@ def _run_attempt_batch(
             contact_capacity=recommended_warp_contact_capacity(
                 num_envs, trajectories.hand_sides
             ),
+            reference_fps=checkpoint_options.reference_fps,
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side="right",
@@ -497,6 +506,8 @@ def _export_isolated_repeated_rollouts(
             "--max-attempts-per-identity", "1",
             "--internal-attempt-control", str(control_path),
         ]
+        if selection.reference_fps is not None:
+            command.extend(["--reference-fps", str(selection.reference_fps)])
         if selection.selector is not None:
             command.extend(["--pairs", selection.canonical_selector])
         if predecoded_manifest is not None:
@@ -648,6 +659,14 @@ def export_checkpoint_rollouts(
         raise ValueError("episodes_per_identity must be positive")
     if max_attempts_per_identity < episodes_per_identity:
         raise ValueError("max attempts must be at least the target episodes per identity")
+    checkpoint = _validate_checkpoint_path(checkpoint)
+    checkpoint_options = _checkpoint_environment_options(checkpoint)
+    reference_fps = _resolve_reference_fps(
+        selection.reference_fps,
+        checkpoint_options=checkpoint_options,
+        has_checkpoint=True,
+    )
+    selection = dataclass_replace(selection, reference_fps=reference_fps)
     if episodes_per_identity > 1 and internal_attempt_control is None:
         return _export_isolated_repeated_rollouts(
             checkpoint=checkpoint, output=output, selection=selection,
@@ -657,8 +676,6 @@ def export_checkpoint_rollouts(
             episodes_per_identity=episodes_per_identity,
             max_attempts_per_identity=max_attempts_per_identity,
         )
-    checkpoint = _validate_checkpoint_path(checkpoint)
-    checkpoint_options = _checkpoint_environment_options(checkpoint)
     trajectories = (
         load_assigned_trajectory_batch(selection, num_envs=num_envs)
         if predecoded_manifest is None
@@ -895,6 +912,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--dataset-path", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--dataset-version", type=int, default=295)
+    parser.add_argument(
+        "--reference-fps",
+        type=int,
+        choices=SUPPORTED_REFERENCE_FPS,
+        help="source trajectory clock; omitted values restore the checkpoint sidecar",
+    )
     parser.add_argument("--num-envs", type=int, default=5)
     parser.add_argument("--pair-assignment-cycle", type=int, default=0)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="gpu")
@@ -948,6 +971,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset_path=args.dataset_path,
             expected_dataset_version=args.dataset_version,
             hand_side="right",
+            reference_fps=args.reference_fps,
             pair_assignment_cycle=args.pair_assignment_cycle,
         ),
         num_envs=args.num_envs,

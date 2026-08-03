@@ -20,10 +20,17 @@ from sim.manorl.environment import (
 )
 from sim.manorl.observations import observation_layout
 from sim.manorl.rerun_recorder import ManoRerunRecorder
-from sim.manorl.trajectory import TrajectorySelection, load_assigned_trajectory_batch
+from sim.manorl.trajectory import (
+    SUPPORTED_REFERENCE_FPS,
+    TrajectorySelection,
+    load_assigned_trajectory_batch,
+)
 from sim.manorl.view_environment import (
+    _CheckpointEnvironmentOptions,
     _build_checkpoint_stepper,
+    _checkpoint_environment_options,
     _checkpoint_use_film,
+    _resolve_reference_fps,
     _inference_ppo_config,
     _reset_runtime_done,
     _validate_checkpoint_path,
@@ -117,6 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gesture", default="01")
     parser.add_argument("--dataset-path", type=Path)
     parser.add_argument(
+        "--reference-fps",
+        type=int,
+        choices=SUPPORTED_REFERENCE_FPS,
+        help="source trajectory clock; checkpoint runs restore it when omitted",
+    )
+    parser.add_argument(
         "--hand-side",
         choices=("auto", "both", "right", "left"),
         default="auto",
@@ -149,10 +162,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.stochastic_policy and args.checkpoint is None:
         parser.error("stochastic-policy requires --checkpoint")
     checkpoint = None if args.checkpoint is None else _validate_checkpoint_path(args.checkpoint)
+    checkpoint_options = (
+        _CheckpointEnvironmentOptions()
+        if checkpoint is None
+        else _checkpoint_environment_options(checkpoint)
+    )
+    reference_fps = _resolve_reference_fps(
+        args.reference_fps,
+        checkpoint_options=checkpoint_options,
+        has_checkpoint=checkpoint is not None,
+    )
     selection_kwargs = {
         "object_type": args.object_type,
         "gesture": args.gesture,
         "hand_side": args.hand_side,
+        "reference_fps": reference_fps,
     }
     if args.dataset_path is not None:
         selection_kwargs["dataset_path"] = args.dataset_path
@@ -173,10 +197,14 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             num_envs=args.num_envs,
             residual_enabled=args.use_residual,
+            residual_action=checkpoint_options.residual_action,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if args.terminal else 1_000_000.0,
             contact_capacity=recommended_warp_contact_capacity(
                 args.num_envs, getattr(trajectories, "hand_sides", ("right",))
             ),
+            reference_fps=reference_fps,
+            warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
+            warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side=args.hand_side,
         ),
     )

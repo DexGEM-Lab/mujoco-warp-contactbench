@@ -514,6 +514,7 @@ def test_record_rerun_cli_reports_null_without_reset_completed_episode(
         ["--output", str(tmp_path / "recording.rrd"), "--steps", "1", *mode_args]
     ) == 0
     assert captured_configs[0].residual_enabled is expected_residual_enabled
+    assert captured_configs[0].reference_fps == 120
     assert (captured_configs[0].max_deviation_distance == 0.10) is expected_terminal
     assert '"rerun_artifact": null' in capsys.readouterr().out
 
@@ -718,6 +719,7 @@ def test_checkpoint_environment_options_restore_residual_and_per_world_ccd(
         lambda path: {
             "runtime_config": {
                 "environment": {
+                    "reference_fps": 100,
                     "residual_action": {
                         "joint_scale_multiplier": 1.5,
                         "joint_max_offset_multiplier": 1.5,
@@ -735,6 +737,7 @@ def test_checkpoint_environment_options_restore_residual_and_per_world_ccd(
     options = _checkpoint_environment_options(checkpoint)
     assert options.residual_action.joint_scale_multiplier == 1.5
     assert options.residual_action.joint_max_offset_multiplier == 1.5
+    assert options.reference_fps == 100
     assert options.warp_ccd_iterations is None
     assert options.warp_ccd_contacts_per_world == 16
 
@@ -865,6 +868,7 @@ def test_checkpoint_viewer_applies_sidecar_options_and_dataset_version(
             joint_scale_multiplier=1.5,
             joint_max_offset_multiplier=1.5,
         ),
+        reference_fps=100,
         warp_ccd_contacts_per_world=16,
     )
     monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
@@ -897,7 +901,9 @@ def test_checkpoint_viewer_applies_sidecar_options_and_dataset_version(
 
     selection = created["selection"]
     assert selection.expected_dataset_version == 978
+    assert selection.reference_fps == 100
     config = created["config"]
+    assert config.reference_fps == 100
     assert config.residual_action.joint_scale_multiplier == 1.5
     assert config.residual_action.joint_max_offset_multiplier == 1.5
     assert config.warp_ccd_contacts_per_world == 16
@@ -926,8 +932,72 @@ def test_checkpoint_rejects_disabled_residual_before_graphics(monkeypatch: pytes
         )
 
 
-def test_viewer_cli_accepts_pinned_dataset_version() -> None:
-    assert parse_args(["--dataset-version", "978"]).dataset_version == 978
+def test_viewer_cli_accepts_pinned_dataset_version_and_reference_fps() -> None:
+    args = parse_args(["--dataset-version", "978", "--reference-fps", "100"])
+    assert args.dataset_version == 978
+    assert args.reference_fps == 100
+    assert parse_args(["--reference-fps", "120"]).reference_fps == 120
+    with pytest.raises(SystemExit):
+        parse_args(["--reference-fps", "200"])
+
+
+def test_reference_fps_resolution_defaults_restores_and_preserves_legacy() -> None:
+    import sim.manorl.view_environment as viewer
+
+    assert viewer._resolve_reference_fps(
+        None,
+        checkpoint_options=viewer._CheckpointEnvironmentOptions(),
+        has_checkpoint=False,
+    ) == 120
+    assert viewer._resolve_reference_fps(
+        None,
+        checkpoint_options=viewer._CheckpointEnvironmentOptions(reference_fps=100),
+        has_checkpoint=True,
+    ) == 100
+    assert viewer._resolve_reference_fps(
+        None,
+        checkpoint_options=viewer._CheckpointEnvironmentOptions(),
+        has_checkpoint=True,
+    ) is None
+    with pytest.raises(ValueError, match="predates"):
+        viewer._resolve_reference_fps(
+            100,
+            checkpoint_options=viewer._CheckpointEnvironmentOptions(),
+            has_checkpoint=True,
+        )
+
+
+def test_checkpoint_viewer_rejects_explicit_reference_fps_conflict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    checkpoint = tmp_path / "policy.pt"
+    checkpoint.touch()
+    monkeypatch.setattr(viewer, "_validate_checkpoint_path", lambda path: path)
+    monkeypatch.setattr(
+        viewer,
+        "_checkpoint_environment_options",
+        lambda path: viewer._CheckpointEnvironmentOptions(reference_fps=120),
+    )
+    with pytest.raises(ValueError, match="conflicts with checkpoint"):
+        viewer.view_environment(
+            device="cpu",
+            speed=1.0,
+            loop=False,
+            print_every=1,
+            terminal=True,
+            trajectory_name="accepted",
+            num_envs=1,
+            render_env=0,
+            tile_envs=1,
+            object_type="cube1",
+            gesture="01",
+            rerun_output=None,
+            use_residual=True,
+            checkpoint=checkpoint,
+            reference_fps=100,
+        )
 
 
 def test_removed_policy_contract_cli_is_rejected() -> None:

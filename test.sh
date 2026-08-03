@@ -16,6 +16,7 @@ else
 fi
 DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance}
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
+REFERENCE_FPS=${MANORL_REFERENCE_FPS:-120}
 SPEED=${MANORL_VIEW_SPEED:-0.5}
 PRINT_EVERY=${MANORL_PRINT_EVERY:-100}
 
@@ -29,6 +30,10 @@ if [[ ! -d "$DATASET" ]]; then
 fi
 if [[ ! "$GPU" =~ ^[0-9]+$ ]]; then
   echo "physical_gpu must be a non-negative integer, got: $GPU" >&2
+  exit 2
+fi
+if [[ "$REFERENCE_FPS" != "100" && "$REFERENCE_FPS" != "120" ]]; then
+  echo "MANORL_REFERENCE_FPS must be 100 or 120, got: $REFERENCE_FPS" >&2
   exit 2
 fi
 if [[ -z ${DISPLAY:-} ]]; then
@@ -56,6 +61,7 @@ exec "$PYTHON" -m sim.manorl.view_environment \
   --gesture 01 \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
+  --reference-fps "$REFERENCE_FPS" \
   --hand-side right \
   --num-envs 20 \
   --render-env 0 \

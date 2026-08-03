@@ -30,6 +30,7 @@ _ENVIRONMENT_SIGNATURE_FIELDS = (
     "action_dim",
     "observation_dim",
     "model_action_dim",
+    "reference_fps",
     "warp_ccd",
 )
 _ENVIRONMENT_SIDE_SEQUENCE_FIELDS = frozenset(
@@ -199,6 +200,7 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
             field
             for field in _ENVIRONMENT_SIGNATURE_FIELDS
             if field not in checkpoint_environment
+            and target_environment.get(field) is not None
         ]
         if missing:
             raise CheckpointFormatError(

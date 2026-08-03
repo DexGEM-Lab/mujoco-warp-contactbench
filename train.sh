@@ -4,8 +4,8 @@ set -Eeuo pipefail
 # Usage: ./train.sh [object|all] [num_envs] [physical_gpu]
 # Example: ./train.sh cube1 2048 0
 # Every eligible gesture for the selected object is trained. Use "all" for all
-# materialized object/action pairs. Stable defaults can be overridden with the
-# MANORL_* environment variables documented below.
+# materialized object/action pairs. MANORL_REFERENCE_FPS selects the 100 or 120
+# Hz source clock (default: 120); policy/control remains fixed at 200 Hz.
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 OBJECT=${1:-${MANORL_TRAIN_OBJECT:-cube1}}
@@ -20,6 +20,7 @@ else
 fi
 DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance}
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
+REFERENCE_FPS=${MANORL_REFERENCE_FPS:-120}
 UPDATES=${MANORL_UPDATES:-5000}
 CHECKPOINT_INTERVAL=${MANORL_CHECKPOINT_INTERVAL:-100}
 HAND_SIDE=${MANORL_HAND_SIDE:-right}
@@ -43,6 +44,10 @@ if [[ ! "$NUM_ENVS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$GPU" =~ ^[0-9]+$ ]]; then
   echo "physical_gpu must be a non-negative integer, got: $GPU" >&2
+  exit 2
+fi
+if [[ "$REFERENCE_FPS" != "100" && "$REFERENCE_FPS" != "120" ]]; then
+  echo "MANORL_REFERENCE_FPS must be 100 or 120, got: $REFERENCE_FPS" >&2
   exit 2
 fi
 
@@ -86,7 +91,7 @@ PY
 fi
 
 SAFE_OBJECT=${OBJECT//[^[:alnum:]_-]/_}
-RUN_DIR=${MANORL_OUTPUT:-$ROOT/outputs/manorl/train_${SAFE_OBJECT}_all_gestures_n${NUM_ENVS}_g${GPU}/run-$STAMP}
+RUN_DIR=${MANORL_OUTPUT:-$ROOT/outputs/manorl/train_${SAFE_OBJECT}_all_gestures_rf${REFERENCE_FPS}_n${NUM_ENVS}_g${GPU}/run-$STAMP}
 mkdir -p "$RUN_DIR"
 cat > "$RUN_DIR/run_manifest.json" <<EOF
 {
@@ -97,6 +102,7 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "physical_gpu": $GPU,
   "dataset_path": "$DATASET",
   "dataset_version": $DATASET_VERSION,
+  "reference_fps": $REFERENCE_FPS,
   "hand_side": "$HAND_SIDE",
   "updates": $UPDATES,
   "checkpoint_interval_updates": $CHECKPOINT_INTERVAL,
@@ -132,6 +138,7 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --evaluation-enabled false \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
+  --reference-fps "$REFERENCE_FPS" \
   --hand-side "$HAND_SIDE" \
   "${SELECTION_ARGS[@]}" \
   --pair-assignment-cycle 0 \
@@ -153,7 +160,7 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --wandb-project "$WANDB_PROJECT" \
   --wandb-entity "$WANDB_ENTITY" \
   --wandb-group "${SAFE_OBJECT}-all-gestures" \
-  --wandb-name "manorl-${SAFE_OBJECT}-all-gestures-u${UPDATES}-n${NUM_ENVS}-g${GPU}-${STAMP}" \
+  --wandb-name "manorl-${SAFE_OBJECT}-all-gestures-rf${REFERENCE_FPS}-u${UPDATES}-n${NUM_ENVS}-g${GPU}-${STAMP}" \
   2>&1 | tee "$RUN_DIR/console.log"
 RC=${PIPESTATUS[0]}
 set -e
