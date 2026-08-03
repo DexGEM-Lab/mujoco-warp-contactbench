@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Validate corrected v2.2 repeated Lance rows in isolated subprocesses."""
+"""Validate full v2.2 or compact replay/visual Lance rows in subprocesses."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -16,9 +17,11 @@ from scipy.spatial.transform import Rotation
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
+    SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
     SYNTHETIC_LANCE_V22_CONTRACT,
 )
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
+from sim.manorl.target_replay import target_replay_source_from_row
 
 
 def _schema_metadata(dataset: Any) -> dict[str, str]:
@@ -68,7 +71,9 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         np.max((mano_global_rot.inv() * expected_global_rot).magnitude())
     )
     if global_position_error > 1e-12 or global_rotation_error > 1e-6:
-        raise ValueError(f"row {row_index} MANO global pose is not the URDF floating root")
+        raise ValueError(
+            f"row {row_index} MANO global pose is not the URDF floating root"
+        )
     mano_pose = np.asarray(hand["mano_hand_pose"], dtype=np.float64)
     if mano_pose.shape != (total_frames, 48) or not np.all(np.isfinite(mano_pose)):
         raise ValueError(f"row {row_index} MANO hand pose has invalid shape/values")
@@ -136,9 +141,7 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         np.any(negative_indices <= contact_end + 10)
         or np.any(positive_indices < contact_start)
         or np.any(positive_indices > contact_end)
-        or not np.allclose(
-            contact_reward[negative_indices], -1.2, rtol=0.0, atol=1e-6
-        )
+        or not np.allclose(contact_reward[negative_indices], -1.2, rtol=0.0, atol=1e-6)
         or not np.allclose(
             contact_reward[contact_end + 1 : min(contact_end + 11, transitions)],
             0.0,
@@ -154,7 +157,9 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         or int(rollout["termination_reason_code"][-1]) != 1
         or any(int(value) != 0 for value in rollout["termination_reason_code"][:-1])
     ):
-        raise ValueError(f"row {row_index} does not end at one complete episode boundary")
+        raise ValueError(
+            f"row {row_index} does not end at one complete episode boundary"
+        )
     if row["provenance"]["force_contract"] != FORCE_DIRECTION_CONTRACT:
         raise ValueError(f"row {row_index} force contract changed")
 
@@ -238,7 +243,9 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
     }
     if row_index == 0:
         checkpoint = json.loads(row["provenance"]["checkpoint_metadata_json"])
-        result["checkpoint_environment_contract"] = checkpoint.get("environment_contract")
+        result["checkpoint_environment_contract"] = checkpoint.get(
+            "environment_contract"
+        )
         result["checkpoint_controlled_hand_sides"] = (
             checkpoint.get("runtime_config", {})
             .get("environment", {})
@@ -250,6 +257,233 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
             .get("reference_following_hand_sides")
         )
     return result
+
+
+def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
+    """Validate one compact replay/visual row without requiring full v2 fields."""
+
+    import lance
+
+    dataset = lance.dataset(str(path))
+    rows = dataset.take(
+        [row_index],
+        columns=[
+            "index",
+            "trajectory_metadata",
+            "timestamp",
+            "hands",
+            "objects",
+            "provenance",
+        ],
+    ).to_pylist()
+    if len(rows) != 1:
+        raise RuntimeError(f"Lance row {row_index} did not decode exactly once")
+    row = rows[0]
+    provenance = row.get("provenance") or {}
+    if provenance.get("force_contract") != FORCE_DIRECTION_CONTRACT:
+        raise ValueError(f"row {row_index} compact force contract changed")
+    metadata_hash = provenance.get("checkpoint_metadata_sha256")
+    if (
+        not isinstance(metadata_hash, str)
+        or len(metadata_hash) != 64
+        or any(character not in "0123456789abcdef" for character in metadata_hash)
+    ):
+        raise ValueError(f"row {row_index} compact metadata SHA256 is invalid")
+    source = target_replay_source_from_row(
+        row,
+        dataset_path=path,
+        dataset_version=int(dataset.version),
+        row_index=row_index,
+    )
+    metadata = row["trajectory_metadata"]
+    if source.warp_ccd_iterations is None or source.warp_ccd_contacts_per_world is None:
+        raise ValueError(
+            f"row {row_index} compact provenance lacks explicit Warp CCD settings"
+        )
+    hand_slots = metadata.get("hand_slots")
+    if hand_slots != ["right", "left"] or len(row["hands"]) != 2:
+        raise ValueError(f"row {row_index} compact hand-slot contract changed")
+    hand = row["hands"][hand_slots.index("right")]
+    for name, shape in {
+        "mano_global_pos": (source.frames, 3),
+        "mano_global_rot_aa": (source.frames, 3),
+        "mano_hand_pose": (source.frames, 48),
+        "mano_joint_pos": (source.frames, 21, 3),
+    }.items():
+        values = np.asarray(hand[name], dtype=np.float64)
+        if values.shape != shape or not np.all(np.isfinite(values)):
+            raise ValueError(
+                f"row {row_index} compact hands.{name} has invalid shape/values"
+            )
+    mano_global_pos = np.asarray(hand["mano_global_pos"], dtype=np.float64)
+    mano_global_rot = Rotation.from_rotvec(
+        np.asarray(hand["mano_global_rot_aa"], dtype=np.float64)
+    )
+    expected_global_rot = Rotation.from_euler("XYZ", source.recorded_qpos[:, 3:6])
+    if (
+        np.max(np.linalg.norm(mano_global_pos - source.recorded_qpos[:, :3], axis=1))
+        > 1e-12
+        or np.max((mano_global_rot.inv() * expected_global_rot).magnitude()) > 1e-6
+    ):
+        raise ValueError(f"row {row_index} compact MANO global pose changed")
+    if any(name in row for name in ("contact", "reference", "rollout")):
+        raise ValueError("compact row contains full/audit top-level fields")
+    return {
+        "row_index": row_index,
+        "uuid": row["index"]["uuid"],
+        "source_identity": source.source_identity,
+        "frames": source.frames,
+        "transitions": source.transitions,
+        "object": row["index"]["scene"],
+        "checkpoint_sha256": source.checkpoint_sha256,
+        "checkpoint_metadata_sha256": row["provenance"].get(
+            "checkpoint_metadata_sha256"
+        ),
+        "checkpoint_update": source.checkpoint_update,
+        "warp_ccd_iterations": source.warp_ccd_iterations,
+        "warp_ccd_contacts_per_world": source.warp_ccd_contacts_per_world,
+        "data_fps": metadata["data_fps"],
+    }
+
+
+def validate_compact_dataset(
+    path: Path,
+    output: Path | None = None,
+    *,
+    max_attempts: int = 5,
+) -> dict[str, Any]:
+    """Validate the compact schema and its replay/visual row contract."""
+
+    import lance
+
+    dataset = lance.dataset(str(path))
+    metadata = _schema_metadata(dataset)
+    if metadata.get("schema_version") != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+        raise ValueError(
+            "dataset schema_version is not the compact replay/visual contract"
+        )
+    if metadata.get("source_contract") != SYNTHETIC_LANCE_V22_CONTRACT:
+        raise ValueError("compact dataset source_contract is not v2.2")
+    expected_fields = [
+        "index",
+        "trajectory_metadata",
+        "timestamp",
+        "hands",
+        "objects",
+        "provenance",
+    ]
+    if dataset.schema.names != expected_fields:
+        raise ValueError(f"compact schema fields differ: {dataset.schema.names}")
+    row_count = int(dataset.count_rows())
+    rows: list[dict[str, Any]] = []
+    for row_index in range(row_count):
+        failures: list[tuple[int, str]] = []
+        for attempt in range(1, max_attempts + 1):
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    str(path),
+                    "--row-index",
+                    str(row_index),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if child.returncode == 0:
+                decoded = json.loads(child.stdout)
+                decoded["decoder_attempts"] = attempt
+                rows.append(decoded)
+                break
+            failures.append((child.returncode, child.stderr.strip()))
+        else:
+            child = None
+        if len(rows) != row_index + 1:
+            code, error = failures[-1]
+            raise RuntimeError(
+                f"isolated compact validation failed for row {row_index} after "
+                f"{len(failures)} attempt(s), final exit {code}: {error}"
+            )
+    uuids = [row["uuid"] for row in rows]
+    identities = [row["source_identity"] for row in rows]
+    checkpoints = {row["checkpoint_sha256"] for row in rows}
+    if len(set(uuids)) != row_count:
+        raise ValueError("compact dataset contains duplicate generated UUIDs")
+    if len(checkpoints) > 1:
+        raise ValueError("compact dataset rows do not share one checkpoint SHA256")
+    metadata_hashes = {row["checkpoint_metadata_sha256"] for row in rows}
+    catalog_path = path.parent / f"{path.name}.checkpoint-metadata.json"
+    manifest_path = path.parent / f"{path.name}.manifest.json"
+    if catalog_path.exists():
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        entries = catalog.get("entries")
+        if (
+            catalog.get("schema") != "manorl.synthetic_checkpoint_metadata_catalog.v1"
+            or catalog.get("source_contract") != SYNTHETIC_LANCE_V22_CONTRACT
+            or not isinstance(entries, dict)
+        ):
+            raise ValueError("compact checkpoint metadata catalog has invalid schema")
+        if not metadata_hashes.issubset(entries):
+            raise ValueError("compact rows reference metadata absent from catalog")
+        for metadata_hash in metadata_hashes:
+            calculated = hashlib.sha256(
+                json.dumps(
+                    entries[metadata_hash], sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+            if calculated != metadata_hash:
+                raise ValueError("compact checkpoint metadata catalog hash mismatch")
+        metadata_source = str(catalog_path)
+    else:
+        manifest = (
+            json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest_path.exists()
+            else {}
+        )
+        checkpoint_metadata = (manifest.get("checkpoint") or {}).get(
+            "checkpoint_metadata"
+        )
+        if not isinstance(checkpoint_metadata, dict):
+            raise ValueError(
+                "compact dataset lacks checkpoint metadata catalog/manifest"
+            )
+        calculated = hashlib.sha256(
+            json.dumps(
+                checkpoint_metadata, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        if metadata_hashes and metadata_hashes != {calculated}:
+            raise ValueError("compact manifest checkpoint metadata hash mismatch")
+        metadata_source = str(manifest_path)
+    summary = {
+        "schema": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+        "schema_metadata": metadata,
+        "rows": row_count,
+        "unique_source_identities": len(set(identities)),
+        "frame_count_min_max_sum": [
+            min((row["frames"] for row in rows), default=0),
+            max((row["frames"] for row in rows), default=0),
+            sum(row["frames"] for row in rows),
+        ],
+        "transition_count_sum": sum(row["transitions"] for row in rows),
+        "checkpoint_sha256": next(iter(checkpoints)) if checkpoints else None,
+        "checkpoint_metadata_sha256": sorted(metadata_hashes),
+        "checkpoint_metadata_source": metadata_source,
+        "warp_ccd": sorted(
+            {
+                (row["warp_ccd_iterations"], row["warp_ccd_contacts_per_world"])
+                for row in rows
+            }
+        ),
+        "isolated_decoder_attempts": sum(row["decoder_attempts"] for row in rows),
+        "retried_row_count": sum(row["decoder_attempts"] > 1 for row in rows),
+    }
+    target = output or path.parent / f"{path.name}.validation.json"
+    target.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return {**summary, "validation_output": str(target)}
 
 
 def _is_retryable_nested_decode_failure(returncode: int, stderr: str) -> bool:
@@ -271,6 +505,8 @@ def validate_dataset(
 
     dataset = lance.dataset(str(path))
     metadata = _schema_metadata(dataset)
+    if metadata.get("schema_version") == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+        return validate_compact_dataset(path, output, max_attempts=max_attempts)
     if metadata.get("schema_version") != SYNTHETIC_LANCE_V22_CONTRACT:
         raise ValueError("dataset schema_version is not the corrected v2.2 contract")
     if metadata.get("mano_global_frame_contract") != MANO_GLOBAL_FRAME_CONTRACT:
@@ -311,9 +547,7 @@ def validate_dataset(
                 break
             stderr = child.stderr.strip()
             failures.append((child.returncode, stderr))
-            if not _is_retryable_nested_decode_failure(
-                child.returncode, stderr
-            ):
+            if not _is_retryable_nested_decode_failure(child.returncode, stderr):
                 break
         else:
             child = None
@@ -334,7 +568,10 @@ def validate_dataset(
         identity = row["source_identity"]
         grouped.setdefault(identity, []).append(row)
         source_row = row["source_row_index"]
-        if identity in source_row_by_identity and source_row_by_identity[identity] != source_row:
+        if (
+            identity in source_row_by_identity
+            and source_row_by_identity[identity] != source_row
+        ):
             raise ValueError("one source identity maps to multiple raw rows")
         source_row_by_identity[identity] = source_row
     if len(set(source_row_by_identity.values())) != len(grouped):
@@ -363,17 +600,25 @@ def validate_dataset(
         "unique_identities": len(grouped),
         "episodes_per_identity": expected_episodes_per_identity,
         "max_generation_attempts_per_identity": max_generation_attempts_per_identity,
-        "generation_attempt_range": [
-            min(row["generation_attempt"] for row in rows),
-            max(row["generation_attempt"] for row in rows),
-        ] if rows else None,
+        "generation_attempt_range": (
+            [
+                min(row["generation_attempt"] for row in rows),
+                max(row["generation_attempt"] for row in rows),
+            ]
+            if rows
+            else None
+        ),
         "episode_seed_range": [min(seeds), max(seeds)] if rows else None,
         "source_row_range": [min(source_rows), max(source_rows)] if rows else None,
-        "frame_count_min_max_sum": [
-            min(row["frames"] for row in rows),
-            max(row["frames"] for row in rows),
-            sum(row["frames"] for row in rows),
-        ] if rows else [0, 0, 0],
+        "frame_count_min_max_sum": (
+            [
+                min(row["frames"] for row in rows),
+                max(row["frames"] for row in rows),
+                sum(row["frames"] for row in rows),
+            ]
+            if rows
+            else [0, 0, 0]
+        ),
         "transition_count_sum": sum(row["transitions"] for row in rows),
         "contact_frames": sum(row["contact_frames"] for row in rows),
         "contact_pairs": sum(row["contact_pairs"] for row in rows),
@@ -425,7 +670,9 @@ def validate_dataset(
         ),
     }
     target = output or path.parent / f"{path.name}.validation.json"
-    target.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    target.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return {**summary, "validation_output": str(target)}
 
 
@@ -443,7 +690,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.row_index is not None:
-        print(json.dumps(validate_row(args.dataset, args.row_index), sort_keys=True))
+        import lance
+
+        metadata = _schema_metadata(lance.dataset(str(args.dataset)))
+        row_result = (
+            validate_compact_row(args.dataset, args.row_index)
+            if metadata.get("schema_version") == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+            else validate_row(args.dataset, args.row_index)
+        )
+        print(json.dumps(row_result, sort_keys=True))
         return 0
     print(
         json.dumps(

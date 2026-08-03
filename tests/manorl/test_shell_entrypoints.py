@@ -63,6 +63,28 @@ def test_synthesis_requires_checkpoint() -> None:
     assert "Set CHECKPOINT or MANORL_CHECKPOINT" in result.stderr
 
 
+def test_synthesis_rejects_unknown_output_format(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint-000001.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    Path(f"{checkpoint}.json").write_text("{}", encoding="utf-8")
+    result = subprocess.run(
+        [str(ROOT / "synthesize.sh"), "cube2", "02", "1", "0"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CHECKPOINT": str(checkpoint),
+            "MANORL_PYTHON": "/bin/true",
+            "MANORL_SYNTH_OUTPUT_FORMAT": "unknown",
+        },
+    )
+    assert result.returncode == 2
+    assert (
+        "MANORL_SYNTH_OUTPUT_FORMAT must be full or compact-replay-visual"
+        in result.stderr
+    )
+
+
 def test_reference_test_rejects_invalid_gpu() -> None:
     result = subprocess.run(
         [str(ROOT / "test.sh"), "invalid"],

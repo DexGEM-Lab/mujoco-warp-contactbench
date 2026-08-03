@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# GPU checkpoint -> corrected v2.2 1:N synthetic Lance.
+# GPU checkpoint -> compact replay/visual or explicit full 1:N synthetic Lance.
 # Usage:
 #   CHECKPOINT=/path/checkpoint-000500.pt ./synthesize.sh [object] [gesture] [num_envs] [gpu]
 
@@ -14,7 +14,8 @@ CHECKPOINT=${CHECKPOINT:-${MANORL_CHECKPOINT:-}}
 DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance}
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
 REFERENCE_FPS=${MANORL_REFERENCE_FPS:-}
-OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_v22_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
+OUTPUT_FORMAT=${MANORL_SYNTH_OUTPUT_FORMAT:-compact-replay-visual}
+OUTPUT=${MANORL_SYNTH_OUTPUT:-$ROOT/outputs/manorl/synthetic_${OUTPUT_FORMAT}_${OBJECT}_${GESTURE}_$(date -u +%Y%m%dT%H%M%SZ).lance}
 PYTHON=${MANORL_PYTHON:-$ROOT/.venv/bin/python}
 PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
 SEED=${MANORL_SYNTH_SEED:-42}
@@ -59,6 +60,10 @@ if [[ ! "$MAX_ATTEMPTS_PER_IDENTITY" =~ ^[1-9][0-9]*$ ]] || \
   echo "max attempts must be at least episodes per identity" >&2
   exit 2
 fi
+if [[ "$OUTPUT_FORMAT" != "full" && "$OUTPUT_FORMAT" != "compact-replay-visual" ]]; then
+  echo "MANORL_SYNTH_OUTPUT_FORMAT must be full or compact-replay-visual, got: $OUTPUT_FORMAT" >&2
+  exit 2
+fi
 
 export PYTHONPATH=$ROOT
 export CUDA_VISIBLE_DEVICES=$GPU
@@ -82,6 +87,7 @@ exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
   --num-envs "$NUM_ENVS" \
+  --output-format "$OUTPUT_FORMAT" \
   --seed "$SEED" \
   --episodes-per-identity "$EPISODES_PER_IDENTITY" \
   --max-attempts-per-identity "$MAX_ATTEMPTS_PER_IDENTITY" \

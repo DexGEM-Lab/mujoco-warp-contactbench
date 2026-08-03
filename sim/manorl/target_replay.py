@@ -35,6 +35,10 @@ from sim.manorl.trajectory import (
 )
 
 TARGET_REPLAY_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
+TARGET_REPLAY_COMPACT_ROW_CONTRACT = "synthetic_mano_target_replay_visual_v1"
+TARGET_REPLAY_ROW_CONTRACTS = frozenset(
+    (TARGET_REPLAY_ROW_CONTRACT, TARGET_REPLAY_COMPACT_ROW_CONTRACT)
+)
 LANCE_TARGET_REPLAY_COLUMNS = (
     "index",
     "trajectory_metadata",
@@ -292,7 +296,7 @@ def target_replay_source_from_row(
     metadata = _mapping(row, "trajectory_metadata")
     provenance = _mapping(row, "provenance")
     contract = _required_string(provenance, "contract", context="provenance")
-    if contract != TARGET_REPLAY_ROW_CONTRACT:
+    if contract not in TARGET_REPLAY_ROW_CONTRACTS:
         raise TargetReplaySourceError(
             f"unsupported target replay row contract: {contract!r}"
         )

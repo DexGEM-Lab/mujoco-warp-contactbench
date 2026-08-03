@@ -274,7 +274,37 @@ every eligible pair in the pinned Lance dataset. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
 remain single-object modes.
 
+### Compact synthetic Lance synthesis
+
+`./synthesize.sh` now defaults to the compact replay/visual contract
+`synthetic_mano_target_replay_visual_v1`. It writes one independent complete
+source-length trajectory per assigned environment while retaining only target
+replay, object-pose comparison, MANO visualization, and lineage fields. The
+full checkpoint runtime metadata is recorded once in the sibling manifest and
+represented in each row by its SHA256 plus the scalar Warp CCD settings; it is
+never repeated as a per-row JSON blob.
+
+```bash
+CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \
+  ./synthesize.sh cube2 02 5 0
+
+# Explicit audit/full v2.2 output, including contact/reference/rollout fields:
+MANORL_SYNTH_OUTPUT_FORMAT=full \
+CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \
+  ./synthesize.sh cube2 02 5 0
+```
+
+The compact output is intended for direct target-DOF replay and visualization,
+not offline policy training. Use `MANORL_SYNTH_OUTPUT_FORMAT=full` when
+observations, actions, rewards, contact forces, or reference trajectories are
+required.
+
 ### Corrected v2.2 repeated checkpoint rollout synthesis
+
+The Python exporter retains the explicit full/audit mode and accepts
+`--output-format {full,compact-replay-visual}`. Both formats use the same
+physics, checkpoint, action, and source-identity contracts; the format only
+controls the persisted Lance projection.
 
 `./synthesize.sh` runs a deterministic checkpoint mean policy on GPU and writes
 one independent complete source-length trajectory per assigned environment:
@@ -286,20 +316,20 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \\
 
 The output is a nested Lance dataset plus a sibling `.manifest.json`. Synthesis
 restores the checkpoint's 100/120 Hz reference clock; `MANORL_REFERENCE_FPS`
-may state the same value explicitly, but conflicts are rejected. The v2.2
-contract is `synthetic_mano_28d_checkpoint_rollout_v2_2`: output timestamps use
-the actual `0.005 s` control interval (`data_fps=200`), `force_normal` contains the
-solved normal component with scale `1.0`, and all force frames use a consistent
-hand-to-object direction. `pos_joint` and `total_force_joint` use the live
-collision-link transform rather than the historical wrist fallback. MANO global
-translation is exactly `urdf_dof[:, :3]`; global axis-angle is derived from the
-URDF floating-root intrinsic `XYZ` composition `Rx @ Ry @ Rz`. Shape metadata
-contains only the raw right-hand shape declared by `hand_names=["right"]`.
-Each row also stores 28D physical and controller targets, 21 keypoints,
-reference frame indices, policy mean/processed actions, observations, rewards,
-termination codes, checkpoint SHA256, runtime sidecar, action contract, and
-source identity. The rollout also stores the positive raw expected-contact
-score and the final signed contact term for every transition.
+may state the same value explicitly, but conflicts are rejected. Both output
+formats use `0.005 s` timestamps (`data_fps=200`), the corrected MANO global
+frame contract, the `1.0` normal-force contract, consistent hand-to-object
+force direction, and the raw right-hand shape. Compact rows persist target DOF,
+recorded DOF, object pose, MANO global pose, hand pose, 21-joint visual frames,
+and minimal lineage. They omit contact, reference, rollout, and the repeated
+runtime JSON by design.
+
+The explicit `full` format uses contract
+`synthetic_mano_28d_checkpoint_rollout_v2_2` and additionally stores contact
+forces, reference frame indices, policy mean/processed actions, observations,
+rewards, termination codes, and all audit fields. Use it when those fields are
+needed for offline training or forensic validation; it is not the compact
+replay format.
 
 By default each raw identity must produce five accepted complete episodes within
 ten attempts. Attempts use consecutive seeds from the base `42`; successful

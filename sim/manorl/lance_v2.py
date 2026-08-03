@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 import uuid
 
 import numpy as np
@@ -21,10 +21,15 @@ from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
 from sim.manorl.trajectory import ReferenceTrajectory, wxyz_to_xyzw
 
 SYNTHETIC_LANCE_V22_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
-FORCE_DIRECTION_CONTRACT = "normal_only_hand_to_object_world_joint_object_scale_1p0"
-MANO_GLOBAL_FRAME_CONTRACT = (
-    "urdf_floating_root_translation_intrinsic_XYZ_to_rotvec_v1"
+SYNTHETIC_LANCE_COMPACT_V1_CONTRACT = "synthetic_mano_target_replay_visual_v1"
+SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL = "full"
+SYNTHETIC_LANCE_OUTPUT_FORMAT_COMPACT = "compact-replay-visual"
+SYNTHETIC_LANCE_OUTPUT_FORMATS = (
+    SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
+    SYNTHETIC_LANCE_OUTPUT_FORMAT_COMPACT,
 )
+FORCE_DIRECTION_CONTRACT = "normal_only_hand_to_object_world_joint_object_scale_1p0"
+MANO_GLOBAL_FRAME_CONTRACT = "urdf_floating_root_translation_intrinsic_XYZ_to_rotvec_v1"
 HAND_SLOT_ORDER = ("right", "left")
 
 
@@ -85,7 +90,9 @@ def corrected_contact_frames(
     grouped: list[dict[tuple[int, str], list[dict[str, Any]]]] = [
         defaultdict(list) for _ in range(batch)
     ]
-    joint_rotations: list[dict[str, NDArray[np.float64]]] = [dict() for _ in range(batch)]
+    joint_rotations: list[dict[str, NDArray[np.float64]]] = [
+        dict() for _ in range(batch)
+    ]
     wrist_rotations = [
         _rotation_wxyz(state.xquat[world_id, wrist_body_id])
         for world_id in range(batch)
@@ -104,23 +111,31 @@ def corrected_contact_frames(
             keypoint_index, joint_name = first_hand
             sign = 1.0
             hand_geom_id = first_geom
-        elif second_hand is not None and first_geom in object_ids and first_hand is None:
+        elif (
+            second_hand is not None and first_geom in object_ids and first_hand is None
+        ):
             keypoint_index, joint_name = second_hand
             sign = -1.0
             hand_geom_id = second_geom
         else:
             continue
         if not 0 <= world_id < batch:
-            raise RuntimeError(f"contact {contact_id} references invalid world {world_id}")
+            raise RuntimeError(
+                f"contact {contact_id} references invalid world {world_id}"
+            )
         if int(buffers.dimension[contact_id]) != 3:
             raise RuntimeError("v2 contact export requires condim=3 solved contacts")
         address = np.asarray(buffers.addresses[contact_id], dtype=np.int64)
         if np.any(address < 0) or np.any(address >= buffers.nefc[world_id]):
-            raise RuntimeError(f"contact {contact_id} has invalid solved-force addresses")
+            raise RuntimeError(
+                f"contact {contact_id} has invalid solved-force addresses"
+            )
         pyramid = buffers.constraint_force[world_id, address]
         normal_magnitude = float(np.sum(pyramid))
-        normal_world = sign * normal_magnitude * np.asarray(
-            buffers.frame[contact_id, 0], dtype=np.float64
+        normal_world = (
+            sign
+            * normal_magnitude
+            * np.asarray(buffers.frame[contact_id, 0], dtype=np.float64)
         )
         hand_body_id = int(model.geom_bodyid[hand_geom_id])
         joint_rotation = _rotation_wxyz(state.xquat[world_id, hand_body_id])
@@ -158,9 +173,13 @@ def corrected_contact_frames(
                     "joint_name": joint_name,
                     "object_name": object_name,
                     "total_force_world": _vec3(total_world),
-                    "total_force_wrist": _vec3(wrist_rotations[world_id].T @ total_world),
+                    "total_force_wrist": _vec3(
+                        wrist_rotations[world_id].T @ total_world
+                    ),
                     "total_force_joint": _vec3(joint_rotation.T @ total_world),
-                    "total_force_object": _vec3(object_rotations[world_id].T @ total_world),
+                    "total_force_object": _vec3(
+                        object_rotations[world_id].T @ total_world
+                    ),
                     "contact_pairs": pairs,
                 }
             )
@@ -209,7 +228,11 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
         ]
     )
     object_move = pa.struct(
-        [("object_name", pa.string()), ("start_frame", pa.int64()), ("end_frame", pa.int64())]
+        [
+            ("object_name", pa.string()),
+            ("start_frame", pa.int64()),
+            ("end_frame", pa.int64()),
+        ]
     )
     metadata = {
         b"schema": b"synthetic",
@@ -261,11 +284,19 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
                                 ]
                             ),
                         ),
-                        ("trajectory_info", pa.struct([("object_move", pa.list_(object_move))])),
+                        (
+                            "trajectory_info",
+                            pa.struct([("object_move", pa.list_(object_move))]),
+                        ),
                         ("capture_info", pa.null()),
                         (
                             "train_info",
-                            pa.struct([("commit_hash", pa.string()), ("reward_value", pa.float64())]),
+                            pa.struct(
+                                [
+                                    ("commit_hash", pa.string()),
+                                    ("reward_value", pa.float64()),
+                                ]
+                            ),
                         ),
                     ]
                 ),
@@ -343,6 +374,254 @@ def build_v2_schema(*, observation_dim: int, action_dim: int) -> Any:
     )
 
 
+def build_compact_schema() -> Any:
+    """Build the replay/visual schema without audit and rollout intermediates."""
+
+    import pyarrow as pa
+
+    fixed = lambda size: pa.list_(pa.float32(), size)
+    hand = pa.struct(
+        [
+            ("hand_name", pa.string()),
+            ("mano_global_pos", pa.list_(fixed(3))),
+            ("mano_global_rot_aa", pa.list_(fixed(3))),
+            ("mano_hand_pose", pa.list_(fixed(48))),
+            ("mano_joint_pos", pa.list_(pa.list_(fixed(3), 21))),
+            ("urdf_dof", pa.list_(fixed(JOINT_DOF))),
+            ("urdf_dof_target", pa.list_(fixed(JOINT_DOF))),
+        ]
+    )
+    object_move = pa.struct(
+        [
+            ("object_name", pa.string()),
+            ("start_frame", pa.int64()),
+            ("end_frame", pa.int64()),
+        ]
+    )
+    metadata = {
+        b"schema": b"synthetic",
+        b"schema_version": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT.encode(),
+        b"source_contract": SYNTHETIC_LANCE_V22_CONTRACT.encode(),
+        b"mano_global_frame_contract": MANO_GLOBAL_FRAME_CONTRACT.encode(),
+        b"hand_slot_order": b"right,left",
+        b"mano_dof_dim": b"28",
+        b"control_timestep_seconds": str(CONTROL_TIMESTEP).encode(),
+        b"compact_projection": b"replay_visual_v1",
+        b"full_checkpoint_metadata": b"external_manifest_only",
+    }
+    return pa.schema(
+        [
+            (
+                "index",
+                pa.struct(
+                    [
+                        ("uuid", pa.string()),
+                        ("seed_uuid", pa.string()),
+                        ("capMachine", pa.string()),
+                        ("operator", pa.string()),
+                        ("scene", pa.string()),
+                        ("is_generated", pa.bool_()),
+                    ]
+                ),
+            ),
+            (
+                "trajectory_metadata",
+                pa.struct(
+                    [
+                        ("data_fps", pa.int64()),
+                        ("total_frames", pa.int64()),
+                        ("gesture", pa.string()),
+                        ("hand_names", pa.list_(pa.string())),
+                        ("hand_slots", pa.list_(pa.string())),
+                        ("object_names", pa.list_(pa.string())),
+                        ("mano_hand_shapes", pa.list_(fixed(10))),
+                        (
+                            "trajectory_info",
+                            pa.struct([("object_move", pa.list_(object_move))]),
+                        ),
+                    ]
+                ),
+            ),
+            ("timestamp", pa.list_(pa.float64())),
+            ("hands", pa.list_(hand)),
+            (
+                "objects",
+                pa.list_(
+                    pa.struct(
+                        [("rot_aa", pa.list_(fixed(3))), ("pos", pa.list_(fixed(3)))]
+                    )
+                ),
+            ),
+            (
+                "provenance",
+                pa.struct(
+                    [
+                        ("contract", pa.string()),
+                        ("force_contract", pa.string()),
+                        ("policy_mode", pa.string()),
+                        ("checkpoint_path", pa.string()),
+                        ("checkpoint_sha256", pa.string()),
+                        ("checkpoint_update", pa.int64()),
+                        ("checkpoint_metadata_sha256", pa.string()),
+                        ("warp_ccd_iterations", pa.int64()),
+                        ("warp_ccd_contacts_per_world", pa.int64()),
+                        ("dataset_path", pa.string()),
+                        ("dataset_version", pa.int64()),
+                        ("row_index", pa.int64()),
+                        ("source_identity", pa.string()),
+                        ("software_commit", pa.string()),
+                        ("seed", pa.int64()),
+                        ("episode_index", pa.int64()),
+                        ("generation_attempt", pa.int64()),
+                    ]
+                ),
+            ),
+        ],
+        metadata=metadata,
+    )
+
+
+def _canonical_json_sha256(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def build_compact_row(
+    full_row: Mapping[str, Any],
+    *,
+    checkpoint_metadata: Mapping[str, Any],
+    warp_ccd_iterations: int,
+    warp_ccd_contacts_per_world: int,
+) -> dict[str, Any]:
+    """Project one full v2 row into the explicit compact replay/visual contract."""
+
+    if warp_ccd_iterations is None or warp_ccd_contacts_per_world is None:
+        raise ValueError("compact projection requires explicit Warp CCD settings")
+    provenance = dict(full_row.get("provenance") or {})
+    if provenance.get("contract") != SYNTHETIC_LANCE_V22_CONTRACT:
+        raise ValueError("compact projection requires a corrected v2.2 source row")
+    metadata = dict(full_row.get("trajectory_metadata") or {})
+    compact_metadata = {
+        name: metadata[name]
+        for name in (
+            "data_fps",
+            "total_frames",
+            "gesture",
+            "hand_names",
+            "hand_slots",
+            "object_names",
+            "mano_hand_shapes",
+            "trajectory_info",
+        )
+    }
+    hands = []
+    for hand in full_row.get("hands") or []:
+        hand = dict(hand)
+        hands.append(
+            {
+                "hand_name": hand.get("hand_name"),
+                "mano_global_pos": hand.get("mano_global_pos") or [],
+                "mano_global_rot_aa": hand.get("mano_global_rot_aa") or [],
+                "mano_hand_pose": hand.get("mano_hand_pose") or [],
+                "mano_joint_pos": hand.get("mano_joint_pos") or [],
+                "urdf_dof": hand.get("urdf_dof") or [],
+                "urdf_dof_target": hand.get("urdf_dof_target") or [],
+            }
+        )
+    compact_provenance = {
+        "contract": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+        "force_contract": provenance.get("force_contract"),
+        "policy_mode": provenance.get("policy_mode"),
+        "checkpoint_path": provenance.get("checkpoint_path"),
+        "checkpoint_sha256": provenance.get("checkpoint_sha256"),
+        "checkpoint_update": provenance.get("checkpoint_update"),
+        "checkpoint_metadata_sha256": _canonical_json_sha256(checkpoint_metadata),
+        "warp_ccd_iterations": warp_ccd_iterations,
+        "warp_ccd_contacts_per_world": warp_ccd_contacts_per_world,
+        "dataset_path": provenance.get("dataset_path"),
+        "dataset_version": provenance.get("dataset_version"),
+        "row_index": provenance.get("row_index"),
+        "source_identity": provenance.get("source_identity"),
+        "software_commit": provenance.get("software_commit"),
+        "seed": provenance.get("seed"),
+        "episode_index": provenance.get("episode_index"),
+        "generation_attempt": provenance.get("generation_attempt"),
+    }
+    return {
+        "index": dict(full_row["index"]),
+        "trajectory_metadata": compact_metadata,
+        "timestamp": list(full_row["timestamp"]),
+        "hands": hands,
+        "objects": list(full_row["objects"]),
+        "provenance": compact_provenance,
+    }
+
+
+def write_compact_lance_stream(
+    rows: Iterable[dict[str, Any]],
+    *,
+    output: str | Path,
+    replace: bool = False,
+    append: bool = False,
+    batch_size: int = 16,
+) -> Path:
+    """Stream compact rows to Lance without materializing the episode set."""
+
+    import lance
+    import pyarrow as pa
+
+    if batch_size < 1:
+        raise ValueError("compact writer batch_size must be positive")
+    output_path = Path(output)
+    if append and replace:
+        raise ValueError("append and replace are mutually exclusive")
+    if output_path.exists() and not append:
+        if not replace:
+            raise FileExistsError(f"output already exists: {output_path}")
+        shutil.rmtree(output_path)
+    if append and not output_path.exists():
+        raise FileNotFoundError(f"append target does not exist: {output_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    schema = build_compact_schema()
+    iterator = iter(rows)
+    try:
+        first = next(iterator)
+    except StopIteration as exc:
+        raise ValueError("cannot write an empty compact rollout dataset") from exc
+
+    def batches():
+        pending = [first]
+        for row in iterator:
+            pending.append(row)
+            if len(pending) >= batch_size:
+                yield pa.RecordBatch.from_pylist(pending, schema=schema)
+                pending = []
+        if pending:
+            yield pa.RecordBatch.from_pylist(pending, schema=schema)
+
+    reader = pa.RecordBatchReader.from_batches(schema, batches())
+    lance.write_dataset(reader, str(output_path), mode="append" if append else "create")
+    return output_path
+
+
+def write_compact_lance(
+    rows: Sequence[dict[str, Any]],
+    *,
+    output: str | Path,
+    replace: bool = False,
+    append: bool = False,
+) -> Path:
+    """Write compact replay/visual rows with an explicit non-v2.2 schema."""
+
+    return write_compact_lance_stream(
+        rows,
+        output=output,
+        replace=replace,
+        append=append,
+        batch_size=max(1, len(rows)),
+    )
+
+
 def _float_rows(values: NDArray[object]) -> list[list[float]]:
     array = np.asarray(values, dtype=np.float32)
     if not np.all(np.isfinite(array)):
@@ -350,7 +629,9 @@ def _float_rows(values: NDArray[object]) -> list[list[float]]:
     return array.tolist()
 
 
-def generated_rollout_uuid(source_uuid: str, checkpoint_sha256: str, episode: int = 0) -> str:
+def generated_rollout_uuid(
+    source_uuid: str, checkpoint_sha256: str, episode: int = 0
+) -> str:
     try:
         namespace = uuid.UUID(source_uuid)
     except ValueError:
@@ -372,15 +653,20 @@ def build_v2_row(
     contacts: list[list[dict[str, Any]]],
     rollout: Mapping[str, NDArray[object]],
     provenance: Mapping[str, Any],
+    include_checkpoint_metadata_json: bool = True,
 ) -> dict[str, Any]:
     """Assemble one independent complete trajectory row."""
 
     urdf_dof = np.asarray(states["urdf_dof"], dtype=np.float64)
     total_frames = len(urdf_dof)
     if total_frames != len(trajectory.q_ref) or len(contacts) != total_frames:
-        raise ValueError("v2 row must contain exactly one complete source-length episode")
+        raise ValueError(
+            "v2 row must contain exactly one complete source-length episode"
+        )
     for name in (
-        "mano_joint_pos", "urdf_dof_target", "object_position",
+        "mano_joint_pos",
+        "urdf_dof_target",
+        "object_position",
         "object_orientation_xyzw",
     ):
         if len(np.asarray(states[name])) != total_frames:
@@ -393,13 +679,17 @@ def build_v2_row(
     ).as_rotvec()
     hand_global_pos = urdf_dof[:, :3]
     hand_rot_aa = Rotation.from_euler("XYZ", urdf_dof[:, 3:6]).as_rotvec()
-    reference_object_rot_aa = Rotation.from_quat(trajectory.object_quat_xyzw).as_rotvec()
+    reference_object_rot_aa = Rotation.from_quat(
+        trajectory.object_quat_xyzw
+    ).as_rotvec()
     mano_pose = right_urdf_trajectory_to_mano_48d(urdf_dof)
     checkpoint_sha = str(provenance["checkpoint_sha256"])
     episode_index = int(provenance["episode_index"])
     generation_attempt = int(provenance["generation_attempt"])
     if episode_index < 0 or generation_attempt < 1:
-        raise ValueError("episode index must be non-negative and generation attempt positive")
+        raise ValueError(
+            "episode index must be non-negative and generation attempt positive"
+        )
     source_uuid = str(trajectory.identity.uuid)
     cap_machine = str(source_index.get("capMachine") or "manorl-mjx-warp")
     operator = str(source_index.get("operator") or "manorl")
@@ -415,8 +705,12 @@ def build_v2_row(
         hand_shapes = [right_shape]
     else:
         hand_shapes = [np.zeros(10, dtype=np.float64)]
-    start_frame = int(trajectory.identity.movement_start_raw - trajectory.identity.source_start)
-    end_frame = int(trajectory.identity.movement_end_raw - trajectory.identity.source_start)
+    start_frame = int(
+        trajectory.identity.movement_start_raw - trajectory.identity.source_start
+    )
+    end_frame = int(
+        trajectory.identity.movement_end_raw - trajectory.identity.source_start
+    )
     empty_hand = {
         "hand_name": None,
         "mano_global_pos": [],
@@ -438,7 +732,10 @@ def build_v2_row(
         "trajectory_metadata": {
             "data_fps": int(round(1.0 / CONTROL_TIMESTEP)),
             "total_frames": total_frames,
-            "gesture": str(source_metadata.get("gesture") or trajectory.identity.identity.split("_")[1]),
+            "gesture": str(
+                source_metadata.get("gesture")
+                or trajectory.identity.identity.split("_")[1]
+            ),
             "hand_names": ["right"],
             "hand_slots": list(HAND_SLOT_ORDER),
             "object_names": [trajectory.identity.identity.split("_", 1)[0]],
@@ -461,10 +758,14 @@ def build_v2_row(
             "capture_info": None,
             "train_info": {
                 "commit_hash": str(provenance["software_commit"]),
-                "reward_value": float(np.sum(np.asarray(rollout["reward"], dtype=np.float64))),
+                "reward_value": float(
+                    np.sum(np.asarray(rollout["reward"], dtype=np.float64))
+                ),
             },
         },
-        "timestamp": (np.arange(total_frames, dtype=np.float64) * CONTROL_TIMESTEP).tolist(),
+        "timestamp": (
+            np.arange(total_frames, dtype=np.float64) * CONTROL_TIMESTEP
+        ).tolist(),
         "hands": [
             {
                 "hand_name": "right",
@@ -496,11 +797,15 @@ def build_v2_row(
                 name: (
                     np.asarray(value, dtype=np.int64).tolist()
                     if name in {"command_reference_index", "command_source_frame_index"}
-                    else np.asarray(value, dtype=np.int32).tolist()
-                    if name == "termination_reason_code"
-                    else np.asarray(value, dtype=bool).tolist()
-                    if name == "terminated"
-                    else _float_rows(value)
+                    else (
+                        np.asarray(value, dtype=np.int32).tolist()
+                        if name == "termination_reason_code"
+                        else (
+                            np.asarray(value, dtype=bool).tolist()
+                            if name == "terminated"
+                            else _float_rows(value)
+                        )
+                    )
                 )
                 for name, value in rollout.items()
             },
@@ -512,8 +817,14 @@ def build_v2_row(
             "checkpoint_path": str(provenance["checkpoint_path"]),
             "checkpoint_sha256": checkpoint_sha,
             "checkpoint_update": int(provenance["checkpoint_update"]),
-            "checkpoint_metadata_json": json.dumps(
-                provenance.get("checkpoint_metadata", {}), sort_keys=True, separators=(",", ":")
+            "checkpoint_metadata_json": (
+                json.dumps(
+                    provenance.get("checkpoint_metadata", {}),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if include_checkpoint_metadata_json
+                else ""
             ),
             "dataset_path": str(trajectory.identity.dataset_path),
             "dataset_version": int(trajectory.identity.dataset_version),
@@ -553,9 +864,8 @@ def write_v2_lance(
         raise FileNotFoundError(f"append target does not exist: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(
-        list(rows), schema=build_v2_schema(observation_dim=observation_dim, action_dim=action_dim)
+        list(rows),
+        schema=build_v2_schema(observation_dim=observation_dim, action_dim=action_dim),
     )
-    lance.write_dataset(
-        table, str(output_path), mode="append" if append else "create"
-    )
+    lance.write_dataset(table, str(output_path), mode="append" if append else "create")
     return output_path
