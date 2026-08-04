@@ -246,8 +246,11 @@ pre-padding and 250 post-padding steps. If a capture ends before either margin,
 the missing interval holds its first or last captured pose; repeated
 `source_indices` expose those synthetic stationary slots instead of hiding them.
 
-Production training uses a Source → Compile → Run boundary. Lance is the
-versioned archival source and is opened only by short-lived compiler workers.
+Production training uses a Source → Compile → Run boundary. The incident
+signature, package lifecycle, validation commands, production launch, and
+failure response are maintained in
+[`docs/manorl_lance_isolation_runbook.md`](docs/manorl_lance_isolation_runbook.md).
+Lance is the versioned archival source and is opened only by short-lived compiler workers.
 The compiler publishes a content-addressed `manorl.trajectory_package.v1`
 directory containing canonical JSON plus hash-verified, `allow_pickle=False`,
 mmapable NPY arrays. The long-lived MuJoCo/MJX/PPO process consumes that package

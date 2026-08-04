@@ -28,7 +28,7 @@ Compilation is atomic on a local filesystem. CIFS does not permit the required d
 
 ## Current justified claim
 
-The completed v295 package represents the direct-Lance training catalog exactly: all 3429 valid trajectories and all 8192 deterministic assignments match source identities and arrays, while five invalid candidates are explicit and hash-bound. Server2 reproduced the same package/catalog/assignment identities in 30/30 package-only loads without Lance/PyArrow, then completed N32 and N8192 one-update PPO runs. Live process mappings during N8192 contained the package NPY files and no Lance/PyArrow libraries. The Source → Compile → Run boundary therefore removes the observed direct-Lance N8192 startup failure while preserving training semantics and checkpoint ABI.
+The completed v295 package represents the direct-Lance training catalog exactly: all 3429 valid trajectories and all 8192 deterministic assignments match source identities and arrays, while five invalid candidates are explicit and hash-bound. Server2 reproduced the same package/catalog/assignment identities in 30/30 package-only loads without Lance/PyArrow. Package-backed training then remained stable through N4096 update 23 and N8192 update 26, sustaining roughly 11k transitions/s with finite learning metrics, NPY-only live mappings, and no segfault, Xid, or OOM. The Source → Compile → Run boundary therefore removes the observed direct-Lance N8192 startup failure while preserving training semantics and checkpoint ABI. N8192 is the accepted 24 GiB production capacity; N12288 is predicted to require about 29.4 GiB under the same contract.
 
 ## Unresolved anomalies
 
@@ -36,4 +36,4 @@ The deepest random native cause—Lance, PyArrow allocator behavior, or host/VM 
 
 ## Highest-value next question
 
-Can server2 sustain the same package-only N8192 path over a multi-update soak and then an 8000-update production run without a host/VM reset? The remaining uncertainty is host endurance, not trajectory decoding, assignment, GPU capacity, or PPO closure.
+Can server2 complete an 8000-update package-backed N8192 production run without a host/VM reset? The remaining uncertainty is host endurance, not trajectory decoding, assignment, GPU capacity, or PPO closure.

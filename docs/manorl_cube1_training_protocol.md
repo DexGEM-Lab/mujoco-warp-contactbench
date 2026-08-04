@@ -12,7 +12,10 @@ a Cartesian product. Pair slots round-robin over the resolved pairs, while each
 pair independently round-robins its sorted source trajectories. Assignments are
 fixed across normal episode resets and reported in metrics and checkpoint
 sidecars. The formal reference fixture remains `cube1_01_009`; it is not the
-training-data default. Isaac rl-games checkpoints are not inputs.
+training-data default. Isaac rl-games checkpoints are not inputs. The server2
+Lance/PyArrow incident, MTP package lifecycle, validation procedure, and
+production recovery commands are in
+[`docs/manorl_lance_isolation_runbook.md`](manorl_lance_isolation_runbook.md).
 
 The s02 catalog has runtime support for all 13 discovered objects. Each object
 uses its pinned URDF, decomposed collision mesh, mass/inertia, geometry encoding,

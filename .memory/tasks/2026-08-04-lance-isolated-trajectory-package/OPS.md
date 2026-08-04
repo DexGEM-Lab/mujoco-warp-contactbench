@@ -57,3 +57,13 @@ Cross-reference: `EPISTEMIC.md`.
 - No 8000-update production run was started. GPU0 is idle and reserved; GPU1 remains owned by mocap2dexhand.
 
 Cross-reference: `EPISTEMIC.md`.
+
+## 2026-08-04 23:13 CST — multi-update evidence, stop, and cleanup
+
+- Pure-MTP N4096 observation run reached update 23 / 4,521,984 transitions with update-4+ throughput near 11k transitions/s, 11,780 MiB sampled GPU0 use, no Lance/PyArrow mappings, and no kernel anomaly. User accepted N4096 and authorized stop; exact trainer PID 45271 received one SIGINT and exited130 during update-24 reset. No periodic checkpoint existed because checkpoint cadence was 25.
+- Pure-MTP N8192 observation run reached update 26 / 10,223,616 transitions. Updates 22-26 sustained 11.2-11.5k transitions/s. GPU0 used about 20,590 MiB with about 3,494 MiB free. Checkpoint-25 SHA256 was `dd85b04e1281af91ed253868f2bf945b1fa08c24a1d8fb7bccbcd25a3b68a399` before cleanup. No Lance/PyArrow mapping, segfault, Xid, or OOM appeared. User authorized stop; exact trainer PID 46360 received one SIGINT and exited130 during update-27 reset.
+- Deleted the four task-owned server2 output roots for MTP N32/N8192 one-update acceptance and N4096/N8192 observation runs, including their checkpoints. Preserved the Guangguan Lance source, canonical NAS MTP, server2 local MTP, setup evidence, and unrelated historical runs.
+- Deleted local task scratch: the 1.3 GiB pre-publication package, failed compiler scratch, compile evidence copy, worker-smoke directories, and `/tmp` compile/validation logs. The canonical NAS package remains READY with digest `994ff827...fe5c`.
+- Added `docs/manorl_lance_isolation_runbook.md` as the durable operational account and linked it from README and the training protocol.
+
+Cross-reference: `EPISTEMIC.md` and `docs/manorl_lance_isolation_runbook.md`.
