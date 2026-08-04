@@ -28,7 +28,7 @@ Compilation is atomic on a local filesystem. CIFS does not permit the required d
 
 ## Current justified claim
 
-The completed 1.3 GiB v295 package represents the direct-Lance training catalog exactly: all 3429 valid trajectories and all 8192 deterministic assignments match source identities and arrays, while five invalid candidates are explicit and hash-bound. Three independent package-only validation cycles produced the same assignment digest without importing Lance/PyArrow. The remaining causal claim is host-specific: server2 must show that the package path crosses the prior N8192 startup boundary and completes one PPO update.
+The completed v295 package represents the direct-Lance training catalog exactly: all 3429 valid trajectories and all 8192 deterministic assignments match source identities and arrays, while five invalid candidates are explicit and hash-bound. Server2 reproduced the same package/catalog/assignment identities in 30/30 package-only loads without Lance/PyArrow, then completed N32 and N8192 one-update PPO runs. Live process mappings during N8192 contained the package NPY files and no Lance/PyArrow libraries. The Source → Compile → Run boundary therefore removes the observed direct-Lance N8192 startup failure while preserving training semantics and checkpoint ABI.
 
 ## Unresolved anomalies
 
@@ -36,4 +36,4 @@ The deepest random native cause—Lance, PyArrow allocator behavior, or host/VM 
 
 ## Highest-value next question
 
-Does server2 reproduce the package identity and N8192 assignment digest for 30/30 package-only loads, then complete one GPU PPO update with Lance/PyArrow absent from the trainer process?
+Can server2 sustain the same package-only N8192 path over a multi-update soak and then an 8000-update production run without a host/VM reset? The remaining uncertainty is host endurance, not trajectory decoding, assignment, GPU capacity, or PPO closure.

@@ -37,3 +37,23 @@ Cross-reference: `EPISTEMIC.md`.
 - Focused validation after implementation: `119 passed, 8 deselected`; package/trajectory/checkpoint subset: `33 passed, 7 deselected`; compileall, shell syntax, and diff checks pass. One unrelated evaluator fake-runtime test remains a known baseline failure and reproduces on primary `dev`.
 
 Cross-reference: `EPISTEMIC.md`.
+
+## 2026-08-04 22:08 CST — server2 N8192 acceptance
+
+- Unison delivered `dev@be44a70` package/trainer sources to server2; server2 trainer import test left Lance/PyArrow absent and focused package/checkpoint/trajectory tests passed (`33 passed, 7 deselected`).
+- Staged canonical NAS package to server2 local NVMe with destination-side hashes:
+  `/home/ubuntu/data/manorl_trajectory_packages/mtp-v1-v295-all75-right-f120-pre180-post250-994ff82737dbf839165e4e22830efa107e227a5d5b613446c15a959586cbfe5c`.
+- Server2 package-only N8192 verification completed 30/30 with package digest `994ff827...fe5c`, catalog digest `0ab4e64b...6223`, and assignment digest `444de860...4063`; Lance/PyArrow remained absent.
+- N32/1-update package smoke exited0: 1536 transitions, finite update metrics, 41 optimizer state entries, 120/480x4, pre180/post250, and matching package/catalog checkpoint ABI.
+- N8192/1-update package acceptance exited0:
+  - Run: `/home/ubuntu/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/server2_mtp_allpairs_f120_u1_n8192_g0_scratch/run-20260804T220800Z`.
+  - 393,216 transitions; update throughput 6,138.6 transitions/s; final aggregate throughput 6,102.2/s; finite metrics.
+  - 9 early deviation failures, expected for an untrained scratch policy; no numerical failure.
+  - Checkpoint SHA256 `1eb4da6ea925e6b4066bdd604febcd8eb92038904c9f41748ad129db1da66f50`; 41 optimizer state entries.
+  - Live `/proc/37300/maps` had no Lance/PyArrow mappings; file descriptors pointed at the package NPY arrays. Evidence: `/home/ubuntu/setup-logs/manorl-mtp-n8192-process-data-boundary.txt`.
+  - Telemetry sampled peak GPU0 use 17,946 MiB with 6,138 MiB free; GPU0 returned to 33 MiB after exit.
+  - No kernel segfault, Xid, OOM, killed-process, or panic entry during the run; host remained online.
+- N4096 package smoke was omitted because N8192 crossed the larger assignment, model, memory, rollout, and PPO boundary; the smaller intermediate run could not change the acceptance decision.
+- No 8000-update production run was started. GPU0 is idle and reserved; GPU1 remains owned by mocap2dexhand.
+
+Cross-reference: `EPISTEMIC.md`.
