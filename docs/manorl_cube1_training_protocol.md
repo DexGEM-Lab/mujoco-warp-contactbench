@@ -2,9 +2,12 @@
 
 ## Scope
 
-This experiment trains from scratch from a versioned Lance selector. It accepts
-the legacy single `--object`/`--gesture` pair, an exact comma-separated `--pairs`
-list, or `--all-pairs`. Exact pairs are canonicalized and sorted; they never form
+This experiment trains from scratch from a compiled ManoRL Trajectory Package
+(MTP) derived from a versioned Lance selector. Lance is an immutable archival
+source opened only by short-lived compiler workers; the long-lived trainer uses
+JSON and NumPy only. It accepts the legacy single `--object`/`--gesture` pair,
+an exact comma-separated `--pairs` list, or `--all-pairs`. Exact pairs are
+canonicalized and sorted; they never form
 a Cartesian product. Pair slots round-robin over the resolved pairs, while each
 pair independently round-robins its sorted source trajectories. Assignments are
 fixed across normal episode resets and reported in metrics and checkpoint
@@ -49,6 +52,12 @@ current native checkpoint contracts. The file-by-file implementation map is in
 - Target Python is `/home/jay/anaconda3/envs/manorl_mujoco/bin/python`.
 - Torch must report `2.13.0+cu129` and `torch.cuda.is_available() == True`.
 - Physical environment uses MJX-Warp CUDA and the policy/value model uses CUDA.
+- Production runs pass `--trajectory-package <directory>`. The package must have
+  a valid `READY` marker, canonical manifest digest, per-array SHA256 values, and
+  matching dataset version, hand selection, 100/120 Hz clock, and pre/post
+  padding. Package validation happens before GPU model construction. An explicit
+  package never falls back to direct Lance, and the trainer process must not
+  import Lance or PyArrow.
 - `--reference-fps {100,120}` selects one coupled source/reference and
   policy/control clock, defaulting to 120 Hz. At 100 Hz, physics is 400 Hz
   (`0.0025 s`); at 120 Hz, physics is 480 Hz (`1/480 s`). Both modes execute
@@ -196,14 +205,40 @@ permanent equality constraints on future runtime versions.
 
 ## Launch
 
-Start the production run with the source-compatible model initialization and
-no checkpoint input. The object, gesture, world count, update budget,
+Compile the complete catalog once on a healthy Lance host. The coordinator never
+imports Lance/PyArrow. Discovery and each 128-row decode shard execute in fresh
+workers. Native exit 139/SIGABRT failures receive at most three fresh-process
+attempts and then recursive shard bisection. Deterministically invalid source
+candidates are recorded in a hash-bound rejection ledger; decoded plus rejected
+must equal discovery exactly. Unaccounted rows, identity mismatches, and package
+contract errors stop the build. Publication is atomic and `READY` is written
+only after every row, shape, and hash validates.
+
+```bash
+PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.compile_manorl_trajectory_package \
+  --output /local/filesystem/mtp-v1-v295-all75-right-f120-pre180-post250.pending \
+  --dataset-path /mnt/nas-222-projects/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance \
+  --dataset-version 295 --reference-fps 120 --hand-side right \
+  --pre-padding 180 --post-padding 250
+
+# Publish to CIFS without READY, verify destination hashes, then expose READY.
+PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.publish_manorl_trajectory_package \
+  --source /local/filesystem/mtp-v1-v295-all75-right-f120-pre180-post250.pending \
+  --destination-parent /mnt/nas-222-projects/mocap_v2/manorl_trajectory_packages
+```
+
+Stage that immutable directory onto the training host's local NVMe, verify it,
+then start the production run with the source-compatible model initialization
+and no checkpoint input. The object, gesture, world count, update budget,
 checkpoint cadence, evaluation count, FiLM, residual, terminal, and W&B values
 below are also the CLI defaults:
 
 ```bash
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
+  --trajectory-package /absolute/local/path/to/<content-addressed-name> \
   --output outputs/manorl/cube1_01_default \
   --object cube1 \
   --gesture 01 \
@@ -232,18 +267,21 @@ JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --num-envs 2048 --updates 8000
 ```
 
-Select every eligible source pair in the pinned s02 Lance version with
-`--all-pairs`. Opt-in pair selectors clip the requested 250-frame context at
+Select every eligible source pair in the pinned MTP catalog with `--all-pairs`.
+Opt-in pair selectors clip the requested 250-frame context at
 source boundaries so every eligible pair remains trainable. The legacy
 `--object`/`--gesture` path retains strict full pre/post padding for compatibility.
 Suffix identities with more than the exact `object_action_sequence` fields and
 rows explicitly marked as generated are excluded.
 
-The trainer defaults to the repository's pinned absolute Lance path. When a
-machine exposes the same dataset version at a different mount point, pass
-`--dataset-path /absolute/path/to/npy_s02_v3.lance`. The resolved path is
-recorded in W&B, metrics, and checkpoint runtime configuration; dataset version
-and row validation remain unchanged.
+Direct Lance remains available only for bounded diagnostics on a healthy source
+host when `--trajectory-package` is omitted. Production supplies the package
+explicitly. The source `--dataset-path` and exact `--dataset-version` remain part
+of selection provenance even when the arrays come from MTP. The package schema,
+package digest, manifest SHA256, and catalog digest are recorded in metrics and
+checkpoint runtime configuration. Strict resume requires all four identities to
+match; cross-package transfer uses explicit warm-start lineage and resets
+optimizer, scheduler, memory, and progress.
 
 The validated Gym checkpoint's resolved run config uses a 4096-sample
 minibatch. ManoRL therefore defaults to the largest divisor shared by `4096`

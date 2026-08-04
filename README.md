@@ -246,9 +246,38 @@ pre-padding and 250 post-padding steps. If a capture ends before either margin,
 the missing interval holds its first or last captured pose; repeated
 `source_indices` expose those synthetic stationary slots instead of hiding them.
 
+Production training uses a Source → Compile → Run boundary. Lance is the
+versioned archival source and is opened only by short-lived compiler workers.
+The compiler publishes a content-addressed `manorl.trajectory_package.v1`
+directory containing canonical JSON plus hash-verified, `allow_pickle=False`,
+mmapable NPY arrays. The long-lived MuJoCo/MJX/PPO process consumes that package
+without importing Lance or PyArrow. A missing `READY` marker, array hash
+mismatch, or clock/padding/catalog mismatch fails closed; an explicit package
+never falls back to direct Lance. One complete catalog is independent of
+`num_envs`, so N32, N4096, and N8192 reuse the same package.
+
 ```bash
+# Run this compile step on a healthy Lance host. Native exit 139 is retried in a
+# fresh process up to three times and persistent shard faults are bisected.
+# Deterministically invalid source candidates enter the manifest rejection
+# ledger; any unaccounted row or package/identity mismatch stops the build.
+PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.compile_manorl_trajectory_package \
+  --output /local/filesystem/mtp-v1-v295-all75-right-f120-pre180-post250.pending \
+  --dataset-path /mnt/nas-222-projects/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance \
+  --dataset-version 295 --reference-fps 120 --hand-side right \
+  --pre-padding 180 --post-padding 250
+
+# CIFS does not provide the directory-rename primitive used by the local atomic
+# writer. Publish to NAS with READY withheld until destination-side hashes pass.
+PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.publish_manorl_trajectory_package \
+  --source /local/filesystem/mtp-v1-v295-all75-right-f120-pre180-post250.pending \
+  --destination-parent /mnt/nas-222-projects/mocap_v2/manorl_trajectory_packages
+
 JAX_PLATFORMS=cuda /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   -m tools.train_manorl_cube1 \
+  --trajectory-package /absolute/path/to/<content-addressed-name> \
   --output outputs/manorl/cube1_01_default \
   --object cube1 --gesture 01 --reference-fps 120 \
   --num-envs 2048 --updates 8000 \
@@ -278,9 +307,11 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
 
 The trainer also accepts exact multi-object/action selection. Use
 `--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for
-every eligible pair in the pinned Lance dataset. Mixed-object batches run
+every eligible pair in the pinned package catalog. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
-remain single-object modes.
+remain single-object modes. Strict resume binds the package schema, package
+manifest SHA256, and catalog digest in the checkpoint environment ABI. Moving a
+verified package does not change its identity; changing any catalog byte does.
 
 ### Compact synthetic Lance synthesis
 

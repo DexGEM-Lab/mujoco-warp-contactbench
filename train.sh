@@ -20,6 +20,7 @@ else
 fi
 DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance}
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
+TRAJECTORY_PACKAGE=${MANORL_TRAJECTORY_PACKAGE:-}
 REFERENCE_FPS=${MANORL_REFERENCE_FPS:-120}
 UPDATES=${MANORL_UPDATES:-5000}
 CHECKPOINT_INTERVAL=${MANORL_CHECKPOINT_INTERVAL:-100}
@@ -36,9 +37,23 @@ if [[ ! -x "$PYTHON" ]]; then
   echo "ManoRL Python is not executable: $PYTHON" >&2
   exit 2
 fi
-if [[ ! -d "$DATASET" ]]; then
-  echo "Lance dataset is absent: $DATASET" >&2
-  exit 2
+if [[ -n "$TRAJECTORY_PACKAGE" ]]; then
+  if [[ ! -f "$TRAJECTORY_PACKAGE/READY" || ! -f "$TRAJECTORY_PACKAGE/manifest.json" ]]; then
+    echo "ManoRL trajectory package is not READY: $TRAJECTORY_PACKAGE" >&2
+    exit 2
+  fi
+  TRAJECTORY_PACKAGE=$(realpath -e "$TRAJECTORY_PACKAGE")
+  TRAJECTORY_PACKAGE_JSON=$(
+    "$PYTHON" -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$TRAJECTORY_PACKAGE"
+  )
+  TRAJECTORY_PACKAGE_ARGS=(--trajectory-package "$TRAJECTORY_PACKAGE")
+else
+  if [[ ! -d "$DATASET" ]]; then
+    echo "Lance dataset is absent: $DATASET" >&2
+    exit 2
+  fi
+  TRAJECTORY_PACKAGE_JSON=null
+  TRAJECTORY_PACKAGE_ARGS=()
 fi
 if [[ ! "$NUM_ENVS" =~ ^[1-9][0-9]*$ ]]; then
   echo "num_envs must be a positive integer, got: $NUM_ENVS" >&2
@@ -87,7 +102,20 @@ if [[ "$OBJECT" == "all" ]]; then
   SELECTION_ARGS=(--all-pairs)
   EXTRA_MODEL_ARGS=(--unified-object-batch --warp-persistent-ccd-workspace)
 else
-  SELECTOR=$("$PYTHON" - "$DATASET" "$DATASET_VERSION" "$HAND_SIDE" "$OBJECT" <<'PY'
+  if [[ -n "$TRAJECTORY_PACKAGE" ]]; then
+    SELECTOR=$("$PYTHON" - "$TRAJECTORY_PACKAGE/manifest.json" "$OBJECT" <<'PY'
+import json
+import sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+object_type = sys.argv[2]
+selected = [value for value in manifest["resolved_pairs"] if value.split(":", 1)[0] == object_type]
+if not selected:
+    raise SystemExit(f"no packaged gestures for object {object_type!r}")
+print(",".join(selected))
+PY
+)
+  else
+    SELECTOR=$("$PYTHON" - "$DATASET" "$DATASET_VERSION" "$HAND_SIDE" "$OBJECT" <<'PY'
 import sys
 from pathlib import Path
 import lance
@@ -112,6 +140,7 @@ if not selected:
 print(",".join(selected))
 PY
 )
+  fi
   SELECTION_ARGS=(--pairs "$SELECTOR")
 fi
 
@@ -127,6 +156,7 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "physical_gpu": $GPU,
   "dataset_path": "$DATASET",
   "dataset_version": $DATASET_VERSION,
+  "trajectory_package": $TRAJECTORY_PACKAGE_JSON,
   "reference_fps": $REFERENCE_FPS,
   "control_fps": $REFERENCE_FPS,
   "physics_fps": $((REFERENCE_FPS * 4)),
@@ -170,6 +200,7 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --evaluation-enabled false \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
+  "${TRAJECTORY_PACKAGE_ARGS[@]}" \
   --reference-fps "$REFERENCE_FPS" \
   "${CHECKPOINT_ARGS[@]}" \
   --hand-side "$HAND_SIDE" \

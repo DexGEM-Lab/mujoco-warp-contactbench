@@ -40,6 +40,18 @@ _ENVIRONMENT_SIGNATURE_FIELDS = (
     "pre_padding",
     "post_padding",
     "warp_ccd",
+    "trajectory_package_schema",
+    "trajectory_package_digest",
+    "trajectory_package_manifest_sha256",
+    "trajectory_catalog_digest",
+)
+_TRAJECTORY_PACKAGE_SIGNATURE_FIELDS = frozenset(
+    {
+        "trajectory_package_schema",
+        "trajectory_package_digest",
+        "trajectory_package_manifest_sha256",
+        "trajectory_catalog_digest",
+    }
 )
 _ENVIRONMENT_SIDE_SEQUENCE_FIELDS = frozenset(
     {
@@ -342,6 +354,10 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
             continue
         target_value = target_environment.get(field)
         if target_value is None:
+            if field in _TRAJECTORY_PACKAGE_SIGNATURE_FIELDS:
+                raise CheckpointFormatError(
+                    f"checkpoint environment {field} requires a trajectory-package target runtime"
+                )
             continue
         checkpoint_value = checkpoint_environment[field]
         if field in _ENVIRONMENT_SIDE_SEQUENCE_FIELDS:

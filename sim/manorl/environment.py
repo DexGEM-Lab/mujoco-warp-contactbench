@@ -1551,6 +1551,11 @@ class MujocoManoEnvironment:
             if isinstance(trajectory, ReferenceTrajectory)
             else trajectory.trajectories
         )
+        self.trajectory_package = (
+            None
+            if isinstance(trajectory, ReferenceTrajectory)
+            else trajectory.trajectory_package
+        )
         if len(trajectories) != config.num_envs:
             raise ValueError("trajectory batch size must equal config.num_envs")
         if any(len(item.q_ref) < 2 for item in trajectories):

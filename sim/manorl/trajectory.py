@@ -376,6 +376,7 @@ class TrajectoryBatch:
     resolved_pairs: tuple[ObjectActionPair, ...] = ()
     selection_mode: str | None = None
     pair_assignment_cycle: int = 0
+    trajectory_package: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.trajectories:
@@ -392,6 +393,12 @@ class TrajectoryBatch:
             or self.pair_assignment_cycle < 0
         ):
             raise ValueError("pair_assignment_cycle must be a non-negative integer")
+        if self.trajectory_package is not None:
+            required = {"schema", "package_digest", "manifest_sha256", "catalog_digest"}
+            if not isinstance(self.trajectory_package, dict) or set(self.trajectory_package) != required:
+                raise ValueError("trajectory_package metadata is incomplete")
+            if any(not isinstance(value, str) or not value for value in self.trajectory_package.values()):
+                raise ValueError("trajectory_package metadata values must be non-empty strings")
 
     @property
     def num_envs(self) -> int:

@@ -377,7 +377,7 @@ class ManoSkrlRuntime:
         available_sides = tuple(physical.hand_sides)
         controlled_sides = tuple(physical.hand_layout.controlled_sides)
         clock = physical.config.clock
-        return {
+        signature = {
             "requested_hand_side": physical.config.hand_side,
             "resolved_hand_side": (
                 "both" if len(controlled_sides) == 2 else controlled_sides[0]
@@ -401,6 +401,17 @@ class ManoSkrlRuntime:
             "warp_ccd": physical.warp_ccd_metadata(),
             "residual_action": asdict(physical.config.residual_action),
         }
+        package = getattr(physical, "trajectory_package", None)
+        if package is not None:
+            signature.update(
+                {
+                    "trajectory_package_schema": package["schema"],
+                    "trajectory_package_digest": package["package_digest"],
+                    "trajectory_package_manifest_sha256": package["manifest_sha256"],
+                    "trajectory_catalog_digest": package["catalog_digest"],
+                }
+            )
+        return signature
 
     def checkpoint_metadata(self) -> dict[str, object]:
         ppo_metadata = asdict(self.config)

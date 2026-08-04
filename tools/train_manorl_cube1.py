@@ -45,7 +45,6 @@ from sim.manorl.environment import (
 )
 from sim.manorl.gymnasium_env import ACTION_DIM, ManoGymnasiumVectorEnv
 from sim.manorl.hand_layout import HandActionLayout
-from sim.manorl.lance_v2 import file_sha256
 from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, observation_layout
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.rewards import (
@@ -65,6 +64,7 @@ from sim.manorl.trajectory import (
     TrajectorySelection,
     load_assigned_trajectory_batch,
 )
+from sim.manorl.trajectory_package import file_sha256, load_assigned_trajectory_package
 
 DEFAULT_WANDB_PROJECT = "mujoco-mano"
 DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
@@ -206,6 +206,7 @@ class TrainingBudget:
     pair_assignment_cycle: int = 0
     dataset_path: str = DATASET_PATH
     dataset_version: int | None = None
+    trajectory_package: str | None = None
     reference_fps: int = DEFAULT_REFERENCE_FPS
     hand_side: str = "auto"
     residual_enabled: bool = True
@@ -1809,7 +1810,7 @@ def _trajectory_selection_metadata(
             for object_type, action_id in sorted(pairs)
         ]
     clock = simulation_clock(selection.resolved_control_fps)
-    return {
+    metadata = {
         "selector": selection.canonical_selector,
         "mode": selection.mode,
         "include_suffix_files": False,
@@ -1842,6 +1843,25 @@ def _trajectory_selection_metadata(
         "assignments": assignments,
         "evaluation_assignments": evaluation_assignments,
     }
+    package = getattr(trajectories, "trajectory_package", None)
+    if package is not None:
+        metadata["trajectory_package"] = dict(package)
+    return metadata
+
+
+def _load_selected_trajectories(
+    selection: TrajectorySelection,
+    budget: TrainingBudget,
+    *,
+    num_envs: int,
+):
+    if budget.trajectory_package is None:
+        return load_assigned_trajectory_batch(selection, num_envs=num_envs)
+    return load_assigned_trajectory_package(
+        budget.trajectory_package,
+        selection,
+        num_envs=num_envs,
+    )
 
 
 def _build_training_observer(
@@ -1896,7 +1916,9 @@ def _build_evaluation_runtime(
     maximum = min(budget.num_envs, 128)
     if not 1 <= num_envs <= maximum:
         raise ValueError(f"evaluation num_envs must be within 1..{maximum}")
-    trajectories = load_assigned_trajectory_batch(selection, num_envs=num_envs)
+    trajectories = _load_selected_trajectories(
+        selection, budget, num_envs=num_envs
+    )
     physical = MujocoManoEnvironment(
         trajectories,
         EnvironmentConfig(
@@ -2081,9 +2103,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     )
     if output.exists() or any(path.exists() for path in artifacts):
         raise FileExistsError("refusing to replace an existing training artifact prefix")
-    torch.manual_seed(budget.seed)
     np.random.seed(budget.seed)
-    torch.cuda.manual_seed_all(budget.seed)
     warm_start_checkpoint = (
         None
         if budget.warm_start_checkpoint is None
@@ -2108,7 +2128,13 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         reference_fps=budget.reference_fps,
         pair_assignment_cycle=budget.pair_assignment_cycle,
     )
-    trajectories = load_assigned_trajectory_batch(selection, num_envs=budget.num_envs)
+    # Validate package hashes/ABI and construct the CPU catalog before the
+    # first operation that can initialize a CUDA context.
+    trajectories = _load_selected_trajectories(
+        selection, budget, num_envs=budget.num_envs
+    )
+    torch.manual_seed(budget.seed)
+    torch.cuda.manual_seed_all(budget.seed)
     contact_capacity = recommended_warp_contact_capacity(
         budget.num_envs, trajectories.hand_sides
     )
@@ -2522,6 +2548,14 @@ def main(argv: list[str] | None = None) -> int:
         help="open this exact historical Lance version instead of the latest version",
     )
     parser.add_argument(
+        "--trajectory-package",
+        type=Path,
+        help=(
+            "validated Lance-free ManoRL trajectory package; when supplied, "
+            "the trainer never falls back to direct Lance"
+        ),
+    )
+    parser.add_argument(
         "--reference-fps",
         type=int,
         choices=SUPPORTED_REFERENCE_FPS,
@@ -2682,6 +2716,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.resume_checkpoint is not None and args.warm_start_checkpoint is not None:
         parser.error("--resume-checkpoint and --warm-start-checkpoint are mutually exclusive")
+    if args.trajectory_package is not None and not args.trajectory_package.expanduser().is_dir():
+        parser.error("--trajectory-package must name an existing package directory")
     if (args.warm_start_checkpoint is None) != (
         args.warm_start_prior_updates is None
     ):
@@ -2818,6 +2854,11 @@ def main(argv: list[str] | None = None) -> int:
             pair_assignment_cycle=args.pair_assignment_cycle,
             dataset_path=str(args.dataset_path.resolve()),
             dataset_version=args.dataset_version,
+            trajectory_package=(
+                None
+                if args.trajectory_package is None
+                else str(args.trajectory_package.expanduser().resolve())
+            ),
             reference_fps=args.reference_fps,
             hand_side=args.hand_side,
             residual_enabled=args.use_residual,
