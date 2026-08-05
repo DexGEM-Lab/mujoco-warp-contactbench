@@ -165,7 +165,28 @@ def test_no_launch_creates_feature_branch_and_linked_worktree(tmp_path: Path) ->
     assert result.returncode == 0, result.stderr
     assert destination.is_dir()
     assert run(["git", "branch", "--show-current"], cwd=destination).stdout.strip() == "feat/controller-sync"
+    assert run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        cwd=destination,
+    ).stdout.strip() == "dev"
     assert branch_exists(repo, "feat/controller-sync")
+    assert "Pi launch skipped." in result.stdout
+
+
+def test_no_launch_creates_dexhand_feature_with_local_upstream(tmp_path: Path) -> None:
+    repo = disposable_repo(tmp_path)
+    destination = task_worktree(repo, "dexfeat-controller-sync")
+
+    result = invoke(repo, "dexfeat", "controller-sync", "--no-launch")
+
+    assert result.returncode == 0, result.stderr
+    assert destination.is_dir()
+    assert run(["git", "branch", "--show-current"], cwd=destination).stdout.strip() == "dexfeat/controller-sync"
+    assert run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        cwd=destination,
+    ).stdout.strip() == "dexhand"
+    assert branch_exists(repo, "dexfeat/controller-sync")
     assert "Pi launch skipped." in result.stdout
 
 
