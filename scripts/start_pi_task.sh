@@ -125,6 +125,7 @@ if [[ "$mode" == "dry-run" ]]; then
 fi
 
 git -C "$repo_root" worktree add -b "$branch_name" "$worktree_path" "$base_branch"
+git -C "$worktree_path" branch --set-upstream-to "$base_branch" "$branch_name" >/dev/null
 printf 'Created task worktree: %s\n' "$worktree_path"
 
 if [[ "$mode" == "no-launch" ]]; then
