@@ -10,6 +10,13 @@
     {
       "source": "dev",
       "source_ref": "refs/heads/dev",
+      "target": "dexhand",
+      "target_ref": "refs/heads/dexhand",
+      "target_ref_regex": "^refs/heads/dexhand$"
+    },
+    {
+      "source": "dev",
+      "source_ref": "refs/heads/dev",
       "target": "feat/*",
       "target_ref": "refs/heads/feat/*",
       "target_ref_regex": "^refs/heads/feat/.+$"
@@ -20,16 +27,33 @@
       "target": "case/*/*",
       "target_ref": "refs/heads/case/*/*",
       "target_ref_regex": "^refs/heads/case/.+/.+$"
+    },
+    {
+      "source": "dexhand",
+      "source_ref": "refs/heads/dexhand",
+      "target": "dexfeat/*",
+      "target_ref": "refs/heads/dexfeat/*",
+      "target_ref_regex": "^refs/heads/dexfeat/.+$"
+    },
+    {
+      "source": "dexhand",
+      "source_ref": "refs/heads/dexhand",
+      "target": "dexcase/*/*",
+      "target_ref": "refs/heads/dexcase/*/*",
+      "target_ref_regex": "^refs/heads/dexcase/.+/.+$"
     }
   ],
   "branches": {
     "families": [
       "feat/*",
-      "case/*/*"
+      "case/*/*",
+      "dexfeat/*",
+      "dexcase/*/*"
     ],
     "long_lived": [
       "main",
-      "dev"
+      "dev",
+      "dexhand"
     ]
   },
   "direct_commit_refs": [
@@ -42,6 +66,16 @@
       "name": "feat/*",
       "ref": "refs/heads/feat/*",
       "ref_regex": "^refs/heads/feat/.+$"
+    },
+    {
+      "name": "dexcase/*/*",
+      "ref": "refs/heads/dexcase/*/*",
+      "ref_regex": "^refs/heads/dexcase/.+/.+$"
+    },
+    {
+      "name": "dexfeat/*",
+      "ref": "refs/heads/dexfeat/*",
+      "ref_regex": "^refs/heads/dexfeat/.+$"
     }
   ],
   "merge_rules": [
@@ -75,6 +109,33 @@
       "target_ref_regex": "^refs/heads/dev$"
     },
     {
+      "id": "dexcase/*/* to dexfeat/*",
+      "source": "dexcase/*/*",
+      "source_ref": "refs/heads/dexcase/*/*",
+      "source_ref_regex": "^refs/heads/dexcase/.+/.+$",
+      "target": "dexfeat/*",
+      "target_ref": "refs/heads/dexfeat/*",
+      "target_ref_regex": "^refs/heads/dexfeat/.+$"
+    },
+    {
+      "id": "dexhand to dexfeat/*",
+      "source": "dexhand",
+      "source_ref": "refs/heads/dexhand",
+      "source_ref_regex": "^refs/heads/dexhand$",
+      "target": "dexfeat/*",
+      "target_ref": "refs/heads/dexfeat/*",
+      "target_ref_regex": "^refs/heads/dexfeat/.+$"
+    },
+    {
+      "id": "dexfeat/* to dexhand",
+      "source": "dexfeat/*",
+      "source_ref": "refs/heads/dexfeat/*",
+      "source_ref_regex": "^refs/heads/dexfeat/.+$",
+      "target": "dexhand",
+      "target_ref": "refs/heads/dexhand",
+      "target_ref_regex": "^refs/heads/dexhand$"
+    },
+    {
       "id": "dev to main",
       "source": "dev",
       "source_ref": "refs/heads/dev",
@@ -86,6 +147,7 @@
   ],
   "protected_refs": [
     "refs/heads/dev",
+    "refs/heads/dexhand",
     "refs/heads/main"
   ],
   "required_targets": [
@@ -109,6 +171,39 @@
       ],
       "targets": [
         "dev"
+      ]
+    },
+    {
+      "source": "dexcase/*/*",
+      "source_ref": "refs/heads/dexcase/*/*",
+      "source_ref_regex": "^refs/heads/dexcase/.+/.+$",
+      "target_refs": [
+        "refs/heads/dexfeat/*"
+      ],
+      "targets": [
+        "dexfeat/*"
+      ]
+    },
+    {
+      "source": "dexhand",
+      "source_ref": "refs/heads/dexhand",
+      "source_ref_regex": "^refs/heads/dexhand$",
+      "target_refs": [
+        "refs/heads/dexfeat/*"
+      ],
+      "targets": [
+        "dexfeat/*"
+      ]
+    },
+    {
+      "source": "dexfeat/*",
+      "source_ref": "refs/heads/dexfeat/*",
+      "source_ref_regex": "^refs/heads/dexfeat/.+$",
+      "target_refs": [
+        "refs/heads/dexhand"
+      ],
+      "targets": [
+        "dexhand"
       ]
     },
     {

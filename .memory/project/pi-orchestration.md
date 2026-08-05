@@ -2,97 +2,97 @@
 
 ## Operating Model
 
-The default development interface is one coordinator Pi in the primary `dev`
-worktree. The user normally talks only to this coordinator. The coordinator
-decomposes work and assigns bounded tasks to worker Pi instances; workers do not
-share the primary working directory.
+One coordinator Pi in the primary `dev` worktree owns orchestration for two
+protected product lines:
+
+- `dev` — ManoRL integration.
+- `dexhand` — DexHandRL integration.
+
+The user normally talks only to this coordinator. Workers use isolated linked
+worktrees and never share the primary working directory.
 
 ```text
 user
   -> coordinator Pi (primary dev: orchestration, review, integration)
-       -> feat worktree -> executor or interactive Pi
-       -> case worktree -> debugging or experiment Pi
-       -> critic Pi -> independent read-only review
+       -> feat/* or case/*/* worktree       -> ManoRL task
+       -> dexfeat/* or dexcase/*/* worktree -> DexHandRL task
+       -> critic                            -> optional authorized review
 ```
 
-The branch, linked worktree, Pi display/intercom name, output directory, and file
-ownership boundary together identify one task. A Pi name alone does not create a
-parent-child relationship; delegation and intercom establish coordination.
+The branch, product line, linked worktree, Pi display/intercom name, output
+directory, and ownership boundary together identify one task. A Pi name alone
+does not create a parent-child relationship. Subagents remain opt-in and require
+explicit user authorization for the current task.
 
 ## Proportional Task Classification
 
-Classify the request before starting the task lifecycle:
+- **T0**: Read-only Q&A, status, inspection, or diagnosis stays in the
+  coordinator session without a task, worktree, or subagent.
+- **T1**: A localized reversible change uses one isolated task worktree and
+  focused validation. Use at most one bounded executor when delegation is
+  explicitly authorized.
+- **T2/T3**: Cross-module contracts, persistence, migration, architecture, or
+  other high-risk work uses explicit task ownership, focused review where the
+  contract can fail, and broad final validation when warranted.
 
-- **T0**: Read-only Q&A, status, inspection, or diagnosis. Answer in the
-  coordinator session without creating a task, worktree, or subagent.
-- **T1**: A localized, reversible code or configuration change. Keep the primary
-  `dev` worktree coordinator-only, use at most one bounded executor in an
-  isolated task worktree, and use focused validation. Do not add an independent
-  critic or run the full suite by default.
-- **T2/T3**: Cross-module contracts, persistence or migration changes, or other
-  high-risk work. Use the full coordinator, worker, review, and integration
-  workflow below.
+Classification changes coordination depth, not GitGuard, worktree isolation,
+ownership, or branch lifecycle requirements.
 
-The classification changes the amount of coordination, not GitGuard, worktree
-isolation, ownership, or branch lifecycle requirements.
+## Product Branch Mapping
+
+| Product | Protected integration | Feature family | Case family | Pi prefix |
+|---|---|---|---|---|
+| ManoRL | `dev` | `feat/*` | `case/*/*` | `manorl-` |
+| DexHandRL | `dexhand` | `dexfeat/*` | `dexcase/*/*` | `dexhand-` |
+
+`main` remains the release branch and accepts only `dev` according to the
+current release policy. Neither `dev` nor `dexhand` accepts direct commits.
 
 ## Coordinator Responsibilities
 
-- Translate the user's objective into features or bounded cases.
+- Translate the objective into the correct product line and bounded task.
 - Define success criteria, owned files, output paths, parent feature where
   applicable, and integration order.
-- Create task branches/worktrees from `dev` with `scripts/start_pi_task.sh`.
-- Use async subagents for bounded implementation, validation, review, and
-  operations; use an interactive named Pi for GUI, GPU, tmux, or evolving work.
-- Monitor workers through subagent status or intercom without duplicating their
-  investigation.
-- Review commits and evidence, require the feature to sync current `dev`, and
-  integrate accepted work into `dev`.
+- Create every task from the primary worktree with `scripts/start_pi_task.sh`.
+- Use `feat`/`case` for ManoRL and `dexfeat`/`dexcase` for DexHandRL.
+- Delegate only when the user has explicitly authorized subagents for the task.
+- Review commits and evidence, require the feature to sync its current protected
+  integration branch, and integrate accepted work into that same product line.
 - Keep the primary `dev` worktree free of feature edits and direct commits.
 
-If an executor reaches its budget and fails once, preserve its partial worktree
-and report the exact failure and available diff. Do not automatically resume the
-executor. Resume only after identifying a concrete missing step or receiving an
-explicit user decision.
+After one executor budget failure, preserve the partial worktree and report the
+exact failure. Resume only for a concrete correction or explicit user decision.
 
 ## Worker Responsibilities
 
 - Work only in the assigned linked worktree and branch.
-- Respect the assigned file and output ownership boundary.
-- Complete only the assigned task; do not silently expand scope or start another
-  task.
-- Preserve unrelated user changes and outputs.
-- Run scoped validation, commit coherent results on the task branch, and report
-  the commit, evidence, and residual risks to the coordinator.
-- Do not merge into `dev` or delegate additional workers unless the coordinator
-  explicitly assigned an orchestrator role.
+- Stay within the assigned product line, files, outputs, and parent-task boundary.
+- Preserve unrelated user changes and generated artifacts.
+- Run scoped validation, commit coherent results, and report evidence and
+  residual risks.
+- Do not merge into a protected integration branch or delegate additional
+  workers unless explicitly assigned that responsibility.
 
 ## Task Lifecycle
 
-1. The user gives the coordinator an objective.
-2. The coordinator chooses `feat/<topic>` or `case/<context>/<topic>` and defines
-   ownership and acceptance criteria.
-3. Create the task without launching an interactive Pi when using a subagent:
-   `scripts/start_pi_task.sh feat <topic> --no-launch`.
-4. Run the worker with that worktree as its cwd, or omit `--no-launch` to start
-   the matching interactive Pi session.
-5. The worker commits and reports; an independent critic reviews when warranted.
-6. A `case/*/*` task merges into its owning `feat/*`; a `feat/*` task first
-   merges current `dev`, then is the only task type the coordinator integrates
-   into `dev`. The coordinator verifies the combined state.
-7. After integrating a feature, the coordinator verifies cleanliness and
-   preserves its linked worktree plus ignored outputs and audit artifacts by
-   detaching that worktree at the integrated commit, then normally deletes the
-   completed `feat/*` branch ref. Do not retain an integrated `feat/*` ref at
-   the current `dev` SHA: GitGuard can otherwise attribute a later `dev` sync
-   to that stale feature ref. Clean up a delivered `case/*/*` after its parent
-   feature under the same coordinator ownership and preservation rules.
-8. Start subsequent work as a new task; never reuse the primary shared cwd for
-   concurrent implementation.
+1. The coordinator identifies ManoRL or DexHandRL ownership.
+2. Choose the matching feature or case family.
+3. Create the task from the primary worktree, for example:
+   - `scripts/start_pi_task.sh feat <topic> --no-launch`
+   - `scripts/start_pi_task.sh dexfeat <topic> --no-launch`
+4. Run the worker in the resulting linked worktree.
+5. The worker commits and reports; independent review is added only when
+   warranted and authorized.
+6. ManoRL delivery is `case/*/* -> feat/* -> dev`; DexHandRL delivery is
+   `dexcase/*/* -> dexfeat/* -> dexhand`. Before delivery, the feature merges
+   its current protected integration branch.
+7. After integration, verify cleanliness, preserve any required ignored outputs
+   or audit artifacts, detach or remove the completed worktree as appropriate,
+   and delete the completed task branch. Do not retain a delivered task ref at
+   the integration-branch SHA.
+8. Start new work as a new task; never reuse the primary shared cwd for feature
+   implementation.
 
-GitGuard enforces the local branch topology and catches accidental workflow
-violations. Native Git worktrees provide file isolation. Local hooks are a
-governance boundary, not protection against a user intentionally bypassing them.
-
-Canonical implementation details are in `.git-guard/contribution.md`,
-`scripts/start_pi_task.sh`, and the `Pi Task Worktrees` section of `README.md`.
+GitGuard enforces the local topology. Canonical implementation details are in
+`.git-guard/contribution.md`, `scripts/start_pi_task.sh`, and the `Pi Task
+Worktrees` section of `README.md`.

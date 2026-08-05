@@ -12,6 +12,9 @@ Usage:
   scripts/start_pi_task.sh feat <topic> [--dry-run|--no-launch]
   scripts/start_pi_task.sh feature <topic> [--dry-run|--no-launch]
   scripts/start_pi_task.sh case <context> <topic> [--dry-run|--no-launch]
+  scripts/start_pi_task.sh dexfeat <topic> [--dry-run|--no-launch]
+  scripts/start_pi_task.sh dexfeature <topic> [--dry-run|--no-launch]
+  scripts/start_pi_task.sh dexcase <context> <topic> [--dry-run|--no-launch]
 EOF
   exit 2
 }
@@ -43,6 +46,7 @@ case "$kind" in
     branch_name="feat/$topic"
     task_key="feat-$topic"
     pi_name="manorl-feat-$topic"
+    base_branch="dev"
     ;;
   case)
     [[ $# -ge 2 ]] || usage
@@ -54,9 +58,31 @@ case "$kind" in
     branch_name="case/$context/$topic"
     task_key="case-$context--$topic"
     pi_name="manorl-case-$context--$topic"
+    base_branch="dev"
+    ;;
+  dexfeat|dexfeature)
+    topic="$1"
+    shift
+    valid_slug "$topic" || fail "topic must be a lowercase hyphenated slug"
+    branch_name="dexfeat/$topic"
+    task_key="dexfeat-$topic"
+    pi_name="dexhand-feat-$topic"
+    base_branch="dexhand"
+    ;;
+  dexcase)
+    [[ $# -ge 2 ]] || usage
+    context="$1"
+    topic="$2"
+    shift 2
+    valid_slug "$context" || fail "context must be a lowercase hyphenated slug"
+    valid_slug "$topic" || fail "topic must be a lowercase hyphenated slug"
+    branch_name="dexcase/$context/$topic"
+    task_key="dexcase-$context--$topic"
+    pi_name="dexhand-case-$context--$topic"
+    base_branch="dexhand"
     ;;
   *)
-    fail "task kind must be feat, feature, or case"
+    fail "task kind must be feat, feature, case, dexfeat, dexfeature, or dexcase"
     ;;
 esac
 
@@ -73,7 +99,6 @@ case "$#" in
   *) usage ;;
 esac
 
-base_branch="dev"
 git -C "$repo_root" show-ref --verify --quiet "refs/heads/$base_branch" \
   || fail "required base branch does not exist: $base_branch"
 git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch_name" \

@@ -66,15 +66,28 @@ git submodule update --init \
 
 ## Pi Task Worktrees
 
-From the primary worktree, create a feature task, linked worktree, and matching Pi session with:
+The primary worktree coordinates two protected product lines: `dev` for ManoRL
+and `dexhand` for DexHandRL. Neither line accepts direct commits. Create tasks
+from the primary worktree with the matching product prefix:
 
 ```bash
+# ManoRL task from dev
 scripts/start_pi_task.sh feat controller-sync
+scripts/start_pi_task.sh case cube1 contact-tuning
+
+# DexHandRL task from dexhand
+scripts/start_pi_task.sh dexfeat controller-sync
+scripts/start_pi_task.sh dexcase cube1 contact-tuning
 ```
 
-Use `feature` as an alias for `feat`, or `scripts/start_pi_task.sh case <context> <topic>` for case work. Add `--dry-run` to inspect without changing Git or `--no-launch` to create the branch and worktree without starting Pi. The enforced branch topology and naming rules are in [`.git-guard/contribution.md`](.git-guard/contribution.md).
+`feature` aliases `feat`, and `dexfeature` aliases `dexfeat`. Add `--dry-run` to
+inspect without changing Git or `--no-launch` to create the branch and worktree
+without starting Pi. The enforced branch topology and naming rules are in
+[`.git-guard/contribution.md`](.git-guard/contribution.md).
 
-After this feature is merged into `dev` and the primary worktree is switched to `dev`, run `.git-guard/enable.sh` there to enable hooks repository-locally. GitGuard is a local accidental-workflow guard, not a security boundary.
+After the workflow is installed in the primary worktree, run
+`.git-guard/enable.sh` there to enable hooks repository-locally. GitGuard is a
+local accidental-workflow guard, not a security boundary.
 
 ## Local uv Environment
 

@@ -3,13 +3,17 @@
 Before substantive work, every Pi session reads
 `.memory/project/pi-orchestration.md`.
 
-- In the primary `dev` worktree, act only as the coordinator: launch, assign,
-  review, and integrate tasks. Do not make feature edits or direct commits.
-- In an assigned linked `feat/*` or `case/*/*` worktree, act as that task's
-  worker. Read its task memory before work, and stay within its assigned files,
-  outputs, and parent-task boundary.
-- Create tasks only from the primary worktree with
-  `scripts/start_pi_task.sh`; do not create worktree branches directly.
+- In the primary `dev` worktree, act only as the coordinator for both product
+  lines: launch, assign, review, and integrate tasks. Do not make feature edits
+  or direct commits.
+- `dev` is the protected ManoRL integration line; `dexhand` is the protected
+  DexHandRL integration line. Neither accepts direct commits.
+- In an assigned linked `feat/*`, `case/*/*`, `dexfeat/*`, or `dexcase/*/*`
+  worktree, act as that task's worker. Read its task memory before work, and stay
+  within its assigned files, outputs, product line, and parent-task boundary.
+- Create tasks only from the primary worktree with `scripts/start_pi_task.sh`;
+  use `feat`/`case` for ManoRL and `dexfeat`/`dexcase` for DexHandRL. Do not
+  create worktree branches directly.
 - Follow GitGuard without bypasses. Ownership, branch topology, lifecycle, and
   cleanup rules are in project memory and `.git-guard/contribution.md`.
 
