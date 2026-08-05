@@ -14,7 +14,9 @@ def run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=cwd, check=True, text=True, capture_output=True)
 
 
-def disposable_repo(tmp_path: Path, *, with_dev: bool = True) -> Path:
+def disposable_repo(
+    tmp_path: Path, *, with_dev: bool = True, with_dexhand: bool = True
+) -> Path:
     repo = tmp_path / "manoRL_mujoco"
     repo.mkdir()
     run(["git", "init", "--initial-branch=main", "--quiet"], cwd=repo)
@@ -25,6 +27,8 @@ def disposable_repo(tmp_path: Path, *, with_dev: bool = True) -> Path:
     run(["git", "commit", "--quiet", "-m", "initial"], cwd=repo)
     if with_dev:
         run(["git", "branch", "dev"], cwd=repo)
+        if with_dexhand:
+            run(["git", "branch", "dexhand", "dev"], cwd=repo)
 
     script_path = repo / "scripts" / "start_pi_task.sh"
     script_path.parent.mkdir()
@@ -105,6 +109,35 @@ def test_case_derives_branch_worktree_and_pi_name(tmp_path: Path) -> None:
     assert "Branch: case/cube1/contact-tuning" in result.stdout
     assert f"Worktree: {task_worktree(repo, 'case-cube1--contact-tuning')}" in result.stdout
     assert "Pi session: manorl-case-cube1--contact-tuning" in result.stdout
+
+
+def test_dexhand_feature_and_case_use_dexhand_base_and_names(tmp_path: Path) -> None:
+    repo = disposable_repo(tmp_path)
+
+    feature = invoke(repo, "dexfeature", "controller-sync", "--dry-run")
+    case = invoke(repo, "dexcase", "cube1", "contact-tuning", "--dry-run")
+
+    assert feature.returncode == 0, feature.stderr
+    assert "Branch: dexfeat/controller-sync" in feature.stdout
+    assert "Base: dexhand" in feature.stdout
+    assert f"Worktree: {task_worktree(repo, 'dexfeat-controller-sync')}" in feature.stdout
+    assert "Pi session: dexhand-feat-controller-sync" in feature.stdout
+    assert case.returncode == 0, case.stderr
+    assert "Branch: dexcase/cube1/contact-tuning" in case.stdout
+    assert "Base: dexhand" in case.stdout
+    assert f"Worktree: {task_worktree(repo, 'dexcase-cube1--contact-tuning')}" in case.stdout
+    assert "Pi session: dexhand-case-cube1--contact-tuning" in case.stdout
+
+
+def test_missing_dexhand_is_rejected_without_creating_a_worktree(tmp_path: Path) -> None:
+    repo = disposable_repo(tmp_path, with_dexhand=False)
+
+    result = invoke(repo, "dexfeat", "controller-sync", "--dry-run")
+
+    assert result.returncode == 2
+    assert "required base branch does not exist: dexhand" in result.stderr
+    assert not branch_exists(repo, "dexfeat/controller-sync")
+    assert not task_worktree(repo, "dexfeat-controller-sync").exists()
 
 
 def test_case_component_separator_keeps_names_injective(tmp_path: Path) -> None:
@@ -221,24 +254,35 @@ def test_git_guard_policy_and_runtime_config_match_task_topology() -> None:
     legacy_branch = "feature/manorl-mujoco-migration"
 
     assert policy["branches"] == {
-        "long_lived": ["main", "dev"],
-        "families": ["feat/*", "case/*/*"],
+        "long_lived": ["main", "dev", "dexhand"],
+        "families": ["feat/*", "case/*/*", "dexfeat/*", "dexcase/*/*"],
     }
     assert {(edge["source"], edge["target"]) for edge in policy["branch_from"]} == {
         ("main", "dev"),
+        ("dev", "dexhand"),
         ("dev", "feat/*"),
         ("dev", "case/*/*"),
+        ("dexhand", "dexfeat/*"),
+        ("dexhand", "dexcase/*/*"),
     }
     rules = {(rule["source"], rule["target"]): rule for rule in policy["merge_rules"]}
     assert set(rules) == {
         ("case/*/*", "feat/*"),
         ("dev", "feat/*"),
         ("feat/*", "dev"),
+        ("dexcase/*/*", "dexfeat/*"),
+        ("dexhand", "dexfeat/*"),
+        ("dexfeat/*", "dexhand"),
         ("dev", "main"),
     }
     assert rules[("dev", "feat/*")]["sync"] is True
     assert rules[("feat/*", "dev")]["sync_merge_required"] is True
-    assert {item["name"] for item in policy["direct_commit_refs"]} == {"feat/*", "case/*/*"}
+    assert {item["name"] for item in policy["direct_commit_refs"]} == {
+        "feat/*",
+        "case/*/*",
+        "dexfeat/*",
+        "dexcase/*/*",
+    }
     assert legacy_branch not in json.dumps(policy, sort_keys=True)
     assert policy["tag_rules"] == []
     assert all("tag_pattern" not in rule for rule in policy["merge_rules"])
