@@ -182,6 +182,30 @@ def _resolve_reference_fps(
     return checkpoint_fps
 
 
+def _resolve_padding(
+    requested: int | None,
+    *,
+    checkpoint_value: int,
+    has_checkpoint: bool,
+    name: str,
+) -> int:
+    """Resolve an explicit padding override without changing checkpoint semantics."""
+
+    if requested is not None and (
+        not isinstance(requested, int)
+        or isinstance(requested, bool)
+        or requested < 0
+    ):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if requested is None:
+        return checkpoint_value
+    if has_checkpoint and requested != checkpoint_value:
+        raise ValueError(
+            f"{name} {requested} conflicts with checkpoint {name} {checkpoint_value}"
+        )
+    return requested
+
+
 def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentOptions:
     """Restore trajectory, clocks, action, and per-world CCD semantics."""
 
@@ -837,6 +861,8 @@ def view_environment(
     dataset_path: Path | None = None,
     dataset_version: int | None = None,
     reference_fps: int | None = None,
+    pre_padding: int | None = None,
+    post_padding: int | None = None,
     hand_side: str = "auto",
 ) -> None:
     """Run a batched production environment and render its first world."""
@@ -858,6 +884,18 @@ def view_environment(
         _CheckpointEnvironmentOptions()
         if checkpoint is None
         else _checkpoint_environment_options(checkpoint)
+    )
+    resolved_pre_padding = _resolve_padding(
+        pre_padding,
+        checkpoint_value=checkpoint_options.pre_padding,
+        has_checkpoint=checkpoint is not None,
+        name="pre_padding",
+    )
+    resolved_post_padding = _resolve_padding(
+        post_padding,
+        checkpoint_value=checkpoint_options.post_padding,
+        has_checkpoint=checkpoint is not None,
+        name="post_padding",
     )
     if device == "gpu":
         import torch
@@ -892,8 +930,8 @@ def view_environment(
                 gesture=selected_gesture,
                 dataset_path=(dataset_path if dataset_path is not None else TrajectorySelection().dataset_path),
                 expected_dataset_version=dataset_version,
-                pre_padding=checkpoint_options.pre_padding,
-                post_padding=checkpoint_options.post_padding,
+                pre_padding=resolved_pre_padding,
+                post_padding=resolved_post_padding,
                 hand_side=hand_side,
                 reference_fps=resolved_reference_fps,
                 control_fps=resolved_control_fps,
@@ -929,13 +967,13 @@ def view_environment(
             residual_action=checkpoint_options.residual_action,
             compatibility=replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
-                movement_pre_padding=checkpoint_options.pre_padding,
+                movement_pre_padding=resolved_pre_padding,
             ),
             max_deviation_distance=max_deviation_distance,
             contact_capacity=contact_capacity,
             reference_fps=resolved_reference_fps,
             control_fps=resolved_control_fps,
-            post_padding=checkpoint_options.post_padding,
+            post_padding=resolved_post_padding,
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side=hand_side,
@@ -1019,6 +1057,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--pre-padding",
+        type=int,
+        help=f"trajectory frames before movement start (default: {DEFAULT_PRE_PADDING})",
+    )
+    parser.add_argument(
+        "--post-padding",
+        type=int,
+        help=f"trajectory frames after movement end (default: {DEFAULT_POST_PADDING})",
+    )
+    parser.add_argument(
         "--hand-side",
         choices=("auto", "both", "right", "left"),
         default="auto",
@@ -1093,6 +1141,8 @@ def main(argv: list[str] | None = None) -> int:
         dataset_path=args.dataset_path,
         dataset_version=args.dataset_version,
         reference_fps=args.reference_fps,
+        pre_padding=args.pre_padding,
+        post_padding=args.post_padding,
         hand_side=args.hand_side,
         rerun_output=args.rerun_output,
         use_residual=args.use_residual,

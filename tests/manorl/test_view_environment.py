@@ -978,6 +978,90 @@ def test_viewer_cli_accepts_pinned_dataset_version_and_reference_fps() -> None:
         parse_args(["--reference-fps", "200"])
 
 
+def test_viewer_cli_accepts_explicit_padding() -> None:
+    args = parse_args(["--pre-padding", "73", "--post-padding", "91"])
+    assert args.pre_padding == 73
+    assert args.post_padding == 91
+    defaults = parse_args([])
+    assert defaults.pre_padding is None
+    assert defaults.post_padding is None
+
+
+def test_padding_resolution_defaults_overrides_and_preserves_checkpoint() -> None:
+    import sim.manorl.view_environment as viewer
+
+    assert viewer._resolve_padding(
+        None, checkpoint_value=180, has_checkpoint=False, name="pre_padding"
+    ) == 180
+    assert viewer._resolve_padding(
+        73, checkpoint_value=180, has_checkpoint=False, name="pre_padding"
+    ) == 73
+    assert viewer._resolve_padding(
+        None, checkpoint_value=100, has_checkpoint=True, name="pre_padding"
+    ) == 100
+    with pytest.raises(ValueError, match="conflicts with checkpoint"):
+        viewer._resolve_padding(
+            180, checkpoint_value=100, has_checkpoint=True, name="pre_padding"
+        )
+    with pytest.raises(ValueError, match="non-negative integer"):
+        viewer._resolve_padding(
+            -1, checkpoint_value=180, has_checkpoint=False, name="pre_padding"
+        )
+
+
+def test_dataset_viewer_applies_explicit_padding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import sim.manorl.view_environment as viewer
+
+    created: dict[str, object] = {}
+
+    class FakeEnvironment:
+        def __init__(self, trajectory: object, config: object) -> None:
+            self.config = config
+            created["config"] = config
+
+    def load(selection: object, *, num_envs: int) -> object:
+        created["selection"] = selection
+        created["num_envs"] = num_envs
+        return SimpleNamespace(hand_sides=("right",))
+
+    monkeypatch.setattr(viewer, "_require_graphical_session", lambda: None)
+    monkeypatch.setattr(viewer, "load_assigned_trajectory_batch", load)
+    monkeypatch.setattr(viewer, "MujocoManoEnvironment", FakeEnvironment)
+    monkeypatch.setattr(viewer, "_ZeroActionStepper", lambda environment: object())
+    monkeypatch.setattr(viewer, "_view_single", lambda *args, **kwargs: None)
+
+    viewer.view_environment(
+        device="cpu",
+        speed=1.0,
+        loop=False,
+        print_every=1,
+        terminal=True,
+        trajectory_name="accepted",
+        num_envs=1,
+        render_env=0,
+        tile_envs=1,
+        object_type="banana",
+        gesture="01",
+        rerun_output=None,
+        use_residual=False,
+        checkpoint=None,
+        dataset_path=tmp_path / "dataset.lance",
+        dataset_version=978,
+        pre_padding=73,
+        post_padding=91,
+        hand_side="right",
+    )
+
+    selection = created["selection"]
+    assert selection.pre_padding == 73
+    assert selection.post_padding == 91
+    config = created["config"]
+    assert config.compatibility.movement_pre_padding == 73
+    assert config.post_padding == 91
+
+
 def test_reference_fps_resolution_defaults_restores_and_preserves_legacy() -> None:
     import sim.manorl.view_environment as viewer
 

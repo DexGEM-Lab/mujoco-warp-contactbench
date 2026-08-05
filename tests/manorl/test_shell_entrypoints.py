@@ -104,3 +104,49 @@ def test_reference_test_rejects_unsupported_reference_fps() -> None:
     )
     assert result.returncode == 2
     assert "MANORL_REFERENCE_FPS must be 100 or 120" in result.stderr
+
+
+def test_reference_test_passes_explicit_padding(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.lance"
+    dataset.mkdir()
+    fake_python = tmp_path / "python"
+    fake_python.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+    fake_python.chmod(0o755)
+    result = subprocess.run(
+        [str(ROOT / "test.sh"), "2", "73", "91"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "DISPLAY": ":99",
+            "MANORL_PYTHON": str(fake_python),
+            "MANORL_DATASET_PATH": str(dataset),
+        },
+        check=True,
+    )
+    arguments = result.stdout.splitlines()
+    assert arguments[arguments.index("--pre-padding") + 1] == "73"
+    assert arguments[arguments.index("--post-padding") + 1] == "91"
+
+
+def test_reference_test_padding_defaults_match_training_contract(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.lance"
+    dataset.mkdir()
+    fake_python = tmp_path / "python"
+    fake_python.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+    fake_python.chmod(0o755)
+    result = subprocess.run(
+        [str(ROOT / "test.sh"), "0"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "DISPLAY": ":99",
+            "MANORL_PYTHON": str(fake_python),
+            "MANORL_DATASET_PATH": str(dataset),
+        },
+        check=True,
+    )
+    arguments = result.stdout.splitlines()
+    assert arguments[arguments.index("--pre-padding") + 1] == "180"
+    assert arguments[arguments.index("--post-padding") + 1] == "250"

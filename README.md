@@ -302,11 +302,13 @@ CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000900.pt \
   ./inference.sh cube1 01 20 0
 
 # Render the fixed no-checkpoint reference test: cube1/action-01, N20,
-# residual actions disabled, on physical GPU 0.
+# residual actions disabled, on physical GPU 0. Pre/post padding default to
+# the training contract 180/250; optional positional overrides follow the GPU.
 ./test.sh 0
+./test.sh 0 73 91
 ```
 
-`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `MANORL_REFERENCE_FPS=100|120` selects the coupled source/policy clock, defaulting to 120 for new training. `MANORL_WARM_START_CHECKPOINT` and `MANORL_WARM_START_PRIOR_UPDATES` must be supplied together to transfer policy/value/normalizers while resetting optimizer, scheduler, memory, and run progress. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`; it restores both checkpoint clocks when the environment variable is omitted and rejects a conflicting explicit value. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its optional argument selects the physical GPU. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
+`train.sh` arguments are `object`, `num_envs`, and `physical_gpu`; use object `all` for all eligible object/action pairs. `MANORL_REFERENCE_FPS=100|120` selects the coupled source/policy clock, defaulting to 120 for new training. `MANORL_WARM_START_CHECKPOINT` and `MANORL_WARM_START_PRIOR_UPDATES` must be supplied together to transfer policy/value/normalizers while resetting optimizer, scheduler, memory, and run progress. `inference.sh` arguments are `object`, `gesture`, `render_count`, and `physical_gpu`, with the checkpoint supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`; it restores both checkpoint clocks when the environment variable is omitted and rejects a conflicting explicit value. `test.sh` has a fixed cube1/action-01, N20, no-checkpoint contract with residual actions disabled; its positional arguments are `physical_gpu`, `pre_padding`, and `post_padding`, with padding defaults 180 and 250. `MANORL_PRE_PADDING` and `MANORL_POST_PADDING` provide equivalent environment overrides. All three scripts generate their remaining runtime contract from stable defaults. Dataset, update count, W&B, device, and playback overrides remain available through `MANORL_*` environment variables documented in each script.
 
 The trainer also accepts exact multi-object/action selection. Use
 `--pairs cube1:01,cube1:02,cube2:01` for only those pairs, or `--all-pairs` for

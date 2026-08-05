@@ -3,10 +3,12 @@ set -Eeuo pipefail
 
 # Reference-following visual smoke without a policy checkpoint.
 # Fixed contract: cube1/action-01, 20 worlds, residual actions disabled.
-# Usage: ./test.sh [physical_gpu]
+# Usage: ./test.sh [physical_gpu] [pre_padding] [post_padding]
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 GPU=${1:-${MANORL_GPU:-0}}
+PRE_PADDING=${2:-${MANORL_PRE_PADDING:-180}}
+POST_PADDING=${3:-${MANORL_POST_PADDING:-250}}
 if [[ -n ${MANORL_PYTHON:-} ]]; then
   PYTHON=$MANORL_PYTHON
 elif [[ -x $ROOT/.venv/bin/python ]]; then
@@ -30,6 +32,14 @@ if [[ ! -d "$DATASET" ]]; then
 fi
 if [[ ! "$GPU" =~ ^[0-9]+$ ]]; then
   echo "physical_gpu must be a non-negative integer, got: $GPU" >&2
+  exit 2
+fi
+if [[ ! "$PRE_PADDING" =~ ^[0-9]+$ ]]; then
+  echo "pre_padding must be a non-negative integer, got: $PRE_PADDING" >&2
+  exit 2
+fi
+if [[ ! "$POST_PADDING" =~ ^[0-9]+$ ]]; then
+  echo "post_padding must be a non-negative integer, got: $POST_PADDING" >&2
   exit 2
 fi
 if [[ "$REFERENCE_FPS" != "100" && "$REFERENCE_FPS" != "120" ]]; then
@@ -62,6 +72,8 @@ exec "$PYTHON" -m sim.manorl.view_environment \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \
   --reference-fps "$REFERENCE_FPS" \
+  --pre-padding "$PRE_PADDING" \
+  --post-padding "$POST_PADDING" \
   --hand-side right \
   --num-envs 20 \
   --render-env 0 \
