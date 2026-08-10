@@ -166,25 +166,58 @@ def _load_predecoded_batch(
                 control_fps=selection.resolved_control_fps,
             )
         trajectories.append(trajectory)
+    trajectory_package = manifest.get("trajectory_package")
+    if trajectory_package is not None and not isinstance(trajectory_package, dict):
+        raise ValueError("predecoded manifest trajectory_package must be an object")
     return TrajectoryBatch(
         tuple(trajectories),
         resolved_pairs=pairs,
         selection_mode=selection.mode,
         pair_assignment_cycle=selection.pair_assignment_cycle,
+        trajectory_package=trajectory_package,
     )
+
+
+def _manifest_lineage_by_row(
+    predecoded_manifest: Path,
+) -> dict[int, tuple[dict[str, Any], dict[str, Any]]]:
+    """Extract source lineage embedded in a predecoded manifest, keyed by row index."""
+
+    manifest = json.loads(predecoded_manifest.read_text(encoding="utf-8"))
+    records = manifest.get("valid_records", [])
+    if not isinstance(records, list) or not records:
+        raise ValueError("predecoded manifest has no valid_records")
+    lineage: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for record in records:
+        row_index = record.get("row_index")
+        if not isinstance(row_index, int):
+            raise ValueError("predecoded manifest record omits integer row_index")
+        lineage[row_index] = (
+            dict(record.get("source_index") or {}),
+            dict(record.get("trajectory_metadata") or {}),
+        )
+    return lineage
 
 
 def _source_metadata(
     trajectories: TrajectoryBatch,
+    *,
+    lineage_by_row: dict[int, tuple[dict[str, Any], dict[str, Any]]] | None = None,
 ) -> dict[int, tuple[dict[str, Any], dict[str, Any]]]:
     """Read only lightweight lineage columns from the pinned source version."""
 
+    first = trajectories.trajectories[0]
+    indices = sorted({item.identity.row_index for item in trajectories.trajectories})
+    if lineage_by_row is not None:
+        missing = sorted(set(indices) - set(lineage_by_row))
+        if missing:
+            raise RuntimeError(f"predecoded manifest omits lineage for rows: {missing}")
+        return {row_index: lineage_by_row[row_index] for row_index in indices}
+
     import lance
 
-    first = trajectories.trajectories[0]
     path = first.identity.dataset_path
     version = first.identity.dataset_version
-    indices = sorted({item.identity.row_index for item in trajectories.trajectories})
     dataset = lance.dataset(path, version=version)
     rows = dataset.take(indices, columns=["index", "trajectory_metadata"]).to_pylist()
     if len(rows) != len(indices):
@@ -272,6 +305,7 @@ def _trajectory_subset(
         resolved_pairs=batch.resolved_pairs,
         selection_mode=batch.selection_mode,
         pair_assignment_cycle=batch.pair_assignment_cycle,
+        trajectory_package=batch.trajectory_package,
     )
 
 
@@ -288,6 +322,7 @@ def _run_attempt_batch(
     attempt_numbers: dict[str, int],
     episode_indices: dict[str, int],
     provenance_base: dict[str, Any],
+    object_xy_offset_m: float = 0.0,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str], int, int]:
     """Run one candidate episode for each identity in one attempt round."""
 
@@ -318,6 +353,7 @@ def _run_attempt_batch(
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side="right",
+            object_init_xy_offset_range_m=object_xy_offset_m,
         ),
     )
     stepper = _build_checkpoint_stepper(environment, checkpoint)
@@ -514,6 +550,7 @@ def _export_isolated_repeated_rollouts(
     seed: int,
     episodes_per_identity: int,
     max_attempts_per_identity: int,
+    object_xy_offset_m: float = 0.0,
 ) -> dict[str, Any]:
     """Run each attempt round in a fresh process and append accepted rows."""
 
@@ -618,6 +655,8 @@ def _export_isolated_repeated_rollouts(
             command.extend(["--pairs", selection.canonical_selector])
         if predecoded_manifest is not None:
             command.extend(["--predecoded-manifest", str(predecoded_manifest)])
+        if object_xy_offset_m > 0.0:
+            command.extend(["--object-xy-offset-m", str(object_xy_offset_m)])
         if allow_deviation_termination:
             command.append("--allow-deviation-termination")
         completed = subprocess.run(command, check=False)
@@ -770,11 +809,19 @@ def export_checkpoint_rollouts(
     max_attempts_per_identity: int = 10,
     output_format: str = SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
     internal_attempt_control: dict[str, Any] | None = None,
+    object_xy_offset_m: float = 0.0,
 ) -> dict[str, Any]:
     """Generate an accepted 1:N checkpoint rollout dataset per raw identity."""
 
     if seed < 0:
         raise ValueError("seed must be non-negative")
+    if (
+        not isinstance(object_xy_offset_m, (int, float))
+        or isinstance(object_xy_offset_m, bool)
+        or not np.isfinite(object_xy_offset_m)
+        or object_xy_offset_m < 0.0
+    ):
+        raise ValueError("object_xy_offset_m must be a finite non-negative float")
     if episodes_per_identity < 1:
         raise ValueError("episodes_per_identity must be positive")
     if max_attempts_per_identity < episodes_per_identity:
@@ -811,6 +858,7 @@ def export_checkpoint_rollouts(
             seed=seed,
             episodes_per_identity=episodes_per_identity,
             max_attempts_per_identity=max_attempts_per_identity,
+            object_xy_offset_m=object_xy_offset_m,
         )
     trajectories = (
         load_assigned_trajectory_batch(selection, num_envs=num_envs)
@@ -842,7 +890,14 @@ def export_checkpoint_rollouts(
         for item in trajectories.trajectories
     ):
         raise ValueError("checkpoint export requires one controlled right 28D hand")
-    metadata_by_row = _source_metadata(trajectories)
+    metadata_by_row = _source_metadata(
+        trajectories,
+        lineage_by_row=(
+            _manifest_lineage_by_row(predecoded_manifest)
+            if predecoded_manifest is not None
+            else None
+        ),
+    )
     checkpoint_sha = file_sha256(checkpoint)
     provenance_base = {
         "checkpoint_path": str(checkpoint.resolve()),
@@ -903,6 +958,7 @@ def export_checkpoint_rollouts(
             attempt_numbers=attempt_numbers,
             episode_indices=episode_indices,
             provenance_base=provenance_base,
+            object_xy_offset_m=object_xy_offset_m,
         )
         observation_dim = observed_dim
         action_dim = acted_dim
@@ -1102,6 +1158,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="retain the training 0.10 m deviation terminal instead of requiring full source-length episodes",
     )
+    parser.add_argument(
+        "--object-xy-offset-m",
+        type=float,
+        default=0.0,
+        help="per-attempt uniform XY object initial-position offset range in meters (default: 0)",
+    )
     args = parser.parse_args(argv)
     if args.num_envs < 1:
         parser.error("num-envs must be positive")
@@ -1115,6 +1177,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("episodes-per-identity must be positive")
     if args.max_attempts_per_identity < args.episodes_per_identity:
         parser.error("max-attempts-per-identity must be at least episodes-per-identity")
+    if (
+        not np.isfinite(args.object_xy_offset_m) or args.object_xy_offset_m < 0.0
+    ):
+        parser.error("object-xy-offset-m must be a finite non-negative float")
     return args
 
 
@@ -1148,6 +1214,7 @@ def main(argv: list[str] | None = None) -> int:
         episodes_per_identity=args.episodes_per_identity,
         max_attempts_per_identity=args.max_attempts_per_identity,
         internal_attempt_control=internal_control,
+        object_xy_offset_m=args.object_xy_offset_m,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0

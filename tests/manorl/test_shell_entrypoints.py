@@ -150,3 +150,36 @@ def test_reference_test_padding_defaults_match_training_contract(tmp_path: Path)
     arguments = result.stdout.splitlines()
     assert arguments[arguments.index("--pre-padding") + 1] == "180"
     assert arguments[arguments.index("--post-padding") + 1] == "250"
+
+
+def test_synthesis_rejects_negative_xy_offset(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint-000001.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    Path(f"{checkpoint}.json").write_text("{}", encoding="utf-8")
+    result = subprocess.run(
+        [str(ROOT / "synthesize.sh"), "cube2", "02", "1", "0"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CHECKPOINT": str(checkpoint),
+            "MANORL_PYTHON": "/bin/true",
+            "MANORL_SYNTH_OBJECT_XY_OFFSET_M": "-0.02",
+        },
+    )
+    assert result.returncode == 2
+    assert "MANORL_SYNTH_OBJECT_XY_OFFSET_M" in result.stderr
+
+
+def test_synthesis_exporter_accepts_xy_offset_arg() -> None:
+    result = subprocess.run(
+        [
+            "python",
+            str(ROOT / "tools" / "export_manorl_synthetic_lance.py"),
+            "--help",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0
+    assert "--object-xy-offset-m" in result.stdout

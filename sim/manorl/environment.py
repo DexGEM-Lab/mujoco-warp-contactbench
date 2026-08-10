@@ -220,6 +220,12 @@ class EnvironmentConfig:
     # restricted to a single unified model until multi-route ownership exists.
     warp_persistent_ccd_workspace: bool = False
     hand_side: str = "auto"
+    # Data-augmentation option used by the synthetic exporter: sample a per-env
+    # uniform XY offset in [-range, +range] meters and apply it to the object's
+    # INITIAL position only. Reference hand targets and target object poses stay
+    # untouched, so the policy must use residual correction to bring the object
+    # back onto the reference path. Zero keeps the current exact-start behavior.
+    object_init_xy_offset_range_m: float = 0.0
 
     def __post_init__(self) -> None:
         if self.num_envs < 1:
@@ -328,6 +334,13 @@ class EnvironmentConfig:
             raise ValueError("warp_persistent_ccd_workspace requires warp_ccd_contacts_per_world")
         if self.warp_persistent_ccd_workspace and not self.unified_object_batch:
             raise ValueError("warp_persistent_ccd_workspace requires unified_object_batch=True")
+        if (
+            not isinstance(self.object_init_xy_offset_range_m, (int, float))
+            or isinstance(self.object_init_xy_offset_range_m, bool)
+            or not np.isfinite(self.object_init_xy_offset_range_m)
+            or self.object_init_xy_offset_range_m < 0.0
+        ):
+            raise ValueError("object_init_xy_offset_range_m must be a finite non-negative float")
         normalize_hand_side(self.hand_side)
 
     @property
@@ -2364,6 +2377,16 @@ class MujocoManoEnvironment:
 
     def _initial_qpos(self) -> NDArray[np.float64]:
         qpos = np.zeros((self.config.num_envs, self.model.nq), dtype=np.float64)
+        range_m = self.config.object_init_xy_offset_range_m
+        if range_m > 0.0:
+            # One sampled XY offset per environment, fixed for the episode's
+            # initial placement. Reference hand targets and target object poses
+            # are intentionally left at their original world positions.
+            self._object_init_xy_offsets = np.random.uniform(
+                -range_m, range_m, size=(self.config.num_envs, 2)
+            )
+        else:
+            self._object_init_xy_offsets = np.zeros((self.config.num_envs, 2), dtype=np.float64)
         for side_index, side in enumerate(self.model_hand_sides):
             start = side_index * self.hand_dof
             qpos[:, start : start + self.hand_dof] = self.reference_q_by_side[side][:, 0]
@@ -2380,14 +2403,25 @@ class MujocoManoEnvironment:
             active_addresses = self._unified_qpos_addresses[self._unified_object_indices]
             for env_id, address in enumerate(active_addresses):
                 qpos[env_id, address : address + 3] = self.reference_object_pos[env_id, 0]
+                qpos[env_id, address : address + 2] += self._object_init_xy_offsets[env_id]
                 qpos[env_id, address + 3 : address + 7] = xyzw_to_wxyz(
                     self.reference_object_quat_xyzw[env_id, 0]
                 )
             return qpos
         address = self.producer.object_qpos_address
         qpos[:, address : address + 3] = self.reference_object_pos[:, 0]
+        qpos[:, address : address + 2] += self._object_init_xy_offsets
         qpos[:, address + 3 : address + 7] = xyzw_to_wxyz(self.reference_object_quat_xyzw[:, 0])
         return qpos
+
+    @property
+    def object_init_xy_offsets(self) -> NDArray[np.float64]:
+        """Per-environment sampled initial XY offsets (meters), for provenance."""
+
+        values = getattr(self, "_object_init_xy_offsets", None)
+        if values is None:
+            return np.zeros((self.config.num_envs, 2), dtype=np.float64)
+        return np.asarray(values, dtype=np.float64).copy()
 
     def _initial_host_data(self, env_id: int) -> Any:
         data = self.mujoco.MjData(self.model)
