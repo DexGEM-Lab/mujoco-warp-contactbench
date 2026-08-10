@@ -1222,3 +1222,82 @@ def test_dynamic_template_variant_preserves_raw_surface_coordinates(trajectory) 
     env.reset(np.asarray([0], dtype=np.int64))
     assert env._dynamic_templates is not None
     assert not np.array_equal(first, env._dynamic_templates)
+
+
+
+def _synthetic_xy_offset_trajectory() -> "ReferenceTrajectory":
+    """Lance-free trajectory for the initial-placement perturbation tests."""
+
+    from sim.manorl.contracts import REFERENCE_FRAME_COUNT, SOURCE_SLICE, TRAJECTORY_IDENTITY
+    from sim.manorl.trajectory import ReferenceTrajectory
+
+    frames = REFERENCE_FRAME_COUNT
+    q_ref = np.zeros((frames, 26), dtype=np.float64)
+    q_ref[1:, :3] = [0.01, -0.005, 0.008]
+    q_ref[1:, 3:6] = [0.05, -0.04, 0.03]
+    object_pos = np.repeat([[0.0, 0.0, 0.1]], frames, axis=0)
+    object_quat = np.repeat([[0.0, 0.0, 0.0, 1.0]], frames, axis=0)
+    source_indices = np.arange(*SOURCE_SLICE, dtype=np.int64)
+    timestamps = np.arange(frames, dtype=np.float64) * 0.01
+    return ReferenceTrajectory(
+        identity=TRAJECTORY_IDENTITY,
+        dataset_version=TRAJECTORY_IDENTITY.dataset_version,
+        source_indices=source_indices,
+        timestamps=timestamps,
+        q_ref=q_ref,
+        object_pos_raw=object_pos.copy(),
+        object_pos=object_pos,
+        object_quat_xyzw=object_quat,
+        object_z_shift=0.0,
+    )
+
+def test_object_init_xy_offset_config_validation() -> None:
+    with pytest.raises(ValueError, match="object_init_xy_offset_range_m"):
+        EnvironmentConfig(object_init_xy_offset_range_m=-0.01)
+    with pytest.raises(ValueError, match="object_init_xy_offset_range_m"):
+        EnvironmentConfig(object_init_xy_offset_range_m=float("nan"))
+    config = EnvironmentConfig(object_init_xy_offset_range_m=0.02)
+    assert config.object_init_xy_offset_range_m == 0.02
+
+
+def test_object_init_xy_offset_zero_by_default() -> None:
+    env = MujocoManoEnvironment(
+        _synthetic_xy_offset_trajectory(),
+        EnvironmentConfig(num_envs=2, max_deviation_distance=1_000_000.0),
+    )
+    assert env.object_init_xy_offsets.shape == (2, 2)
+    assert np.all(env.object_init_xy_offsets == 0.0)
+    address = env.producer.object_qpos_address
+    np.testing.assert_allclose(
+        env._reset_qpos[:, address : address + 2],
+        env.reference_object_pos[:, 0, :2],
+        atol=1e-12,
+    )
+
+
+def test_object_init_xy_offset_applied_to_initial_qpos_only() -> None:
+    np.random.seed(20260810)
+    env = MujocoManoEnvironment(
+        _synthetic_xy_offset_trajectory(),
+        EnvironmentConfig(
+            num_envs=2,
+            object_init_xy_offset_range_m=0.02,
+            max_deviation_distance=1_000_000.0,
+        ),
+    )
+    offsets = env.object_init_xy_offsets
+    assert offsets.shape == (2, 2)
+    assert np.all(np.abs(offsets) <= 0.02 + 1e-9)
+    assert np.any(offsets != 0.0)
+    address = env.producer.object_qpos_address
+    reference_start = env.reference_object_pos[:, 0].copy()
+    expected = reference_start.copy()
+    expected[:, :2] += offsets
+    np.testing.assert_allclose(
+        env._reset_qpos[:, address : address + 3], expected, atol=1e-9
+    )
+    # Only the initial placement moves; the reference/target object poses stay
+    # at the original world positions (the policy must compensate with residual).
+    np.testing.assert_allclose(
+        env.reference_object_pos[:, 0, :2], reference_start[:, :2], atol=0
+    )

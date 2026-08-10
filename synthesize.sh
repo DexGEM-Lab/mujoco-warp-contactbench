@@ -21,6 +21,7 @@ PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
 SEED=${MANORL_SYNTH_SEED:-42}
 EPISODES_PER_IDENTITY=${MANORL_SYNTH_EPISODES_PER_IDENTITY:-5}
 MAX_ATTEMPTS_PER_IDENTITY=${MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY:-10}
+OBJECT_XY_OFFSET_M=${MANORL_SYNTH_OBJECT_XY_OFFSET_M:-0.0}
 
 if [[ -z "$CHECKPOINT" ]]; then
   echo "Set CHECKPOINT or MANORL_CHECKPOINT to a native ManoRL checkpoint." >&2
@@ -64,6 +65,10 @@ if [[ "$OUTPUT_FORMAT" != "full" && "$OUTPUT_FORMAT" != "compact-replay-visual" 
   echo "MANORL_SYNTH_OUTPUT_FORMAT must be full or compact-replay-visual, got: $OUTPUT_FORMAT" >&2
   exit 2
 fi
+if ! awk "BEGIN{exit !(\"$OBJECT_XY_OFFSET_M\" >= 0)}"; then
+  echo "MANORL_SYNTH_OBJECT_XY_OFFSET_M must be a non-negative float, got: $OBJECT_XY_OFFSET_M" >&2
+  exit 2
+fi
 
 export PYTHONPATH=$ROOT
 export CUDA_VISIBLE_DEVICES=$GPU
@@ -76,6 +81,9 @@ fi
 if [[ -n "$PREDECODED_MANIFEST" ]]; then
   PREDECODED_MANIFEST=$(realpath -e "$PREDECODED_MANIFEST")
   EXTRA_ARGS+=(--predecoded-manifest "$PREDECODED_MANIFEST")
+fi
+if awk "BEGIN{exit !(\"$OBJECT_XY_OFFSET_M\" > 0)}"; then
+  EXTRA_ARGS+=(--object-xy-offset-m "$OBJECT_XY_OFFSET_M")
 fi
 
 exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \
