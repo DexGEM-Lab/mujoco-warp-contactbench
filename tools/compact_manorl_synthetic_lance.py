@@ -83,6 +83,9 @@ def compact_dataset(
             "timestamp",
             "hands",
             "objects",
+            "contact",
+            "reference",
+            "rollout",
             "provenance",
         ],
         batch_size=batch_size,
@@ -140,7 +143,10 @@ def compact_dataset(
     if (
         int(compact.count_rows()) != source_rows
         or compact.schema.metadata.get(b"schema_version")
-        != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT.encode()
+        not in (
+            SYNTHETIC_LANCE_COMPACT_V1_CONTRACT.encode(),
+            SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT.encode(),
+        )
         or compact.schema.metadata.get(b"source_contract") != source_contract.encode()
     ):
         raise RuntimeError("compact projection row count or schema contract failed")
@@ -168,7 +174,7 @@ def compact_dataset(
     metadata_partial.replace(metadata_sidecar)
     building.replace(output_path)
     manifest = {
-        "schema": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+        "schema": SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT,
         "output_format": "compact-replay-visual",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input": {
@@ -181,7 +187,7 @@ def compact_dataset(
             "dataset": str(output_path.resolve()),
             "version": 1,
             "rows": source_rows,
-            "schema": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+            "schema": SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT,
         },
         "projection": {
             "kept_top_level": [
@@ -190,9 +196,13 @@ def compact_dataset(
                 "timestamp",
                 "hands",
                 "objects",
+                "contact",
+                "reference",
+                "command_reference_index",
+                "command_source_frame_index",
                 "provenance",
             ],
-            "dropped_top_level": ["contact", "reference", "rollout"],
+            "dropped_top_level": ["rollout"],
             "checkpoint_metadata_sidecar": str(metadata_sidecar.resolve()),
             "checkpoint_metadata_sha256": sorted(metadata_by_hash),
         },

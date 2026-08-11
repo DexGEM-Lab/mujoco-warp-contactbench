@@ -11,7 +11,7 @@ import pytest
 
 from sim.manorl.target_replay import (
     LANCE_TARGET_REPLAY_COLUMNS,
-    TARGET_REPLAY_COMPACT_ROW_CONTRACT,
+    TARGET_REPLAY_COMPACT_ROW_CONTRACTS,
     TARGET_REPLAY_ROW_CONTRACT,
     TARGET_REPLAY_V23_ROW_CONTRACT,
     TargetDofReplay,
@@ -124,7 +124,7 @@ def test_direct_row_preserves_generated_and_source_lineage() -> None:
 def test_compact_row_uses_direct_warp_ccd_provenance() -> None:
     row = _row()
     provenance = row["provenance"]
-    provenance["contract"] = TARGET_REPLAY_COMPACT_ROW_CONTRACT
+    provenance["contract"] = next(iter(TARGET_REPLAY_COMPACT_ROW_CONTRACTS))
     provenance["source_contract"] = TARGET_REPLAY_V23_ROW_CONTRACT
     provenance.pop("checkpoint_metadata_json")
     provenance["reference_fps"] = None
@@ -139,7 +139,7 @@ def test_compact_row_uses_direct_warp_ccd_provenance() -> None:
 
     source = _source(row)
 
-    assert source.row_contract == TARGET_REPLAY_COMPACT_ROW_CONTRACT
+    assert source.row_contract in TARGET_REPLAY_COMPACT_ROW_CONTRACTS
     assert source.warp_ccd_iterations == 16
     assert source.warp_ccd_contacts_per_world == 16
     assert source.source_contract == TARGET_REPLAY_V23_ROW_CONTRACT

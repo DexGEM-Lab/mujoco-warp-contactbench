@@ -18,7 +18,9 @@ from sim.manorl.contracts import simulation_clock
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
+    SYNTHETIC_LANCE_COMPACT_CONTRACTS,
     SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+    SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT,
     SYNTHETIC_LANCE_CONTRACT,
     SYNTHETIC_LANCE_SOURCE_CONTRACTS,
     SYNTHETIC_LANCE_V22_CONTRACT,
@@ -406,7 +408,7 @@ def validate_compact_dataset(
 
     dataset = lance.dataset(str(path))
     metadata = _schema_metadata(dataset)
-    if metadata.get("schema_version") != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+    if metadata.get("schema_version") not in SYNTHETIC_LANCE_COMPACT_CONTRACTS:
         raise ValueError(
             "dataset schema_version is not the compact replay/visual contract"
         )
@@ -539,7 +541,7 @@ def validate_compact_dataset(
             raise ValueError("compact manifest checkpoint metadata hash mismatch")
         metadata_source = str(manifest_path)
     summary = {
-        "schema": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+        "schema": str(metadata.get("schema_version")),
         "source_contract": source_contract,
         "schema_metadata": metadata,
         "rows": row_count,
@@ -595,7 +597,7 @@ def validate_dataset(
     dataset = lance.dataset(str(path))
     metadata = _schema_metadata(dataset)
     schema_contract = metadata.get("schema_version")
-    if schema_contract == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+    if schema_contract in SYNTHETIC_LANCE_COMPACT_CONTRACTS:
         return validate_compact_dataset(path, output, max_attempts=max_attempts)
     if schema_contract not in (SYNTHETIC_LANCE_V22_CONTRACT, SYNTHETIC_LANCE_CONTRACT):
         raise ValueError("dataset schema_version is not a supported synthetic contract")
@@ -832,7 +834,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         row_result = (
             validate_compact_row(args.dataset, args.row_index)
-            if schema == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+            if schema in SYNTHETIC_LANCE_COMPACT_CONTRACTS
             else validate_row(args.dataset, args.row_index)
         )
         print(json.dumps(row_result, sort_keys=True))

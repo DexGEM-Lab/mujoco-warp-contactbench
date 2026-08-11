@@ -18,6 +18,7 @@ from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
     MANO_GLOBAL_FRAME_CONTRACT,
     SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+    SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT,
     SYNTHETIC_LANCE_CONTRACT,
     build_compact_row,
     build_compact_schema,
@@ -818,8 +819,41 @@ def _compact_full_row(*, data_fps: int = 200) -> dict[str, object]:
     }
 
 
-def test_compact_projection_preserves_visuals_and_clock(tmp_path) -> None:
+def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_path) -> None:
     full_row = _compact_full_row(data_fps=120)
+    full_row["contact"] = [
+        [
+            {
+                "hand_name": "right",
+                "joint_name": "thumb_ip",
+                "object_name": "cube2",
+                "total_force_world": [0.5, 1.0, -1.5],
+                "total_force_wrist": [0.1, 0.2, -0.3],
+                "total_force_joint": [0.2, 0.3, -0.4],
+                "total_force_object": [0.3, 0.4, -0.5],
+                "contact_pairs": [
+                    {
+                        "force_normal": [0.5, 1.0, -1.5],
+                        "pos_world": [0.0, 0.0, 0.1],
+                        "pos_wrist": [0.0, 0.0, 0.0],
+                        "pos_joint": [0.0, 0.0, 0.0],
+                        "pos_object": [0.0, 0.0, 0.0],
+                    }
+                ],
+            }
+        ],
+        [],
+    ]
+    full_row["reference"] = {
+        "source_frame_index": [0, 1],
+        "hand_urdf_dof": [[0.0] * 28] * 2,
+        "object_pos": [[0.0] * 3] * 2,
+        "object_rot_aa": [[0.0] * 3] * 2,
+    }
+    full_row["rollout"] = {
+        "command_reference_index": [0, 1],
+        "command_source_frame_index": [440, 441],
+    }
     compact = build_compact_row(
         full_row,
         checkpoint_metadata={"runtime_config": {"warp_ccd": {"ccd_iterations": 16}}},
@@ -832,12 +866,20 @@ def test_compact_projection_preserves_visuals_and_clock(tmp_path) -> None:
         "timestamp",
         "hands",
         "objects",
+        "contact",
+        "reference",
+        "command_reference_index",
+        "command_source_frame_index",
         "provenance",
     }
-    assert compact["provenance"]["contract"] == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+    assert compact["provenance"]["contract"] == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
     assert compact["provenance"]["source_contract"] == SYNTHETIC_LANCE_CONTRACT
     assert compact["provenance"]["physics_substeps_per_control"] == 4
     assert np.asarray(compact["hands"][0]["mano_joint_pos"]).shape == (2, 21, 3)
+    assert compact["contact"][0][0]["joint_name"] == "thumb_ip"
+    assert compact["contact"][0][0]["total_force_world"] == [0.5, 1.0, -1.5]
+    assert compact["reference"]["source_frame_index"] == [0, 1]
+    assert compact["command_source_frame_index"] == [440, 441]
     output = tmp_path / "compact_120.lance"
     write_compact_lance([compact], output=output)
     import lance
@@ -845,6 +887,10 @@ def test_compact_projection_preserves_visuals_and_clock(tmp_path) -> None:
     dataset = lance.dataset(str(output))
     assert (
         dataset.schema.metadata[b"source_contract"] == SYNTHETIC_LANCE_CONTRACT.encode()
+    )
+    assert (
+        dataset.schema.metadata[b"schema_version"]
+        == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT.encode()
     )
     decoded = dataset.take([0]).to_pylist()[0]
     source = target_replay_source_from_row(

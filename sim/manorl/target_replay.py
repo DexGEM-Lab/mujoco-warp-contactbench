@@ -37,12 +37,17 @@ from sim.manorl.trajectory import (
 TARGET_REPLAY_V22_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
 TARGET_REPLAY_V23_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_3"
 TARGET_REPLAY_ROW_CONTRACT = TARGET_REPLAY_V22_ROW_CONTRACT
-TARGET_REPLAY_COMPACT_ROW_CONTRACT = "synthetic_mano_target_replay_visual_v1"
+TARGET_REPLAY_COMPACT_ROW_CONTRACTS = frozenset(
+    (
+        "synthetic_mano_target_replay_visual_v1",
+        "synthetic_mano_target_replay_visual_v2_contact",
+    )
+)
 TARGET_REPLAY_FULL_ROW_CONTRACTS = frozenset(
     (TARGET_REPLAY_V22_ROW_CONTRACT, TARGET_REPLAY_V23_ROW_CONTRACT)
 )
 TARGET_REPLAY_ROW_CONTRACTS = frozenset(
-    (*TARGET_REPLAY_FULL_ROW_CONTRACTS, TARGET_REPLAY_COMPACT_ROW_CONTRACT)
+    (*TARGET_REPLAY_FULL_ROW_CONTRACTS, *TARGET_REPLAY_COMPACT_ROW_CONTRACTS)
 )
 LANCE_TARGET_REPLAY_COLUMNS = (
     "index",
@@ -120,7 +125,7 @@ def _row_clock(
         ) from exc
     source_contract = (
         _required_string(provenance, "source_contract", context="provenance")
-        if contract == TARGET_REPLAY_COMPACT_ROW_CONTRACT
+        if contract in TARGET_REPLAY_COMPACT_ROW_CONTRACTS
         else contract
     )
     if source_contract not in TARGET_REPLAY_FULL_ROW_CONTRACTS:
@@ -129,7 +134,7 @@ def _row_clock(
         )
     explicit = contract in (
         TARGET_REPLAY_V23_ROW_CONTRACT,
-        TARGET_REPLAY_COMPACT_ROW_CONTRACT,
+        *TARGET_REPLAY_COMPACT_ROW_CONTRACTS,
     )
     reference_fps = provenance.get("reference_fps")
     if source_contract == TARGET_REPLAY_V22_ROW_CONTRACT:
