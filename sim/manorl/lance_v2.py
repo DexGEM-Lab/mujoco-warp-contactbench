@@ -33,6 +33,13 @@ SYNTHETIC_LANCE_SOURCE_CONTRACTS = (
     SYNTHETIC_LANCE_V23_CONTRACT,
 )
 SYNTHETIC_LANCE_COMPACT_V1_CONTRACT = "synthetic_mano_target_replay_visual_v1"
+SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT = (
+    "synthetic_mano_target_replay_visual_v2_contact"
+)
+SYNTHETIC_LANCE_COMPACT_CONTRACTS = (
+    SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+    SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT,
+)
 SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL = "full"
 SYNTHETIC_LANCE_OUTPUT_FORMAT_COMPACT = "compact-replay-visual"
 SYNTHETIC_LANCE_OUTPUT_FORMATS = (
@@ -258,6 +265,53 @@ def corrected_contact_frames(
     return output
 
 
+def _contact_pair_schema(pa: Any) -> Any:
+    """Arrow struct for one contact pair within a hand-object contact entry."""
+
+    fixed = lambda size: pa.list_(pa.float32(), size)
+    return pa.struct(
+        [
+            ("force_normal", fixed(3)),
+            ("pos_world", fixed(3)),
+            ("pos_wrist", fixed(3)),
+            ("pos_joint", fixed(3)),
+            ("pos_object", fixed(3)),
+        ]
+    )
+
+
+def _contact_entry_schema(pa: Any) -> Any:
+    """Arrow struct for one hand-object contact entry (per keypoint per frame)."""
+
+    fixed = lambda size: pa.list_(pa.float32(), size)
+    return pa.struct(
+        [
+            ("hand_name", pa.string()),
+            ("joint_name", pa.string()),
+            ("object_name", pa.string()),
+            ("total_force_world", fixed(3)),
+            ("total_force_wrist", fixed(3)),
+            ("total_force_joint", fixed(3)),
+            ("total_force_object", fixed(3)),
+            ("contact_pairs", pa.list_(_contact_pair_schema(pa))),
+        ]
+    )
+
+
+def _reference_schema(pa: Any) -> Any:
+    """Arrow struct for the source reference trajectory columns."""
+
+    fixed = lambda size: pa.list_(pa.float32(), size)
+    return pa.struct(
+        [
+            ("source_frame_index", pa.list_(pa.int64())),
+            ("hand_urdf_dof", pa.list_(fixed(JOINT_DOF))),
+            ("object_pos", pa.list_(fixed(3))),
+            ("object_rot_aa", pa.list_(fixed(3))),
+        ]
+    )
+
+
 def build_v2_schema(
     *,
     observation_dim: int,
@@ -277,27 +331,8 @@ def build_v2_schema(
     if control_fps in (100, 120) and reference_fps != control_fps:
         raise ValueError("public synthetic clocks require reference_fps == control_fps")
     fixed = lambda size: pa.list_(pa.float32(), size)
-    contact_pair = pa.struct(
-        [
-            ("force_normal", fixed(3)),
-            ("pos_world", fixed(3)),
-            ("pos_wrist", fixed(3)),
-            ("pos_joint", fixed(3)),
-            ("pos_object", fixed(3)),
-        ]
-    )
-    contact_entry = pa.struct(
-        [
-            ("hand_name", pa.string()),
-            ("joint_name", pa.string()),
-            ("object_name", pa.string()),
-            ("total_force_world", fixed(3)),
-            ("total_force_wrist", fixed(3)),
-            ("total_force_joint", fixed(3)),
-            ("total_force_object", fixed(3)),
-            ("contact_pairs", pa.list_(contact_pair)),
-        ]
-    )
+    contact_pair = _contact_pair_schema(pa)
+    contact_entry = _contact_entry_schema(pa)
     hand = pa.struct(
         [
             ("hand_name", pa.string()),
@@ -514,7 +549,7 @@ def build_compact_schema(
     )
     metadata = {
         b"schema": b"synthetic",
-        b"schema_version": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT.encode(),
+        b"schema_version": SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT.encode(),
         b"source_contract": source_contract.encode(),
         b"mano_global_frame_contract": MANO_GLOBAL_FRAME_CONTRACT.encode(),
         b"hand_slot_order": b"right,left",
@@ -529,7 +564,7 @@ def build_compact_schema(
         b"physics_substeps_per_control": str(
             clock.physics_substeps_per_control
         ).encode(),
-        b"compact_projection": b"replay_visual_v1",
+        b"compact_projection": b"replay_visual_v2_contact",
         b"full_checkpoint_metadata": b"external_manifest_only",
     }
     return pa.schema(
@@ -575,6 +610,10 @@ def build_compact_schema(
                     )
                 ),
             ),
+            ("contact", pa.list_(pa.list_(_contact_entry_schema(pa)))),
+            ("reference", _reference_schema(pa)),
+            ("command_reference_index", pa.list_(pa.int64())),
+            ("command_source_frame_index", pa.list_(pa.int64())),
             (
                 "provenance",
                 pa.struct(
@@ -661,7 +700,7 @@ def build_compact_row(
             }
         )
     compact_provenance = {
-        "contract": SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+        "contract": SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT,
         "source_contract": source_contract,
         "force_contract": provenance.get("force_contract"),
         "reference_fps": reference_fps,
@@ -692,6 +731,14 @@ def build_compact_row(
         "timestamp": list(full_row["timestamp"]),
         "hands": hands,
         "objects": list(full_row["objects"]),
+        "contact": list(full_row.get("contact") or []),
+        "reference": dict(full_row.get("reference") or {}),
+        "command_reference_index": list(
+            (full_row.get("rollout") or {}).get("command_reference_index") or []
+        ),
+        "command_source_frame_index": list(
+            (full_row.get("rollout") or {}).get("command_source_frame_index") or []
+        ),
         "provenance": compact_provenance,
     }
 
@@ -700,7 +747,7 @@ def _compact_row_clock(
     row: Mapping[str, Any]
 ) -> tuple[str, SimulationClock, int | None]:
     provenance = dict(row.get("provenance") or {})
-    if provenance.get("contract") != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+    if provenance.get("contract") not in SYNTHETIC_LANCE_COMPACT_CONTRACTS:
         raise ValueError("compact writer requires compact replay/visual rows")
     metadata = dict(row.get("trajectory_metadata") or {})
     source_contract = str(provenance.get("source_contract"))
