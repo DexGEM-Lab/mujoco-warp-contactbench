@@ -804,7 +804,7 @@ def write_compact_lance_stream(
         expected_reference = "none" if reference_fps is None else str(reference_fps)
         if (
             existing_metadata.get("schema_version")
-            != SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+            != SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
             or existing_metadata.get("source_contract") != source_contract
             or int(existing_metadata.get("control_fps", -1)) != clock.policy_fps
             or existing_metadata.get("reference_fps") != expected_reference
