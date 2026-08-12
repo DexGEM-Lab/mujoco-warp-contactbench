@@ -46,6 +46,7 @@ from sim.manorl.trajectory import (
     load_cube1_action_01_batch10,
     load_generated_cube1_row_507,
     load_reference_trajectory,
+    parse_trajectory_selector,
 )
 
 if TYPE_CHECKING:
@@ -855,6 +856,7 @@ def view_environment(
     tile_envs: int,
     object_type: str | None,
     gesture: str | None,
+    pairs: str | None = None,
     rerun_output: Path | None,
     use_residual: bool,
     checkpoint: Path | None,
@@ -905,7 +907,11 @@ def view_environment(
 
     if (object_type is None) != (gesture is None):
         raise ValueError("--object and --gesture must be supplied together")
-    uses_dataset_selection = dataset_path is not None or object_type is not None
+    if pairs is not None and (object_type is not None or gesture is not None):
+        raise ValueError("--pairs is mutually exclusive with --object/--gesture")
+    uses_dataset_selection = (
+        dataset_path is not None or object_type is not None or pairs is not None
+    )
     resolved_reference_fps = _resolve_reference_fps(
         reference_fps,
         checkpoint_options=checkpoint_options,
@@ -922,23 +928,46 @@ def view_environment(
         )
     _require_graphical_session()
     if uses_dataset_selection:
-        selected_object = object_type or "banana"
-        selected_gesture = gesture or "01"
-        trajectory = load_assigned_trajectory_batch(
-            TrajectorySelection(
-                object_type=selected_object,
-                gesture=selected_gesture,
-                dataset_path=(dataset_path if dataset_path is not None else TrajectorySelection().dataset_path),
-                expected_dataset_version=dataset_version,
-                pre_padding=resolved_pre_padding,
-                post_padding=resolved_post_padding,
-                hand_side=hand_side,
-                reference_fps=resolved_reference_fps,
-                control_fps=resolved_control_fps,
-            ),
-            num_envs=num_envs,
-        )
-        trajectory_label = f"object={selected_object}, gesture={selected_gesture}, hand_side={hand_side}"
+        if pairs is not None:
+            selected_pairs = list(parse_trajectory_selector(pairs))
+            if not selected_pairs:
+                raise ValueError("--pairs must name at least one object:action pair")
+            trajectory = load_assigned_trajectory_batch(
+                TrajectorySelection(
+                    selector=",".join(pair.canonical for pair in selected_pairs),
+                    dataset_path=(
+                        dataset_path
+                        if dataset_path is not None
+                        else TrajectorySelection().dataset_path
+                    ),
+                    expected_dataset_version=dataset_version,
+                    pre_padding=resolved_pre_padding,
+                    post_padding=resolved_post_padding,
+                    hand_side=hand_side,
+                    reference_fps=resolved_reference_fps,
+                    control_fps=resolved_control_fps,
+                ),
+                num_envs=num_envs,
+            )
+            trajectory_label = "pairs=" + ",".join(pair.canonical for pair in selected_pairs)
+        else:
+            selected_object = object_type or "banana"
+            selected_gesture = gesture or "01"
+            trajectory = load_assigned_trajectory_batch(
+                TrajectorySelection(
+                    object_type=selected_object,
+                    gesture=selected_gesture,
+                    dataset_path=(dataset_path if dataset_path is not None else TrajectorySelection().dataset_path),
+                    expected_dataset_version=dataset_version,
+                    pre_padding=resolved_pre_padding,
+                    post_padding=resolved_post_padding,
+                    hand_side=hand_side,
+                    reference_fps=resolved_reference_fps,
+                    control_fps=resolved_control_fps,
+                ),
+                num_envs=num_envs,
+            )
+            trajectory_label = f"object={selected_object}, gesture={selected_gesture}, hand_side={hand_side}"
     elif trajectory_name == "accepted":
         trajectory = load_reference_trajectory()
         trajectory_label = trajectory_name
@@ -1041,6 +1070,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--object", dest="object_type", help="Lance object selector; requires --gesture")
     parser.add_argument("--gesture", help="Lance two-digit action selector; requires --object")
+    parser.add_argument(
+        "--pairs",
+        help="comma-separated object:action pairs to tile in one window (alternative to --object/--gesture)",
+    )
     parser.add_argument("--dataset-path", type=Path, help="optional Lance dataset for modern hand-side rows")
     parser.add_argument(
         "--dataset-version",
@@ -1138,6 +1171,7 @@ def main(argv: list[str] | None = None) -> int:
         tile_envs=args.tile_envs,
         object_type=args.object_type,
         gesture=args.gesture,
+        pairs=args.pairs,
         dataset_path=args.dataset_path,
         dataset_version=args.dataset_version,
         reference_fps=args.reference_fps,
