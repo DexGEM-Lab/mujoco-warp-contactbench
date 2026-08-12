@@ -45,7 +45,11 @@ from sim.manorl.environment import (
 )
 from sim.manorl.gymnasium_env import ACTION_DIM, ManoGymnasiumVectorEnv
 from sim.manorl.hand_layout import HandActionLayout
-from sim.manorl.observations import CONTACT_FORCE_THRESHOLD, observation_layout
+from sim.manorl.observations import (
+    CONTACT_FORCE_THRESHOLD,
+    SOURCE_ALIGNED_COMPATIBILITY,
+    observation_layout,
+)
 from sim.manorl.rerun_recorder import ManoRerunRecorder
 from sim.manorl.rewards import (
     PPO_REWARD_CONTRACT_ID,
@@ -209,6 +213,8 @@ class TrainingBudget:
     trajectory_package: str | None = None
     reference_fps: int = DEFAULT_REFERENCE_FPS
     hand_side: str = "auto"
+    pre_padding: int = DEFAULT_PRE_PADDING
+    post_padding: int = DEFAULT_POST_PADDING
     residual_enabled: bool = True
     position_scale: float = 0.003
     max_position_offset: float = 0.03
@@ -616,8 +622,8 @@ def _wandb_config(
             "physics_fps": clock.physics_fps,
             "physics_timestep_seconds": clock.physics_timestep,
             "physics_substeps_per_control": clock.physics_substeps_per_control,
-            "pre_padding": DEFAULT_PRE_PADDING,
-            "post_padding": DEFAULT_POST_PADDING,
+            "pre_padding": budget.pre_padding,
+            "post_padding": budget.post_padding,
             "reference_resampling": REFERENCE_RESAMPLING_ID,
             "observation_contact_threshold_N": CONTACT_FORCE_THRESHOLD,
             "residual_action": {
@@ -1931,6 +1937,11 @@ def _build_evaluation_runtime(
                 num_envs, trajectories.hand_sides
             ),
             reference_fps=budget.reference_fps,
+            compatibility=replace(
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=budget.pre_padding,
+            ),
+            post_padding=budget.post_padding,
             unified_object_batch=budget.unified_object_batch,
             hand_side=budget.hand_side,
         ),
@@ -2127,6 +2138,8 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         hand_side=budget.hand_side,
         reference_fps=budget.reference_fps,
         pair_assignment_cycle=budget.pair_assignment_cycle,
+        pre_padding=budget.pre_padding,
+        post_padding=budget.post_padding,
     )
     # Validate package hashes/ABI and construct the CPU catalog before the
     # first operation that can initialize a CUDA context.
@@ -2171,6 +2184,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             capture_transition_diagnostics=budget.resolved_capture_transition_diagnostics,
             profile_phases=budget.profile_phases,
             reference_fps=budget.reference_fps,
+            compatibility=replace(
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=budget.pre_padding,
+            ),
+            post_padding=budget.post_padding,
             unified_object_batch=budget.unified_object_batch,
             warp_ccd_iterations=budget.warp_ccd_iterations,
             warp_ccd_contacts_per_world=budget.warp_ccd_contacts_per_world,
@@ -2566,6 +2584,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--pre-padding",
+        type=int,
+        default=DEFAULT_PRE_PADDING,
+        help="trajectory frames before movement start (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--post-padding",
+        type=int,
+        default=DEFAULT_POST_PADDING,
+        help="trajectory frames after movement end (default: %(default)s)",
+    )
+    parser.add_argument(
         "--hand-side",
         choices=("auto", "both", "right", "left"),
         default="auto",
@@ -2754,6 +2784,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
+    if args.pre_padding < 0 or args.post_padding < 0:
+        parser.error("pre-padding and post-padding must be non-negative")
     for name, value in (
         ("position-scale", args.position_scale),
         ("max-position-offset", args.max_position_offset),
@@ -2861,6 +2893,8 @@ def main(argv: list[str] | None = None) -> int:
             ),
             reference_fps=args.reference_fps,
             hand_side=args.hand_side,
+            pre_padding=args.pre_padding,
+            post_padding=args.post_padding,
             residual_enabled=args.use_residual,
             position_scale=args.position_scale,
             max_position_offset=args.max_position_offset,
