@@ -146,10 +146,10 @@ def _all_assets_runtime(
     collision_sha256: str,
     rgba: str,
 ) -> ObjectRuntime:
-    urdf_path = ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / f"{object_type}.urdf"
+    urdf_path = ALL_ASSETS_SIM_ROOT / "decomposed" / object_type / f"{object_type}.urdf"
     collision_path = (
         ALL_ASSETS_SIM_ROOT
-        / "for_math_retaregeting"
+        / "decomposed"
         / object_type
         / "coacd"
         / "coacd_convex_piece_0.obj"
@@ -185,35 +185,47 @@ _OBJECT_RUNTIMES = {
         body_name="cube1",
         free_joint_name="cube1_free",
         source_mesh_filename="cube1.obj",
-        urdf_path=ASSET_ROOT / "cube1" / "cube1.urdf",
-        collision_mesh_paths=(OBJECT_MESH,),
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "cube1" / "cube1.urdf",
+        collision_mesh_paths=(
+            ALL_ASSETS_SIM_ROOT / "decomposed" / "cube1" / "coacd" / "coacd_convex_piece_0.obj",
+        ),
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
-        collision_mesh_scales=((0.001, 0.001, 0.001),),
+        collision_mesh_scales=((1.0, 1.0, 1.0),),
         rgba="0.8 0.18 0.16 1",
-        expected_sha256=((ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),),
+        expected_sha256=(
+            (
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "cube1" / "cube1.urdf",
+                "b9685e086c79cb6d5198793fcdd89ec8772f1b5d5a73658d94ce0c574d72e9f8",
+            ),
+            (
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "cube1" / "coacd" / "coacd_convex_piece_0.obj",
+                "edf46dc464fbffd2619ef2f0a0450db44577820af60440fe8e6fefc2eaa1be61",
+            ),
+            (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
+        ),
     ),
     "cuboid1": _all_assets_runtime(
         "cuboid1",
-        urdf_sha256="bf4f6d101acdbac594c2da7c4ea48b577d222738887873a7b8e8cb608fc605db",
+        urdf_sha256="992c0d09852e9f9f2dc8adde5ca68baf65b03a4687d0909055c02e19300d9a64",
         collision_sha256="1d02f428a7c8e0264788dbe3379385002f93bcf38ad19c727850beb099428928",
         rgba="0.72 0.45 0.12 1",
     ),
     "cuboid2": _all_assets_runtime(
         "cuboid2",
-        urdf_sha256="93442dc020074eec170ea4aa322a23c4a3784c69af46befa621b8bb256a6e9d2",
+        urdf_sha256="f756ebca397435f7c7d409d920334b26e548c645f17e1a562927844d5d4f07fb",
         collision_sha256="4ca4388942b10a224c9d5e8fa04da6629e1e07d9379131bc8085f823da03e3a4",
         rgba="0.36 0.62 0.18 1",
     ),
     "cylinder2": _all_assets_runtime(
         "cylinder2",
-        urdf_sha256="98ba6559327367aa17e5611407dad4336a832e08ef276fe7425961408183e5a2",
+        urdf_sha256="4bafbd1bf28335da91d0dc102e37eaa713dd395f007e9effd8c1ee07dd8cab3e",
         collision_sha256="f5e70d139ed1209c643a81ba5313aeec301d630b26b17c4c39d9484b3b50cae0",
         rgba="0.16 0.62 0.58 1",
     ),
     "cylinder7": _all_assets_runtime(
         "cylinder7",
-        urdf_sha256="8ce7485e27852048d84d35f858f0653c242621d3370a425a8d0414c011d9a630",
+        urdf_sha256="66ed65184d4c8fd6f86bd97bd52d46a7f2f204db387b308304c82b75ccf7f7a8",
         collision_sha256="65dc08550f006c7f380a7094b70eb2e1753a735028445e7c23facc8782078d0a",
         rgba="0.75 0.35 0.12 1",
     ),
@@ -369,73 +381,73 @@ _OBJECT_RUNTIMES = {
     ),
     "cube2": _all_assets_runtime(
         "cube2",
-        urdf_sha256="334fb68ecf7eca5a860b72f10b556d37af6045e18cfc2049f9f2490463abdce2",
+        urdf_sha256="cce8f8315c1e37f5166d21ad5971eb96916d6128b493e30731a4da0f61db753c",
         collision_sha256="018616c33d159ca5246da8fdc923579c009b900e56a1997e9e8a34463d069d6f",
         rgba="0.15 0.45 0.85 1",
     ),
     "cylinder1": _all_assets_runtime(
         "cylinder1",
-        urdf_sha256="804894a8406a3a9de2cb377af3927a1cdcd9ddd49e26cce4f9f36940833bd37a",
+        urdf_sha256="9a6c7efe8f69384478c51386b0f8a13d70168d0545beea59e089b184470b2f76",
         collision_sha256="104df8077aa9009571f25d5637a2b8aa36fc78e29479c5155aefe60a5c178509",
         rgba="0.62 0.25 0.55 1",
     ),
     "cylinder3": _all_assets_runtime(
         "cylinder3",
-        urdf_sha256="0ee0d19fe45f11792172db042d66dc1ae6dad2c9ea3c1dd96669a4ba35974630",
+        urdf_sha256="86e118e74169c0f49d016e87f50c775ebaf218b30c6ece93a9acec0ba22030e4",
         collision_sha256="a955748b8cc1d85e7c4ca9a63a6ed334558149994cea1d176f1296e51bdfc3ee",
         rgba="0.75 0.22 0.25 1",
     ),
     "cylinder4": _all_assets_runtime(
         "cylinder4",
-        urdf_sha256="35e83a639fee1dfdb44c7c77a65955665465afc6955a53e7b5a22e15e9d16fe0",
+        urdf_sha256="a905e926f746ec839fa6f6ff4200bef8a190fdf2af8f6249fb4fbef5674a7f89",
         collision_sha256="1700c2f9528711ebff23c0d42a311a8d3f00356802f64339340ea1e6db26bfb4",
         rgba="0.30 0.45 0.78 1",
     ),
     "cylinder5": _all_assets_runtime(
         "cylinder5",
-        urdf_sha256="a026bf1762370f8471e73d20c8f0ad27e4213a654bb19b7d91197c557f0f1478",
+        urdf_sha256="70b73b9c4b126fcd96cf559ab1c30318a3d8794bb52fcdbf5faef4df52b10428",
         collision_sha256="8c0cbbe5ac1fcc5827d0983454db0d47e7adcb12b7c0c53f6565b5977cb234f7",
         rgba="0.72 0.54 0.12 1",
     ),
     "cylinder6": _all_assets_runtime(
         "cylinder6",
-        urdf_sha256="b1105b23619ce7697cddce6d18ec51ed7740e76e5795a63fcf22d2737f8b4d17",
+        urdf_sha256="305b8a47a6cb535c822397d00746aef741d32847a041a3859db316466ef2e067",
         collision_sha256="be1134bdce8bc270ec2b5f64d03c7adb650f8c429555c5d465818ecdd671bec8",
         rgba="0.30 0.68 0.32 1",
     ),
     "sphere1": _all_assets_runtime(
         "sphere1",
-        urdf_sha256="5a6560e0c32d99c580cda2932e6563edc3406473fc8a0f2f780f8664bc23e983",
+        urdf_sha256="d87a7e18cefabd1c3f190306a6f5d1ffacd22c42c12d232148256554b09cdf53",
         collision_sha256="3ed3410d72eb6ee6915d6530f5544921d32eaa47261bfc20b2d3101b14526c8b",
         rgba="0.85 0.30 0.18 1",
     ),
     "sphere2": _all_assets_runtime(
         "sphere2",
-        urdf_sha256="5c934be6a43e7efda8338998aeb8e6dceae1935bfcb74ea5ef2a65aa5a0abf7e",
+        urdf_sha256="776b5691a359c2297122e07ef78126047e2d14cbc4b0c84deeeebc7077fcc234",
         collision_sha256="7ab5563b5883a61b9ed55143b07cf582c0b3ab2fdbaea24340320fc81e112460",
         rgba="0.18 0.58 0.82 1",
     ),
     "sphere3": _all_assets_runtime(
         "sphere3",
-        urdf_sha256="d79e32663a1f065dd4855297e182b745262615329176e7bb314b5de8b75e2e04",
-        collision_sha256="da32bee52e7841bb2e1313ed9752623c351f34e0023d0f7a7a276c5323835601",
+        urdf_sha256="ee47aa1fa826939c221b2f6f5b57c6ddf12b4b68b60c39e0e3bd7e9fee019430",
+        collision_sha256="411696f124754a032265a4ac2610cb1ac5a9933af992b1c864b41d2c40dbc277",
         rgba="0.46 0.68 0.18 1",
     ),
     "cuboid3": _all_assets_runtime(
         "cuboid3",
-        urdf_sha256="abaad82b63c72fae8df11bfec35c0d4462d55f809f503d9477184c3868a58273",
+        urdf_sha256="beab747890abce39b9f0c75c76256b1069c7f6d7deb56021e729f79ad03d497a",
         collision_sha256="6a8e186b9c6be97b0681815ce58a79e7e6b7414a3ecdf5033dc5fec1dc24cc74",
         rgba="0.40 0.70 0.35 1",
     ),
     "iphone": ObjectRuntime(
         object_type="iphone",
-        link_name="iphone17_link",
-        body_name="iphone17",
-        free_joint_name="iphone17_free",
-        source_mesh_filename="iphone17.obj",
-        urdf_path=ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
+        link_name="iphone_link",
+        body_name="iphone",
+        free_joint_name="iphone_free",
+        source_mesh_filename="iphone.obj",
+        urdf_path=ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "iphone.urdf",
         collision_mesh_paths=(
-            ALL_ASSETS_SIM_ROOT / "for_math_retaregeting" / "iphone17" / "coacd" / "coacd_convex_piece_0.obj",
+            ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "coacd" / "coacd_convex_piece_0.obj",
         ),
         grasp_mapping_path=ALL_OBJECT_GRASPS,
         source_mesh_scale=(0.001, 0.001, 0.001),
@@ -444,12 +456,12 @@ _OBJECT_RUNTIMES = {
         geometry_type="box",
         expected_sha256=(
             (
-                ALL_ASSETS_SIM_ROOT / "mano_objects_urdf" / "iphone17.urdf",
-                "b6cf7a4bc57db9b6733a3d13c981366a49836f2d850f921ff8066ead0d95ff5d",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "iphone.urdf",
+                "9821d88124f829d7f3472d2e63ef2bb341c8a9138d0f9a2b7e22af7a1000dbe5",
             ),
             (
-                ALL_ASSETS_SIM_ROOT / "for_math_retaregeting" / "iphone17" / "coacd" / "coacd_convex_piece_0.obj",
-                "1643c316fa319b34af9849c2db6250d6d08f2d47c2b30ebc4ea852b19a72a605",
+                ALL_ASSETS_SIM_ROOT / "decomposed" / "iphone" / "coacd" / "coacd_convex_piece_0.obj",
+                "eb2ae67ef1e7db25cc09ce77aeb1f5b853c79ba220ab7aa07bebb5fa6737299e",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
@@ -477,7 +489,7 @@ _OBJECT_RUNTIMES = {
         expected_sha256=(
             (
                 ALL_ASSETS_SIM_ROOT / "decomposed" / "bottlewithcap" / "bottlewithcap.urdf",
-                "ac23ee51dbd0a03cb0cc84895eeb78c2d7bcc3fd032671c92e36b7bd3396f191",
+                "16021148b55bd6fc4867599e7097fb0a5be0a3fab4df8fbbc6c88e6fe9e9a334",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
@@ -485,7 +497,7 @@ _OBJECT_RUNTIMES = {
                 / "bottlewithcap"
                 / "coacd"
                 / "coacd_convex_piece_0.obj",
-                "bec56e9e7984db51cf91b3d73154dcbf7c58ac20aa53a921da45f641ae3abd85",
+                "a5be7713acb4e41747464ce8c46d78ce563ba8f555c72af8e5cde6d00d694224",
             ),
             (
                 ALL_ASSETS_SIM_ROOT
@@ -493,7 +505,7 @@ _OBJECT_RUNTIMES = {
                 / "bottlewithcap"
                 / "coacd"
                 / "coacd_convex_piece_1.obj",
-                "8575fd39eb2969cdf9c67bc54a2702de77efcc4900a6766afe58e5266b3da424",
+                "6f622664d0de5958ac145c206c0e00448eb4adca99605b73ddb1382e5ef90688",
             ),
             (ALL_OBJECT_GRASPS, ALL_OBJECT_GRASPS_SHA256),
         ),
@@ -1478,11 +1490,9 @@ def _object_body(
         )
     ):
         source_mesh = collision.find("geometry/mesh")
-        expected_filename = (
-            runtime.source_mesh_filename
-            if runtime.collision_geom_count == 1
-            else collision_path.name
-        )
+        # The unified decomposed convention references the coacd piece file
+        # directly (scale 1.0) for every object, single-geom included.
+        expected_filename = collision_path.name
         if (
             source_mesh is None
             or Path(source_mesh.get("filename", "")).name != expected_filename
@@ -1491,11 +1501,7 @@ def _object_body(
                 f"{runtime.object_type} URDF collision {collision_index} must reference "
                 f"{expected_filename}"
             )
-        expected_source_scale = (
-            runtime.source_mesh_scale
-            if runtime.collision_geom_count == 1
-            else collision_scale
-        )
+        expected_source_scale = collision_scale
         mesh_scale = _numbers(source_mesh.get("scale"), 3, (1.0, 1.0, 1.0))
         if mesh_scale != expected_source_scale:
             raise ValueError(
