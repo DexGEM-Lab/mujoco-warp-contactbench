@@ -136,7 +136,13 @@ def render_video(args: argparse.Namespace) -> None:
         physics=physics,
     )
     model = mujoco.MjModel.from_xml_path(str(scene_path))
-    validate_dexhandrl_compiled_model(mujoco, model, physics, object_name=traj.object_name)
+    validate_dexhandrl_compiled_model(
+        mujoco,
+        model,
+        physics,
+        object_name=traj.object_name,
+        isaac_source_root=args.isaac_source_root,
+    )
     model.vis.global_.offwidth = max(int(model.vis.global_.offwidth), int(args.width))
     model.vis.global_.offheight = max(int(model.vis.global_.offheight), int(args.height))
     render_data = mujoco.MjData(model)

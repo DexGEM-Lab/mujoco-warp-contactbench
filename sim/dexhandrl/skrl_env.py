@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - optional dependency
     gym_spaces = None
 
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, physics_legacy_aliases, resolve_physics_config
+from sim.dexhandrl.asset_paths import contact_bodies_path, task_config_path
 from sim.dexhandrl.constants import (
     ACTION_DIM_021PRO,
     DEFAULT_ISAAC_SOURCE_ROOT,
@@ -208,11 +209,11 @@ class DexHandRLMJXEnvConfig:
         root = Path(self.isaac_source_root or DEFAULT_ISAAC_SOURCE_ROOT)
         self.isaac_source_root = root
         if self.contact_bodies_file is None:
-            self.contact_bodies_file = root / "assets/all_assets/Assets/object_grasps_simple.yaml"
+            self.contact_bodies_file = contact_bodies_path(root)
         else:
             self.contact_bodies_file = Path(self.contact_bodies_file)
         if self.task_config_path is None:
-            self.task_config_path = root / "dexhand_env/cfg/task/Dexhand021proReconstruction.yaml"
+            self.task_config_path = task_config_path(root)
         else:
             self.task_config_path = Path(self.task_config_path)
 
@@ -664,7 +665,13 @@ class DexHandRLMJXEnv:
             physics=cfg.physics,
         )
         self.model = mujoco.MjModel.from_xml_path(str(self.scene_path))
-        validate_dexhandrl_compiled_model(mujoco, self.model, cfg.physics, object_name=cfg.object_name)
+        validate_dexhandrl_compiled_model(
+            mujoco,
+            self.model,
+            cfg.physics,
+            object_name=cfg.object_name,
+            isaac_source_root=cfg.isaac_source_root,
+        )
         self.ids = resolve_mujoco_ids(mujoco, self.model, object_name=cfg.object_name)
         self.route_joint_upper_limits = dexhand021pro_route_joint_upper_limits(mujoco, self.model)
         if cfg.runtime_backend == "mjx-warp":

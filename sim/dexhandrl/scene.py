@@ -9,6 +9,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from sim.dexhandrl.asset_paths import hand_xml_path, object_urdf_path
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, format_friction, legacy_physics_config
 from sim.dexhandrl.constants import (
     DEFAULT_ISAAC_SOURCE_ROOT,
@@ -17,11 +18,6 @@ from sim.dexhandrl.constants import (
 )
 
 
-HAND_XML_RELATIVE = Path(
-    "assets/all_assets/Assets/HAND/dexhand021pro/marvin_021pro_mujoco/"
-    "marvin_021pro_right_hand_floating_simplified.xml"
-)
-OBJECT_URDF_RELATIVE = Path("assets/all_assets/Assets/sim/mano_objects_urdf")
 _UNSET = object()
 
 # These spellings are part of the frozen legacy XML oracle.  All non-legacy
@@ -47,10 +43,7 @@ def _format_numbers_legacy_compatible(values: tuple[float, ...]) -> str:
 
 
 def _object_urdf_path(object_name: str, isaac_source_root: Path) -> Path:
-    path = isaac_source_root / OBJECT_URDF_RELATIVE / f"{object_name}.urdf"
-    if not path.exists():
-        raise FileNotFoundError(f"object URDF not found: {path}")
-    return path
+    return object_urdf_path(object_name, isaac_source_root)
 
 
 def _finite_numbers(value: str | None, count: int, default: tuple[float, ...]) -> tuple[float, ...]:
@@ -96,21 +89,54 @@ def _format_numbers(values: tuple[float, ...]) -> str:
     return " ".join(f"{value:.17g}" for value in values)
 
 
+def _parse_mesh_geometry(
+    *, urdf: Path, geometry_owner: ET.Element, description: str
+) -> dict[str, object]:
+    mesh = geometry_owner.find("geometry/mesh")
+    if mesh is None or not mesh.get("filename"):
+        raise ValueError(f"{description} must contain a mesh filename")
+    path = (urdf.parent / mesh.get("filename", "")).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"{description} mesh not found: {path}")
+    scale = _finite_numbers(mesh.get("scale"), 3, (1.0, 1.0, 1.0))
+    position, quaternion = _parse_urdf_origin(geometry_owner.find("origin"))
+    return {
+        "mesh_path": path,
+        "scale": scale,
+        "position": position,
+        "quaternion": quaternion,
+    }
+
+
 def _parse_object_asset(object_name: str, isaac_source_root: Path) -> dict[str, object]:
+    """Parse one authoritative decomposed URDF without dropping collision pieces."""
+
     urdf = _object_urdf_path(object_name, isaac_source_root)
     root = ET.parse(urdf).getroot()
-    collision = root.find(".//collision")
-    mesh = None if collision is None else collision.find("geometry/mesh")
-    if mesh is None:
-        visual = root.find(".//visual")
-        mesh = None if visual is None else visual.find("geometry/mesh")
-    if mesh is None:
-        raise RuntimeError(f"DexHandRL object {object_name!r} currently expects mesh URDF geometry")
-    if "filename" not in mesh.attrib:
-        raise ValueError(f"DexHandRL object {object_name!r} mesh has no filename")
-    mesh_path = (urdf.parent / mesh.attrib["filename"]).resolve()
-    scale = mesh.attrib.get("scale", "1 1 1")
-    inertial = root.find(".//inertial")
+    links = root.findall("link")
+    if len(links) != 1:
+        raise ValueError(f"DexHandRL object {object_name!r} requires exactly one URDF link")
+    link = links[0]
+    visual_elements = link.findall("visual")
+    collision_elements = link.findall("collision")
+    if len(visual_elements) != 1:
+        raise ValueError(f"DexHandRL object {object_name!r} requires exactly one visual mesh")
+    if not collision_elements:
+        raise ValueError(f"DexHandRL object {object_name!r} requires decomposed collision meshes")
+    visual = _parse_mesh_geometry(
+        urdf=urdf,
+        geometry_owner=visual_elements[0],
+        description=f"DexHandRL object {object_name!r} visual",
+    )
+    collisions = tuple(
+        _parse_mesh_geometry(
+            urdf=urdf,
+            geometry_owner=collision,
+            description=f"DexHandRL object {object_name!r} collision {index}",
+        )
+        for index, collision in enumerate(collision_elements)
+    )
+    inertial = link.find("inertial")
     mass_elem = None if inertial is None else inertial.find("mass")
     inertia_elem = None if inertial is None else inertial.find("inertia")
     if mass_elem is None or inertia_elem is None:
@@ -121,16 +147,14 @@ def _parse_object_asset(object_name: str, isaac_source_root: Path) -> dict[str, 
         for key in ("ixx", "iyy", "izz", "ixy", "ixz", "iyz")
     }
     inertial_pos, inertial_quat = _parse_urdf_origin(inertial.find("origin"))
-    collision_pos, collision_quat = _parse_urdf_origin(None if collision is None else collision.find("origin"))
     return {
-        "mesh_path": mesh_path,
-        "scale": scale,
+        "urdf_path": urdf.resolve(),
+        "visual": visual,
+        "collisions": collisions,
         "mass": mass,
         "inertia": inertia,
         "inertial_pos": inertial_pos,
         "inertial_quat": inertial_quat,
-        "collision_pos": collision_pos,
-        "collision_quat": collision_quat,
     }
 
 
@@ -170,7 +194,7 @@ def _patch_hand_xml(
     }
     if physics is not None and legacy:
         raise ValueError("physics cannot be combined with legacy hand XML overrides")
-    hand_dir = (isaac_source_root / HAND_XML_RELATIVE).parent
+    hand_dir = hand_xml_path(isaac_source_root).parent
     mesh_dir = (hand_dir / "../marvin_021pro_urdf/meshes").resolve()
     physics = physics or legacy_physics_config(**legacy)
     xml = _replace_exactly_once(xml, r'meshdir="[^"]+"', f'meshdir="{mesh_dir.as_posix()}"', "mesh directory")
@@ -185,10 +209,19 @@ def _patch_hand_xml(
 
 
 def _object_asset_xml(object_name: str, asset: dict[str, object]) -> str:
-    return (
-        f'    <mesh name="{object_name}_mesh" file="{Path(asset["mesh_path"]).as_posix()}" '
-        f'scale="{asset["scale"]}" />\n'
+    lines: list[str] = []
+    for index, collision in enumerate(asset["collisions"]):
+        mesh_name = f"{object_name}_mesh" if index == 0 else f"{object_name}_collision_mesh_{index}"
+        lines.append(
+            f'    <mesh name="{mesh_name}" file="{Path(collision["mesh_path"]).as_posix()}" '
+            f'scale="{_format_numbers(collision["scale"])}" />\n'
+        )
+    visual = asset["visual"]
+    lines.append(
+        f'    <mesh name="{object_name}_visual_mesh" file="{Path(visual["mesh_path"]).as_posix()}" '
+        f'scale="{_format_numbers(visual["scale"])}" />\n'
     )
+    return "".join(lines)
 
 
 def _object_contact_xml(physics: DexHandPhysicsConfig) -> tuple[str, str]:
@@ -210,14 +243,28 @@ def _object_body_xml(
     inertial_pos = _format_numbers(asset["inertial_pos"])
     inertial_quat = _format_numbers(asset["inertial_quat"])
     inertial_orientation = "" if inertial_quat == "1 0 0 0" else f' quat="{inertial_quat}"'
-    collision_pos = _format_numbers(asset["collision_pos"])
-    collision_quat = _format_numbers(asset["collision_quat"])
+    collision_lines: list[str] = []
+    for index, collision in enumerate(asset["collisions"]):
+        mesh_name = f"{object_name}_mesh" if index == 0 else f"{object_name}_collision_mesh_{index}"
+        geom_name = f"{object_name}_collision" if index == 0 else f"{object_name}_piece_{index}_collision"
+        collision_lines.append(
+            f'      <geom name="{geom_name}" type="mesh" mesh="{mesh_name}" '
+            f'pos="{_format_numbers(collision["position"])}" '
+            f'quat="{_format_numbers(collision["quaternion"])}" contype="1" conaffinity="1" '
+            f'condim="3" friction="{object_friction}" solref="{solref}" solimp="{solimp}" '
+            f'rgba="0.80 0.18 0.16 1" group="3" />\n'
+        )
+    visual = asset["visual"]
+    visual_line = (
+        f'      <geom name="{object_name}_visual" type="mesh" mesh="{object_name}_visual_mesh" '
+        f'pos="{_format_numbers(visual["position"])}" quat="{_format_numbers(visual["quaternion"])}" '
+        f'contype="0" conaffinity="0" rgba="0.80 0.18 0.16 1" group="2" />\n'
+    )
     return f'''
     <body name="{object_name}" pos="0 0 0">
       <freejoint name="{object_name}_free" />
       <inertial pos="{inertial_pos}"{inertial_orientation} mass="{asset["mass"]}" fullinertia="{inertia["ixx"]} {inertia["iyy"]} {inertia["izz"]} {inertia["ixy"]} {inertia["ixz"]} {inertia["iyz"]}" />
-      <geom name="{object_name}_collision" type="mesh" mesh="{object_name}_mesh" pos="{collision_pos}" quat="{collision_quat}" contype="1" conaffinity="1" condim="3" friction="{object_friction}" solref="{solref}" solimp="{solimp}" rgba="0.80 0.18 0.16 1" />
-    </body>
+{''.join(collision_lines)}{visual_line}    </body>
 '''
 
 
@@ -341,12 +388,10 @@ def build_dexhandrl_scene_xml(
     if physics is not None and legacy:
         raise ValueError("physics cannot be combined with legacy scene overrides")
     config = physics or legacy_physics_config(**legacy)
-    hand_xml_path = isaac_source_root / HAND_XML_RELATIVE
-    if not hand_xml_path.exists():
-        raise FileNotFoundError(f"DexHand021Pro hand XML not found: {hand_xml_path}")
+    hand_xml_source = hand_xml_path(isaac_source_root)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     asset = _parse_object_asset(object_name=object_name, isaac_source_root=isaac_source_root)
-    xml = hand_xml_path.read_text(encoding="utf-8")
+    xml = hand_xml_source.read_text(encoding="utf-8")
     _validate_hand_source(xml)
     xml = _patch_hand_xml(
         xml, isaac_source_root=isaac_source_root, physics=config
@@ -427,7 +472,12 @@ def _compiled_exclude_pairs(mujoco: Any, model: Any) -> set[tuple[str, str]]:
 
 
 def validate_dexhandrl_compiled_model(
-    mujoco: Any, model: Any, physics: DexHandPhysicsConfig = DexHandPhysicsConfig(), *, object_name: str = "cube1"
+    mujoco: Any,
+    model: Any,
+    physics: DexHandPhysicsConfig = DexHandPhysicsConfig(),
+    *,
+    object_name: str = "cube1",
+    isaac_source_root: Path = DEFAULT_ISAAC_SOURCE_ROOT,
 ) -> None:
     """Fail closed unless a compiled model realizes the DexHand legacy profile."""
     if model.nu != 26 or model.nq != 33 or model.nv != 32:
@@ -465,21 +515,48 @@ def validate_dexhandrl_compiled_model(
             raise ValueError(f"compiled actuator force limit missing: {name}")
         _close(model.actuator_forcerange[actuator_id, 0], -force, f"actuator lower force {name}")
         _close(model.actuator_forcerange[actuator_id, 1], force, f"actuator upper force {name}")
-    object_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{object_name}_collision")
     ground_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
     object_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, object_name)
-    if min(object_geom, ground_geom, object_body) < 0:
+    if min(ground_geom, object_body) < 0:
         raise ValueError("compiled object, ground, or object body absent")
+    source_asset = _parse_object_asset(object_name, isaac_source_root)
+    object_geoms = [
+        geom_id for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) == object_body
+    ]
+    expected_collision_names = [
+        f"{object_name}_collision" if index == 0 else f"{object_name}_piece_{index}_collision"
+        for index in range(len(source_asset["collisions"]))
+    ]
+    collision_geoms = [
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        for name in expected_collision_names
+    ]
+    visual_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{object_name}_visual")
+    if any(geom_id < 0 for geom_id in collision_geoms) or visual_geom < 0:
+        raise ValueError("compiled decomposed object geoms are incomplete")
+    if set(object_geoms) != {*collision_geoms, visual_geom}:
+        raise ValueError("compiled object geom set differs from decomposed URDF")
+
     def friction(geom_id: int, expected: tuple[float, float, float], label: str) -> None:
         for actual, value in zip(model.geom_friction[geom_id], expected, strict=True):
             _close(actual, value, f"{label} friction")
-    friction(object_geom, physics.material.object_friction, "object")
+
+    for object_geom in collision_geoms:
+        if int(model.geom_contype[object_geom]) != 1 or int(model.geom_conaffinity[object_geom]) != 1:
+            raise ValueError("compiled object collision mask mismatch")
+        friction(object_geom, physics.material.object_friction, "object")
+        for actual, value in zip(model.geom_solref[object_geom], physics.material.object_solref, strict=True):
+            _close(actual, value, "object solref")
+        for actual, value in zip(model.geom_solimp[object_geom], physics.material.object_solimp, strict=True):
+            _close(actual, value, "object solimp")
+    if int(model.geom_contype[visual_geom]) != 0 or int(model.geom_conaffinity[visual_geom]) != 0:
+        raise ValueError("compiled object visual geom must be non-colliding")
     friction(ground_geom, physics.material.ground_friction, "ground")
-    for actual, value in zip(model.geom_solref[object_geom], physics.material.object_solref, strict=True):
-        _close(actual, value, "object solref")
-    for actual, value in zip(model.geom_solimp[object_geom], physics.material.object_solimp, strict=True):
-        _close(actual, value, "object solimp")
-    hand_geoms = [index for index in range(model.ngeom) if index not in (ground_geom, object_geom)]
+    hand_geoms = [
+        index for index in range(model.ngeom)
+        if index != ground_geom and index not in object_geoms
+    ]
     if len(hand_geoms) != 47:
         raise ValueError(f"compiled hand geom count mismatch: {len(hand_geoms)}")
     for geom_id in hand_geoms:
@@ -509,5 +586,11 @@ def compile_dexhandrl_model(
     with tempfile.TemporaryDirectory(prefix="dexhandrl_contract_") as directory:
         path = build_dexhandrl_scene_xml(Path(directory) / "scene.xml", object_name, isaac_source_root, physics=physics)
         model = mujoco.MjModel.from_xml_path(str(path))
-    validate_dexhandrl_compiled_model(mujoco, model, physics, object_name=object_name)
+    validate_dexhandrl_compiled_model(
+        mujoco,
+        model,
+        physics,
+        object_name=object_name,
+        isaac_source_root=isaac_source_root,
+    )
     return mujoco, model

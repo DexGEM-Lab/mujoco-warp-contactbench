@@ -10,6 +10,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LOCAL_ASSET_CACHE_ROOT = Path("/tmp/dexhandrl_assets")
 _LOCAL_OUTPUT_ROOT = _REPO_ROOT / "outputs"
 _VENDORED_ISAAC_SOURCE_ROOT = _REPO_ROOT / "assets/isaac_source_root"
+_REPOSITORY_ASSET_SOURCE_ROOT = _REPO_ROOT
 
 
 def _env_path(name: str, default: str) -> Path:
@@ -22,11 +23,13 @@ def _env_path(name: str, default: str) -> Path:
 DEFAULT_ISAAC_SOURCE_ROOT = _env_path(
     "DEXHANDRL_ISAAC_SOURCE_ROOT",
     str(
-        _VENDORED_ISAAC_SOURCE_ROOT
+        _REPOSITORY_ASSET_SOURCE_ROOT
+        if (_REPOSITORY_ASSET_SOURCE_ROOT / "assets/all_assets/Assets").exists()
+        else _VENDORED_ISAAC_SOURCE_ROOT
         if _VENDORED_ISAAC_SOURCE_ROOT.exists()
         else _LOCAL_ASSET_CACHE_ROOT
         if _LOCAL_ASSET_CACHE_ROOT.exists()
-        else _VENDORED_ISAAC_SOURCE_ROOT
+        else _REPOSITORY_ASSET_SOURCE_ROOT
     ),
 )
 DEFAULT_LANCE_PATH = _env_path(

@@ -207,7 +207,13 @@ def replay(args: argparse.Namespace) -> dict[str, Any]:
     args.scene_copy.write_text(scene_path.read_text(encoding="utf-8"), encoding="utf-8")
 
     model = mujoco.MjModel.from_xml_path(str(scene_path))
-    validate_dexhandrl_compiled_model(mujoco, model, physics, object_name=traj.object_name)
+    validate_dexhandrl_compiled_model(
+        mujoco,
+        model,
+        physics,
+        object_name=traj.object_name,
+        isaac_source_root=args.isaac_source_root,
+    )
     ids = resolve_mujoco_ids(mujoco, model, object_name=traj.object_name)
     route_joint_upper_limits = dexhand021pro_route_joint_upper_limits(mujoco, model)
     geom_body_names = _geom_body_names(mujoco, model)

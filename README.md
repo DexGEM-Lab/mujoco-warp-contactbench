@@ -38,7 +38,7 @@ Current submodules:
 
 ```text
 assets/mano_hand_s02 -> git@192.168.10.116:ai/group-ai-public/group-sim-assets/mano_hand_s02.git
-assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ ead79126589d1abf2362ea30b9d674d9e675a2f9 (fixed pin)
+assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ 7228b5cfce8d9a072ed4bded7a489cf73d521b68 (fixed pin; nested Assets/sim/mano_assets @ cde03ef94816b589f574ca6f358695005d3d1a3f)
 3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
 ```
 
@@ -469,6 +469,14 @@ so the existing evidence-backed DexHandRL values remain owned by the immutable
 `DexHandPhysicsConfig`, `DexHandServoConfig`, and `DexHandMaterialConfig` under
 the `legacy_port_v1` profile.
 
+The scene boundary reads the pinned `assets/all_assets` checkout directly. Every
+object resolves only from `Assets/sim/decomposed/<object>/<object>.urdf`: the
+source visual mesh supplies rendering and the policy point-cloud/geometry
+observation, while every referenced CoACD convex piece becomes an object-owned
+collision geom. Multi-piece objects fail closed if any piece is absent. Run and
+checkpoint provenance records `all_assets@7228b5cf`, nested
+`mano_assets@cde03ef`, the object URDF, and their exact digests.
+
 The scene boundary validates source asset, name, and transformation assumptions
 before compiling; provenance is serialized metadata. Compiled validation then
 checks timestep, integrator and solver settings, joint/actuator order and
@@ -824,23 +832,19 @@ The diagnostic overrides `--hand-self-collision-mode`,
 Their defaults preserve the current task semantics; relaxing the terminal
 threshold is not an acceptance result.
 
-The DexHand021Pro hand and default `cube1` object assets are included in the
-repository under `assets/isaac_source_root/`. To use an external asset bundle
-or add more objects, set `DEXHANDRL_ISAAC_SOURCE_ROOT` or run the import helper.
-
-```text
-assets/isaac_source_root/assets/all_assets/Assets/...
-```
-
-Set `DEXHANDRL_ISAAC_SOURCE_ROOT` or pass `--isaac-source-root` to override the
-asset root if needed. `assets/README.md` documents the source commit and the
-minimal bundle/import workflow.
-
-To refresh the local cache from the IsaacGym checkout, run:
+The DexHand021Pro hand, contact map, visual meshes, and decomposed object
+collisions come from the repository's pinned `assets/all_assets` submodule.
+Initialize both asset levels after cloning:
 
 ```bash
-bash scripts/import_isaac_assets.sh
+git submodule update --init --recursive assets/all_assets
 ```
+
+The small `assets/isaac_source_root/` bundle remains only the default owner of
+`Dexhand021proReconstruction.yaml`, which is not stored in all_assets. Set
+`DEXHANDRL_ISAAC_SOURCE_ROOT` or pass `--isaac-source-root` only for a complete
+alternate outer source root containing both `assets/all_assets/Assets` and the
+DexHand task configuration.
 
 ## Notes
 

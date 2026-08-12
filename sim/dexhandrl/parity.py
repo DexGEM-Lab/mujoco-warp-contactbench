@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import yaml
 
+from sim.dexhandrl.asset_paths import object_urdf_path
 from sim.dexhandrl.constants import (
     DEFAULT_ISAAC_SOURCE_ROOT,
     NUM_ACTION_TYPES_021PRO,
@@ -47,11 +48,12 @@ def _mesh_extents_from_obj(path: Path, scale: tuple[float, float, float]) -> lis
 
 
 def geometry_from_isaac_urdf(object_name: str, isaac_source_root: Path = DEFAULT_ISAAC_SOURCE_ROOT) -> dict[str, object]:
-    urdf_path = isaac_source_root / "assets/all_assets/Assets/sim/mano_objects_urdf" / f"{object_name}.urdf"
-    if not urdf_path.exists():
-        raise FileNotFoundError(f"object URDF not found: {urdf_path}")
+    urdf_path = object_urdf_path(object_name, isaac_source_root)
     root = ET.parse(urdf_path).getroot()
-    geom = root.find(".//collision/geometry") or root.find(".//visual/geometry")
+    # Policy geometry and the 64-point observation describe the complete object
+    # surface. CoACD pieces are physics-only and must not replace the visual
+    # source with an arbitrary first convex piece.
+    geom = root.find(".//visual/geometry")
     if geom is None:
         raise RuntimeError(f"URDF has no geometry: {urdf_path}")
     if geom.find("box") is not None:
