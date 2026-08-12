@@ -75,6 +75,52 @@ def test_bulk_loader_fails_closed_without_stable_row_id_api(monkeypatch) -> None
         lance_loader.load_trajectories_by_row_ids("synthetic.lance", [120_259_084_300])
 
 
+def test_n8_evaluation_assignment_duplicates_world_zero_exactly() -> None:
+    rows = []
+    for action_index, action in enumerate(DEXHAND_ALL_ACTIONS):
+        rows.append({
+            "object_name": "cube1",
+            "action": action,
+            "uuid": f"uuid-{action}",
+            "seed_uuid": f"seed-{action}",
+            "row_id": 10 + action_index,
+        })
+    from sim.dexhandrl.trajectory_batch import resolve_balanced_action_assignments
+
+    specs = resolve_balanced_action_assignments(
+        rows,
+        object_name="cube1",
+        num_envs=8,
+        duplicate_first_for_extra=True,
+    )
+    assert [spec["action"] for spec in specs[:7]] == list(DEXHAND_ALL_ACTIONS)
+    assert specs[7]["row_id"] == specs[0]["row_id"]
+    assert specs[7]["uuid"] == specs[0]["uuid"]
+    assert specs[7]["sequence_index"] == specs[0]["sequence_index"]
+    assert specs[7]["determinism_duplicate_of"] == 0
+
+
+def test_n8_training_uses_identical_duplicate_identity_contract(monkeypatch) -> None:
+    rows = [
+        {
+            "object_name": "cube1", "action": action,
+            "uuid": f"uuid-{action}", "seed_uuid": f"seed-{action}",
+            "row_id": 10 + action_index,
+        }
+        for action_index, action in enumerate(DEXHAND_ALL_ACTIONS)
+    ]
+    monkeypatch.setattr(skrl_train, "list_trajectories", lambda *args, **kwargs: rows)
+
+    specs = _resolve_trajectory_specs(SkrlLauncherConfig(
+        lance_path=Path("unused"), action="all", num_envs=8, sequence_index=0,
+    ))
+
+    assert [spec["action"] for spec in specs[:7]] == list(DEXHAND_ALL_ACTIONS)
+    assert specs[7]["uuid"] == specs[0]["uuid"]
+    assert specs[7]["row_id"] == specs[0]["row_id"]
+    assert specs[7]["determinism_duplicate_of"] == 0
+
+
 def test_all_action_assignment_is_balanced_sorted_and_deterministic(monkeypatch) -> None:
     rows = []
     for action_index, action in enumerate(DEXHAND_ALL_ACTIONS):

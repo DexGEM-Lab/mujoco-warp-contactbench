@@ -27,7 +27,7 @@ class _Transition:
     truncated: np.ndarray
     valid: np.ndarray
     reason: np.ndarray | None = None
-    weighted: np.ndarray | None = None
+    components: np.ndarray | None = None
 
 
 class _Env:
@@ -121,6 +121,12 @@ def test_cpu_fake_loop_records_terminal_before_next_reset_and_checkpoints(tmp_pa
     assert (tmp_path / "checkpoint-000001.pt").is_file()
     assert (tmp_path / "checkpoint-000002.pt").is_file()
     assert (tmp_path / "last.pt").is_file()
+    sidecar = __import__("json").loads((tmp_path / "checkpoint-000001.json").read_text())
+    assert sidecar["reward"]["ppo_reward_scale"] == 0.5
+    assert sidecar["dataset"]["version"] == 30
+    assert sidecar["assets"]["collision_mesh_count"] == 1
+    assert sidecar["assets"]["visual_mesh"]["sha256"]
+    assert sidecar["code"]["revision"] and isinstance(sidecar["code"]["dirty"], bool)
     assert len((tmp_path / "progress.jsonl").read_text().splitlines()) == 2
 
 
@@ -243,19 +249,18 @@ def test_episode_metrics_keep_raw_and_bootstrapped_shaped_rewards_separate(tmp_p
     run_batch_ppo(TelemetryEnv(), ShapingAgent([]), cfg, model_config=_ModelConfig(), assignment=[], bridge=_CpuBridge())
     metrics = __import__("json").loads((tmp_path / "progress.jsonl").read_text())["metrics"]
     assert metrics["rewards"] == 1.5 and metrics["shaped_rewards"] == 11.5
-    assert metrics["alive"] == 5.0
-    assert metrics["alive_instant"] == 5.0
-    assert metrics["alive/object_cube1"] == 5.0
-    assert metrics["object_pos_tracking_x"] == 6.0
-    assert metrics["object_pos_tracking_x_instant"] == 6.0
+    assert metrics["distance_x"] == 5.0
+    assert metrics["distance_x_instant"] == 5.0
+    assert metrics["distance_x/object_cube1"] == 5.0
+    assert metrics["distance_y"] == 6.0
+    assert metrics["distance_y_instant"] == 6.0
     assert metrics["reward_by_pair/cube1_01/total_reward"] == 1.0
     assert metrics["reward_by_pair_instant/cube1_01/total_reward"] == 1.0
     assert metrics["reward_by_pair/cube1_02/total_reward"] == 2.0
     assert "reward_by_pair/cube1_03/total_reward" not in metrics
     assert metrics["training/termination_rates/failure"] == .5
-    assert metrics["training/termination_rates/success"] == 0.0
-    assert metrics["training/termination_rates/timeout"] == .5
-    assert metrics["terminal_reward_raw_weighted_gap"] == -93.5
+    assert metrics["training/termination_rates/success"] == .5
+    assert metrics["components_consistency_gap"] == -93.5
     assert "x" not in metrics
 
 
@@ -326,11 +331,13 @@ def test_fixed_entropy_requires_actual_fixed_backbone_and_22d_log_std():
     assert _fixed_gaussian_entropy(SimpleNamespace(log_std=torch.zeros(22), backbone=SimpleNamespace(fixed_sigma=True))) is not None
 
 
-def test_identity_reward_shaper_preserves_ppo_bootstrap_mutation():
-    from sim.dexhandrl.skrl_train import _reward_shaper_1_0
+def test_ppo_reward_shaper_applies_zero_point_five_in_place():
+    from sim.dexhandrl.skrl_train import _reward_shaper_0_5
 
-    rewards = torch.tensor([1.0])
-    assert _reward_shaper_1_0(rewards, 0, 1) is rewards
+    rewards = torch.tensor([1.0, -2.0])
+    shaped = _reward_shaper_0_5(rewards, 0, 1)
+    assert shaped is rewards
+    torch.testing.assert_close(rewards, torch.tensor([0.5, -1.0]))
 
 
 def test_update_time_ends_before_validation_and_telemetry(tmp_path):
@@ -362,7 +369,7 @@ def test_core_reward_window_is_rolling_while_components_are_current_update_sampl
         )
         metrics = telemetry.flush()
     assert metrics["rewards"] == __import__("pytest").approx(51.5)
-    assert metrics["alive"] == 101.0
+    assert metrics["distance_x"] == 101.0
     assert "rewards/cube1_02" not in metrics
 
 

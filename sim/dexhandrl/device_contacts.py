@@ -11,9 +11,16 @@ from typing import Any, NamedTuple, Sequence
 
 
 class DeviceContactSummary(NamedTuple):
-    """Per-world force features plus a fail-closed ABI validity scalar."""
+    """Per-world contact diagnostics plus a fail-closed ABI validity scalar.
+
+    ``hand`` retains the historical all-contact body force used by the 461D
+    observation. ``hand_object`` is the narrower hand↔task-object force used by
+    the shared task reward and contact-threshold calibration. Keeping both
+    prevents table/ground/self contact from being mislabeled as task contact.
+    """
 
     hand: Any
+    hand_object: Any
     object: Any
     count: Any
     valid: Any
@@ -129,9 +136,26 @@ def reduce_dexhand_contacts(
     second_hand = contribution & (body2 >= 0)
     hand = hand.at[safe_world, jp.maximum(body1, 0)].add(-world_force * first_hand[:, None])
     hand = hand.at[safe_world, jp.maximum(body2, 0)].add(world_force * second_hand[:, None])
+
+    # Reward contact is strictly hand↔object. Force signs follow the force on
+    # the hand body, matching the scalar ``collect_contact_summary`` contract.
+    first_hand_object = contribution & (body1 >= 0) & object2
+    second_hand_object = contribution & (body2 >= 0) & object1
+    hand_object = jp.zeros_like(hand)
+    hand_object = hand_object.at[safe_world, jp.maximum(body1, 0)].add(
+        -world_force * first_hand_object[:, None]
+    )
+    hand_object = hand_object.at[safe_world, jp.maximum(body2, 0)].add(
+        world_force * second_hand_object[:, None]
+    )
     object_force = jp.zeros((batch, 3), dtype=world_force.dtype)
     object_force = object_force.at[safe_world].add(-world_force * (contribution & object1)[:, None])
     object_force = object_force.at[safe_world].add(world_force * (contribution & object2)[:, None])
     counts = jp.zeros((batch,), dtype=jp.int32).at[safe_world].add(contribution.astype(jp.int32))
-    valid = valid & jp.all(jp.isfinite(hand)) & jp.all(jp.isfinite(object_force))
-    return DeviceContactSummary(hand, object_force, counts, valid)
+    valid = (
+        valid
+        & jp.all(jp.isfinite(hand))
+        & jp.all(jp.isfinite(hand_object))
+        & jp.all(jp.isfinite(object_force))
+    )
+    return DeviceContactSummary(hand, hand_object, object_force, counts, valid)

@@ -19,6 +19,55 @@ from sim.dexhandrl.parity import action_type_onehot
 
 DEXHAND_ALL_ACTIONS = ("01", "02", "03", "04", "09", "10", "18")
 
+
+def resolve_balanced_action_assignments(
+    rows: Sequence[dict[str, Any]],
+    *,
+    object_name: str,
+    num_envs: int,
+    sequence_index: int = 0,
+    duplicate_first_for_extra: bool = False,
+) -> list[dict[str, Any]]:
+    """Resolve all seven actions deterministically across a vector batch.
+
+    Production training cycles trajectory identities independently within each
+    action.  A bounded eight-world evaluation may instead duplicate world 0 in
+    world 7, giving one exact same-input determinism control while retaining
+    one world for every action.
+    """
+
+    if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
+        raise ValueError("num_envs must be a positive integer")
+    routes: dict[str, list[dict[str, Any]]] = {}
+    for action in DEXHAND_ALL_ACTIONS:
+        selected = [
+            row
+            for row in rows
+            if row.get("object_name") == object_name and str(row.get("action")) == action
+        ]
+        selected.sort(key=lambda row: (int(row["row_id"]), str(row["uuid"])))
+        if not selected:
+            raise RuntimeError(
+                f"no trajectories found for required action={action!r} "
+                f"object={object_name!r}"
+            )
+        routes[action] = selected
+
+    assignments: list[dict[str, Any]] = []
+    for env_id in range(num_envs):
+        if duplicate_first_for_extra and env_id >= len(DEXHAND_ALL_ACTIONS):
+            source = assignments[env_id % len(DEXHAND_ALL_ACTIONS)]
+            assignments.append({**source, "determinism_duplicate_of": env_id % len(DEXHAND_ALL_ACTIONS)})
+            continue
+        action = DEXHAND_ALL_ACTIONS[env_id % len(DEXHAND_ALL_ACTIONS)]
+        route = routes[action]
+        route_index = (
+            sequence_index + env_id // len(DEXHAND_ALL_ACTIONS)
+        ) % len(route)
+        assignments.append({**route[route_index], "sequence_index": route_index})
+    return assignments
+
+
 _SIMPLE_CONTACT_TO_BODY = {
     "palm": "RFH1", "thumb1": "RH0_0", "thumb2": "RH0_2", "thumb3": "RH0_3",
     "index1": "RH1_0", "index2": "RH1_2", "index3": "RH1_3",
@@ -57,6 +106,9 @@ class DexHandTrajectoryBatch:
     active_joint_masks: np.ndarray
     active_fingertip_masks: np.ndarray
     rotation_disabled: np.ndarray
+    # Lineage evidence retained from the read-only Lance index (default empty
+    # for direct dataclass construction in tests).
+    seed_uuids: tuple[str, ...] = ()
 
     @property
     def num_envs(self) -> int:
@@ -165,6 +217,10 @@ def pack_trajectory_batch(
         row_ids=np.asarray([traj.row_id for traj in trajectories], dtype=np.int64),
         action_indices=np.asarray([DEXHAND_ALL_ACTIONS.index(action) for action in actions], dtype=np.int32),
         actions=actions, uuids=tuple(traj.uuid for traj in trajectories),
+        seed_uuids=tuple(
+            str((traj.metadata.get("index") or {}).get("seed_uuid") or "")
+            for traj in trajectories
+        ),
         action_onehot50=np.stack([action_type_onehot(action) for action in actions]),
         task_expected_contact_masks=np.stack([entry[0] for entry in task]),
         task_contact_body_names=tuple(entry[1] for entry in task),

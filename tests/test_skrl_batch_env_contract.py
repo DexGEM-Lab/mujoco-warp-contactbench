@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from sim.dexhandrl.hand_mapping import active_to_full_dof, full_to_active_dof
+from sim.dexhandrl.rewards import DexHandRewardConfig
 from sim.dexhandrl.skrl_batch_env import (
     DexHandRLBatchConfig,
     conservative_batch_ccd_capacity,
@@ -142,6 +143,55 @@ def test_selected_reset_rebuilds_contacts_and_preserves_unselected_worlds() -> N
         assert np.all(np.asarray(mixed.valid))
     finally:
         env.close()
+
+
+def test_reward_config_is_downstream_of_residual_off_physics() -> None:
+    """Reward-only changes cannot alter control, state, or strict contacts."""
+
+    pytest.importorskip("mujoco")
+    from sim.dexhandrl.skrl_batch_env import DexHandRLMJXBatchEnv
+
+    batch = replace(
+        _batch(1),
+        object_quat_xyzw=np.tile(
+            np.asarray([0., 0., 0., 1.], dtype=np.float32), (1, 3, 1)
+        ),
+    )
+    baseline_reward = DexHandRewardConfig(early_phase_steps=0)
+    counterfactual_reward = replace(
+        baseline_reward,
+        distance_scales=(3.0, 4.0, 5.0),
+        contact_force_threshold_N=99.0,
+        max_deviation_distance_m=0.0,
+        deviation_penalty=17.0,
+        survival_reward=0.7,
+        fingertip_penetration_weight=9.0,
+    )
+    env_a = DexHandRLMJXBatchEnv(DexHandRLBatchConfig(
+        trajectories=batch, device="cpu", settle_frames=0,
+        use_residual=False, reward=baseline_reward,
+    ))
+    env_b = DexHandRLMJXBatchEnv(DexHandRLBatchConfig(
+        trajectories=batch, device="cpu", settle_frames=0,
+        use_residual=False, reward=counterfactual_reward,
+    ))
+    try:
+        action = np.ones((1, 22), dtype=np.float32)
+        transition_a = env_a.step_device(action)
+        transition_b = env_b.step_device(action)
+
+        assert not np.array_equal(
+            np.asarray(transition_a.reward), np.asarray(transition_b.reward)
+        )
+        np.testing.assert_array_equal(transition_a.ctrl, transition_b.ctrl)
+        np.testing.assert_array_equal(env_a.state.data.qpos, env_b.state.data.qpos)
+        np.testing.assert_array_equal(env_a.state.data.qvel, env_b.state.data.qvel)
+        np.testing.assert_array_equal(
+            transition_a.contact_magnitudes, transition_b.contact_magnitudes
+        )
+    finally:
+        env_a.close()
+        env_b.close()
 
 
 def test_zero_reset_mask_is_device_identity_without_forward() -> None:

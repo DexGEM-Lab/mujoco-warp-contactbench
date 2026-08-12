@@ -623,6 +623,38 @@ The skrl launcher is:
 bash scripts/run_dexhandrl_skrl.sh --mode inspect --device cpu --num-envs 1
 ```
 
+Current cross-embodiment training/evaluation evidence uses the all-action
+`DexHandRLMJXBatchEnv` path (`--action all`). Its versioned task reward uses
+strict hand↔object forces, the fixed additive components
+`distance_x,distance_y,distance_z,rotation,action_penalty,contact,object_stability,survival,fingertip_penetration,deviation_penalty`,
+a calibrated `0.2 N` contact threshold, and an explicit `0.5x` PPO transform.
+The Lance `object_move` interval is recorded as an object-motion reward-phase
+proxy because the retarget rows have no measured contact interval. The legacy
+single-world Gym adapter retains its historical scalar/YAML reward for
+checkpoint diagnostics only; its returns are not comparable to the batch
+contract.
+
+Run the fixed cube1 N8 identities (actions `01,02,03,04,09,10,18` plus an exact
+world-0 duplicate) with:
+
+```bash
+python -m sim.dexhandrl.batch_evaluate --mode reference --device gpu \
+  --output-dir outputs/dexhandrl_n8/reference
+python -m sim.dexhandrl.batch_evaluate --mode untrained --device gpu --seed 0 \
+  --output-dir outputs/dexhandrl_n8/untrained
+python -m sim.dexhandrl.skrl_train --mode train --device gpu --num-envs 8 \
+  --action all --updates 1 --rollouts 48 --learning-epochs 1 --mini-batches 1 \
+  --output-dir outputs/dexhandrl_n8/ppo-smoke
+python -m sim.dexhandrl.batch_evaluate --mode trained --device gpu \
+  --checkpoint outputs/dexhandrl_n8/ppo-smoke/checkpoint-000001.pt \
+  --output-dir outputs/dexhandrl_n8/trained
+```
+
+Evaluation summaries and checkpoint sidecars bind the Lance path/version,
+ordered UUID/row assignments, reward and physics contracts, observation/action
+ABI, both asset commits, the decomposed URDF, visual mesh and every CoACD mesh
+SHA256, plus code revision/dirty-diff identity.
+
 The recommended local setup is `scripts/setup_local_env.sh`, which installs the
 `dexhandrl` extra containing `torch`, `gymnasium`, and `skrl`. If you manage the
 environment yourself, install those packages before using the skrl launcher.

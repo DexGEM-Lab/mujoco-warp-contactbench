@@ -160,6 +160,7 @@ def list_trajectories(lance_path: Path | str = DEFAULT_LANCE_PATH, limit: int | 
             {
                 "row_id": int(row.get("_rowid", fallback_row_id)),
                 "uuid": index.get("uuid"),
+                "seed_uuid": index.get("seed_uuid"),
                 "object_name": index.get("scene"),
                 "action": index.get("gesture"),
                 "frames": metadata.get("total_frames"),
@@ -167,6 +168,14 @@ def list_trajectories(lance_path: Path | str = DEFAULT_LANCE_PATH, limit: int | 
             }
         )
     return rows
+
+
+def lance_dataset_metadata(lance_path: Path | str) -> dict[str, Any]:
+    """Return the read-only dataset identity for run/checkpoint provenance."""
+
+    path = Path(lance_path)
+    ds = _import_lance().dataset(str(path))
+    return {"path": str(path), "version": int(ds.version)}
 
 
 def load_trajectory(

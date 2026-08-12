@@ -17,6 +17,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
+from sim.dexhandrl.asset_paths import contact_bodies_path, task_config_path
 from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT, DEFAULT_LANCE_PATH
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, resolve_physics_config
 
@@ -294,7 +295,16 @@ class TiledDexHandRenderer:
             mujoco.mjv_updateScene(self.environment.model, self.data[env_id], self.option, None, self.camera, mujoco.mjtCatBit.mjCAT_ALL, self.scene)
             viewport = mujoco.MjrRect(x, y, tile_width, tile_height)
             mujoco.mjr_render(viewport, self.scene, self.context)
-            mujoco.mjr_overlay(mujoco.mjtFont.mjFONT_NORMAL, mujoco.mjtGridPos.mjGRID_TOPLEFT, viewport, f"world {env_id}", f"frame {int(snapshot.frame[env_id])}  episode {int(snapshot.episode_count[env_id])}", self.context)
+            action = self.environment.batch.actions[env_id]
+            row_id = int(self.environment.batch.row_ids[env_id])
+            mujoco.mjr_overlay(
+                mujoco.mjtFont.mjFONT_NORMAL,
+                mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                viewport,
+                f"world {env_id}  cube1/{action}",
+                f"row {row_id}  frame {int(snapshot.frame[env_id])}  episode {int(snapshot.episode_count[env_id])}",
+                self.context,
+            )
         glfw.swap_buffers(self.window); glfw.poll_events()
         return not glfw.window_should_close(self.window)
 
@@ -357,27 +367,55 @@ def _validate_batch_options(args: argparse.Namespace) -> None:
             raise ValueError("multi-env viewing requires --runtime-backend mjx-warp")
         if args.object_name != "cube1":
             raise ValueError("multi-env viewing requires --object cube1")
-        if args.action != "01":
-            raise ValueError("multi-env viewing requires --gesture 01")
+        if args.action not in {"01", "all"}:
+            raise ValueError("multi-env viewing requires --gesture 01 or all")
+        if args.action == "all" and args.num_envs < 7:
+            raise ValueError("all-action viewing requires at least 7 environments")
 
 
 def _resolve_batched_assignments(args: argparse.Namespace) -> list[dict[str, Any]]:
-    """Select cube1/action01 rows in stable order and cycle them across worlds."""
+    """Resolve stable single-action or seven-action viewer worlds."""
     from sim.dexhandrl.lance_loader import list_trajectories
-    rows = [row for row in list_trajectories(args.lance_path, limit=None)
-            if row["object_name"] == "cube1" and row["action"] == "01"]
-    rows.sort(key=lambda row: (int(row["row_id"]), str(row["uuid"])))
-    if not rows:
+    from sim.dexhandrl.trajectory_batch import resolve_balanced_action_assignments
+
+    rows = list_trajectories(args.lance_path, limit=None)
+    if args.action == "all":
+        if args.uuid is not None:
+            raise RuntimeError("--uuid cannot be combined with --gesture all")
+        return resolve_balanced_action_assignments(
+            rows,
+            object_name="cube1",
+            num_envs=args.num_envs,
+            sequence_index=args.sequence_index,
+            duplicate_first_for_extra=args.num_envs == 8,
+        )
+
+    selected = [
+        row
+        for row in rows
+        if row["object_name"] == "cube1" and row["action"] == "01"
+    ]
+    selected.sort(key=lambda row: (int(row["row_id"]), str(row["uuid"])))
+    if not selected:
         raise RuntimeError(f"no trajectories found for cube1/01 in {args.lance_path}")
     if args.uuid is not None:
-        matched = [(index, row) for index, row in enumerate(rows) if row["uuid"] == args.uuid]
+        matched = [
+            (index, row)
+            for index, row in enumerate(selected)
+            if row["uuid"] == args.uuid
+        ]
         if not matched:
             raise RuntimeError(f"trajectory uuid {args.uuid!r} not found for cube1/01")
         index, row = matched[0]
         return [{**row, "sequence_index": index} for _ in range(args.num_envs)]
-    start = args.sequence_index % len(rows)
-    return [{**rows[(start + env_id) % len(rows)], "sequence_index": (start + env_id) % len(rows)}
-            for env_id in range(args.num_envs)]
+    start = args.sequence_index % len(selected)
+    return [
+        {
+            **selected[(start + env_id) % len(selected)],
+            "sequence_index": (start + env_id) % len(selected),
+        }
+        for env_id in range(args.num_envs)
+    ]
 
 
 def _run_batched(args: argparse.Namespace, options: ViewerOptions, physics: DexHandPhysicsConfig) -> int:
@@ -387,16 +425,34 @@ def _run_batched(args: argparse.Namespace, options: ViewerOptions, physics: DexH
     assignments = _resolve_batched_assignments(args)
     trajectories = load_trajectory_batch(
         args.lance_path, assignments, pre_contact_frames=200, post_contact_frames=250,
-        contact_bodies_file=root / "assets/all_assets/Assets/object_grasps_simple.yaml",
-        task_config_path=root / "dexhand_env/cfg/task/Dexhand021proReconstruction.yaml",
+        contact_bodies_file=contact_bodies_path(root),
+        task_config_path=task_config_path(root),
+    )
+    from dataclasses import replace
+    from sim.dexhandrl.rewards import SOURCE_ALIGNED_REWARD_CONFIG
+
+    reward = replace(
+        SOURCE_ALIGNED_REWARD_CONFIG,
+        max_deviation_distance_m=options.terminal_threshold,
     )
     env = DexHandRLMJXBatchEnv(DexHandRLBatchConfig(
-        trajectories=trajectories, action="all", device=args.device, object_name="cube1", physics=physics,
-        use_residual=options.use_residual, object_position_terminal_threshold=options.terminal_threshold,
+        trajectories=trajectories,
+        action="all",
+        device=args.device,
+        object_name="cube1",
+        physics=physics,
+        use_residual=options.use_residual,
+        reward=reward,
         isaac_source_root=root,
     ))
     try:
-        print(f"DexHandRL tiled viewer: backend=mjx-warp device={args.device} worlds={env.num_envs} tiles={args.tile_envs}; zero 22D residual actions", flush=True)
+        assignments_label = ",".join(env.batch.actions)
+        print(
+            f"DexHandRL tiled viewer: backend=mjx-warp device={args.device} "
+            f"worlds={env.num_envs} tiles={args.tile_envs} actions={assignments_label}; "
+            f"zero 22D residual actions use_residual={options.use_residual}",
+            flush=True,
+        )
         stepper, steps = BatchZeroActionStepper(env), 0
         renderer = TiledDexHandRenderer(env, tile_envs=args.tile_envs)
         try:

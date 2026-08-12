@@ -110,6 +110,11 @@ def test_launcher_forwards_one_physics_identity_and_serializes_contract(tmp_path
     assert payload["physics_contract"]["runtime_naconmax"] == 64
     assert payload["physics_contract"]["physics_dt"] == 0.001
     assert payload["physics_contract"]["servo"]["finger_kp"] == 15
+    assert payload["reward_contract"]["ppo_reward_scale"] == 0.5
+    assert payload["dataset"]["version"] == 30
+    assert payload["assets"]["collision_mesh_count"] == 1
+    assert payload["assets"]["visual_mesh"]["sha256"]
+    assert payload["code"]["revision"] and isinstance(payload["code"]["dirty"], bool)
 
 
 def test_parser_exposes_complete_physics_overrides() -> None:

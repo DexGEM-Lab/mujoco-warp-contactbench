@@ -21,11 +21,13 @@ except ImportError:  # pragma: no cover - production requires skrl
         pass
 
 
-REWARD_COMPONENTS = (
-    "alive", "object_pos_tracking_x", "object_pos_tracking_y", "object_pos_tracking_z",
-    "contact_quality", "object_stability_velocity", "object_rot_tracking",
-    "fingertip_inside_object_penalty", "action_penalty_position", "action_penalty_joint",
+from sim.dexhandrl.provenance import code_provenance
+from sim.dexhandrl.rewards import (
+    PPO_REWARD_SCALE,
+    REWARD_COMPONENTS,
+    SOURCE_ALIGNED_REWARD_CONFIG,
 )
+
 GAMES_TO_TRACK = 100
 
 
@@ -230,7 +232,7 @@ class _EpisodeTelemetry:
             "rewards": sum(self.rewards) / len(self.rewards),
             "shaped_rewards": sum(self.shaped_rewards) / len(self.shaped_rewards),
             "episode_lengths": sum(self.lengths) / len(self.lengths),
-            "terminal_reward_raw_weighted_gap": _scalar((raw - weighted.sum(dim=1)).mean()),
+            "components_consistency_gap": _scalar((raw - weighted.sum(dim=1)).mean()),
         }
 
         def add_episode_metrics(mask: Any, suffix: str) -> None:
@@ -261,20 +263,21 @@ class _EpisodeTelemetry:
                 metrics[f"reward_by_pair/{label}/total_reward"] = _scalar(raw[mask].mean())
                 metrics[f"reward_by_pair_instant/{label}/total_reward"] = _scalar((raw[mask] / length[mask]).mean())
         total = float(len(actions))
-        for code, name in ((1, "failure"), (0, "success"), (2, "timeout")):
+        for code, name in ((2, "failure"), (1, "success"), (0, "ongoing")):
             metrics[f"training/termination_rates/{name}"] = _scalar((reason == code).sum().float() / total)
         return metrics
 
 
 def _write_schema(output: Path) -> None:
     (output / "metrics_schema.json").write_text(json.dumps({
-        "schema": "dexhandrl.gym_tensorboard.v2", "phase_1_full_metrics_available": False,
+        "schema": "dexhandrl.gym_tensorboard.v3", "phase_1_full_metrics_available": False,
         "provenance": "standard-skrl PPO with telemetry-only KL observation",
         "standard_skrl_analogs": {"a_loss": "Loss / Policy loss", "c_loss": "Loss / Value loss / value_loss_scale", "bounds_loss": 0, "entropy": "fixed policy.log_std Gaussian summed over 22", "info/kl": "KLAdaptiveLR.step inputs mean"},
-        "reward_shaper": 1.0,
+        "reward_shaper": PPO_REWARD_SCALE,
+        "reward_components": list(REWARD_COMPONENTS),
+        "termination_reason_codes": {"0": "ongoing", "1": "trajectory_complete_success", "2": "deviation_failure"},
         "axes": {"iter": "global update", "step": "global transitions", "time": "segment-local elapsed seconds"},
         "games_to_track": GAMES_TO_TRACK,
-        "reward_components": list(REWARD_COMPONENTS),
     }, indent=2, sort_keys=True), encoding="utf-8")
 
 
@@ -292,6 +295,34 @@ def _write_metrics(writer: Any, metrics: dict[str, float], *, update: int, trans
             writer.add_scalar(tag, value, transitions if tag.startswith(("performance/", "info/", "losses/")) else update)
     writer.add_scalar("global_step", transitions, transitions)
     writer.flush()
+
+
+def _reward_contract_record(cfg: Any) -> dict[str, Any]:
+    reward = getattr(cfg, "reward", None)
+    if reward is None or not hasattr(reward, "record"):
+        reward = SOURCE_ALIGNED_REWARD_CONFIG
+    return reward.record()
+
+
+def _asset_metadata(cfg: Any) -> dict[str, Any]:
+    from sim.dexhandrl.asset_paths import asset_provenance
+
+    return asset_provenance(
+        str(getattr(cfg, "object_name", "cube1")),
+        Path(getattr(cfg, "isaac_source_root")),
+    )
+
+
+def _dataset_metadata(cfg: Any) -> dict[str, Any]:
+    path = getattr(cfg, "lance_path", None)
+    if path is None:
+        return {}
+    try:
+        from sim.dexhandrl.lance_loader import lance_dataset_metadata
+
+        return lance_dataset_metadata(path)
+    except Exception:  # pragma: no cover - optional Lance availability
+        return {"path": str(path), "version": None}
 
 
 def _resume_checkpoint(cfg: Any) -> None:
@@ -350,10 +381,10 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
                 terminated = bridge.jax_to_torch(transition.terminated.astype("float32")).bool()
                 truncated = bridge.jax_to_torch(transition.truncated.astype("float32")).bool()
                 done = terminated | truncated
-                weighted_value = getattr(transition, "weighted", None)
+                weighted_value = getattr(transition, "components", None)
                 reason_value = getattr(transition, "reason", None)
                 weighted = bridge.jax_to_torch(weighted_value) if weighted_value is not None else torch.zeros((env.num_envs, len(REWARD_COMPONENTS)), device=observations.device)
-                reason = bridge.jax_to_torch(reason_value.astype("float32")).long() if reason_value is not None else torch.where(terminated, 1, torch.where(truncated, 2, 0))
+                reason = bridge.jax_to_torch(reason_value.astype("float32")).long() if reason_value is not None else torch.where(terminated, 2, torch.where(truncated, 1, 0))
                 transition_valid = bridge.jax_to_torch(transition.valid.astype("float32")).bool()
                 step_time += time.perf_counter() - step_started
                 finite = finite & torch.isfinite(next_obs).all() & torch.isfinite(raw).all()
@@ -388,6 +419,6 @@ def run_batch_ppo(env: Any, agent: Any, cfg: Any, *, model_config: Any, assignme
             checkpoint_due = update == start_update + 1 or update % int(cfg.checkpoint_interval_updates) == 0 or update == total_updates
             if update % int(cfg.log_interval_updates) == 0 or checkpoint_due: logs.write(json.dumps(record, sort_keys=True) + "\n"); logs.flush()
             _write_metrics(writer, metrics, update=update, transitions=transitions, elapsed=elapsed)
-            if checkpoint_due: _checkpoint(agent, output, update, {"progress": record, "config": asdict(cfg), "physics": cfg.physics.record(), "assignment": assignment, "model_config": asdict(model_config), "resume_environment_reset": bool(start_update)})
+            if checkpoint_due: _checkpoint(agent, output, update, {"progress": record, "config": asdict(cfg), "physics": cfg.physics.record(), "assignment": assignment, "model_config": asdict(model_config), "resume_environment_reset": bool(start_update), "reward": _reward_contract_record(cfg), "dataset": _dataset_metadata(cfg), "assets": _asset_metadata(cfg), "code": code_provenance()})
     if writer is not None: writer.close()
     return BatchPPOResult(total_updates - start_update, (total_updates - start_update) * int(cfg.rollouts) * int(env.num_envs), log_path)

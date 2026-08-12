@@ -13,6 +13,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from sim.dexhandrl.asset_paths import task_config_path
 from sim.dexhandrl.constants import (
     ACTION_DIM_021PRO,
     DEFAULT_ISAAC_SOURCE_ROOT,
@@ -27,7 +28,7 @@ from sim.dexhandrl.device_task import (
     apply_device_control,
     build_device_observation,
     compute_device_reward_done,
-    fingertip_inside_object_penalty,
+    fingertip_inside_object_diagnostics,
     gather_trajectory,
     route_active_to_full,
     route_full_to_active,
@@ -40,7 +41,12 @@ from sim.dexhandrl.hand_mapping import (
     resolve_mujoco_ids,
 )
 from sim.dexhandrl.obs_layout import OBS_DIM_021PRO
-from sim.dexhandrl.parity import encode_geometry_12d, geometry_from_isaac_urdf, load_isaac_reward_contract
+from sim.dexhandrl.parity import encode_geometry_12d, geometry_from_isaac_urdf
+from sim.dexhandrl.rewards import (
+    DexHandRewardConfig,
+    REWARD_COMPONENTS,
+    SOURCE_ALIGNED_REWARD_CONFIG,
+)
 from sim.dexhandrl.scene import build_dexhandrl_scene_xml, validate_dexhandrl_compiled_model
 from sim.dexhandrl.skrl_env import _sample_object_point_cloud
 from sim.dexhandrl.trajectory_batch import DexHandTrajectoryBatch
@@ -59,14 +65,7 @@ class DexHandRLBatchConfig:
     settle_frames: int = 1
     object_reset_z_offset: float = 0.01
     use_residual: bool = True
-    early_phase_frames: int = 130
-    object_position_terminal_threshold: float = 0.1
-    termination_failure_penalty: float = -200.0
-    termination_timeout_penalty: float = 0.0
-    contact_force_threshold: float = 5.0
-    max_contact_reward: float = 0.4
-    max_object_stability_reward: float = 0.4
-    object_stability_velocity_scale: float = 0.1
+    reward: DexHandRewardConfig = SOURCE_ALIGNED_REWARD_CONFIG
     fingertip_inside_object_min_depth: float = 0.001
     fingertip_inside_object_max_depth: float = 0.003
     max_fingertip_inside_object_penalty: float = 0.4
@@ -100,6 +99,8 @@ class DexHandRLBatchConfig:
             raise ValueError("batched DexHandRL pins exactly 10 MJX steps per control transition")
         if self.settle_frames < 0:
             raise ValueError("settle_frames must be non-negative")
+        if not isinstance(self.reward, DexHandRewardConfig):
+            raise TypeError("reward must be a DexHandRewardConfig")
         if self.contact_capacity is not None and self.contact_capacity < 128 * self.trajectories.num_envs:
             raise ValueError("contact_capacity is below the conservative global 128-row-per-world floor")
         if self.ccd_capacity is not None and self.ccd_capacity < 64 * self.trajectories.num_envs:
@@ -118,7 +119,26 @@ class DeviceBatchTransition(NamedTuple):
     terminated: Any
     truncated: Any
     reason: Any
-    weighted: Any
+    components: Any
+    task_reward: Any
+    embodiment_reward: Any
+    object_position_error: Any
+    object_rotation_error_deg: Any
+    object_speed: Any
+    object_angular_speed: Any
+    object_position: Any
+    target_object_position: Any
+    object_height_delta: Any
+    target_height_delta: Any
+    hand_active_l2_error: Any
+    finger_active_mean_abs_error: Any
+    finger_active_max_abs_error: Any
+    contact_magnitudes: Any
+    raw_contact: Any
+    contact_gate: Any
+    fingertip_penetration: Any
+    fingertip_penetration_max_depth_m: Any
+    fingertip_penetration_mean_depth_m: Any
     reference_active: Any
     corrected_active: Any
     applied_active: Any
@@ -223,19 +243,18 @@ class DexHandRLMJXBatchEnv:
             raise RuntimeError(f"no JAX {platform} device is available")
         self.device = devices[0]
         root = Path(cfg.isaac_source_root)
-        task_config = Path(cfg.task_config_path or root / "dexhand_env/cfg/task/Dexhand021proReconstruction.yaml")
-        self.reward_contract = load_isaac_reward_contract(task_config)
-        self.reward_weights = np.asarray([
-            self.reward_contract.reward_weights[name] for name in (
-                "alive", "object_pos_tracking_x", "object_pos_tracking_y", "object_pos_tracking_z",
-                "contact_quality", "object_stability_velocity", "object_rot_tracking",
-                "fingertip_inside_object_penalty", "action_penalty_position", "action_penalty_joint",
-            )
-        ], dtype=np.float32)
+        task_config = Path(cfg.task_config_path or task_config_path(root))
+        self.reward_config = cfg.reward
         scene_path = Path(__import__("tempfile").mkdtemp(prefix="dexhandrl_mjx_batch_")) / "cube1.xml"
         self.scene_path = build_dexhandrl_scene_xml(scene_path, object_name="cube1", isaac_source_root=root, physics=cfg.physics)
         self.model = mujoco.MjModel.from_xml_path(str(self.scene_path))
-        validate_dexhandrl_compiled_model(mujoco, self.model, cfg.physics, object_name="cube1")
+        validate_dexhandrl_compiled_model(
+            mujoco,
+            self.model,
+            cfg.physics,
+            object_name="cube1",
+            isaac_source_root=root,
+        )
         self.ids = resolve_mujoco_ids(mujoco, self.model, object_name="cube1")
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if str(self.mjx_model.impl).lower().split(".")[-1] != "warp":
@@ -244,6 +263,9 @@ class DexHandRLMJXBatchEnv:
         self._forward_world = jax.jit(jax.vmap(lambda world: mjx.forward(self.mjx_model, world)))
         self._build_static_contract(root)
         self._build_reset_state()
+        # Actual lift is measured from the settled simulator state. Using the
+        # raw reference Z would fold the intentional reset offset into lift.
+        self._settled_object_z = self._settled_data.xpos[:, self.object_body_id, 2]
         self._transition_fn = jax.jit(self._transition)
         self._reset_mask_fn = jax.jit(self._reset_mask)
         self._reset_observation_fn = jax.jit(self._reset_observation)
@@ -303,7 +325,7 @@ class DexHandRLMJXBatchEnv:
         put = lambda x: self.jax.device_put(self.jp.asarray(x), self.device)
         self._tables = {
             "hand": put(self.batch.hand_active), "object_pos": put(self.batch.object_pos), "object_quat": put(self.batch.object_quat_xyzw),
-            "lengths": put(self.batch.lengths), "last_contact": put(self.batch.movement_end_local), "onehot": put(self.batch.action_onehot50),
+            "lengths": put(self.batch.lengths), "movement_start": put(self.batch.movement_start_local), "movement_end": put(self.batch.movement_end_local), "onehot": put(self.batch.action_onehot50),
             "expected": put(self.batch.task_expected_contact_masks), "joint_mask": put(self.batch.active_joint_masks),
             "tip_mask": put(self.batch.active_fingertip_masks), "rotation_disabled": put(self.batch.rotation_disabled),
             "geometry": put(np.broadcast_to(encode_geometry_12d(geometry), (self.num_envs, 12))), "primitive_type": put(np.full(self.num_envs, kind, np.int32)),
@@ -311,7 +333,7 @@ class DexHandRLMJXBatchEnv:
             "dof_ids": put(self.dof_ids), "actuator_ids": put(self.actuator_ids), "route_upper": put(self.route_upper),
             "active_lower": put(active_lower), "active_upper": put(active_upper), "finger_lower": put(active_lower[6:]), "finger_upper": put(active_upper[6:]),
             "max_delta": put(max_delta), "contact_body_ids": put(self.contact_body_ids), "tip_ids": put(self.fingertip_body_ids),
-            "reward_weights": put(self.reward_weights), "geom_body": put(self.geom_to_contact_body), "geom_object": put(self.object_geom_flags),
+            "geom_body": put(self.geom_to_contact_body), "geom_object": put(self.object_geom_flags),
         }
 
     def _active_limits(self) -> tuple[np.ndarray, np.ndarray]:
@@ -390,7 +412,7 @@ class DexHandRLMJXBatchEnv:
             maximum = max(maximum, int(data.nefc))
         return maximum
 
-    def _features(self, data: Any) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
+    def _features(self, data: Any) -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any]:
         t = self._tables
         current_full = data.qpos[:, t["qpos_ids"]]
         hand_pos = data.xpos[:, self.hand_body_id]
@@ -402,7 +424,8 @@ class DexHandRLMJXBatchEnv:
         fingertips = data.xpos[:, t["tip_ids"]]
         contact_bodies = data.xpos[:, t["contact_body_ids"]]
         obj_vel = data.qvel[:, self.ids.object_free_dof_addr:self.ids.object_free_dof_addr + 3]
-        return current_full, hand_pos, hand_xyzw, object_pos, object_xyzw, obj_vel, fingertips, contact_bodies
+        obj_ang_vel = data.qvel[:, self.ids.object_free_dof_addr + 3:self.ids.object_free_dof_addr + 6]
+        return current_full, hand_pos, hand_xyzw, object_pos, object_xyzw, obj_vel, obj_ang_vel, fingertips, contact_bodies
 
     def _contacts(self, data: Any) -> Any:
         impl = data._impl
@@ -415,7 +438,7 @@ class DexHandRLMJXBatchEnv:
 
     def _observe_state(self, state: _BatchState) -> tuple[Any, Any]:
         t = self._tables
-        current, hp, hq, op, oq, ov, tips, bodies = self._features(state.data)
+        current, hp, hq, op, oq, ov, _, tips, bodies = self._features(state.data)
         contacts = self._contacts(state.data)
         target = gather_trajectory(values=t["object_pos"], frame=state.frame, lengths=t["lengths"])
         target_quat = gather_trajectory(values=t["object_quat"], frame=state.frame, lengths=t["lengths"])
@@ -434,12 +457,12 @@ class DexHandRLMJXBatchEnv:
         t = self._tables
         actions = self.jp.asarray(actions, dtype=self.jp.float32)
         reference = gather_trajectory(values=t["hand"], frame=state.frame, lengths=t["lengths"])
-        current, _, _, op0, oq0, _, tips0, _ = self._features(state.data)
+        current, _, _, op0, oq0, _, _, tips0, _ = self._features(state.data)
         control = apply_device_control(
             action=actions, reference_active=reference, current_full=current, previous_active=state.previous_active,
             base_offset=state.base_offset, joint_offset=state.joint_offset, active_joint_mask=t["joint_mask"], frame=state.frame,
-            start_frame=self.jp.zeros_like(state.frame), last_contact_frame=t["last_contact"], use_residual=self.cfg.use_residual,
-            early_phase_frames=self.cfg.early_phase_frames, base_decay=self.cfg.base_position_decay, post_contact_base_decay=self.cfg.post_contact_base_position_decay,
+            start_frame=self.jp.zeros_like(state.frame), last_contact_frame=t["movement_end"], use_residual=self.cfg.use_residual,
+            early_phase_frames=self.cfg.reward.early_phase_steps, base_decay=self.cfg.base_position_decay, post_contact_base_decay=self.cfg.post_contact_base_position_decay,
             joint_decay=self.cfg.joint_decay, post_contact_joint_decay=self.cfg.post_contact_joint_decay, base_scales=self.cfg.base_position_scales,
             base_max_offset=self.cfg.base_position_max_offset, active_max_deltas=t["max_delta"], active_lower=t["active_lower"], active_upper=t["active_upper"],
             route_upper=t["route_upper"], actuator_ids=t["actuator_ids"], nu=self.model.nu,
@@ -450,24 +473,70 @@ class DexHandRLMJXBatchEnv:
         next_state = _BatchState(data=data, frame=self.jp.minimum(state.frame + 1, t["lengths"] - 1), episode_count=state.episode_count + 1,
             previous_active=control.applied_active, base_offset=control.base_offset, joint_offset=control.joint_offset)
         obs, obs_valid = self._observe_state(next_state)
-        _, _, _, op, oq, ov, tips, _ = self._features(data)
+        current_after, _, _, op, oq, ov, oav, tips, _ = self._features(data)
         contacts = self._contacts(data)
         target = gather_trajectory(values=t["object_pos"], frame=next_state.frame, lengths=t["lengths"])
         target_quat = gather_trajectory(values=t["object_quat"], frame=next_state.frame, lengths=t["lengths"])
-        penalty = fingertip_inside_object_penalty(fingertips_world=tips, object_position=op, object_quat_xyzw=oq, primitive_type=t["primitive_type"], primitive_params=t["primitive"], active_fingertip_mask=t["tip_mask"], min_depth=self.cfg.fingertip_inside_object_min_depth, max_depth=self.cfg.fingertip_inside_object_max_depth, max_penalty=self.cfg.max_fingertip_inside_object_penalty)
+        penetration = fingertip_inside_object_diagnostics(fingertips_world=tips, object_position=op, object_quat_xyzw=oq, primitive_type=t["primitive_type"], primitive_params=t["primitive"], active_fingertip_mask=t["tip_mask"], min_depth=self.cfg.fingertip_inside_object_min_depth, max_depth=self.cfg.fingertip_inside_object_max_depth, max_penalty=self.cfg.max_fingertip_inside_object_penalty)
         reward = compute_device_reward_done(
-            frame=next_state.frame, start_frame=self.jp.zeros_like(next_state.frame), last_contact_frame=t["last_contact"], lengths=t["lengths"],
-            object_position=op, target_position=target, object_quat_xyzw=oq, target_quat_xyzw=target_quat, object_linear_velocity=ov,
-            hand_contact_force=contacts.hand, expected_contact_mask=t["expected"], base_offset=next_state.base_offset, joint_offset=next_state.joint_offset,
-            active_joint_mask=t["joint_mask"], fingertip_inside_penalty=penalty, rotation_disabled=t["rotation_disabled"], early_phase_frames=self.cfg.early_phase_frames,
-            contact_force_threshold=self.cfg.contact_force_threshold, max_contact_reward=self.cfg.max_contact_reward, max_stability_reward=self.cfg.max_object_stability_reward,
-            stability_scale=self.cfg.object_stability_velocity_scale, object_terminal_threshold=self.cfg.object_position_terminal_threshold,
-            reward_weights=t["reward_weights"], termination_failure_reward=self.cfg.termination_failure_penalty, termination_timeout_reward=self.cfg.termination_timeout_penalty,
+            frame=next_state.frame,
+            motion_window_start_frame=t["movement_start"],
+            motion_window_end_frame=t["movement_end"],
+            lengths=t["lengths"],
+            object_position=op,
+            target_position=target,
+            object_quat_xyzw=oq,
+            target_quat_xyzw=target_quat,
+            object_linear_velocity=ov,
+            hand_contact_force=contacts.hand_object,
+            expected_contact_mask=t["expected"],
+            base_offset=next_state.base_offset,
+            joint_offset=next_state.joint_offset,
+            active_joint_mask=t["joint_mask"],
+            fingertip_inside_penalty=penetration.penalty,
+            rotation_disabled=t["rotation_disabled"],
+            config=self.cfg.reward,
         )
         valid = control.valid & obs_valid & contacts.valid & reward.valid & self.jp.all(self.jp.isfinite(actions))
-        reason = self.jp.where(reward.terminated, 1, self.jp.where(reward.truncated, 2, 0)).astype(self.jp.int32)
-        return next_state, DeviceBatchTransition(obs, reward.total.astype(self.jp.float32), reward.terminated, reward.truncated, reason,
-            reward.weighted.astype(self.jp.float32), control.reference_active, control.corrected_active, control.applied_active, control.full_target, control.ctrl, valid)
+        contact_magnitudes = self.jp.linalg.norm(contacts.hand_object, axis=-1)
+        actual_active = route_full_to_active(full=current_after)
+        active_error = actual_active - control.applied_active
+        finger_abs_error = self.jp.abs(active_error[:, 6:])
+        object_height_delta = op[:, 2] - self._settled_object_z
+        target_height_delta = target[:, 2] - self.jp.asarray(self.batch.object_pos[:, 0, 2])
+        return next_state, DeviceBatchTransition(
+            obs,
+            reward.total.astype(self.jp.float32),
+            reward.terminated,
+            reward.truncated,
+            reward.reason,
+            reward.components.astype(self.jp.float32),
+            reward.task_total.astype(self.jp.float32),
+            reward.embodiment_total.astype(self.jp.float32),
+            self.jp.linalg.norm(op - target, axis=1).astype(self.jp.float32),
+            reward.rotation_error_deg.astype(self.jp.float32),
+            reward.object_speed.astype(self.jp.float32),
+            self.jp.linalg.norm(oav, axis=1).astype(self.jp.float32),
+            op.astype(self.jp.float32),
+            target.astype(self.jp.float32),
+            object_height_delta.astype(self.jp.float32),
+            target_height_delta.astype(self.jp.float32),
+            self.jp.linalg.norm(active_error, axis=1).astype(self.jp.float32),
+            self.jp.mean(finger_abs_error, axis=1).astype(self.jp.float32),
+            self.jp.max(finger_abs_error, axis=1).astype(self.jp.float32),
+            contact_magnitudes.astype(self.jp.float32),
+            reward.raw_contact.astype(self.jp.float32),
+            reward.distance_gate.astype(self.jp.float32),
+            reward.fingertip_penetration.astype(self.jp.float32),
+            penetration.max_depth_m.astype(self.jp.float32),
+            penetration.mean_depth_m.astype(self.jp.float32),
+            control.reference_active,
+            control.corrected_active,
+            control.applied_active,
+            control.full_target,
+            control.ctrl,
+            valid,
+        )
 
     def _replace_rows(self, current: Any, cached: Any, mask: Any) -> Any:
         if not hasattr(current, "ndim") or current.ndim == 0 or current.shape[0] != self.num_envs:
@@ -502,8 +571,40 @@ class DexHandRLMJXBatchEnv:
     def _reset_observation(self, state: _BatchState) -> DeviceBatchTransition:
         obs, valid = self._observe_state(state)
         zeros = self.jp.zeros((self.num_envs,), dtype=self.jp.float32)
-        return DeviceBatchTransition(obs, zeros, self.jp.zeros((self.num_envs,), dtype=bool), self.jp.zeros((self.num_envs,), dtype=bool), self.jp.zeros((self.num_envs,), dtype=self.jp.int32),
-            self.jp.zeros((self.num_envs, 10), dtype=self.jp.float32), state.previous_active, state.previous_active, state.previous_active, self.jp.zeros((self.num_envs, 26), dtype=self.jp.float32), self.jp.zeros((self.num_envs, self.model.nu), dtype=self.jp.float32), valid)
+        vector_zeros = self.jp.zeros((self.num_envs,), dtype=self.jp.float32)
+        return DeviceBatchTransition(
+            obs,
+            zeros,
+            self.jp.zeros((self.num_envs,), dtype=bool),
+            self.jp.zeros((self.num_envs,), dtype=bool),
+            self.jp.zeros((self.num_envs,), dtype=self.jp.int32),
+            self.jp.zeros((self.num_envs, len(REWARD_COMPONENTS)), dtype=self.jp.float32),
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            self.jp.zeros((self.num_envs, 3), dtype=self.jp.float32),
+            self.jp.zeros((self.num_envs, 3), dtype=self.jp.float32),
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            self.jp.zeros((self.num_envs, 16), dtype=self.jp.float32),
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            vector_zeros,
+            state.previous_active,
+            state.previous_active,
+            state.previous_active,
+            self.jp.zeros((self.num_envs, 26), dtype=self.jp.float32),
+            self.jp.zeros((self.num_envs, self.model.nu), dtype=self.jp.float32),
+            valid,
+        )
 
     def reset_device(self) -> DeviceBatchTransition:
         self.state = self._initial_state

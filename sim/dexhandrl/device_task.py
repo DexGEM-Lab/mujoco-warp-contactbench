@@ -11,6 +11,10 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from sim.dexhandrl.obs_layout import OBS_DIM_021PRO
+from sim.dexhandrl.rewards import (
+    DeviceReward,
+    compute_device_reward as compute_device_reward_done,
+)
 
 _DIRECT_ACTIVE = np.asarray([0, 1, 2, 3, 4, 5, 7, 8, 10, 11, 13, 14], dtype=np.int32)
 _DIRECT_FULL = np.asarray([6, 7, 8, 9, 10, 11, 14, 15, 18, 19, 22, 23], dtype=np.int32)
@@ -34,20 +38,12 @@ class DeviceControl(NamedTuple):
     valid: Any
 
 
-class DeviceReward(NamedTuple):
-    """Raw and weighted reward diagnostics in source reward-term order.
+class FingertipPenetration(NamedTuple):
+    """DexHand fingertip penetration diagnostics per world."""
 
-    The columns are ``alive, x, y, z, contact, stability, rotation,
-    fingertip, action_position, action_joint``. ``total`` includes terminal
-    failure/timeout additions supplied by the caller.
-    """
-
-    total: Any
-    raw: Any
-    weighted: Any
-    terminated: Any
-    truncated: Any
-    valid: Any
+    penalty: Any
+    max_depth_m: Any
+    mean_depth_m: Any
 
 
 def _require_batch(value: Any, batch: int, trailing: tuple[int, ...], name: str) -> Any:
@@ -220,12 +216,12 @@ def build_device_observation(
     return observation, valid
 
 
-def fingertip_inside_object_penalty(
+def fingertip_inside_object_diagnostics(
     *, fingertips_world: Any, object_position: Any, object_quat_xyzw: Any,
     primitive_type: Any, primitive_params: Any, active_fingertip_mask: Any,
     min_depth: float, max_depth: float, max_penalty: float,
-) -> Any:
-    """Device equivalent of DexHand's cube/cylinder/sphere penetration term."""
+) -> FingertipPenetration:
+    """Return normalized penalty and physical fingertip penetration depths."""
     import jax.numpy as jp
     tips, position, quat = jp.asarray(fingertips_world), jp.asarray(object_position), jp.asarray(object_quat_xyzw)
     batch = tips.shape[0]
@@ -241,50 +237,31 @@ def fingertip_inside_object_penalty(
     cylinder_depth = jp.minimum(params[:, None, 0] - radial, params[:, None, 1] * .5 - jp.abs(local[..., 2]))
     sphere_depth = params[:, None, 0] - jp.linalg.norm(local, axis=-1)
     depth = jp.where(kind[:, None] == 0, box_depth, jp.where(kind[:, None] == 1, cylinder_depth, jp.where(kind[:, None] == 2, sphere_depth, 0.)))
-    ramp = jp.clip((jp.maximum(depth, 0.) - min_depth) / (max_depth - min_depth), 0., 1.)
-    return -max_penalty * jp.sum(ramp * mask, axis=1) / jp.maximum(jp.sum(mask, axis=1), 1.)
-
-
-def compute_device_reward_done(
-    *, frame: Any, start_frame: Any, last_contact_frame: Any, lengths: Any,
-    object_position: Any, target_position: Any, object_quat_xyzw: Any,
-    target_quat_xyzw: Any, object_linear_velocity: Any, hand_contact_force: Any,
-    expected_contact_mask: Any, base_offset: Any, joint_offset: Any,
-    active_joint_mask: Any, fingertip_inside_penalty: Any, rotation_disabled: Any,
-    early_phase_frames: int, contact_force_threshold: float,
-    max_contact_reward: float, max_stability_reward: float, stability_scale: float,
-    object_terminal_threshold: float, reward_weights: Any,
-    termination_failure_reward: float, termination_timeout_reward: float,
-) -> DeviceReward:
-    """Compute scalar-environment parity reward components and done masks."""
-    import jax.numpy as jp
-    frame, start, last, lengths = map(jp.asarray,(frame,start_frame,last_contact_frame,lengths)); batch=frame.shape[0]
-    obj,target,quat,tquat,vel = (_require_batch(x,batch,s,n) for x,s,n in ((object_position,(3,),"object_position"),(target_position,(3,),"target_position"),(object_quat_xyzw,(4,),"object_quat"),(target_quat_xyzw,(4,),"target_quat"),(object_linear_velocity,(3,),"object_linear_velocity")))
-    force,expected = _require_batch(hand_contact_force,batch,(16,3),"hand_contact_force"),_require_batch(expected_contact_mask,batch,(16,),"expected_contact_mask")
-    base,joint,mask = _require_batch(base_offset,batch,(3,),"base_offset"),_require_batch(joint_offset,batch,(16,),"joint_offset"),_require_batch(active_joint_mask,batch,(16,),"active_joint_mask")
-    tip_penalty,disabled = jp.asarray(fingertip_inside_penalty),jp.asarray(rotation_disabled)
-    weights=jp.asarray(reward_weights)
-    if any(x.shape != (batch,) for x in (start,last,lengths,tip_penalty,disabled)) or weights.shape != (10,): raise ValueError("reward ABI vectors differ from pinned contract")
-    early=(frame-start)<early_phase_frames; after=frame>last
-    has=jp.linalg.norm(force,axis=-1)>contact_force_threshold
-    quality=jp.sum(has* (expected>.5),axis=1)/jp.maximum(jp.sum(expected,axis=1),1.)*max_contact_reward
-    quality=jp.where(after,0.,quality)
-    tracking=quality[:,None]*jp.exp(-40.*jp.abs(obj-target))
-    stability=jp.where(after,max_stability_reward*jp.exp(-(jp.linalg.norm(vel,axis=1)/max(stability_scale,1e-6))**2),0.)
-    dot=jp.clip(jp.abs(jp.sum(quat*tquat,axis=1))/jp.maximum(jp.linalg.norm(quat,axis=1)*jp.linalg.norm(tquat,axis=1),1e-12),0.,1.)
-    deg=2*jp.arccos(dot)*180/jp.pi; rot=jp.where(deg<=20,.4*(-.00125*deg**2+1)-.1,jp.where(deg<=90,.4*(-.00003175*(deg-20)**2-.019206*(deg-20)+.5)-.1,-.5)); rot=jp.where(disabled.astype(bool),0.,rot)
-    position=-jp.sum(jp.abs(base*100),axis=1); action_joint=-jp.sum(jp.abs(joint*10),axis=1)/jp.maximum(jp.sum(mask,axis=1),1)*8; position=jp.where(after,position*.5,position); action_joint=jp.where(after,action_joint*.5,action_joint)
-    raw=jp.stack((jp.ones((batch,),obj.dtype),tracking[:,0],tracking[:,1],tracking[:,2],quality,stability,rot,tip_penalty,position,action_joint),axis=1)
-    raw=jp.where(early[:,None],raw.at[:,1:7].set(0.),raw)
-    weighted=raw*weights[None]; error=jp.linalg.norm(obj-target,axis=1); terminated=(~early)&(error>object_terminal_threshold); truncated=frame>=lengths-1
-    termination_reward = jp.where(
-        terminated,
-        jp.asarray(termination_failure_reward, dtype=obj.dtype),
-        jp.where(truncated, jp.asarray(termination_timeout_reward, dtype=obj.dtype), 0.0),
+    positive_depth = jp.maximum(depth, 0.) * mask
+    ramp = jp.clip((positive_depth - min_depth) / (max_depth - min_depth), 0., 1.)
+    active_count = jp.maximum(jp.sum(mask, axis=1), 1.)
+    penalty = -max_penalty * jp.sum(ramp, axis=1) / active_count
+    return FingertipPenetration(
+        penalty=penalty,
+        max_depth_m=jp.max(positive_depth, axis=1),
+        mean_depth_m=jp.sum(positive_depth, axis=1) / active_count,
     )
-    total=jp.sum(weighted,axis=1)+termination_reward
-    valid=(jp.all(jp.isfinite(raw))&jp.all(jp.isfinite(total))
-           &jp.isfinite(jp.asarray(termination_failure_reward))
-           &jp.isfinite(jp.asarray(termination_timeout_reward))
-           &jp.all((expected==0)|(expected==1)))
-    return DeviceReward(total,raw,weighted,terminated,truncated,valid)
+
+
+def fingertip_inside_object_penalty(
+    *, fingertips_world: Any, object_position: Any, object_quat_xyzw: Any,
+    primitive_type: Any, primitive_params: Any, active_fingertip_mask: Any,
+    min_depth: float, max_depth: float, max_penalty: float,
+) -> Any:
+    """Compatibility projection of :func:`fingertip_inside_object_diagnostics`."""
+    return fingertip_inside_object_diagnostics(
+        fingertips_world=fingertips_world,
+        object_position=object_position,
+        object_quat_xyzw=object_quat_xyzw,
+        primitive_type=primitive_type,
+        primitive_params=primitive_params,
+        active_fingertip_mask=active_fingertip_mask,
+        min_depth=min_depth,
+        max_depth=max_depth,
+        max_penalty=max_penalty,
+    ).penalty

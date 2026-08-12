@@ -4,7 +4,7 @@ Make the existing DexHand021Pro retarget dataset executable as a physically cons
 
 Completion requires both layers to work:
 
-1. `use_residual=false` follows representative and all selected retarget references without numerical failure, pathological penetration/ejection, or a systematic simulator/control defect that RL would have to hide.
+1. `use_residual=false` executes representative and all selected retarget references through their full horizons without numerical failure, pathological penetration/ejection, capacity saturation, or a systematic asset/control defect. Grasp/lift task failure is an expected residual gap and is measured rather than used as a PPO blocker.
 2. Residual PPO consumes a versioned ManoRL-aligned task reward, records comparable update/episode/evaluation evidence, and demonstrates improvement over reference-only and untrained-policy baselines on physical task metrics.
 
 ## Workbench
@@ -37,10 +37,10 @@ Completion requires both layers to work:
 
 ### Simulation acceptance
 
-- The residual-off baseline is a prerequisite for RL, not an optional diagnostic.
+- The residual-off baseline is a prerequisite measurement for RL: it must establish a trustworthy simulator/control baseline, but it is not required to grasp or lift successfully.
 - Evaluate at least all selected `cube1` actions `01,02,03,04,09,10,18`, with deterministic identity selection and one full movement/release horizon per action before scaled training.
 - Record reference tracking error, object translation/orientation error, contact coverage, object lift/placement, fingertip penetration, object speed/angular speed, termination reason, and finite-state validity.
-- Separate reference feasibility from policy quality. A repeated reference-only failure caused by scene assets, inertial origin, contact decoding, target routing, actuator response, reset, timing, or capacity must be corrected before PPO is used as evidence.
+- Separate simulator-contract validity from task success. Numerical failure, pathological penetration/ejection, wrong scene assets, broken contact decoding, invalid target routing, reset/timing errors, or saturated capacity must be corrected before PPO is used as evidence. A stable, correctly measured failure to grasp or lift is the residual policy's intended optimization gap.
 - Keep `mjx-warp` authoritative for batch training. Native MuJoCo may be used as a discriminating simulator/control diagnostic, with backend identity explicit.
 
 ### Shared reward contract
@@ -88,6 +88,6 @@ The raw term vector, weighted term vector, total, early-phase behavior, and term
 - Do not merge `dev` wholesale into the DexHand product line.
 - Do not use subagents; the user has not authorized delegation.
 - Do not launch a long production run before the reference and short-PPO gates pass.
-- Do not use RL to mask a repeatable reference-only simulator defect.
+- Do not use RL to mask a repeatable simulator-contract defect; stable reference-only task failure is allowed and retained as the learning baseline.
 - Preserve DexHand021Pro observation/action/routing ABI unless evidence requires an explicitly versioned change.
 - Stage explicit files only and keep commits atomic.

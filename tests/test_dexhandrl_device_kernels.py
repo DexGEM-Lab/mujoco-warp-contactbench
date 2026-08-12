@@ -18,13 +18,8 @@ from sim.dexhandrl.device_task import (
     route_full_to_active,
 )
 from sim.dexhandrl.hand_mapping import active_to_full_dof, full_to_active_dof
-from sim.dexhandrl.parity import (
-    add_termination_reward,
-    apply_reward_weights,
-    build_minimal_observation,
-    object_tracking_rewards,
-    rotation_tracking_reward,
-)
+from sim.dexhandrl.parity import build_minimal_observation
+from sim.dexhandrl.rewards import DexHandRewardConfig, compute_reward_host
 from sim.dexhandrl.skrl_env import apply_active_target_post_filters
 
 
@@ -155,39 +150,71 @@ def test_device_control_matches_scalar_raw_reference_correction_residual_filters
     assert np.max(np.abs(np.asarray(result.corrected_active) - reference)) > .1
 
 
-def test_device_reward_components_and_termination_match_scalar_helpers() -> None:
+def test_device_reward_components_and_termination_match_host_kernel() -> None:
     n = 7
     frame = np.asarray([0, 1, 2, 4, 5, 6, 7], np.int32)
     lengths = np.asarray([10, 10, 10, 10, 10, 6, 8], np.int32)
-    # Row five is both terminal and truncated, proving failure takes priority
-    # over timeout exactly as add_termination_reward does in the scalar env.
     obj = np.asarray([[0,0,0], [.1,0,0], [0,.1,0], [.1,.1,.1], [.5,0,0], [.5,0,.1], [0,0,0]], np.float32)
     target = np.zeros((n,3), np.float32)
     quat = np.tile(np.asarray([0,0,0,1.], np.float32), (n,1)); quat[4] = np.asarray([0,0,np.sin(np.pi/8),np.cos(np.pi/8)], np.float32)
+    target_quat = np.tile(np.asarray([0,0,0,1.], np.float32), (n,1))
     force = np.zeros((n,16,3), np.float32); force[:, :2, 0] = np.asarray([[6,4],[7,8],[2,9],[6,6],[8,2],[9,9],[0,0]], np.float32)
     expected = np.zeros((n,16), np.float32); expected[:, :2] = 1
-    base = np.linspace(-.02,.02,n*3,dtype=np.float32).reshape(n,3); joint = np.linspace(-.1,.1,n*16,dtype=np.float32).reshape(n,16); mask = np.tile(np.asarray([1,0]*8, np.float32), (n,1))
-    weights = np.asarray([.001,.1,.2,.3,.4,.5,.6,.7,.8,.9], np.float32)
-    result = compute_device_reward_done(frame=jnp.asarray(frame), start_frame=jnp.zeros(n,jnp.int32), last_contact_frame=jnp.full(n,3), lengths=jnp.asarray(lengths), object_position=jnp.asarray(obj), target_position=jnp.asarray(target), object_quat_xyzw=jnp.asarray(quat), target_quat_xyzw=jnp.tile(jnp.asarray([[0,0,0,1.]],jnp.float32),(n,1)), object_linear_velocity=jnp.asarray(np.arange(n*3,dtype=np.float32).reshape(n,3)/20), hand_contact_force=jnp.asarray(force), expected_contact_mask=jnp.asarray(expected), base_offset=jnp.asarray(base), joint_offset=jnp.asarray(joint), active_joint_mask=jnp.asarray(mask), fingertip_inside_penalty=jnp.linspace(-.3,0,n), rotation_disabled=jnp.asarray([0,1,0,0,0,0,0],bool), early_phase_frames=2, contact_force_threshold=5., max_contact_reward=.4, max_stability_reward=.4, stability_scale=.1, object_terminal_threshold=.3, reward_weights=jnp.asarray(weights), termination_failure_reward=-123., termination_timeout_reward=4.5)
-    names = ("alive", "object_pos_tracking_x", "object_pos_tracking_y", "object_pos_tracking_z", "contact_quality", "object_stability_velocity", "object_rot_tracking", "fingertip_inside_object_penalty", "action_penalty_position", "action_penalty_joint")
-    scalar_raw, scalar_weighted, scalar_total = [], [], []
-    for row in range(n):
-        after, early = frame[row] > 3, frame[row] < 2
-        quality = ((np.linalg.norm(force[row],axis=-1) > 5) * (expected[row] > .5)).sum() / max(expected[row].sum(), 1) * .4
-        quality = 0. if after else quality
-        tracking = object_tracking_rewards(obj[row], target[row])
-        angle = 2 * np.arccos(np.clip(abs(np.dot(quat[row], [0,0,0,1.])), 0, 1)) * 180 / np.pi
-        raw = dict(zip(names, [1., quality*tracking["object_pos_tracking_x"], quality*tracking["object_pos_tracking_y"], quality*tracking["object_pos_tracking_z"], quality, .4*np.exp(-(np.linalg.norm(np.arange(row*3,row*3+3)/20)/.1)**2) if after else 0., 0. if row == 1 else rotation_tracking_reward(angle), float(np.linspace(-.3,0,n)[row]), -np.abs(base[row]*100).sum()*(.5 if after else 1.), -np.abs(joint[row]*10).sum()/max(mask[row].sum(),1)*8*(.5 if after else 1.)]))
-        if early:
-            for name in names[1:7]: raw[name] = 0.
-        components = apply_reward_weights(raw, dict(zip(names, weights)))
-        terminated, truncated = (not early and np.linalg.norm(obj[row]) > .3), frame[row] >= lengths[row] - 1
-        if terminated: add_termination_reward(components, "failure", {"failure": -123.})
-        elif truncated: add_termination_reward(components, "timeout", {"timeout": 4.5})
-        scalar_raw.append([raw[name] for name in names]); scalar_weighted.append([raw[name]*weights[index] for index,name in enumerate(names)]); scalar_total.append(components["total"])
-    np.testing.assert_allclose(np.asarray(result.raw), scalar_raw, rtol=2e-5, atol=2e-6)
-    np.testing.assert_allclose(np.asarray(result.weighted), scalar_weighted, rtol=2e-5, atol=2e-6)
-    np.testing.assert_allclose(np.asarray(result.total), scalar_total, rtol=2e-5, atol=2e-6)
+    base = np.linspace(-.02,.02,n*3,dtype=np.float32).reshape(n,3)
+    joint = np.linspace(-.1,.1,n*16,dtype=np.float32).reshape(n,16)
+    mask = np.tile(np.asarray([1,0]*8, np.float32), (n,1))
+    velocity = np.arange(n*3,dtype=np.float32).reshape(n,3)/20
+    fingertip = np.linspace(-.3,0,n, dtype=np.float32)
+    rotation_disabled = np.asarray([0,1,0,0,0,0,0], bool)
+    config = DexHandRewardConfig(
+        early_phase_steps=2,
+        contact_force_threshold_N=5.0,
+        late_contact_grace_frames=1,
+        max_deviation_distance_m=.3,
+        deviation_penalty=123.0,
+        action_penalty_scale=1.0,
+    )
+    inputs = dict(
+        frame=frame,
+        motion_window_start_frame=np.ones(n, np.int32),
+        motion_window_end_frame=np.full(n,3,np.int32),
+        lengths=lengths,
+        object_position=obj,
+        target_position=target,
+        object_quat_xyzw=quat,
+        target_quat_xyzw=target_quat,
+        object_linear_velocity=velocity,
+        hand_contact_force=force,
+        expected_contact_mask=expected,
+        base_offset=base,
+        joint_offset=joint,
+        active_joint_mask=mask,
+        fingertip_inside_penalty=fingertip,
+        rotation_disabled=rotation_disabled,
+        config=config,
+    )
+    host = compute_reward_host(**inputs)
+    result = compute_device_reward_done(
+        **{name: jnp.asarray(value) for name, value in inputs.items() if name != "config"},
+        config=config,
+    )
+    for name in (
+        "total", "task_total", "embodiment_total", "components",
+        "distance_x", "distance_y", "distance_z", "rotation",
+        "rotation_error_deg", "position_penalty", "joint_penalty",
+        "action_penalty", "raw_contact", "contact", "distance_gate",
+        "object_stability", "object_speed", "survival",
+        "fingertip_penetration", "deviation_penalty", "reason",
+    ):
+        np.testing.assert_allclose(
+            np.asarray(getattr(result, name)), np.asarray(getattr(host, name)),
+            rtol=2e-5, atol=2e-6,
+        )
     np.testing.assert_array_equal(np.asarray(result.terminated), [False,False,False,False,True,True,False])
     np.testing.assert_array_equal(np.asarray(result.truncated), [False,False,False,False,False,True,True])
-    assert bool(result.valid)
+    np.testing.assert_array_equal(np.asarray(result.reason), [0,0,0,0,2,2,1])
+    np.testing.assert_allclose(
+        np.asarray(result.components).sum(axis=1), np.asarray(result.total),
+        rtol=2e-5, atol=2e-6,
+    )
+    assert bool(np.asarray(result.valid)) and host.valid

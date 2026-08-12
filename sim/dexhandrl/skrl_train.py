@@ -6,7 +6,7 @@ import argparse
 import copy
 import json
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +14,23 @@ import numpy as np
 import torch
 from loguru import logger
 
+from sim.dexhandrl.asset_paths import asset_provenance, contact_bodies_path, task_config_path
 from sim.dexhandrl.contracts import DexHandPhysicsConfig, physics_legacy_aliases, resolve_physics_config
 from sim.dexhandrl.lance_loader import list_trajectories
-from sim.dexhandrl.trajectory_batch import DEXHAND_ALL_ACTIONS
+from sim.dexhandrl.trajectory_batch import (
+    DEXHAND_ALL_ACTIONS,
+    resolve_balanced_action_assignments,
+)
 from sim.dexhandrl.rlgames_checkpoint import RlGamesRunningMeanStd, load_rlgames_checkpoint
 from sim.dexhandrl.skrl_env import DexHandRLMJXEnv, DexHandRLMJXEnvConfig
 from sim.dexhandrl.constants import DEFAULT_ISAAC_SOURCE_ROOT, DEFAULT_OUTPUT_ROOT
+from sim.dexhandrl.lance_loader import lance_dataset_metadata
+from sim.dexhandrl.provenance import code_provenance
+from sim.dexhandrl.rewards import (
+    PPO_REWARD_SCALE,
+    SOURCE_ALIGNED_REWARD_CONFIG,
+    DexHandRewardConfig,
+)
 
 try:
     from sim.dexhandrl.skrl_models import SkrlDexHandModelConfig, build_skrl_models
@@ -40,6 +51,7 @@ class SkrlLauncherConfig:
     sequence_index: int = 0
     uuid: str | None = None
     use_residual: bool = True
+    reward: DexHandRewardConfig = SOURCE_ALIGNED_REWARD_CONFIG
     physics: DexHandPhysicsConfig | None = None
     # Compatibility inputs are resolved into physics in __post_init__.
     dt: float | None = None
@@ -233,22 +245,20 @@ def _resolve_trajectory_specs(cfg: SkrlLauncherConfig) -> list[dict[str, Any]]:
     if cfg.action == "all":
         if cfg.uuid is not None:
             raise RuntimeError("--uuid cannot be combined with --action all")
-        routes: dict[str, list[dict[str, Any]]] = {}
-        for action in DEXHAND_ALL_ACTIONS:
-            selected = [row for row in rows if row["object_name"] == cfg.object_name and row["action"] == action]
-            selected.sort(key=lambda row: (int(row["row_id"]), str(row["uuid"])))
-            if not selected:
-                raise RuntimeError(
-                    f"no trajectories found for required action={action!r} object={cfg.object_name!r} in {cfg.lance_path}"
-                )
-            routes[action] = selected
-        specs = []
-        for env_id in range(num_envs):
-            action = DEXHAND_ALL_ACTIONS[env_id % len(DEXHAND_ALL_ACTIONS)]
-            route = routes[action]
-            sequence_index = (cfg.sequence_index + env_id // len(DEXHAND_ALL_ACTIONS)) % len(route)
-            specs.append({**route[sequence_index], "sequence_index": sequence_index})
-        return specs
+        try:
+            return resolve_balanced_action_assignments(
+                rows,
+                object_name=cfg.object_name,
+                num_envs=num_envs,
+                sequence_index=cfg.sequence_index,
+                # The bounded N8 learning gate uses the identical identity set
+                # as reference/untrained/trained evaluation: world 7 is an
+                # exact duplicate of world 0. Larger batches retain independent
+                # per-action trajectory cycling for production training.
+                duplicate_first_for_extra=num_envs == 8,
+            )
+        except RuntimeError as error:
+            raise RuntimeError(f"{error} in {cfg.lance_path}") from error
 
     selected = [row for row in rows if row["object_name"] == cfg.object_name and row["action"] == cfg.action]
     if not selected:
@@ -338,23 +348,27 @@ def _build_batch_env(cfg: SkrlLauncherConfig, specs: list[dict[str, Any]]):
     batch = load_trajectory_batch(
         cfg.lance_path, specs, pre_contact_frames=cfg.pre_contact_frames,
         post_contact_frames=cfg.post_contact_frames,
-        contact_bodies_file=root / "assets/all_assets/Assets/object_grasps_simple.yaml",
-        task_config_path=root / "dexhand_env/cfg/task/Dexhand021proReconstruction.yaml",
+        contact_bodies_file=contact_bodies_path(root),
+        task_config_path=task_config_path(root),
     )
     env = DexHandRLMJXBatchEnv(DexHandRLBatchConfig(
         trajectories=batch, device=cfg.device, object_name=cfg.object_name, action="all",
         physics=cfg.physics, settle_frames=cfg.settle_frames, use_residual=cfg.use_residual,
-        early_phase_frames=cfg.early_phase_frames,
-        object_position_terminal_threshold=cfg.object_position_terminal_threshold,
+        reward=cfg.reward,
         isaac_source_root=root,
     ))
     return env, _BatchSpaces(env.num_envs)
 
 
-def _reward_shaper_1_0(rewards: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
-    """Authoritative DexHand run shaper; explicit to preserve telemetry provenance."""
+def _reward_shaper_0_5(rewards: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
+    """ManoRL-aligned PPO reward shaper (0.5x raw environment reward).
+
+    In-place so the batch runtime's post-record ``rewards`` tensor reflects the
+    exact values PPO stores, matching the existing shaped-reward telemetry path.
+    """
+
     del timestep, timesteps
-    return rewards
+    return rewards.mul_(PPO_REWARD_SCALE)
 
 
 def _build_agent(env, cfg: SkrlLauncherConfig):
@@ -394,7 +408,7 @@ def _build_agent(env, cfg: SkrlLauncherConfig):
     _set_cfg_value(agent_cfg, "kl_threshold", float(cfg.kl_threshold))
     _set_cfg_value(agent_cfg, "mixed_precision", bool(cfg.mixed_precision))
     _set_cfg_value(agent_cfg, "time_limit_bootstrap", bool(cfg.time_limit_bootstrap))
-    _set_cfg_value(agent_cfg, "rewards_shaper", _reward_shaper_1_0)
+    _set_cfg_value(agent_cfg, "rewards_shaper", _reward_shaper_0_5)
     _set_cfg_value(agent_cfg, "observation_preprocessor", RlGamesRunningMeanStd)
     _set_cfg_value(
         agent_cfg,
@@ -445,6 +459,10 @@ def _write_launcher_config(cfg: SkrlLauncherConfig, specs: list[dict[str, Any]],
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     payload = _to_jsonable(asdict(cfg))
     payload["physics_contract"] = _to_jsonable(cfg.physics.record())
+    payload["reward_contract"] = _to_jsonable(cfg.reward.record())
+    payload["dataset"] = _to_jsonable(lance_dataset_metadata(cfg.lance_path))
+    payload["assets"] = _to_jsonable(asset_provenance(cfg.object_name, cfg.isaac_source_root))
+    payload["code"] = _to_jsonable(code_provenance())
     payload["resolved_trajectories"] = _to_jsonable(specs)
     payload["trajectory_assignment_counts"] = {
         action: sum(spec.get("action") == action for spec in specs) for action in DEXHAND_ALL_ACTIONS
@@ -646,6 +664,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--uuid", default=None)
     parser.add_argument("--use-residual", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--early-phase-frames", type=int, default=130)
+    parser.add_argument("--contact-force-threshold", type=float, default=0.2)
     parser.add_argument("--pre-contact-frames", type=int, default=200)
     parser.add_argument("--post-contact-frames", type=int, default=250)
     parser.add_argument("--object-position-terminal-threshold", type=float, default=0.1)
@@ -745,6 +764,12 @@ def main(argv: list[str] | None = None) -> None:
         sequence_index=int(args.sequence_index),
         uuid=args.uuid,
         use_residual=bool(args.use_residual),
+        reward=replace(
+            SOURCE_ALIGNED_REWARD_CONFIG,
+            early_phase_steps=int(args.early_phase_frames),
+            max_deviation_distance_m=float(args.object_position_terminal_threshold),
+            contact_force_threshold_N=float(args.contact_force_threshold),
+        ),
         early_phase_frames=int(args.early_phase_frames),
         pre_contact_frames=int(args.pre_contact_frames),
         post_contact_frames=int(args.post_contact_frames),
