@@ -226,6 +226,10 @@ class EnvironmentConfig:
     # untouched, so the policy must use residual correction to bring the object
     # back onto the reference path. Zero keeps the current exact-start behavior.
     object_init_xy_offset_range_m: float = 0.0
+    # Accepted-parent synthesis reuses the exact object offset from a previously
+    # successful scalable-synthesis row. This explicit per-world contract is
+    # mutually exclusive with random range sampling.
+    object_init_xy_offsets_m: tuple[tuple[float, float], ...] | None = None
 
     def __post_init__(self) -> None:
         if self.num_envs < 1:
@@ -244,6 +248,16 @@ class EnvironmentConfig:
             raise TypeError("reward_config must be a RewardConfig")
         if self.max_deviation_distance < 0 or self.deviation_penalty < 0:
             raise ValueError("termination thresholds must be non-negative")
+        if self.object_init_xy_offsets_m is not None:
+            offsets = np.asarray(self.object_init_xy_offsets_m, dtype=np.float64)
+            if offsets.shape != (self.num_envs, 2) or not np.all(np.isfinite(offsets)):
+                raise ValueError(
+                    "object_init_xy_offsets_m must contain one finite XY pair per environment"
+                )
+            if self.object_init_xy_offset_range_m != 0.0:
+                raise ValueError(
+                    "explicit object XY offsets are mutually exclusive with random range sampling"
+                )
         if self.episode_length < 1:
             raise ValueError("episode_length must be positive")
         if self.contact_capacity < 1 or self.constraint_capacity < 1:
@@ -2353,6 +2367,32 @@ class MujocoManoEnvironment:
             ],
             dtype=np.int64,
         )
+        # Ordinary training/reference trajectories preserve the fixed early30
+        # ABI. Synthesis-only augmented trajectories make exactly their new
+        # prefix the pure-reference phase; at the first unchanged pre60 frame,
+        # residual action and deviation termination become live together.
+        self.augmentation_prefix_mask = np.asarray(
+            [
+                int(getattr(item, "augmentation_prefix_frames", 0)) > 0
+                for item in self.trajectories
+            ],
+            dtype=bool,
+        )
+        self.early_phase_lengths = np.asarray(
+            [
+                int(getattr(item, "augmentation_prefix_frames", 0))
+                if augmented
+                else self.config.compatibility.early_phase_steps
+                for item, augmented in zip(
+                    self.trajectories, self.augmentation_prefix_mask, strict=True
+                )
+            ],
+            dtype=np.int64,
+        )
+        # Deviation protection covers only the generated augmentation. Entering
+        # the unchanged original pre60 reference re-enables the normal 0.10 m
+        # terminal at the same boundary where residual action becomes live.
+        self.deviation_enable_steps = self.early_phase_lengths.copy()
         # ``object_move.end_frame`` is inclusive in both the source metadata
         # and reward window.  Modern decoding converts it to an exclusive
         # Python slice stop while retaining this raw inclusive identity value.
@@ -2371,6 +2411,13 @@ class MujocoManoEnvironment:
             self.contact_end_frames >= self.trajectory_lengths
         ):
             raise ValueError("trajectory movement window does not map into its reference slice")
+        if np.any(self.early_phase_lengths < 0) or np.any(
+            self.augmentation_prefix_mask
+            & (self.early_phase_lengths >= self.trajectory_lengths)
+        ):
+            raise ValueError("augmented trajectory early phase does not map into its reference slice")
+        if np.any(self.deviation_enable_steps < self.early_phase_lengths):
+            raise ValueError("trajectory deviation gate precedes its early phase")
         # Compatibility diagnostics still expose scalar values for a single/shared trajectory.
         self.contact_start_frame = int(self.contact_start_frames[0])
         self.contact_end_frame = int(self.contact_end_frames[0])
@@ -2378,7 +2425,11 @@ class MujocoManoEnvironment:
     def _initial_qpos(self) -> NDArray[np.float64]:
         qpos = np.zeros((self.config.num_envs, self.model.nq), dtype=np.float64)
         range_m = self.config.object_init_xy_offset_range_m
-        if range_m > 0.0:
+        if self.config.object_init_xy_offsets_m is not None:
+            self._object_init_xy_offsets = np.asarray(
+                self.config.object_init_xy_offsets_m, dtype=np.float64
+            ).copy()
+        elif range_m > 0.0:
             # One sampled XY offset per environment, fixed for the episode's
             # initial placement. Reference hand targets and target object poses
             # are intentionally left at their original world positions.
@@ -3134,6 +3185,15 @@ class MujocoManoEnvironment:
             contact_end_frames=self.contact_end_frames.copy(),
             rotation_disabled_mask=np.zeros(batch, dtype=bool),
             early_phase_starts=np.zeros(batch, dtype=np.int64),
+            early_phase_lengths=getattr(
+                self,
+                "early_phase_lengths",
+                np.full(
+                    batch,
+                    self.config.compatibility.early_phase_steps,
+                    dtype=np.int64,
+                ),
+            ).copy(),
         )
 
     def _refresh_output(self) -> ObservationResult:
@@ -3253,6 +3313,11 @@ class MujocoManoEnvironment:
                     self.config.residual_enabled,
                     dtype=np.float64,
                 ),
+                early_phase_lengths=self.early_phase_lengths,
+                hold_early_exit_zero=np.asarray(
+                    ~self.augmentation_prefix_mask,
+                    dtype=bool,
+                ),
                 config=self.config.residual_action,
             )
             action_results[side] = side_result
@@ -3349,18 +3414,14 @@ class MujocoManoEnvironment:
             device_contact_decode=self.config.device_contact_decode,
         )
         self._phase_stop("state_contact_extraction", extraction_phase)
-        early = early_phase_mask(
-            self.trajectory_steps,
-            starts=np.zeros(self.config.num_envs, dtype=np.int64),
-            steps=self.config.compatibility.early_phase_steps,
-        )
+        deviation_mask = self.trajectory_steps < self.deviation_enable_steps
         termination_phase = self._phase_start("termination")
         termination = check_termination(
             object_position=physical.object_position,
             target_position=self._reference_gather(self.reference_object_pos, self._target_indices()),
             progress=self.progress,
             trajectory_lengths=self.trajectory_lengths.copy(),
-            early_mask=early,
+            early_mask=deviation_mask,
             max_deviation_distance=self.config.max_deviation_distance,
             deviation_penalty=self.config.deviation_penalty,
         )

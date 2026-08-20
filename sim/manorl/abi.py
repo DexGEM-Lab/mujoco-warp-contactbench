@@ -182,20 +182,33 @@ def early_phase_mask(
     trajectory_steps: NDArray[object],
     *,
     starts: NDArray[object] | None = None,
-    steps: int = DEFAULT_EARLY_PHASE_STEPS,
+    steps: int | NDArray[object] = DEFAULT_EARLY_PHASE_STEPS,
 ) -> NDArray[np.bool_]:
-    """Return the source half-open early pure-mocap interval."""
+    """Return per-row half-open pure-reference intervals.
+
+    Production trajectories use the established scalar early-phase length.
+    Synthesis-only augmented trajectories may supply one prefix length per row,
+    allowing each fresh attempt to open residual and deviation semantics exactly
+    when its generated prefix reaches the unchanged source reference.
+    """
 
     step_values = np.asarray(trajectory_steps)
     if step_values.ndim != 1 or not np.issubdtype(step_values.dtype, np.integer):
         raise ValueError("trajectory_steps must be a one-dimensional integer array")
-    if steps < 0:
-        raise ValueError("steps must be non-negative")
     if starts is None:
         start_values = np.zeros_like(step_values)
     else:
         start_values = _as_vector("starts", starts, len(step_values))
-    return (step_values >= start_values) & (step_values < start_values + steps)
+    raw_steps = np.asarray(steps)
+    if raw_steps.ndim == 0:
+        if not np.issubdtype(raw_steps.dtype, np.integer):
+            raise ValueError("steps must be an integer or integer (batch,) array")
+        step_lengths = np.full(len(step_values), int(raw_steps), dtype=np.int64)
+    else:
+        step_lengths = _as_vector("steps", raw_steps, len(step_values))
+    if np.any(step_lengths < 0):
+        raise ValueError("steps must be non-negative")
+    return (step_values >= start_values) & (step_values < start_values + step_lengths)
 
 
 def process_residual_actions(
@@ -210,6 +223,8 @@ def process_residual_actions(
     active_joint_mask: NDArray[object],
     use_residual: NDArray[object] | None = None,
     early_phase_starts: NDArray[object] | None = None,
+    early_phase_lengths: NDArray[object] | None = None,
+    hold_early_exit_zero: NDArray[object] | None = None,
     config: ResidualActionConfig = ResidualActionConfig(),
 ) -> ResidualActionResult:
     """Apply the residual transformation for a 28-DoF MuJoCo hand.
@@ -265,8 +280,13 @@ def process_residual_actions(
         active, processed[:, 6 : 6 + cumulative_dim], 0.0
     )
     old_joint_offset = np.where(active, joint_offset, 0.0)
+    early_lengths = (
+        config.early_phase_steps
+        if early_phase_lengths is None
+        else _as_vector("early_phase_lengths", early_phase_lengths, batch)
+    )
     early = early_phase_mask(
-        steps, starts=early_phase_starts, steps=config.early_phase_steps
+        steps, starts=early_phase_starts, steps=early_lengths
     )
     processed[early] = 0.0
     starts = (
@@ -274,7 +294,14 @@ def process_residual_actions(
         if early_phase_starts is None
         else _as_vector("early_phase_starts", early_phase_starts, batch)
     )
-    exit_early = steps == starts + config.early_phase_steps
+    if hold_early_exit_zero is None:
+        hold_exit = np.ones(batch, dtype=bool)
+    else:
+        hold_values = np.asarray(hold_early_exit_zero)
+        if hold_values.shape != (batch,):
+            raise ValueError("hold_early_exit_zero must have shape (batch,)")
+        hold_exit = hold_values.astype(bool, copy=False)
+    exit_early = (steps == starts + early_lengths) & hold_exit
     zero_offset = ~residual | early | exit_early
     accumulate = (steps != 0) & ~early & residual
 

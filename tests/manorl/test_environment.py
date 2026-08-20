@@ -1258,6 +1258,14 @@ def test_object_init_xy_offset_config_validation() -> None:
         EnvironmentConfig(object_init_xy_offset_range_m=float("nan"))
     config = EnvironmentConfig(object_init_xy_offset_range_m=0.02)
     assert config.object_init_xy_offset_range_m == 0.02
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        EnvironmentConfig(
+            num_envs=1,
+            object_init_xy_offset_range_m=0.02,
+            object_init_xy_offsets_m=((0.01, 0.0),),
+        )
+    with pytest.raises(ValueError, match="one finite XY pair"):
+        EnvironmentConfig(num_envs=2, object_init_xy_offsets_m=((0.01, 0.0),))
 
 
 def test_object_init_xy_offset_zero_by_default() -> None:
@@ -1273,6 +1281,22 @@ def test_object_init_xy_offset_zero_by_default() -> None:
         env.reference_object_pos[:, 0, :2],
         atol=1e-12,
     )
+
+
+def test_explicit_object_init_xy_offset_reuses_accepted_parent() -> None:
+    offset = ((-0.013, 0.017),)
+    env = MujocoManoEnvironment(
+        _synthetic_xy_offset_trajectory(),
+        EnvironmentConfig(
+            num_envs=1,
+            object_init_xy_offsets_m=offset,
+            max_deviation_distance=1_000_000.0,
+        ),
+    )
+    np.testing.assert_array_equal(env.object_init_xy_offsets, offset)
+    address = env.producer.object_qpos_address
+    expected = env.reference_object_pos[0, 0, :2] + np.asarray(offset[0])
+    np.testing.assert_allclose(env._reset_qpos[0, address : address + 2], expected)
 
 
 def test_object_init_xy_offset_applied_to_initial_qpos_only() -> None:

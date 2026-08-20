@@ -417,6 +417,22 @@ def load_skrl_checkpoint_for_inference(agent: "PPO", path: str | Path) -> Path:
     return checkpoint
 
 
+def load_skrl_checkpoint_for_policy_transfer_inference(
+    agent: "PPO", path: str | Path
+) -> Path:
+    """Load a policy for synthesis under an intentionally different reference ABI.
+
+    This boundary is narrower than ordinary inference: reward/environment
+    families and model architecture remain fail-closed, while the environment
+    signature (padding, assets, and related rollout state) is deliberately not
+    required to equal the synthesis environment. Optimizer and PPO memory are
+    loaded by skrl but never used because the synthesis stepper runs deterministic
+    actions without record_transition/post_interaction.
+    """
+
+    return load_skrl_checkpoint_for_warm_start(agent, path)
+
+
 def load_skrl_checkpoint_for_warm_start(agent: "PPO", path: str | Path) -> Path:
     """Transfer learned models and normalizers without stale optimizer state.
 

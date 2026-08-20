@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from dataclasses import replace as dataclass_replace
+from dataclasses import asdict, replace as dataclass_replace
 from datetime import datetime, timezone
 import json
 import os
@@ -20,6 +20,12 @@ from typing import Any
 import numpy as np
 
 from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
+from sim.manorl.approach_prefix import (
+    APPROACH_PREFIX_CONTRACT,
+    ApproachPrefixConfig,
+    ApproachPrefixSample,
+    augment_trajectory_with_approach_prefix,
+)
 from sim.manorl.checkpoint import checkpoint_runtime_metadata
 from sim.manorl.contracts import JOINT_DOF, simulation_clock
 from sim.manorl.environment import (
@@ -29,7 +35,7 @@ from sim.manorl.environment import (
 )
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
-    SYNTHETIC_LANCE_COMPACT_V1_CONTRACT,
+    SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT,
     SYNTHETIC_LANCE_CONTRACT,
     SYNTHETIC_LANCE_OUTPUT_FORMAT_COMPACT,
     SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
@@ -42,7 +48,15 @@ from sim.manorl.lance_v2 import (
     write_v2_lance,
 )
 from sim.manorl.observations import SOURCE_ALIGNED_COMPATIBILITY
-from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
+from sim.manorl.rewards import (
+    CONTACT_FORCE_THRESHOLD,
+    PPO_REWARD_CONTRACT_ID,
+    REWARD_CONTRACT_ID,
+)
+from sim.manorl.synthetic_parent import (
+    AcceptedSyntheticParent,
+    load_accepted_synthetic_parent,
+)
 from sim.manorl.trajectory import (
     SUPPORTED_REFERENCE_FPS,
     TrajectoryBatch,
@@ -81,9 +95,13 @@ def _projection_manifest(output_format: str) -> dict[str, Any]:
                 "timestamp",
                 "hands",
                 "objects",
+                "contact",
+                "reference",
+                "command_reference_index",
+                "command_source_frame_index",
                 "provenance",
             ],
-            "dropped_top_level": ["contact", "reference", "rollout"],
+            "dropped_top_level": ["rollout"],
             "checkpoint_metadata": "embedded_once_in_manifest",
         }
     return {
@@ -114,7 +132,11 @@ def _checkpoint_update(path: Path) -> int:
 
 
 def _load_predecoded_batch(
-    selection: TrajectorySelection, *, num_envs: int, manifest_path: Path
+    selection: TrajectorySelection,
+    *,
+    num_envs: int,
+    manifest_path: Path,
+    exact_identities: tuple[str, ...] | None = None,
 ) -> TrajectoryBatch:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if Path(manifest.get("dataset_path", "")) != selection.dataset_path:
@@ -139,6 +161,17 @@ def _load_predecoded_batch(
         for record in manifest.get("valid_records", [])
         if record.get("pair") in requested
     ]
+    if exact_identities is not None:
+        wanted_identities = set(exact_identities)
+        records = [
+            record for record in records if record.get("identity") in wanted_identities
+        ]
+        found_identities = {str(record.get("identity")) for record in records}
+        missing_identities = sorted(wanted_identities - found_identities)
+        if missing_identities:
+            raise LookupError(
+                f"predecoded manifest omits requested identities: {missing_identities}"
+            )
     available = {record["pair"] for record in records}
     missing = sorted(requested - available)
     if missing:
@@ -233,7 +266,7 @@ def _source_metadata(
 
 def _materialized_contacts(
     environment: MujocoManoEnvironment,
-) -> list[list[dict[str, Any]]]:
+) -> tuple[list[list[dict[str, Any]]], np.ndarray]:
     state = environment.producer.materialize_state(environment.data)
     buffers = environment.producer.materialize_contact_buffers(
         environment.data, environment.config.num_envs
@@ -243,7 +276,7 @@ def _materialized_contacts(
         raise RuntimeError(
             "v2 checkpoint export currently requires one homogeneous object type"
         )
-    return corrected_contact_frames(
+    contacts = corrected_contact_frames(
         buffers=buffers,
         state=state,
         model=environment.model,
@@ -253,6 +286,35 @@ def _materialized_contacts(
         wrist_body_id=producer.keypoint_body_ids[0],
         object_name=environment.object_type,
     )
+    floor_geom_id = int(
+        environment.mujoco.mj_name2id(
+            environment.model,
+            environment.mujoco.mjtObj.mjOBJ_GEOM,
+            "floor",
+        )
+    )
+    if floor_geom_id < 0:
+        raise RuntimeError("synthesis scene has no resolvable floor geom")
+    # The left hand may be compiled for reference following. Augmentation owns
+    # only the controlled right hand, so unrelated left-hand floor candidates
+    # must not reject an otherwise valid sample.
+    hand_geom_ids = {
+        int(geom_id)
+        for geom_id in producer.keypoint_geom_ids_by_side["right"]
+    }
+    hand_floor = np.zeros(environment.config.num_envs, dtype=bool)
+    for contact_id in range(buffers.count):
+        first, second = map(int, buffers.geom[contact_id])
+        if (first == floor_geom_id and second in hand_geom_ids) or (
+            second == floor_geom_id and first in hand_geom_ids
+        ):
+            world_id = int(buffers.world[contact_id])
+            solved = buffers.constraint_force[
+                world_id, np.asarray(buffers.addresses[contact_id], dtype=np.int64)
+            ]
+            if float(np.sum(solved)) > CONTACT_FORCE_THRESHOLD:
+                hand_floor[world_id] = True
+    return contacts, hand_floor
 
 
 def _state_row(
@@ -309,6 +371,25 @@ def _trajectory_subset(
     )
 
 
+def _augment_attempt_trajectories(
+    trajectories: TrajectoryBatch,
+    *,
+    attempt_seed: int,
+    config: ApproachPrefixConfig,
+) -> tuple[TrajectoryBatch, dict[str, ApproachPrefixSample]]:
+    augmented = []
+    samples: dict[str, ApproachPrefixSample] = {}
+    for trajectory in trajectories.trajectories:
+        resolved, sample = augment_trajectory_with_approach_prefix(
+            trajectory,
+            seed=attempt_seed,
+            config=config,
+        )
+        augmented.append(resolved)
+        samples[trajectory.identity.identity] = sample
+    return _trajectory_subset(trajectories, augmented), samples
+
+
 def _run_attempt_batch(
     *,
     checkpoint: Path,
@@ -323,10 +404,38 @@ def _run_attempt_batch(
     episode_indices: dict[str, int],
     provenance_base: dict[str, Any],
     object_xy_offset_m: float = 0.0,
-) -> tuple[dict[str, dict[str, Any]], dict[str, str], int, int]:
+    approach_prefix_config: ApproachPrefixConfig | None = None,
+    accepted_parent: AcceptedSyntheticParent | None = None,
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, str],
+    int,
+    int,
+    dict[str, dict[str, object]],
+]:
     """Run one candidate episode for each identity in one attempt round."""
 
     _seed_attempt(attempt_seed, device)
+    if accepted_parent is not None:
+        if trajectories.num_envs != 1 or (
+            trajectories.trajectories[0].identity.identity
+            != accepted_parent.source_identity
+        ):
+            raise ValueError(
+                "accepted-parent synthesis requires exactly its bound source identity"
+            )
+        if approach_prefix_config is None:
+            raise ValueError("accepted-parent synthesis requires approach-prefix augmentation")
+    resolved_deviation_termination = (
+        allow_deviation_termination or approach_prefix_config is not None
+    )
+    approach_samples: dict[str, ApproachPrefixSample] = {}
+    if approach_prefix_config is not None:
+        trajectories, approach_samples = _augment_attempt_trajectories(
+            trajectories,
+            attempt_seed=attempt_seed,
+            config=approach_prefix_config,
+        )
     num_envs = trajectories.num_envs
     environment = MujocoManoEnvironment(
         trajectories,
@@ -337,11 +446,15 @@ def _run_attempt_batch(
             residual_action=checkpoint_options.residual_action,
             compatibility=dataclass_replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
-                movement_pre_padding=checkpoint_options.pre_padding,
+                movement_pre_padding=(
+                    approach_prefix_config.required_base_pre_padding
+                    if approach_prefix_config is not None
+                    else checkpoint_options.pre_padding
+                ),
             ),
             max_deviation_distance=(
                 TARGET_MAX_DEVIATION_DISTANCE
-                if allow_deviation_termination
+                if resolved_deviation_termination
                 else 1_000_000.0
             ),
             contact_capacity=recommended_warp_contact_capacity(
@@ -353,10 +466,26 @@ def _run_attempt_batch(
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side="right",
-            object_init_xy_offset_range_m=object_xy_offset_m,
+            object_init_xy_offset_range_m=(
+                0.0 if accepted_parent is not None else object_xy_offset_m
+            ),
+            object_init_xy_offsets_m=(
+                None
+                if accepted_parent is None
+                else (accepted_parent.object_init_xy_offset_m,)
+            ),
         ),
     )
-    stepper = _build_checkpoint_stepper(environment, checkpoint)
+    stepper = _build_checkpoint_stepper(
+        environment,
+        checkpoint,
+        policy_transfer=approach_prefix_config is not None,
+        policy_enable_steps=(
+            environment.early_phase_lengths
+            if approach_prefix_config is not None
+            else None
+        ),
+    )
     right_model_index = environment.model_hand_sides.index("right")
     right_model_slice = slice(
         right_model_index * JOINT_DOF, (right_model_index + 1) * JOINT_DOF
@@ -368,7 +497,14 @@ def _run_attempt_batch(
     succeeded = np.zeros(num_envs, dtype=bool)
     failure_reasons: dict[str, str] = {}
 
-    initial_contacts = _materialized_contacts(environment)
+    initial_contacts, initial_hand_floor = _materialized_contacts(environment)
+    prefix_valid = np.ones(num_envs, dtype=bool)
+    prefix_invalid_reasons: list[str | None] = [None] * num_envs
+    if approach_prefix_config is not None:
+        for env_id in range(num_envs):
+            if bool(initial_hand_floor[env_id]):
+                prefix_valid[env_id] = False
+                prefix_invalid_reasons[env_id] = "augmentation_prefix_hand_table_clearance"
     for env_id in range(num_envs):
         initial = _state_row(environment, env_id)
         _append_state(state_storage[env_id], initial)
@@ -391,7 +527,7 @@ def _run_attempt_batch(
         transition = environment.last_transition
         if transition is None:
             raise RuntimeError("checkpoint exporter requires transition diagnostics")
-        frame_contacts = _materialized_contacts(environment)
+        frame_contacts, frame_hand_floor = _materialized_contacts(environment)
         for env_id in np.flatnonzero(active):
             if bool(transition.reset_applied[env_id]):
                 raise RuntimeError(
@@ -406,6 +542,14 @@ def _run_attempt_batch(
                 )
             )
             contact_storage[env_id].append(frame_contacts[env_id])
+            if (
+                approach_prefix_config is not None
+                and int(transition.command_reference_indices[env_id])
+                < int(environment.early_phase_lengths[env_id])
+            ):
+                if bool(frame_hand_floor[env_id]):
+                    prefix_valid[env_id] = False
+                    prefix_invalid_reasons[env_id] = "augmentation_prefix_hand_table_clearance"
             command_index = int(transition.command_reference_indices[env_id])
             rollout = rollout_storage[env_id]
             rollout["observation_t"].append(previous_observation[env_id])
@@ -429,7 +573,7 @@ def _run_attempt_batch(
             rollout["cumulative_joint_residual"].append(
                 np.asarray(
                     environment.cumulative_joint_offset[env_id], dtype=np.float64
-                )
+                ).copy()
             )
             rollout["command_reference_index"].append(command_index)
             rollout["command_source_frame_index"].append(
@@ -466,8 +610,10 @@ def _run_attempt_batch(
             if terminal:
                 identity = environment.trajectories[env_id].identity.identity
                 active[env_id] = False
-                if bool(transition.termination.success[env_id]):
+                if bool(transition.termination.success[env_id]) and prefix_valid[env_id]:
                     succeeded[env_id] = True
+                elif not prefix_valid[env_id]:
+                    failure_reasons[identity] = str(prefix_invalid_reasons[env_id])
                 else:
                     failure_reasons[identity] = "deviation_before_source_completion"
         if step_index % 100 == 0 or not np.any(active):
@@ -510,6 +656,14 @@ def _run_attempt_batch(
             "seed": attempt_seed,
             "episode_index": episode_indices[identity],
             "generation_attempt": attempt_numbers[identity],
+            "augmentation_identity": (
+                None
+                if accepted_parent is None
+                else (
+                    f"{accepted_parent.parent_row_uuid}:seed={attempt_seed}:"
+                    f"attempt={attempt_numbers[identity]}"
+                )
+            ),
         }
         full_row = build_v2_row(
             trajectory=trajectory,
@@ -533,7 +687,18 @@ def _run_attempt_batch(
                 warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             )
         )
-    return rows, failure_reasons, environment.observation_dim, environment.action_dim
+    accepted_augmentations = {
+        identity: approach_samples[identity].to_manifest()
+        for identity in rows
+        if identity in approach_samples
+    }
+    return (
+        rows,
+        failure_reasons,
+        environment.observation_dim,
+        environment.action_dim,
+        accepted_augmentations,
+    )
 
 
 def _export_isolated_repeated_rollouts(
@@ -551,6 +716,8 @@ def _export_isolated_repeated_rollouts(
     episodes_per_identity: int,
     max_attempts_per_identity: int,
     object_xy_offset_m: float = 0.0,
+    approach_prefix_config: ApproachPrefixConfig | None = None,
+    accepted_parent: AcceptedSyntheticParent | None = None,
 ) -> dict[str, Any]:
     """Run each attempt round in a fresh process and append accepted rows."""
 
@@ -560,7 +727,14 @@ def _export_isolated_repeated_rollouts(
         load_assigned_trajectory_batch(selection, num_envs=num_envs)
         if predecoded_manifest is None
         else _load_predecoded_batch(
-            selection, num_envs=num_envs, manifest_path=predecoded_manifest
+            selection,
+            num_envs=num_envs,
+            manifest_path=predecoded_manifest,
+            exact_identities=(
+                None
+                if accepted_parent is None
+                else (accepted_parent.source_identity,)
+            ),
         )
     )
     identities = [item.identity.identity for item in trajectories.trajectories]
@@ -584,12 +758,19 @@ def _export_isolated_repeated_rollouts(
             shutil.rmtree(stale)
     output.parent.mkdir(parents=True, exist_ok=True)
     control_path = output.parent / f".{output.name}.attempt-control.json"
+    accepted_parent_path = output.parent / f".{output.name}.accepted-parent.json"
+    if accepted_parent is not None:
+        accepted_parent_path.write_text(
+            json.dumps(accepted_parent.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     child_manifest = building.parent / f"{building.name}.manifest.json"
     counters = {
         identity: {"attempts": 0, "saved": 0, "failures": []} for identity in identities
     }
     generated_uuids: list[str] = []
     row_source_identities: list[str] = []
+    accepted_approach_prefixes: list[dict[str, object]] = []
 
     for attempt_round in range(1, max_attempts_per_identity + 1):
         pending = [
@@ -657,6 +838,38 @@ def _export_isolated_repeated_rollouts(
             command.extend(["--predecoded-manifest", str(predecoded_manifest)])
         if object_xy_offset_m > 0.0:
             command.extend(["--object-xy-offset-m", str(object_xy_offset_m)])
+        if accepted_parent is not None:
+            command.extend(["--accepted-parent", str(accepted_parent_path)])
+        if approach_prefix_config is not None:
+            command.extend(
+                [
+                    "--approach-prefix",
+                    "--approach-xy-radius-min-m",
+                    str(approach_prefix_config.minimum_xy_radius_m),
+                    "--approach-xy-radius-max-m",
+                    str(approach_prefix_config.maximum_xy_radius_m),
+                    "--approach-xy-deg",
+                    str(approach_prefix_config.maximum_xy_offset_deg),
+                    "--approach-z-offset-min-m",
+                    str(approach_prefix_config.minimum_z_offset_m),
+                    "--approach-z-offset-max-m",
+                    str(approach_prefix_config.maximum_z_offset_m),
+                    "--approach-total-pre-min",
+                    str(approach_prefix_config.minimum_total_pre_padding),
+                    "--approach-total-pre-max",
+                    str(approach_prefix_config.maximum_total_pre_padding),
+                    "--approach-nominal-speed-m-s",
+                    str(approach_prefix_config.nominal_speed_m_s),
+                    "--approach-nominal-angular-speed-deg-s",
+                    str(approach_prefix_config.nominal_angular_speed_deg_s),
+                    "--approach-duration-jitter-fraction",
+                    str(approach_prefix_config.duration_jitter_fraction),
+                    "--approach-orientation-perturbation-deg",
+                    str(approach_prefix_config.maximum_orientation_perturbation_deg),
+                    "--approach-vertical-arc-height-m",
+                    str(approach_prefix_config.vertical_arc_height_m),
+                ]
+            )
         if allow_deviation_termination:
             command.append("--allow-deviation-termination")
         completed = subprocess.run(command, check=False)
@@ -675,6 +888,7 @@ def _export_isolated_repeated_rollouts(
                 counters[identity]["failures"].extend(child_counter["failures"])
         generated_uuids.extend(child["generated_uuids"])
         row_source_identities.extend(child["row_source_identities"])
+        accepted_approach_prefixes.extend(child.get("approach_prefixes", []))
         print(
             json.dumps(
                 {
@@ -701,6 +915,7 @@ def _export_isolated_repeated_rollouts(
         building.replace(published)
     child_manifest.unlink(missing_ok=True)
     control_path.unlink(missing_ok=True)
+    accepted_parent_path.unlink(missing_ok=True)
     checkpoint_sha = file_sha256(checkpoint)
     provenance_base = {
         "checkpoint_path": str(checkpoint.resolve()),
@@ -714,7 +929,7 @@ def _export_isolated_repeated_rollouts(
         "schema": (
             SYNTHETIC_LANCE_CONTRACT
             if output_format == SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL
-            else SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+            else SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
         ),
         "output_format": output_format,
         "source_schema": SYNTHETIC_LANCE_CONTRACT,
@@ -729,6 +944,10 @@ def _export_isolated_repeated_rollouts(
         "source_identities": identities,
         "row_source_identities": row_source_identities,
         "generated_uuids": generated_uuids,
+        "approach_prefixes": accepted_approach_prefixes,
+        "accepted_parent": (
+            None if accepted_parent is None else accepted_parent.to_dict()
+        ),
         "checkpoint": provenance_base,
         "selection": {
             "object": selection.object_type,
@@ -748,6 +967,18 @@ def _export_isolated_repeated_rollouts(
             "base_seed": seed,
             "counters": counters,
             "attempt_isolation": "one_fresh_process_per_attempt_round",
+            "approach_prefix": (
+                None
+                if approach_prefix_config is None
+                else {
+                    "contract": APPROACH_PREFIX_CONTRACT,
+                    "config": asdict(approach_prefix_config),
+                    "reset_semantics": "fresh_seeded_reference_per_isolated_attempt",
+                    "residual_gate": "zero_through_prefix_then_checkpoint_policy",
+                    "deviation_terminal_gate": "disabled_through_prefix_then_0p10m_at_original_pre60_start",
+                    "accepted_rows": accepted_approach_prefixes,
+                }
+            ),
         },
         "runtime": {
             "device": device,
@@ -759,7 +990,9 @@ def _export_isolated_repeated_rollouts(
             "physics_timestep_seconds": clock.physics_timestep,
             "physics_substeps_per_control": clock.physics_substeps_per_control,
             "normal_force_scale": 1.0,
-            "deviation_termination": allow_deviation_termination,
+            "deviation_termination": (
+                allow_deviation_termination or approach_prefix_config is not None
+            ),
             "late_contact_grace_frames": 10,
             "late_contact_penalty_multiplier": 3.0,
             "late_contact_scope": "any_16_keypoint_hand_object_contact_above_0p2N",
@@ -791,6 +1024,7 @@ def _export_isolated_repeated_rollouts(
         "episodes_per_identity": episodes_per_identity,
         "max_attempts_per_identity": max_attempts_per_identity,
         "checkpoint_sha256": checkpoint_sha,
+        "approach_prefixes": accepted_approach_prefixes,
     }
 
 
@@ -810,6 +1044,8 @@ def export_checkpoint_rollouts(
     output_format: str = SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
     internal_attempt_control: dict[str, Any] | None = None,
     object_xy_offset_m: float = 0.0,
+    approach_prefix_config: ApproachPrefixConfig | None = None,
+    accepted_parent: AcceptedSyntheticParent | None = None,
 ) -> dict[str, Any]:
     """Generate an accepted 1:N checkpoint rollout dataset per raw identity."""
 
@@ -822,6 +1058,25 @@ def export_checkpoint_rollouts(
         or object_xy_offset_m < 0.0
     ):
         raise ValueError("object_xy_offset_m must be a finite non-negative float")
+    if (approach_prefix_config is None) != (accepted_parent is None):
+        raise ValueError(
+            "approach-prefix synthesis requires an accepted-parent descriptor"
+        )
+    if accepted_parent is not None:
+        if num_envs != 1:
+            raise ValueError("accepted-parent synthesis requires num-envs=1")
+        if object_xy_offset_m != 0.0:
+            raise ValueError(
+                "accepted-parent synthesis reuses its exact object XY offset"
+            )
+        if selection.expected_dataset_version != accepted_parent.source_dataset_version:
+            raise ValueError("accepted parent source dataset version differs from selection")
+        if selection.dataset_path != Path(accepted_parent.source_dataset_path):
+            raise ValueError("accepted parent source dataset path differs from selection")
+        pair = f"{accepted_parent.object_type}:{accepted_parent.action_id}"
+        requested = selection.requested_pairs
+        if len(requested) != 1 or requested[0].canonical != pair:
+            raise ValueError("accepted parent source pair differs from selection")
     if episodes_per_identity < 1:
         raise ValueError("episodes_per_identity must be positive")
     if max_attempts_per_identity < episodes_per_identity:
@@ -831,16 +1086,28 @@ def export_checkpoint_rollouts(
     output_format = _validate_output_format(output_format)
     checkpoint = _validate_checkpoint_path(checkpoint)
     checkpoint_options = _checkpoint_environment_options(checkpoint)
+    if accepted_parent is not None:
+        if file_sha256(checkpoint) != accepted_parent.checkpoint_sha256:
+            raise ValueError(
+                "accepted parent checkpoint SHA256 differs from requested checkpoint"
+            )
+        if checkpoint_options.reference_fps != accepted_parent.reference_fps:
+            raise ValueError("accepted parent reference FPS differs from checkpoint")
     reference_fps = _resolve_reference_fps(
         selection.reference_fps,
         checkpoint_options=checkpoint_options,
         has_checkpoint=True,
     )
+    reference_pre_padding = (
+        approach_prefix_config.required_base_pre_padding
+        if approach_prefix_config is not None
+        else checkpoint_options.pre_padding
+    )
     selection = dataclass_replace(
         selection,
         reference_fps=reference_fps,
         control_fps=checkpoint_options.control_fps,
-        pre_padding=checkpoint_options.pre_padding,
+        pre_padding=reference_pre_padding,
         post_padding=checkpoint_options.post_padding,
     )
     clock = simulation_clock(selection.resolved_control_fps)
@@ -859,12 +1126,21 @@ def export_checkpoint_rollouts(
             episodes_per_identity=episodes_per_identity,
             max_attempts_per_identity=max_attempts_per_identity,
             object_xy_offset_m=object_xy_offset_m,
+            approach_prefix_config=approach_prefix_config,
+            accepted_parent=accepted_parent,
         )
     trajectories = (
         load_assigned_trajectory_batch(selection, num_envs=num_envs)
         if predecoded_manifest is None
         else _load_predecoded_batch(
-            selection, num_envs=num_envs, manifest_path=predecoded_manifest
+            selection,
+            num_envs=num_envs,
+            manifest_path=predecoded_manifest,
+            exact_identities=(
+                None
+                if accepted_parent is None
+                else (accepted_parent.source_identity,)
+            ),
         )
     )
     identities = [item.identity.identity for item in trajectories.trajectories]
@@ -913,6 +1189,7 @@ def export_checkpoint_rollouts(
         item.identity.identity: item for item in trajectories.trajectories
     }
     rows: list[dict[str, Any]] = []
+    accepted_approach_prefixes: list[dict[str, object]] = []
     observation_dim: int | None = None
     action_dim: int | None = None
 
@@ -944,7 +1221,13 @@ def export_checkpoint_rollouts(
                 for identity in pending
             }
             attempt_seed = int(internal_attempt_control["attempt_seed"])
-        attempt_rows, failures, observed_dim, acted_dim = _run_attempt_batch(
+        (
+            attempt_rows,
+            failures,
+            observed_dim,
+            acted_dim,
+            attempt_augmentations,
+        ) = _run_attempt_batch(
             checkpoint=checkpoint,
             checkpoint_options=checkpoint_options,
             trajectories=_trajectory_subset(
@@ -959,9 +1242,12 @@ def export_checkpoint_rollouts(
             episode_indices=episode_indices,
             provenance_base=provenance_base,
             object_xy_offset_m=object_xy_offset_m,
+            approach_prefix_config=approach_prefix_config,
+            accepted_parent=accepted_parent,
         )
         observation_dim = observed_dim
         action_dim = acted_dim
+        accepted_approach_prefixes.extend(attempt_augmentations.values())
         for identity in pending:
             row = attempt_rows.get(identity)
             if row is not None:
@@ -1038,7 +1324,7 @@ def export_checkpoint_rollouts(
         "schema": (
             SYNTHETIC_LANCE_CONTRACT
             if output_format == SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL
-            else SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+            else SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
         ),
         "output_format": output_format,
         "source_schema": SYNTHETIC_LANCE_CONTRACT,
@@ -1053,6 +1339,10 @@ def export_checkpoint_rollouts(
         "source_identities": identities,
         "row_source_identities": [row["provenance"]["source_identity"] for row in rows],
         "generated_uuids": [row["index"]["uuid"] for row in rows],
+        "approach_prefixes": accepted_approach_prefixes,
+        "accepted_parent": (
+            None if accepted_parent is None else accepted_parent.to_dict()
+        ),
         "checkpoint": provenance_base,
         "selection": {
             "object": selection.object_type,
@@ -1071,6 +1361,18 @@ def export_checkpoint_rollouts(
             "max_attempts_per_identity": max_attempts_per_identity,
             "base_seed": seed,
             "counters": counters,
+            "approach_prefix": (
+                None
+                if approach_prefix_config is None
+                else {
+                    "contract": APPROACH_PREFIX_CONTRACT,
+                    "config": asdict(approach_prefix_config),
+                    "reset_semantics": "fresh_seeded_reference_per_attempt",
+                    "residual_gate": "zero_through_prefix_then_checkpoint_policy",
+                    "deviation_terminal_gate": "disabled_through_prefix_then_0p10m_at_original_pre60_start",
+                    "accepted_rows": accepted_approach_prefixes,
+                }
+            ),
         },
         "runtime": {
             "device": device,
@@ -1082,7 +1384,9 @@ def export_checkpoint_rollouts(
             "physics_timestep_seconds": clock.physics_timestep,
             "physics_substeps_per_control": clock.physics_substeps_per_control,
             "normal_force_scale": 1.0,
-            "deviation_termination": allow_deviation_termination,
+            "deviation_termination": (
+                allow_deviation_termination or approach_prefix_config is not None
+            ),
             "late_contact_grace_frames": 10,
             "late_contact_penalty_multiplier": 3.0,
             "late_contact_scope": "any_16_keypoint_hand_object_contact_above_0p2N",
@@ -1113,6 +1417,7 @@ def export_checkpoint_rollouts(
         "episodes_per_identity": episodes_per_identity,
         "max_attempts_per_identity": max_attempts_per_identity,
         "checkpoint_sha256": checkpoint_sha,
+        "approach_prefixes": accepted_approach_prefixes,
     }
 
 
@@ -1164,6 +1469,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.0,
         help="per-attempt uniform XY object initial-position offset range in meters (default: 0)",
     )
+    parser.add_argument(
+        "--approach-prefix",
+        action="store_true",
+        help="prepend a fresh seeded human-like approach reference for every synthesis attempt",
+    )
+    parser.add_argument(
+        "--accepted-parent",
+        type=Path,
+        help="JSON descriptor of one accepted prior scalable-synthesis row",
+    )
+    parser.add_argument("--approach-xy-radius-min-m", type=float, default=0.30)
+    parser.add_argument("--approach-xy-radius-max-m", type=float, default=0.70)
+    parser.add_argument("--approach-xy-deg", type=float, default=30.0)
+    parser.add_argument("--approach-z-offset-min-m", type=float, default=0.08)
+    parser.add_argument("--approach-z-offset-max-m", type=float, default=0.30)
+    parser.add_argument("--approach-total-pre-min", type=int, default=100)
+    parser.add_argument("--approach-total-pre-max", type=int, default=360)
+    parser.add_argument("--approach-nominal-speed-m-s", type=float, default=0.30)
+    parser.add_argument("--approach-nominal-angular-speed-deg-s", type=float, default=90.0)
+    parser.add_argument("--approach-duration-jitter-fraction", type=float, default=0.10)
+    parser.add_argument("--approach-orientation-perturbation-deg", type=float, default=12.0)
+    parser.add_argument("--approach-vertical-arc-height-m", type=float, default=0.04)
     args = parser.parse_args(argv)
     if args.num_envs < 1:
         parser.error("num-envs must be positive")
@@ -1181,6 +1508,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         not np.isfinite(args.object_xy_offset_m) or args.object_xy_offset_m < 0.0
     ):
         parser.error("object-xy-offset-m must be a finite non-negative float")
+    args.accepted_parent_descriptor = (
+        None
+        if args.accepted_parent is None
+        else load_accepted_synthetic_parent(args.accepted_parent)
+    )
+    if args.approach_prefix != (args.accepted_parent_descriptor is not None):
+        parser.error("--approach-prefix and --accepted-parent must be supplied together")
+    try:
+        args.approach_prefix_config = (
+            ApproachPrefixConfig(
+                minimum_xy_radius_m=args.approach_xy_radius_min_m,
+                maximum_xy_radius_m=args.approach_xy_radius_max_m,
+                maximum_xy_offset_deg=args.approach_xy_deg,
+                minimum_z_offset_m=args.approach_z_offset_min_m,
+                maximum_z_offset_m=args.approach_z_offset_max_m,
+                minimum_total_pre_padding=args.approach_total_pre_min,
+                maximum_total_pre_padding=args.approach_total_pre_max,
+                nominal_speed_m_s=args.approach_nominal_speed_m_s,
+                nominal_angular_speed_deg_s=args.approach_nominal_angular_speed_deg_s,
+                duration_jitter_fraction=args.approach_duration_jitter_fraction,
+                maximum_orientation_perturbation_deg=args.approach_orientation_perturbation_deg,
+                vertical_arc_height_m=args.approach_vertical_arc_height_m,
+            )
+            if args.approach_prefix
+            else None
+        )
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
     return args
 
 
@@ -1191,19 +1546,33 @@ def main(argv: list[str] | None = None) -> int:
         if args.internal_attempt_control is None
         else json.loads(args.internal_attempt_control.read_text(encoding="utf-8"))
     )
+    parent = args.accepted_parent_descriptor
+    selection = TrajectorySelection(
+        object_type=(parent.object_type if parent is not None else args.object_type),
+        gesture=(parent.action_id if parent is not None else args.gesture),
+        selector=(
+            f"{parent.object_type}:{parent.action_id}"
+            if parent is not None
+            else args.pairs
+        ),
+        dataset_path=(
+            Path(parent.source_dataset_path)
+            if parent is not None
+            else args.dataset_path
+        ),
+        expected_dataset_version=(
+            parent.source_dataset_version
+            if parent is not None
+            else args.dataset_version
+        ),
+        hand_side="right",
+        reference_fps=(parent.reference_fps if parent is not None else args.reference_fps),
+        pair_assignment_cycle=args.pair_assignment_cycle,
+    )
     result = export_checkpoint_rollouts(
         checkpoint=args.checkpoint,
         output=args.output,
-        selection=TrajectorySelection(
-            object_type=args.object_type,
-            gesture=args.gesture,
-            selector=args.pairs,
-            dataset_path=args.dataset_path,
-            expected_dataset_version=args.dataset_version,
-            hand_side="right",
-            reference_fps=args.reference_fps,
-            pair_assignment_cycle=args.pair_assignment_cycle,
-        ),
+        selection=selection,
         num_envs=args.num_envs,
         device=args.device,
         output_format=args.output_format,
@@ -1215,6 +1584,8 @@ def main(argv: list[str] | None = None) -> int:
         max_attempts_per_identity=args.max_attempts_per_identity,
         internal_attempt_control=internal_control,
         object_xy_offset_m=args.object_xy_offset_m,
+        approach_prefix_config=args.approach_prefix_config,
+        accepted_parent=args.accepted_parent_descriptor,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0

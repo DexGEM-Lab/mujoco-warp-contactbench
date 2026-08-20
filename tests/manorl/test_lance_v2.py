@@ -390,6 +390,22 @@ def test_predecoded_manifest_selects_unique_hashed_identity_window(tmp_path) -> 
     )
     assert [item.identity.identity for item in batch.trajectories] == ["cube2_02_0002"]
 
+    exact = _load_predecoded_batch(
+        TrajectorySelection(
+            "cube2",
+            "02",
+            dataset_path=dataset,
+            expected_dataset_version=295,
+            hand_side="right",
+        ),
+        num_envs=1,
+        manifest_path=manifest,
+        exact_identities=("cube2_02_0001",),
+    )
+    assert [item.identity.identity for item in exact.trajectories] == [
+        "cube2_02_0001"
+    ]
+
 
 def test_predecoded_manifest_selects_multiple_homogeneous_pairs(tmp_path) -> None:
     dataset = tmp_path / "source.lance"
@@ -584,7 +600,7 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
     manifest = json.loads((tmp_path / "repeated.lance.manifest.json").read_text())
     assert manifest["complete"] is True
     assert manifest["rows"] == 5
-    assert manifest["schema"] == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+    assert manifest["schema"] == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
     assert manifest["output_format"] == "compact-replay-visual"
     assert (
         manifest["synthesis"]["attempt_isolation"]

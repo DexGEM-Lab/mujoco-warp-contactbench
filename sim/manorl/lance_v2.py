@@ -857,7 +857,11 @@ def _float_rows(values: NDArray[object]) -> list[list[float]]:
 
 
 def generated_rollout_uuid(
-    source_uuid: str, checkpoint_sha256: str, episode: int = 0
+    source_uuid: str,
+    checkpoint_sha256: str,
+    episode: int = 0,
+    *,
+    augmentation_identity: str | None = None,
 ) -> str:
     try:
         namespace = uuid.UUID(source_uuid)
@@ -866,7 +870,14 @@ def generated_rollout_uuid(
     return str(
         uuid.uuid5(
             namespace,
-            f"{SYNTHETIC_LANCE_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}",
+            (
+                f"{SYNTHETIC_LANCE_CONTRACT}:{source_uuid}:{checkpoint_sha256}:episode={episode}"
+                + (
+                    ""
+                    if augmentation_identity is None
+                    else f":augmentation={augmentation_identity}"
+                )
+            ),
         )
     )
 
@@ -914,6 +925,11 @@ def build_v2_row(
     checkpoint_sha = str(provenance["checkpoint_sha256"])
     episode_index = int(provenance["episode_index"])
     generation_attempt = int(provenance["generation_attempt"])
+    augmentation_identity = provenance.get("augmentation_identity")
+    if augmentation_identity is not None and (
+        not isinstance(augmentation_identity, str) or not augmentation_identity
+    ):
+        raise ValueError("augmentation_identity must be a non-empty string or null")
     if episode_index < 0 or generation_attempt < 1:
         raise ValueError(
             "episode index must be non-negative and generation attempt positive"
@@ -934,10 +950,14 @@ def build_v2_row(
     else:
         hand_shapes = [np.zeros(10, dtype=np.float64)]
     start_frame = int(
-        trajectory.identity.movement_start_raw - trajectory.identity.source_start
+        trajectory.movement_start_step
+        if trajectory.movement_start_step is not None
+        else trajectory.identity.movement_start_raw - trajectory.identity.source_start
     )
     end_frame = int(
-        trajectory.identity.movement_end_raw - trajectory.identity.source_start
+        trajectory.movement_end_step
+        if trajectory.movement_end_step is not None
+        else trajectory.identity.movement_end_raw - trajectory.identity.source_start
     )
     empty_hand = {
         "hand_name": None,
@@ -950,7 +970,12 @@ def build_v2_row(
     }
     row = {
         "index": {
-            "uuid": generated_rollout_uuid(source_uuid, checkpoint_sha, episode_index),
+            "uuid": generated_rollout_uuid(
+                source_uuid,
+                checkpoint_sha,
+                episode_index,
+                augmentation_identity=augmentation_identity,
+            ),
             "seed_uuid": source_uuid,
             "capMachine": cap_machine,
             "operator": operator,
