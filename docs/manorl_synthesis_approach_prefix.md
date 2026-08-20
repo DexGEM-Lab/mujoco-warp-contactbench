@@ -1,218 +1,234 @@
-# ManoRL synthesis approach-prefix augmentation
+# ManoRL accepted-parent approach and retreat augmentation
 
 ## Purpose
 
-The approach-prefix feature augments one row that has already succeeded in the
-prior scalable synthetic Lance publication. The accepted parent fixes the
-source identity, checkpoint SHA256, reference clock, and successful object XY
-initial offset. Only a fresh hand approach is added; the canonical pre60
-reference and all later content remain unchanged. It is synthesis-only: PPO
-training, strict checkpoint resume, and ordinary viewers retain their existing
-early30 contract unless this feature is explicitly enabled by the exporter.
+This synthesis-only feature augments one row that already succeeded in a prior
+compact v2_contact publication. The accepted parent binds the exact source row,
+checkpoint SHA256, 120 Hz reference clock, successful object XY offset, source
+row frame-0 right-hand pose, and a validated retreat anchor. Training, strict
+resume, and ordinary viewers keep their existing contracts.
 
-Enable the default contract with:
+The output reference has three control regions:
+
+```text
+approach prefix       pure reference; policy/residual/deviation terminal disabled
+original task body    deterministic parent checkpoint policy; normal deviation terminal
+retreat tail          policy/action disabled; prior residual smoothly discharged; deviation enabled
+```
+
+The base trajectory must use pre60/post250 at 120 Hz. Approach frames are
+prepended; the retreat deforms wrist XYZ after a fixed parent-derived anchor
+without changing trajectory length.
+
+## Accepted-parent v3
+
+Create the descriptor on a Lance-healthy host:
 
 ```bash
 python tools/select_manorl_synthetic_parent.py \
-  --input /path/prior-scalable-successes.lance \
-  --row-uuid <accepted-generated-row-uuid> \
+  --input /path/prior-successes.lance \
+  --row-uuid <accepted-row-uuid> \
   --output /path/accepted-parent.json
+```
 
+`manorl_accepted_synthetic_parent_v3` records:
+
+- parent dataset version, row UUID/index, and row contract;
+- exact source dataset version/row/identity;
+- checkpoint SHA256/update and parent episode provenance;
+- successful object XY offset;
+- raw source-row frame-0 right-hand `q_ref[3:28]`;
+- parent movement-end and last solved right-hand/object contact diagnostics;
+- retreat anchor contract, source frame, and anchor→final horizontal distance.
+
+A parent is rejected when its last solved contact occurs before its movement-end,
+when movement-end+15 does not exist, or when no nonzero horizontal retreat
+direction remains after that anchor.
+The retreat anchor is deterministic:
+
+```text
+parent anchor state = parent movement-end state + 15 frames
+```
+
+The selector maps that state through
+`reference.source_frame_index[anchor_state]`. It also verifies the persisted
+command/reference/source mapping. Contact does not choose the anchor; it only
+qualifies that the parent remained in contact through its declared task motion.
+
+## Approach modes
+
+Select the mode with `--approach-mode far|near` or
+`MANORL_SYNTH_APPROACH_MODE=far|near`. The default is `far`.
+
+### Far close
+
+The start is sampled around the initial object:
+
+```text
+horizontal radius: 0.30–0.70 m
+world-up Z offset: 0.08–0.30 m
+azimuth: initial object→pre60 hand direction ±30°
+```
+
+The episode seed is the far-approach seed, preserving the original far sampling
+sequence.
+
+### Near close
+
+Near and retreat use the same endpoint-distribution family but independent
+seeds. Near does not copy the actual retreat endpoint.
+
+```text
+near seed    = hash(episode seed, "near-approach")
+retreat seed = episode seed
+```
+
+A near endpoint is sampled from the source retreat geometry:
+
+```text
+horizontal distance = original anchor→final XY distance + Uniform(0.03, 0.15) m
+azimuth               = original retreat direction + Uniform(-30°, +30°)
+height                 = original final wrist Z + Uniform(0.04, 0.10) m
+```
+
+The endpoint XY is represented relative to the final object, rotated by the
+initial-vs-final object yaw, and translated to the initial object XY. Z keeps
+the sampled retreat endpoint's absolute world height. This avoids translating
+a hand below the table when the final object has been lifted above its initial
+pose. Near and retreat remain independently sampled and normally differ.
+
+## Approach hand pose and motion
+
+Only start XYZ is sampled. Start `q_ref[3:28]` is copied exactly from the raw
+source row frame 0:
+
+```text
+q[0:3]   sampled wrist XYZ
+q[3:6]   raw source-row frame-0 wrist Euler XYZ
+q[6:28]  raw source-row frame-0 finger joints
+```
+
+Wrist translation, wrist orientation, and all 22 finger joints use a quintic
+trajectory to the pre60 frame 0 pose. The last prefix interval exactly matches
+the pre60 frame0→frame1 interval, giving zero discrete splice-velocity error.
+The source is rejected if raw frame-0 and pre60 wrist Euler coordinates differ
+by more than π on any axis rather than silently changing the stored raw pose.
+
+Prefix duration is the maximum required by:
+
+- translation at nominal 0.30 m/s;
+- wrist rotation at nominal 90°/s;
+- maximum individual finger displacement at nominal 90°/s.
+
+Duration receives ±10% jitter and is clamped by total pre-padding 100–360 frames
+(base pre-padding is 60). A 4 cm endpoint-smooth wrist Z arc keeps the approach
+clear of the table.
+
+During the prefix:
+
+```text
+policy forward                              disabled
+processed residual                          0
+cumulative wrist/finger residual            0
+0.10 m object-deviation terminal            disabled
+right-hand/table solved contact >0.2 N      reject candidate
+right-hand/object solved contact >0.2 N     reject candidate
+```
+
+At original pre60 frame 0, policy, residual, and deviation semantics resume.
+
+## Retreat tail
+
+The parent descriptor's movement-end+15 source frame is mapped into the augmented
+reference. Frames through that anchor remain bit-identical. After it:
+
+- the original per-frame wrist retreat is preserved;
+- a discrete-C2 smooth endpoint displacement is added;
+- wrist orientation and finger sequence remain the original tail;
+- source indices, timestamps, object reference, movement window, and total
+  trajectory length remain unchanged.
+
+The retreat endpoint distribution is the one described under Near close. The
+smooth deformation has zero added discrete velocity and acceleration at both
+anchor and final boundaries. The policy-free tail window begins at the
+movement-end+15 command itself:
+
+```text
+policy forward                    disabled
+processed residual action         0
+new residual accumulation         disabled
+entry cumulative residual         quintic decay to 0 over the tail
+0.10 m deviation terminal         enabled
+```
+
+Retaining the entry residual at the first tail command prevents a controller
+jump; the quintic decay has zero endpoint slope and reaches exact zero on the
+last command issued by ManoRL's delayed-terminal counter. The actual new rollout
+may retain solved contact after the parent-derived anchor because randomized
+approach changes closed-loop physics. The contract is therefore explicitly
+**parent movement-end+15**, not the new rollout's own final contact. Computing an
+augmentation from each candidate's future final contact would require a
+two-pass simulation.
+
+## Reproducibility and UUIDs
+
+The sibling manifest records accepted parent v3, far/near config, near endpoint
+config, retreat config, seed streams, and every accepted sample. Generated UUIDs
+use `manorl_synthesis_augmentation_identity_v3`, a canonical SHA256 over semantic
+parent identity, mode/config, episode/attempt, and resolved approach/retreat
+seeds. Far and near outputs, or outputs with different bounds, cannot collide.
+Machine-specific dataset paths are excluded from this content identity; pinned
+versions/row identity/checkpoint digest remain included.
+
+## Synthesis
+
+```bash
 MANORL_SYNTH_APPROACH_PREFIX=true \
+MANORL_SYNTH_APPROACH_MODE=near \
+MANORL_SYNTH_RETREAT_SUFFIX=true \
 MANORL_SYNTH_ACCEPTED_PARENT=/path/accepted-parent.json \
-CHECKPOINT=/path/to/the-parent-checkpoint.pt \
-MANORL_PREDECODED_MANIFEST=/path/to/pre60-bundle/manifest.json \
+MANORL_PREDECODED_MANIFEST=/path/pre60-bundle/manifest.json \
+CHECKPOINT=/path/exact-parent-checkpoint.pt \
 ./synthesize.sh <object> <action> 1 <gpu>
 ```
 
-The corresponding direct exporter option is `--approach-prefix`.
+The long-lived process consumes the predecoded bundle, not source Lance. The
+checkpoint is loaded through explicit policy-transfer inference when its saved
+padding/assets differ; strict training resume remains fail-closed.
 
-## Reference structure
-
-For a sampled prefix of length `L`:
-
-```text
-[0, L)          generated approach prefix
-[L, L + 60)     original pre60 reference, unchanged
-[L + 60, ...]   original movement/grasp/lift/place/post250, unchanged
-```
-
-The source pre60 trajectory is the reference truth. Its hand targets, object
-targets, source indices, movement window, command mapping, and all later frames
-are copied exactly after index `L`. The feature refuses a source whose base
-movement start is not exactly 60 frames.
-
-The generated prefix repeats the first source frame index and holds the initial
-object reference pose. The output movement start/end indices are shifted by
-`L`, so replay sees the same movement content at its new absolute position.
-
-## Per-reset sampling
-
-Accepted-parent synthesis always owns one active environment. Repeated synthesis
-uses one fresh isolated process per attempt/reset. Attempt `k` uses
-`attempt_seed = base_seed + k`; the bound source identity derives a stable RNG
-stream from `(attempt_seed, source_identity)`. Therefore:
-
-- the same seed and identity reproduce the same prefix exactly;
-- a new synthesis reset/attempt produces another random start;
-- failed candidates do not alter later source identities' random streams.
-
-The companion manifest records the algorithm contract, complete configuration,
-and accepted per-row samples. The row already records `seed` and
-`source_identity`, making every start reproducible.
-
-## Start distribution
-
-The start is sampled relative to the object's initial centre with two
-independent axes:
-
-```text
-XY radius (horizontal): 0.30–0.70 m
-Z offset (above centre): 0.08–0.30 m
-XY azimuth offset:       ±30° around the source object→hand XY direction
-```
-
-If `ψ0` is the source object→hand XY azimuth, sampled azimuth `ψ`, XY radius
-`r_xy`, Z offset `z`, and object centre `o` define:
-
-```text
-ψ = ψ0 + Uniform(-30°, +30°)
-r_xy = Uniform(0.30, 0.70) m
-z = Uniform(0.08, 0.30) m
-p_start = o + [r_xy cosψ, r_xy sinψ, z]
-```
-
-XY radius and Z offset are independent, so a tall/near start and a low/far
-start are both reachable. The positive Z lower bound is 8 cm, rather than
-merely greater than zero, because real MJX-Warp inspection showed low
-approaches could develop right-hand floor contact before reaching the source
-reference.
-
-## Human-like motion
-
-Prefix duration is derived from translation and orientation distance, then
-jittered by ±10% and clamped through total pre-padding 100–300 frames:
-
-```text
-L = effective_pre_padding - 60
-40 <= L <= 240
-```
-
-The defaults use nominal translation speed 0.30 m/s and nominal angular speed
-90°/s. A quintic approach provides zero start velocity/acceleration. A 4 cm
-endpoint-smooth vertical arc gives the wrist a human-like raised path and avoids
-premature table descent.
-
-The splice is exact in the discrete 120 Hz sequence: the last prefix interval
-is equal to the original source frame0→frame1 interval. This produces zero
-sampled velocity error at the boundary. Raw source acceleration is not forced
-as an endpoint constraint; full-catalog validation showed that backward
-extrapolation of capture acceleration noise produces non-human velocity and
-angular-velocity spikes.
-
-The wrist orientation template is selected from the source grasp family:
-
-- `top_oblique`;
-- `object_facing`;
-- `source_neutral`.
-
-Templates apply only a bounded source-relative perturbation (default norm at
-most 12°) and return exactly to the source orientation. Finger targets remain
-fixed at the original pre60 frame0 pose throughout the generated prefix.
-
-## Action and terminal gates
-
-The generated prefix is the synthesis early phase:
-
-```text
-trajectory_step < L:
-    policy forward is not called
-    processed residual action = 0
-    cumulative position residual = 0
-    cumulative joint residual = 0
-    0.10 m object-deviation terminal disabled
-
-trajectory_step >= L:
-    deterministic checkpoint policy residual enabled
-    cumulative residual enabled
-    normal 0.10 m object-deviation terminal enabled
-```
-
-Thus the first original pre60 command uses the checkpoint policy and ordinary
-termination semantics. Non-augmented environments preserve the existing fixed
-early30 behavior, including its established exit-frame handling.
-
-Synthesis does not train PPO. Its checkpoint stepper calls deterministic mean
-policy inference and `env.step` only; it never calls `record_transition`,
-`post_interaction`, or an optimizer. No PPO samples are written to memory.
-
-## Checkpoint boundary
-
-The accepted parent binds the exact checkpoint SHA256; selecting a different
-checkpoint is a hard error. The checkpoint is a policy-transfer source, not the
-reference ABI. A successful
-pre180 or old-geometry checkpoint may drive a pre60/new-asset synthesis rollout
-only through the explicit policy-transfer inference loader. That loader retains
-fail-closed checks for checkpoint format, known reward/environment families,
-model architecture, tensor shapes, and finite state, while deliberately not
-claiming padding/asset signature equality. It transfers policy, value, and
-normalizer modules without optimizer or PPO-memory state.
-
-Ordinary viewer inference and strict training resume continue to require full
-environment-signature equality.
-
-## Candidate acceptance
-
-The exporter rejects an augmented attempt if the controlled right hand develops
-an actual solved floor contact above the production 0.2 N threshold during the
-prefix. Broadphase candidates and contacts on a compiled reference-following
-left hand do not count. Candidate success still requires source completion
-without deviation failure after the prefix gate opens.
-
-A positive wrist Z alone is not treated as proof of clearance; this solved-force
-check is the physical acceptance criterion.
-
-## Validation expectations
-
-Before publishing a new dataset:
-
-1. verify start radius, XY offset, and positive elevation bounds;
-2. verify the exact source suffix, source indices, and object reference suffix;
-3. verify zero discrete splice velocity error;
-4. audit peak translation/angular speed over the selected catalog;
-5. verify processed/cumulative residual is zero only in the prefix;
-6. verify the 0.10 m terminal is disabled before `L` and live at `L`;
-7. inspect at least one generated prefix in the native viewer;
-8. validate compact v2_contact structure and target replay;
-9. preserve the sibling manifest containing accepted per-row samples.
-
-The generated row UUID is salted with parent row UUID, attempt seed, and
-attempt number, so multiple augmentations of the same parent cannot collide.
-
-## Interactive viewer
-
-`tools/view_manorl_approach_prefix.py` opens one MuJoCo window and loops over
-fresh approach-prefix episodes of the bound accepted parent. One MJX-Warp
-environment and one checkpoint policy runtime are reused across every reset:
+## Viewer
 
 ```bash
 python tools/view_manorl_approach_prefix.py \
-  --checkpoint /path/checkpoint-001000.pt \
+  --checkpoint /path/exact-parent-checkpoint.pt \
   --accepted-parent /path/accepted-parent.json \
   --predecode-dir /path/pre60-bundle \
+  --approach-mode near \
+  --retreat-suffix \
   --seed 49 \
-  --speed 1.0 \
-  --print-every 20
+  --speed 1.0
 ```
 
-Each terminal advances `--seed`, reinstalls the next seeded
-approach-prefixed reference, and replays from frame 0 in the same window.
-Machine-readable JSON lines on stdout report `RESET` (sampled start, XY
-radius, Z offset, prefix length), `FRAME` (progress and policy gate), and
-`TERMINAL` (reason code). `--max-episodes N` stops after N episodes for
-bounded smoke runs.
+The viewer uses one active MJX-Warp environment and reuses one policy runtime.
+Each terminal increments the episode seed and reinstalls the next immutable
+reference from frame 0. RESET telemetry reports mode, independent approach and
+retreat seeds, approach geometry, prefix length, retreat anchor, and endpoint.
 
-The production compact row contract remains
-`synthetic_mano_target_replay_visual_v2_contact`; augmentation semantics live in
-the sibling manifest while row seed/identity/reference arrays retain complete
-replay and reproducibility evidence.
+## Publication validation
+
+Production format is
+`synthetic_mano_target_replay_visual_v2_contact`. Before publication:
+
+1. validate accepted-parent v3 and exact checkpoint SHA;
+2. verify far/near bounds and independent seed streams;
+3. verify raw frame-0 `q[3:28]` at approach start;
+4. verify zero prefix and retreat splice-velocity errors;
+5. verify prefix policy/processed/cumulative residual are zero; verify retreat
+   policy/processed action are zero and cumulative residual decays monotonically
+   from its entry value to zero without a controller-target jump;
+6. verify prefix has no solved table or object contact above 0.2 N;
+7. verify retreat anchor equals augmented movement-end+15;
+8. verify success termination and normal deviation semantics in the tail;
+9. validate compact contact/reference/command mapping and force-frame
+   consistency with `tools/validate_manorl_synthetic_lance.py`;
+10. preserve the sibling manifest and checkpoint metadata catalog.

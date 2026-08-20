@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -12,10 +13,18 @@ from sim.manorl.abi import (
 )
 from sim.manorl.approach_prefix import (
     APPROACH_PREFIX_CONTRACT,
+    RETREAT_SUFFIX_CONTRACT,
     ApproachPrefixConfig,
+    RetreatSuffixConfig,
     augment_trajectory_with_approach_prefix,
+    augment_trajectory_with_retreat_suffix,
+    augmentation_stream_seed,
 )
 from sim.manorl.contracts import JOINT_DOF, TrajectoryIdentity
+from sim.manorl.synthetic_parent import (
+    ACCEPTED_SYNTHETIC_PARENT_CONTRACT,
+    AcceptedSyntheticParent,
+)
 from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch
 
 
@@ -127,6 +136,249 @@ def test_approach_prefix_is_seeded_positive_z_and_suffix_exact() -> None:
     assert sample.splice_acceleration_jump_m_s2 < 20.0
 
 
+def test_approach_smooths_source_row_frame0_pose_into_pre60() -> None:
+    source = _trajectory()
+    raw_frame0_q_3_28 = np.asarray(source.q_ref[0, 3:]).copy()
+    raw_frame0_q_3_28[:3] += np.asarray((0.20, -0.10, 0.15))
+    raw_frame0_q_3_28[3:] += np.linspace(-0.25, 0.20, JOINT_DOF - 6)
+    augmented, sample = augment_trajectory_with_approach_prefix(
+        source,
+        seed=42,
+        start_q_ref_3_28=raw_frame0_q_3_28,
+    )
+    prefix = sample.prefix_frames
+    assert sample.orientation_template == "source_row_frame0"
+    np.testing.assert_allclose(
+        augmented.q_ref[0, 3:28], raw_frame0_q_3_28, atol=1e-14
+    )
+    assert not np.allclose(
+        augmented.q_ref[:prefix, 6:],
+        augmented.q_ref[0, 6:][None],
+    )
+    np.testing.assert_array_equal(augmented.q_ref[prefix:], source.q_ref)
+    dt = 1.0 / source.control_fps
+    prefix_splice_velocity = (
+        augmented.q_ref[prefix, 3:28] - augmented.q_ref[prefix - 1, 3:28]
+    ) / dt
+    source_velocity = (source.q_ref[1, 3:28] - source.q_ref[0, 3:28]) / dt
+    np.testing.assert_allclose(prefix_splice_velocity, source_velocity, atol=1e-12)
+
+
+def test_approach_rejects_invalid_source_row_frame0_pose() -> None:
+    with pytest.raises(ValueError, match=r"q_ref\[3:28\]"):
+        augment_trajectory_with_approach_prefix(
+            _trajectory(), seed=42, start_q_ref_3_28=np.zeros(24)
+        )
+
+
+def test_near_approach_uses_independent_retreat_like_object_relative_sample() -> None:
+    source = _trajectory()
+    anchor = 100
+    episode_seed = 49
+    near_seed = augmentation_stream_seed(episode_seed, "near-approach")
+    retreat_seed = episode_seed
+    assert near_seed != retreat_seed
+
+    near, near_sample = augment_trajectory_with_approach_prefix(
+        source,
+        seed=near_seed,
+        config=ApproachPrefixConfig(mode="near"),
+        near_anchor_reference_index=anchor,
+    )
+    retreat, retreat_sample = augment_trajectory_with_retreat_suffix(
+        near,
+        seed=retreat_seed,
+        anchor_reference_index=anchor + near_sample.prefix_frames,
+    )
+    assert near_sample.approach_mode == "near"
+    assert near_sample.seed == near_seed
+    assert retreat_sample.seed == retreat_seed
+    assert near_sample.direction_reference == (
+        "final_retreat_distribution_mapped_to_initial_object"
+    )
+    near_relative = (
+        np.asarray(near_sample.start_position_m) - source.object_pos[0]
+    )
+    retreat_relative = (
+        np.asarray(retreat_sample.end_position_m) - retreat.object_pos[-1]
+    )
+    assert not np.allclose(near_relative, retreat_relative)
+    assert near_sample.start_xy_radius_m == pytest.approx(
+        np.linalg.norm(near_relative[:2]), abs=1e-12
+    )
+    assert near_sample.start_z_offset_m == pytest.approx(
+        near_relative[2], abs=1e-12
+    )
+
+
+def test_near_approach_keeps_retreat_endpoint_world_z_after_object_lift() -> None:
+    source = _trajectory()
+    lifted_object = np.asarray(source.object_pos).copy()
+    lifted_object[:, 2] = np.linspace(0.01, 0.21, len(lifted_object))
+    source = replace(
+        source,
+        object_pos=lifted_object,
+        object_pos_raw=lifted_object,
+    )
+    seed = augmentation_stream_seed(49, "near-approach")
+    _, near_sample = augment_trajectory_with_approach_prefix(
+        source,
+        seed=seed,
+        config=ApproachPrefixConfig(mode="near"),
+        near_anchor_reference_index=100,
+    )
+    _, endpoint_sample = augment_trajectory_with_retreat_suffix(
+        source,
+        seed=seed,
+        anchor_reference_index=100,
+    )
+    assert near_sample.start_position_m[2] == pytest.approx(
+        endpoint_sample.end_position_m[2], abs=1e-12
+    )
+    assert near_sample.start_position_m[2] != pytest.approx(
+        source.object_pos[0, 2]
+        + endpoint_sample.end_position_m[2]
+        - source.object_pos[-1, 2],
+        abs=1e-6,
+    )
+
+
+def test_near_approach_allows_start_below_object_center_for_contact_validation() -> None:
+    source = _trajectory()
+    raised_object = np.asarray(source.object_pos).copy()
+    raised_object[:, 2] = 0.20
+    source = replace(
+        source,
+        object_pos=raised_object,
+        object_pos_raw=raised_object,
+    )
+    _, sample = augment_trajectory_with_approach_prefix(
+        source,
+        seed=augmentation_stream_seed(49, "near-approach"),
+        config=ApproachPrefixConfig(mode="near"),
+        near_anchor_reference_index=100,
+    )
+    assert sample.start_z_offset_m < 0.0
+    assert np.all(np.isfinite(sample.start_position_m))
+
+
+def test_near_approach_rejects_far_only_distribution_overrides() -> None:
+    with pytest.raises(ValueError, match="far-only"):
+        ApproachPrefixConfig(mode="near", minimum_xy_radius_m=0.20)
+
+
+def test_near_approach_requires_movement_end_anchor() -> None:
+    with pytest.raises(ValueError, match="movement-end-anchored"):
+        augment_trajectory_with_approach_prefix(
+            _trajectory(),
+            seed=42,
+            config=ApproachPrefixConfig(mode="near"),
+        )
+
+
+def test_retreat_suffix_replaces_post_contact_tail_from_original_direction() -> None:
+    source = _trajectory()
+    anchor = 100
+    augmented, sample = augment_trajectory_with_retreat_suffix(
+        source, seed=42, anchor_reference_index=anchor
+    )
+    repeated, repeated_sample = augment_trajectory_with_retreat_suffix(
+        source, seed=42, anchor_reference_index=anchor
+    )
+    changed, changed_sample = augment_trajectory_with_retreat_suffix(
+        source, seed=43, anchor_reference_index=anchor
+    )
+
+    assert sample.contract == RETREAT_SUFFIX_CONTRACT
+    assert sample.source_identity == source.identity.identity
+    assert sample.anchor_reference_index == anchor
+    assert sample.to_manifest() == repeated_sample.to_manifest()
+    np.testing.assert_array_equal(augmented.q_ref, repeated.q_ref)
+    assert sample.to_manifest() != changed_sample.to_manifest()
+    assert not np.array_equal(
+        augmented.q_ref[anchor + 1 :, :3],
+        changed.q_ref[anchor + 1 :, :3],
+    )
+
+    assert 0.03 <= sample.extra_horizontal_offset_m <= 0.15
+    assert 0.04 <= sample.extra_z_offset_m <= 0.10
+    assert -30.0 <= sample.xy_offset_deg <= 30.0
+    original_delta = source.q_ref[-1, :3] - source.q_ref[anchor, :3]
+    original_horizontal = float(np.linalg.norm(original_delta[:2]))
+    assert sample.original_horizontal_distance_m == pytest.approx(
+        original_horizontal, abs=1e-12
+    )
+    assert sample.end_horizontal_distance_m == pytest.approx(
+        original_horizontal + sample.extra_horizontal_offset_m, abs=1e-12
+    )
+    endpoint_delta = np.asarray(sample.end_position_m) - source.q_ref[anchor, :3]
+    assert np.linalg.norm(endpoint_delta[:2]) == pytest.approx(
+        sample.end_horizontal_distance_m, abs=1e-12
+    )
+    assert sample.original_z_displacement_m == pytest.approx(
+        original_delta[2], abs=1e-12
+    )
+    assert sample.end_z_displacement_m == pytest.approx(
+        original_delta[2] + sample.extra_z_offset_m, abs=1e-12
+    )
+    assert endpoint_delta[2] == pytest.approx(
+        sample.end_z_displacement_m, abs=1e-12
+    )
+    assert np.asarray(sample.end_position_m)[2] - source.q_ref[-1, 2] == pytest.approx(
+        sample.extra_z_offset_m, abs=1e-12
+    )
+    original_direction = math.atan2(original_delta[1], original_delta[0])
+    sampled_direction = math.atan2(endpoint_delta[1], endpoint_delta[0])
+    wrapped_offset = math.degrees(
+        (sampled_direction - original_direction + math.pi) % (2 * math.pi) - math.pi
+    )
+    assert wrapped_offset == pytest.approx(sample.xy_offset_deg, abs=1e-12)
+
+    assert sample.suffix_frames == len(source.q_ref) - anchor
+    assert sample.replaced_tail_frames == len(source.q_ref) - anchor - 1
+    assert sample.suffix_frames == augmented.augmentation_suffix_frames
+    assert len(augmented.q_ref) == len(source.q_ref)
+    np.testing.assert_array_equal(
+        augmented.q_ref[: anchor + 1], source.q_ref[: anchor + 1]
+    )
+    np.testing.assert_array_equal(
+        augmented.q_ref[anchor + 1 : anchor + 3, :3],
+        source.q_ref[anchor + 1 : anchor + 3, :3],
+    )
+    np.testing.assert_array_equal(
+        augmented.q_ref_by_side["right"][: anchor + 1],
+        source.q_ref_by_side["right"][: anchor + 1],
+    )
+    # Only right-wrist XYZ in the replacement tail changes. Rotation, fingers,
+    # source clock/mapping, and object reference stay bit-identical.
+    np.testing.assert_array_equal(augmented.q_ref[:, 3:], source.q_ref[:, 3:])
+    np.testing.assert_array_equal(augmented.source_indices, source.source_indices)
+    np.testing.assert_array_equal(augmented.timestamps, source.timestamps)
+    np.testing.assert_array_equal(augmented.object_pos, source.object_pos)
+    np.testing.assert_array_equal(
+        augmented.object_quat_xyzw, source.object_quat_xyzw
+    )
+    assert augmented.movement_start_step == source.movement_start_step
+    assert augmented.movement_end_step == source.movement_end_step
+    assert sample.splice_position_m == pytest.approx(
+        tuple(source.q_ref[anchor, :3]), abs=1e-14
+    )
+    assert sample.splice_velocity_error_m_s == pytest.approx(0.0, abs=1e-12)
+    np.testing.assert_allclose(
+        augmented.q_ref[-1, :3], sample.end_position_m, atol=1e-12
+    )
+
+
+def test_retreat_suffix_config_bounds() -> None:
+    with pytest.raises(ValueError, match="extra-horizontal bounds"):
+        RetreatSuffixConfig(
+            minimum_extra_horizontal_m=0.20,
+            maximum_extra_horizontal_m=0.10,
+        )
+    with pytest.raises(ValueError, match="Z-offset bounds"):
+        RetreatSuffixConfig(minimum_z_offset_m=-0.01)
+
+
 def test_approach_prefix_rejects_non_pre60_source() -> None:
     with pytest.raises(ValueError, match="requires base pre-padding 60"):
         augment_trajectory_with_approach_prefix(_trajectory(base_pre_padding=180), seed=42)
@@ -170,6 +422,108 @@ def test_per_row_prefix_gates_residual_then_opens_at_original_pre60_start() -> N
     assert np.all(boundary.actions > 0.0)
     assert np.all(boundary.cumulative_offset > 0.0)
     assert np.all(boundary.cumulative_joint_offset > 0.0)
+
+
+def test_per_row_suffix_disables_actions_and_smoothly_decays_residual() -> None:
+    lengths = np.asarray((500, 600), dtype=np.int64)
+    suffix_lengths = np.asarray((20, 40), dtype=np.int64)
+    before = process_residual_actions(
+        **_action_inputs(2),
+        trajectory_steps=lengths - suffix_lengths - 1,
+        trajectory_lengths=lengths,
+        final_decay_lengths=suffix_lengths,
+    )
+    assert np.all(before.actions > 0.0)
+    assert np.all(before.cumulative_offset > 0.0)
+    assert np.all(before.cumulative_joint_offset > 0.0)
+
+    inputs = _action_inputs(2)
+    boundary = process_residual_actions(
+        **inputs,
+        trajectory_steps=lengths - suffix_lengths,
+        trajectory_lengths=lengths,
+        final_decay_lengths=suffix_lengths,
+    )
+    np.testing.assert_array_equal(boundary.actions, 0.0)
+    np.testing.assert_array_equal(
+        boundary.cumulative_offset, inputs["cumulative_offset"]
+    )
+    np.testing.assert_array_equal(
+        boundary.cumulative_joint_offset, inputs["cumulative_joint_offset"]
+    )
+
+    position = boundary.cumulative_offset
+    joints = boundary.cumulative_joint_offset
+    for step in range(1, int(suffix_lengths.max())):
+        active_steps = np.minimum(
+            lengths - suffix_lengths + step,
+            lengths - 3,
+        )
+        result = process_residual_actions(
+            **{
+                **_action_inputs(2),
+                "cumulative_offset": position,
+                "cumulative_joint_offset": joints,
+            },
+            trajectory_steps=active_steps,
+            trajectory_lengths=lengths,
+            final_decay_lengths=suffix_lengths,
+        )
+        np.testing.assert_array_equal(result.actions, 0.0)
+        assert np.all(np.abs(result.cumulative_offset) <= np.abs(position) + 1e-15)
+        assert np.all(
+            np.abs(result.cumulative_joint_offset) <= np.abs(joints) + 1e-15
+        )
+        position = result.cumulative_offset
+        joints = result.cumulative_joint_offset
+    np.testing.assert_allclose(position, 0.0, atol=1e-15)
+    np.testing.assert_allclose(joints, 0.0, atol=1e-15)
+
+
+def test_near_attempt_uses_movement_anchor_when_source_index_is_edge_held() -> None:
+    from tools.export_manorl_synthetic_lance import _augment_attempt_trajectories
+
+    source = _trajectory()
+    anchor = int(source.movement_end_step) + 15
+    source_indices = source.source_indices.copy()
+    source_indices[anchor:] = source_indices[anchor]
+    source = replace(source, source_indices=source_indices)
+    parent = AcceptedSyntheticParent(
+        contract=ACCEPTED_SYNTHETIC_PARENT_CONTRACT,
+        parent_dataset_path="/prior.lance",
+        parent_dataset_version=40,
+        parent_row_index=3,
+        parent_row_uuid="row-uuid",
+        parent_row_contract="synthetic_mano_target_replay_visual_v2_contact",
+        source_identity=source.identity.identity,
+        source_dataset_path=source.identity.dataset_path,
+        source_dataset_version=source.identity.dataset_version,
+        source_row_index=source.identity.row_index,
+        checkpoint_sha256="a" * 64,
+        checkpoint_update=1000,
+        parent_seed=42,
+        parent_episode_index=0,
+        parent_generation_attempt=1,
+        object_init_xy_offset_m=(0.0, 0.0),
+        reference_fps=120,
+        retreat_last_contact_state_index=120,
+        retreat_anchor_state_index=115,
+        retreat_anchor_source_frame_index=int(source_indices[anchor]),
+        retreat_anchor_horizontal_distance_m=float(
+            np.linalg.norm(source.q_ref[-1, :2] - source.q_ref[anchor, :2])
+        ),
+        retreat_anchor_offset_frames=15,
+        parent_movement_end_state_index=100,
+        source_row_frame0_right_q_ref_3_28=tuple(source.q_ref[0, 3:28]),
+    )
+    augmented, samples = _augment_attempt_trajectories(
+        TrajectoryBatch((source,)),
+        attempt_seed=42,
+        config=ApproachPrefixConfig(mode="near"),
+        accepted_parent=parent,
+    )
+    assert augmented.num_envs == 1
+    assert samples[source.identity.identity].approach_mode == "near"
 
 
 def test_attempt_batch_resamples_per_reset_seed_and_identity() -> None:

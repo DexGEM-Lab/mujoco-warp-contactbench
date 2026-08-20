@@ -1,31 +1,23 @@
 ## Objective
-Implement an opt-in synthesis-only human-like approach prefix before the unchanged pre60 reference. Each synthesis reset/attempt samples a new seeded start. Finish when generated rows retain the original suffix exactly, use positive-Z 30–50 cm starts within XY ±30°, gate RL residual and 0.10 m deviation termination through the prefix, remain replay-compatible, and are documented/tested.
+Implement synthesis-only accepted-parent augmentation with two approach modes and a deterministic retreat phase. Each reset samples a fresh immutable reference, runs one active environment, preserves compact v2_contact replay, and remains safe for policy-transfer inference from the bound checkpoint.
 
-## Workbench
-- Implement and validate immutable prefix generation.
-- Wire per-trajectory control/termination gates into synthesis attempts.
-- Use old checkpoints as explicit policy-transfer inference when padding/assets differ.
-- Preserve compact v2_contact and record augmentation in companion manifest.
-
-## Context
-- Repository/worktree: /home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/feat-synthesis-approach-prefix
-- Base reference: pre60/post250 at 120 Hz; original pre60 and all later frames must remain byte-identical.
-- Existing successful checkpoints may be pre180 and old geometry; they provide policy weights only.
-- Synthesis attempts already run in isolated fresh processes with attempt_seed incremented per retry.
-
-## Task specifications
-- Sample hand start at 0.30–0.50 m from object, azimuth within ±30° of object→source-hand XY direction, elevation strictly positive (default +15° to +30°) with a 4 cm endpoint-smooth vertical approach arc.
-- Generate adaptive 100–300 total pre-padding using a non-linear human-like profile with an exact discrete C1 velocity splice; prefix length is total minus base60.
-- Select bounded source-conditioned orientation templates; keep finger pose fixed in v1.
-- Prefix is the synthetic early phase: processed/cumulative residual is zero while step < prefix length and opens at original pre60 frame 0.
-- The >0.10 m object deviation terminal is disabled only while step < prefix length and resumes at original pre60 frame 0.
-- Each reset/attempt resamples deterministically from attempt seed + source identity.
-- Synthesis inference must not write PPO memory.
-- Keep compact v2_contact row schema; companion manifest records algorithm contract/config/per-row sample, while row seed+identity make sampling reproducible.
+## Final task contract
+- Base reference: pre60/post250 at 120 Hz; ordinary training early30 and strict resume remain unchanged.
+- Parent: one prior successful compact v2_contact row, bound by accepted-parent v3 to source identity/version/row, checkpoint SHA/update, object XY offset, raw source frame0 right q_ref[3:28], movement-end, contact qualification, and retreat anchor.
+- Parent qualification: last solved right-hand/object contact (>0.2 N per contact pair) must not precede parent movement-end; movement-end+15 to final wrist XY must define a nonzero retreat direction.
+- Retreat anchor: parent movement-end + 15 state frames (125 ms at 120 Hz), mapped through state-aligned reference.source_frame_index and verified against command mapping.
+- Approach modes:
+  - far: initial-object-relative XY 0.30–0.70 m, Z 0.08–0.30 m, source direction ±30°; seed=episode seed.
+  - near: independently seeded retreat-like endpoint mapped from final-object-relative to initial object; seed=hash(episode seed, near-approach).
+- Retreat endpoint family: original anchor→final XY distance + 0.03–0.15 m, direction ±30°, final wrist Z + 0.04–0.10 m; retreat seed=episode seed.
+- Approach start q[0:3] is sampled XYZ; q[3:28] is exact raw source row frame0. Wrist rotation and all finger joints use discrete-C1 quintics to pre60 frame0. Prefix duration accounts for translation, wrist rotation, and max finger displacement.
+- Prefix: no policy call; processed/cumulative residual zero; deviation terminal disabled; any solved right-hand/table or right-hand/object contact >0.2 N rejects the candidate.
+- Task body: deterministic checkpoint policy and normal deviation semantics.
+- Retreat: preserve and smoothly deform original tail XYZ from movement-end+15. No policy call or processed action; no new residual accumulation. Entry cumulative residual is quintic-decayed to exact zero by the final issued command, preventing controller-target discontinuity. Deviation remains enabled.
+- Compact production contract: synthetic_mano_target_replay_visual_v2_contact with contact/reference/command mapping plus sibling manifest.
 
 ## Constraints
 - Work only in feat/synthesis-approach-prefix.
-- Preserve the primary dev worktree and user-modified test.sh.
-- Do not change ordinary training early30 semantics.
-- Do not treat a padding/asset-mismatched checkpoint as strict inference; use an explicit policy-transfer boundary.
+- Preserve primary dev worktree and user-modified test.sh.
+- Use explicit policy-transfer, never claim strict ABI equivalence for padding/assets.
 - No subagents.

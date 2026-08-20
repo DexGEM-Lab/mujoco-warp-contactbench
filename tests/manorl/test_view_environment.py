@@ -673,6 +673,63 @@ def test_checkpoint_stepper_skips_policy_forward_until_prefix_end() -> None:
     np.testing.assert_array_equal(runtime.env.actions.numpy(), 1.0)
 
 
+def test_checkpoint_stepper_stops_policy_forward_at_suffix_boundary() -> None:
+    import torch
+
+    from sim.manorl.view_environment import _CheckpointPolicyStepper
+
+    class Physical:
+        action_dim = 28
+        trajectory_steps = np.asarray([0], dtype=np.int64)
+
+        class config:
+            num_envs = 1
+
+    physical = Physical()
+
+    class Wrapped:
+        def step(self, actions):
+            self.actions = actions.clone()
+            physical.trajectory_steps += 1
+            return (
+                torch.zeros((1, 2)),
+                torch.zeros(1),
+                torch.zeros(1, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.bool),
+                {},
+            )
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.env = Wrapped()
+            self.gymnasium_env = SimpleNamespace(environment=physical)
+            self.calls = 0
+
+        def deterministic_actions(self, observations):
+            self.calls += 1
+            return torch.ones((1, 28))
+
+    runtime = Runtime()
+    stepper = _CheckpointPolicyStepper(
+        runtime,
+        torch.zeros((1, 2)),
+        policy_enable_steps=np.asarray([1]),
+        policy_disable_steps=np.asarray([3]),
+    )
+    stepper.step()
+    assert runtime.calls == 0
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 0.0)
+    stepper.step()
+    assert runtime.calls == 1
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 1.0)
+    stepper.step()
+    assert runtime.calls == 2
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 1.0)
+    stepper.step()
+    assert runtime.calls == 2
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 0.0)
+
+
 def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

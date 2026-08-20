@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 
 from sim.manorl.abi import ResidualActionConfig, TARGET_MAX_DEVIATION_DISTANCE
-from sim.manorl.approach_prefix import augment_trajectory_with_approach_prefix
+from sim.manorl.approach_prefix import (
+    ApproachPrefixConfig,
+    augment_trajectory_with_approach_prefix,
+    augment_trajectory_with_retreat_suffix,
+    augmentation_stream_seed,
+)
 from sim.manorl.assets import (
     COLLISION_GEOM_GROUP,
     compile_model,
@@ -110,7 +115,13 @@ def _reset_runtime_done(runtime: Any, observations: Any, done: Any) -> Any:
 
 
 class _CheckpointPolicyStepper:
-    """Advance with deterministic PPO means after optional reference-only prefixes."""
+    """Advance with deterministic PPO means after optional reference-only phases.
+
+    ``policy_enable_steps`` opens policy inference at the first live step of
+    each world (approach-prefix gate); ``policy_disable_steps`` closes it at
+    the movement-end+15 retreat anchor so the deformed tail never calls policy;
+    its entry residual is discharged without new action accumulation.
+    """
 
     def __init__(
         self,
@@ -118,6 +129,7 @@ class _CheckpointPolicyStepper:
         observations: Any,
         *,
         policy_enable_steps: np.ndarray | None = None,
+        policy_disable_steps: np.ndarray | None = None,
     ) -> None:
         self._runtime = runtime
         self._observations = observations
@@ -127,11 +139,29 @@ class _CheckpointPolicyStepper:
             if policy_enable_steps is None
             else np.asarray(policy_enable_steps, dtype=np.int64)
         )
-        if self._policy_enable_steps is not None:
+        self._policy_disable_steps = (
+            None
+            if policy_disable_steps is None
+            else np.asarray(policy_disable_steps, dtype=np.int64)
+        )
+        if self._policy_enable_steps is not None or self._policy_disable_steps is not None:
             environment = runtime.gymnasium_env.environment
-            if self._policy_enable_steps.shape != (environment.config.num_envs,):
+            expected = (environment.config.num_envs,)
+            if self._policy_enable_steps is not None and self._policy_enable_steps.shape != expected:
                 raise ValueError(
                     "policy_enable_steps must contain one step per environment"
+                )
+            if self._policy_disable_steps is not None and self._policy_disable_steps.shape != expected:
+                raise ValueError(
+                    "policy_disable_steps must contain one step per environment"
+                )
+            if (
+                self._policy_enable_steps is not None
+                and self._policy_disable_steps is not None
+                and np.any(self._policy_disable_steps < self._policy_enable_steps)
+            ):
+                raise ValueError(
+                    "policy_disable_steps must not precede policy_enable_steps"
                 )
 
     def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]:
@@ -142,11 +172,16 @@ class _CheckpointPolicyStepper:
                 self._pending_done,
             )
             self._pending_done = None
-        if self._policy_enable_steps is None:
+        if self._policy_enable_steps is None and self._policy_disable_steps is None:
             actions = self._runtime.deterministic_actions(self._observations)
         else:
             physical = self._runtime.gymnasium_env.environment
-            enabled = np.asarray(physical.trajectory_steps) >= self._policy_enable_steps
+            steps = np.asarray(physical.trajectory_steps, dtype=np.int64)
+            enabled = np.ones(physical.config.num_envs, dtype=bool)
+            if self._policy_enable_steps is not None:
+                enabled &= steps >= self._policy_enable_steps
+            if self._policy_disable_steps is not None:
+                enabled &= steps < self._policy_disable_steps
             action_dim = int(getattr(physical, "action_dim", JOINT_DOF))
             if np.all(enabled):
                 actions = self._runtime.deterministic_actions(self._observations)
@@ -366,6 +401,7 @@ def _build_checkpoint_stepper(
     *,
     policy_transfer: bool = False,
     policy_enable_steps: np.ndarray | None = None,
+    policy_disable_steps: np.ndarray | None = None,
 ) -> ViewerStepper:
     """Load the native policy and reset through its vector wrapper before rendering.
 
@@ -402,6 +438,7 @@ def _build_checkpoint_stepper(
         runtime,
         observations,
         policy_enable_steps=policy_enable_steps,
+        policy_disable_steps=policy_disable_steps,
     )
 
 
@@ -1124,6 +1161,7 @@ def _reinstall_approach_prefix_reference(
     trajectory: ReferenceTrajectory,
     *,
     seed: int,
+    policy_disable_steps: np.ndarray | None = None,
 ) -> None:
     """Replace the single world's reference and reset the runtime in place.
 
@@ -1156,6 +1194,18 @@ def _reinstall_approach_prefix_reference(
     stepper._observations = observations
     stepper._pending_done = None
     stepper._policy_enable_steps = environment.early_phase_lengths.copy()
+    resolved_disable_steps = policy_disable_steps
+    if resolved_disable_steps is None and getattr(
+        stepper, "_policy_disable_steps", None
+    ) is not None:
+        resolved_disable_steps = (
+            environment.trajectory_lengths
+            - environment.augmentation_suffix_frames
+        )
+    if resolved_disable_steps is not None:
+        stepper._policy_disable_steps = np.asarray(
+            resolved_disable_steps, dtype=np.int64
+        ).copy()
 
 
 def view_approach_prefix_episodes(
@@ -1167,6 +1217,8 @@ def view_approach_prefix_episodes(
     speed: float = 1.0,
     print_every: int = 20,
     max_episodes: int | None = None,
+    retreat_suffix: bool = True,
+    approach_mode: str = "far",
 ) -> None:
     """View accepted-parent approach-prefix augmentation episodes in one window.
 
@@ -1178,6 +1230,8 @@ def view_approach_prefix_episodes(
     deterministic checkpoint policy continue unchanged.
     """
 
+    if approach_mode not in ("far", "near"):
+        raise ValueError("approach_mode must be 'far' or 'near'")
     if speed <= 0.0:
         raise ValueError("speed must be positive")
     if print_every < 1:
@@ -1214,15 +1268,80 @@ def view_approach_prefix_episodes(
         source = pickle.load(stream)
     if source.reference_fps != parent.reference_fps:
         raise ValueError("predecoded source clock differs from the accepted parent")
+    if parent.source_row_frame0_right_q_ref_3_28 is None:
+        raise ValueError(
+            "accepted parent lacks source-row frame0 right q_ref[3:28]"
+        )
 
     checkpoint = _validate_checkpoint_path(checkpoint)
     options = _checkpoint_environment_options(checkpoint)
 
+    anchor_source = parent.retreat_anchor_source_frame_index
+    if anchor_source is None:
+        raise ValueError(
+            "accepted parent lacks movement-end+15 retreat anchor provenance"
+        )
+    source_anchor_index = (
+        int(source.movement_end_step) + parent.retreat_anchor_offset_frames
+    )
+    if (
+        not 0 <= source_anchor_index < len(source.q_ref)
+        or int(source.source_indices[source_anchor_index]) != int(anchor_source)
+    ):
+        raise ValueError(
+            "base movement-end+offset anchor disagrees with accepted-parent source frame"
+        )
+
     def sample(seed: int):
-        return augment_trajectory_with_approach_prefix(source, seed=seed)
+        approach_seed = (
+            seed
+            if approach_mode == "far"
+            else augmentation_stream_seed(seed, "near-approach")
+        )
+        retreat_seed = seed
+        trajectory, prefix_sample = augment_trajectory_with_approach_prefix(
+            source,
+            seed=approach_seed,
+            config=ApproachPrefixConfig(mode=approach_mode),
+            near_anchor_reference_index=(
+                source_anchor_index if approach_mode == "near" else None
+            ),
+            start_q_ref_3_28=parent.source_row_frame0_right_q_ref_3_28,
+        )
+        suffix_sample = None
+        if retreat_suffix:
+            anchor_index = (
+                int(trajectory.movement_end_step)
+                + parent.retreat_anchor_offset_frames
+            )
+            if (
+                not 0 <= anchor_index < len(trajectory.q_ref)
+                or int(trajectory.source_indices[anchor_index]) != int(anchor_source)
+            ):
+                raise ValueError(
+                    "augmented movement-end+offset anchor disagrees with accepted parent"
+                )
+            trajectory, suffix_sample = augment_trajectory_with_retreat_suffix(
+                trajectory,
+                seed=retreat_seed,
+                anchor_reference_index=anchor_index,
+            )
+        return (
+            trajectory,
+            prefix_sample,
+            suffix_sample,
+            approach_seed,
+            retreat_seed,
+        )
 
     seed = start_seed
-    trajectory, sample_result = sample(seed)
+    (
+        trajectory,
+        prefix_sample,
+        suffix_sample,
+        approach_seed,
+        retreat_seed,
+    ) = sample(seed)
     batch = TrajectoryBatch((trajectory,))
     environment = MujocoManoEnvironment(
         batch,
@@ -1251,6 +1370,9 @@ def view_approach_prefix_episodes(
         checkpoint,
         policy_transfer=True,
         policy_enable_steps=environment.early_phase_lengths,
+        policy_disable_steps=(
+            environment.trajectory_lengths - environment.augmentation_suffix_frames
+        ),
     )
 
     import mujoco
@@ -1272,28 +1394,61 @@ def view_approach_prefix_episodes(
     )
 
     def print_reset(current_seed: int) -> None:
-        print(
-            "RESET",
-            json.dumps(
+        reset_info: dict[str, object] = {
+            "seed": current_seed,
+            "approach_mode": approach_mode,
+            "approach_seed": approach_seed,
+            "retreat_seed": retreat_seed,
+            "progress": int(environment.progress[0]),
+            "trajectory_step": int(environment.trajectory_steps[0]),
+            "start_xyz_m": [
+                round(value, 6) for value in prefix_sample.start_position_m
+            ],
+            "xy_radius_m": round(prefix_sample.start_xy_radius_m, 6),
+            "z_offset_m": round(prefix_sample.start_z_offset_m, 6),
+            "distance_3d_m": round(prefix_sample.start_distance_m, 6),
+            "xy_angle_deg": round(prefix_sample.xy_offset_deg, 3),
+            "prefix_frames": prefix_sample.prefix_frames,
+            "effective_pre": prefix_sample.effective_pre_padding,
+            "object_xy_offset_m": list(parent.object_init_xy_offset_m),
+        }
+        if suffix_sample is not None:
+            reset_info.update(
                 {
-                    "seed": current_seed,
-                    "progress": int(environment.progress[0]),
-                    "trajectory_step": int(environment.trajectory_steps[0]),
-                    "start_xyz_m": [
-                        round(value, 6) for value in sample_result.start_position_m
+                    "suffix_anchor_reference_index": (
+                        suffix_sample.anchor_reference_index
+                    ),
+                    "suffix_frames": suffix_sample.suffix_frames,
+                    "suffix_end_xyz_m": [
+                        round(value, 6) for value in suffix_sample.end_position_m
                     ],
-                    "xy_radius_m": round(sample_result.start_xy_radius_m, 6),
-                    "z_offset_m": round(sample_result.start_z_offset_m, 6),
-                    "distance_3d_m": round(sample_result.start_distance_m, 6),
-                    "xy_angle_deg": round(sample_result.xy_offset_deg, 3),
-                    "prefix_frames": sample_result.prefix_frames,
-                    "effective_pre": sample_result.effective_pre_padding,
-                    "object_xy_offset_m": list(parent.object_init_xy_offset_m),
-                },
-                sort_keys=True,
-            ),
-            flush=True,
-        )
+                    "suffix_original_horizontal_m": round(
+                        suffix_sample.original_horizontal_distance_m, 6
+                    ),
+                    "suffix_extra_horizontal_m": round(
+                        suffix_sample.extra_horizontal_offset_m, 6
+                    ),
+                    "suffix_end_horizontal_m": round(
+                        suffix_sample.end_horizontal_distance_m, 6
+                    ),
+                    "suffix_original_dz_m": round(
+                        suffix_sample.original_z_displacement_m, 6
+                    ),
+                    "suffix_extra_z_m": round(
+                        suffix_sample.extra_z_offset_m, 6
+                    ),
+                    "suffix_end_dz_m": round(
+                        suffix_sample.end_z_displacement_m, 6
+                    ),
+                    "suffix_original_direction_deg": round(
+                        suffix_sample.original_direction_deg, 3
+                    ),
+                    "suffix_angle_offset_deg": round(
+                        suffix_sample.xy_offset_deg, 3
+                    ),
+                }
+            )
+        print("RESET", json.dumps(reset_info, sort_keys=True), flush=True)
 
     print_reset(seed)
     episodes = 0
@@ -1326,10 +1481,16 @@ def view_approach_prefix_episodes(
                             "seed": seed,
                             "progress": int(environment.progress[0]),
                             "trajectory_step": int(environment.trajectory_steps[0]),
-                            "prefix_frames": sample_result.prefix_frames,
+                            "prefix_frames": prefix_sample.prefix_frames,
+                            "suffix_frames": (
+                                0 if suffix_sample is None else suffix_sample.suffix_frames
+                            ),
                             "policy_enabled": bool(
                                 environment.trajectory_steps[0]
-                                >= sample_result.prefix_frames
+                                >= prefix_sample.prefix_frames
+                                and environment.trajectory_steps[0]
+                                < environment.trajectory_lengths[0]
+                                - environment.augmentation_suffix_frames[0]
                             ),
                             "reward": float(rewards[0]),
                         },
@@ -1352,7 +1513,13 @@ def view_approach_prefix_episodes(
                     print("STOP", json.dumps({"episodes": episodes}), flush=True)
                     break
                 seed += 1
-                trajectory, sample_result = sample(seed)
+                (
+                    trajectory,
+                    prefix_sample,
+                    suffix_sample,
+                    approach_seed,
+                    retreat_seed,
+                ) = sample(seed)
                 _reinstall_approach_prefix_reference(
                     environment,
                     stepper,

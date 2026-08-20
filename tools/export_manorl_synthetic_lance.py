@@ -7,6 +7,7 @@ import argparse
 from collections import defaultdict
 from dataclasses import asdict, replace as dataclass_replace
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,9 +23,14 @@ import numpy as np
 from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.approach_prefix import (
     APPROACH_PREFIX_CONTRACT,
+    RETREAT_SUFFIX_CONTRACT,
     ApproachPrefixConfig,
     ApproachPrefixSample,
+    RetreatSuffixConfig,
+    RetreatSuffixSample,
     augment_trajectory_with_approach_prefix,
+    augment_trajectory_with_retreat_suffix,
+    augmentation_stream_seed,
 )
 from sim.manorl.checkpoint import checkpoint_runtime_metadata
 from sim.manorl.contracts import JOINT_DOF, simulation_clock
@@ -70,6 +76,62 @@ from sim.manorl.view_environment import (
     _resolve_reference_fps,
     _validate_checkpoint_path,
 )
+
+AUGMENTATION_IDENTITY_CONTRACT = "manorl_synthesis_augmentation_identity_v3"
+
+
+def _augmentation_identity(
+    *,
+    accepted_parent: AcceptedSyntheticParent,
+    episode_seed: int,
+    attempt_number: int,
+    episode_index: int,
+    approach_config: ApproachPrefixConfig | None,
+    approach_sample: ApproachPrefixSample | None,
+    near_endpoint_config: RetreatSuffixConfig,
+    retreat_config: RetreatSuffixConfig | None,
+    retreat_sample: RetreatSuffixSample | None,
+) -> str:
+    parent_identity = accepted_parent.to_dict()
+    # Storage aliases and host mount paths are operational details, not sample
+    # identity. Versions, row UUID/index, source identity, checkpoint digest,
+    # offsets, anchors, and raw start pose retain the complete semantic binding.
+    parent_identity.pop("parent_dataset_path", None)
+    parent_identity.pop("source_dataset_path", None)
+    payload = {
+        "contract": AUGMENTATION_IDENTITY_CONTRACT,
+        "accepted_parent": parent_identity,
+        "episode_seed": episode_seed,
+        "attempt_number": attempt_number,
+        "episode_index": episode_index,
+        "approach": (
+            None
+            if approach_config is None
+            else {
+                "contract": APPROACH_PREFIX_CONTRACT,
+                "config": asdict(approach_config),
+                "near_endpoint_config": (
+                    asdict(near_endpoint_config)
+                    if approach_config.mode == "near"
+                    else None
+                ),
+                "seed": None if approach_sample is None else approach_sample.seed,
+            }
+        ),
+        "retreat": (
+            None
+            if retreat_config is None
+            else {
+                "contract": RETREAT_SUFFIX_CONTRACT,
+                "config": asdict(retreat_config),
+                "seed": None if retreat_sample is None else retreat_sample.seed,
+            }
+        ),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{AUGMENTATION_IDENTITY_CONTRACT}:{digest}"
+
 
 DEFAULT_DATASET = Path(
     "/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/"
@@ -266,7 +328,7 @@ def _source_metadata(
 
 def _materialized_contacts(
     environment: MujocoManoEnvironment,
-) -> tuple[list[list[dict[str, Any]]], np.ndarray]:
+) -> tuple[list[list[dict[str, Any]]], np.ndarray, np.ndarray]:
     state = environment.producer.materialize_state(environment.data)
     buffers = environment.producer.materialize_contact_buffers(
         environment.data, environment.config.num_envs
@@ -303,6 +365,20 @@ def _materialized_contacts(
         for geom_id in producer.keypoint_geom_ids_by_side["right"]
     }
     hand_floor = np.zeros(environment.config.num_envs, dtype=bool)
+    hand_object = np.asarray(
+        [
+            any(
+                np.linalg.norm(
+                    np.asarray(pair.get("force_normal") or (), dtype=np.float64)
+                )
+                > CONTACT_FORCE_THRESHOLD
+                for entry in entries
+                for pair in (entry.get("contact_pairs") or [])
+            )
+            for entries in contacts
+        ],
+        dtype=bool,
+    )
     for contact_id in range(buffers.count):
         first, second = map(int, buffers.geom[contact_id])
         if (first == floor_geom_id and second in hand_geom_ids) or (
@@ -314,7 +390,7 @@ def _materialized_contacts(
             ]
             if float(np.sum(solved)) > CONTACT_FORCE_THRESHOLD:
                 hand_floor[world_id] = True
-    return contacts, hand_floor
+    return contacts, hand_floor, hand_object
 
 
 def _state_row(
@@ -376,14 +452,56 @@ def _augment_attempt_trajectories(
     *,
     attempt_seed: int,
     config: ApproachPrefixConfig,
+    accepted_parent: AcceptedSyntheticParent | None = None,
+    near_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
 ) -> tuple[TrajectoryBatch, dict[str, ApproachPrefixSample]]:
     augmented = []
     samples: dict[str, ApproachPrefixSample] = {}
     for trajectory in trajectories.trajectories:
+        approach_seed = (
+            attempt_seed
+            if config.mode == "far"
+            else augmentation_stream_seed(attempt_seed, "near-approach")
+        )
+        near_anchor = None
+        if config.mode == "near":
+            if (
+                accepted_parent is None
+                or accepted_parent.retreat_anchor_source_frame_index is None
+            ):
+                raise ValueError(
+                    "near approach requires accepted-parent movement-end anchor provenance"
+                )
+            near_anchor = (
+                int(trajectory.movement_end_step)
+                + accepted_parent.retreat_anchor_offset_frames
+            )
+            if (
+                not 0 <= near_anchor < len(trajectory.q_ref)
+                or int(trajectory.source_indices[near_anchor])
+                != int(accepted_parent.retreat_anchor_source_frame_index)
+            ):
+                raise ValueError(
+                    "near-approach movement-end+offset anchor disagrees with accepted parent"
+                )
+        if (
+            accepted_parent is not None
+            and accepted_parent.source_row_frame0_right_q_ref_3_28 is None
+        ):
+            raise ValueError(
+                "approach synthesis requires source-row frame0 right q_ref[3:28] provenance"
+            )
         resolved, sample = augment_trajectory_with_approach_prefix(
             trajectory,
-            seed=attempt_seed,
+            seed=approach_seed,
             config=config,
+            near_anchor_reference_index=near_anchor,
+            near_endpoint_config=near_endpoint_config,
+            start_q_ref_3_28=(
+                None
+                if accepted_parent is None
+                else accepted_parent.source_row_frame0_right_q_ref_3_28
+            ),
         )
         augmented.append(resolved)
         samples[trajectory.identity.identity] = sample
@@ -406,11 +524,14 @@ def _run_attempt_batch(
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
+    retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
+    retreat_suffix_config: RetreatSuffixConfig | None = None,
 ) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, str],
     int,
     int,
+    dict[str, dict[str, object]],
     dict[str, dict[str, object]],
 ]:
     """Run one candidate episode for each identity in one attempt round."""
@@ -426,6 +547,13 @@ def _run_attempt_batch(
             )
         if approach_prefix_config is None:
             raise ValueError("accepted-parent synthesis requires approach-prefix augmentation")
+    if retreat_suffix_config is not None and (
+        accepted_parent is None
+        or accepted_parent.retreat_anchor_source_frame_index is None
+    ):
+        raise ValueError(
+            "retreat-suffix synthesis requires accepted-parent movement-end anchor provenance"
+        )
     resolved_deviation_termination = (
         allow_deviation_termination or approach_prefix_config is not None
     )
@@ -435,7 +563,34 @@ def _run_attempt_batch(
             trajectories,
             attempt_seed=attempt_seed,
             config=approach_prefix_config,
+            accepted_parent=accepted_parent,
+            near_endpoint_config=retreat_endpoint_config,
         )
+    retreat_samples: dict[str, RetreatSuffixSample] = {}
+    if retreat_suffix_config is not None:
+        augmented = []
+        for item in trajectories.trajectories:
+            anchor_source = int(accepted_parent.retreat_anchor_source_frame_index)
+            anchor_index = (
+                int(item.movement_end_step)
+                + accepted_parent.retreat_anchor_offset_frames
+            )
+            if (
+                not 0 <= anchor_index < len(item.q_ref)
+                or int(item.source_indices[anchor_index]) != anchor_source
+            ):
+                raise ValueError(
+                    "retreat movement-end+offset anchor disagrees with accepted parent"
+                )
+            augmented_item, suffix_sample = augment_trajectory_with_retreat_suffix(
+                item,
+                seed=attempt_seed,
+                anchor_reference_index=anchor_index,
+                config=retreat_suffix_config,
+            )
+            augmented.append(augmented_item)
+            retreat_samples[item.identity.identity] = suffix_sample
+        trajectories = _trajectory_subset(trajectories, augmented)
     num_envs = trajectories.num_envs
     environment = MujocoManoEnvironment(
         trajectories,
@@ -485,6 +640,11 @@ def _run_attempt_batch(
             if approach_prefix_config is not None
             else None
         ),
+        policy_disable_steps=(
+            environment.trajectory_lengths - environment.augmentation_suffix_frames
+            if retreat_suffix_config is not None
+            else None
+        ),
     )
     right_model_index = environment.model_hand_sides.index("right")
     right_model_slice = slice(
@@ -497,7 +657,11 @@ def _run_attempt_batch(
     succeeded = np.zeros(num_envs, dtype=bool)
     failure_reasons: dict[str, str] = {}
 
-    initial_contacts, initial_hand_floor = _materialized_contacts(environment)
+    (
+        initial_contacts,
+        initial_hand_floor,
+        initial_hand_object,
+    ) = _materialized_contacts(environment)
     prefix_valid = np.ones(num_envs, dtype=bool)
     prefix_invalid_reasons: list[str | None] = [None] * num_envs
     if approach_prefix_config is not None:
@@ -505,6 +669,9 @@ def _run_attempt_batch(
             if bool(initial_hand_floor[env_id]):
                 prefix_valid[env_id] = False
                 prefix_invalid_reasons[env_id] = "augmentation_prefix_hand_table_clearance"
+            elif bool(initial_hand_object[env_id]):
+                prefix_valid[env_id] = False
+                prefix_invalid_reasons[env_id] = "augmentation_prefix_hand_object_contact"
     for env_id in range(num_envs):
         initial = _state_row(environment, env_id)
         _append_state(state_storage[env_id], initial)
@@ -527,7 +694,11 @@ def _run_attempt_batch(
         transition = environment.last_transition
         if transition is None:
             raise RuntimeError("checkpoint exporter requires transition diagnostics")
-        frame_contacts, frame_hand_floor = _materialized_contacts(environment)
+        (
+            frame_contacts,
+            frame_hand_floor,
+            frame_hand_object,
+        ) = _materialized_contacts(environment)
         for env_id in np.flatnonzero(active):
             if bool(transition.reset_applied[env_id]):
                 raise RuntimeError(
@@ -550,6 +721,9 @@ def _run_attempt_batch(
                 if bool(frame_hand_floor[env_id]):
                     prefix_valid[env_id] = False
                     prefix_invalid_reasons[env_id] = "augmentation_prefix_hand_table_clearance"
+                elif bool(frame_hand_object[env_id]):
+                    prefix_valid[env_id] = False
+                    prefix_invalid_reasons[env_id] = "augmentation_prefix_hand_object_contact"
             command_index = int(transition.command_reference_indices[env_id])
             rollout = rollout_storage[env_id]
             rollout["observation_t"].append(previous_observation[env_id])
@@ -651,19 +825,25 @@ def _run_attempt_batch(
             name: np.asarray(values) for name, values in rollout_storage[env_id].items()
         }
         source_index, source_metadata = metadata_by_row[trajectory.identity.row_index]
+        augmentation_identity = None
+        if accepted_parent is not None:
+            augmentation_identity = _augmentation_identity(
+                accepted_parent=accepted_parent,
+                episode_seed=attempt_seed,
+                attempt_number=attempt_numbers[identity],
+                episode_index=episode_indices[identity],
+                approach_config=approach_prefix_config,
+                approach_sample=approach_samples.get(identity),
+                near_endpoint_config=retreat_endpoint_config,
+                retreat_config=retreat_suffix_config,
+                retreat_sample=retreat_samples.get(identity),
+            )
         provenance = {
             **provenance_base,
             "seed": attempt_seed,
             "episode_index": episode_indices[identity],
             "generation_attempt": attempt_numbers[identity],
-            "augmentation_identity": (
-                None
-                if accepted_parent is None
-                else (
-                    f"{accepted_parent.parent_row_uuid}:seed={attempt_seed}:"
-                    f"attempt={attempt_numbers[identity]}"
-                )
-            ),
+            "augmentation_identity": augmentation_identity,
         }
         full_row = build_v2_row(
             trajectory=trajectory,
@@ -692,12 +872,18 @@ def _run_attempt_batch(
         for identity in rows
         if identity in approach_samples
     }
+    accepted_retreats = {
+        identity: retreat_samples[identity].to_manifest()
+        for identity in rows
+        if identity in retreat_samples
+    }
     return (
         rows,
         failure_reasons,
         environment.observation_dim,
         environment.action_dim,
         accepted_augmentations,
+        accepted_retreats,
     )
 
 
@@ -718,6 +904,8 @@ def _export_isolated_repeated_rollouts(
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
+    retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
+    retreat_suffix_config: RetreatSuffixConfig | None = None,
 ) -> dict[str, Any]:
     """Run each attempt round in a fresh process and append accepted rows."""
 
@@ -771,6 +959,7 @@ def _export_isolated_repeated_rollouts(
     generated_uuids: list[str] = []
     row_source_identities: list[str] = []
     accepted_approach_prefixes: list[dict[str, object]] = []
+    accepted_retreat_suffixes: list[dict[str, object]] = []
 
     for attempt_round in range(1, max_attempts_per_identity + 1):
         pending = [
@@ -844,6 +1033,8 @@ def _export_isolated_repeated_rollouts(
             command.extend(
                 [
                     "--approach-prefix",
+                    "--approach-mode",
+                    approach_prefix_config.mode,
                     "--approach-xy-radius-min-m",
                     str(approach_prefix_config.minimum_xy_radius_m),
                     "--approach-xy-radius-max-m",
@@ -864,12 +1055,33 @@ def _export_isolated_repeated_rollouts(
                     str(approach_prefix_config.nominal_angular_speed_deg_s),
                     "--approach-duration-jitter-fraction",
                     str(approach_prefix_config.duration_jitter_fraction),
-                    "--approach-orientation-perturbation-deg",
-                    str(approach_prefix_config.maximum_orientation_perturbation_deg),
                     "--approach-vertical-arc-height-m",
                     str(approach_prefix_config.vertical_arc_height_m),
                 ]
             )
+        if (
+            retreat_suffix_config is not None
+            or (
+                approach_prefix_config is not None
+                and approach_prefix_config.mode == "near"
+            )
+        ):
+            command.extend(
+                [
+                    "--retreat-horizontal-min-m",
+                    str(retreat_endpoint_config.minimum_extra_horizontal_m),
+                    "--retreat-horizontal-max-m",
+                    str(retreat_endpoint_config.maximum_extra_horizontal_m),
+                    "--retreat-xy-deg",
+                    str(retreat_endpoint_config.maximum_xy_offset_deg),
+                    "--retreat-z-min-m",
+                    str(retreat_endpoint_config.minimum_z_offset_m),
+                    "--retreat-z-max-m",
+                    str(retreat_endpoint_config.maximum_z_offset_m),
+                ]
+            )
+            if retreat_suffix_config is not None:
+                command.append("--retreat-suffix")
         if allow_deviation_termination:
             command.append("--allow-deviation-termination")
         completed = subprocess.run(command, check=False)
@@ -889,6 +1101,7 @@ def _export_isolated_repeated_rollouts(
         generated_uuids.extend(child["generated_uuids"])
         row_source_identities.extend(child["row_source_identities"])
         accepted_approach_prefixes.extend(child.get("approach_prefixes", []))
+        accepted_retreat_suffixes.extend(child.get("retreat_suffixes", []))
         print(
             json.dumps(
                 {
@@ -945,6 +1158,7 @@ def _export_isolated_repeated_rollouts(
         "row_source_identities": row_source_identities,
         "generated_uuids": generated_uuids,
         "approach_prefixes": accepted_approach_prefixes,
+        "retreat_suffixes": accepted_retreat_suffixes,
         "accepted_parent": (
             None if accepted_parent is None else accepted_parent.to_dict()
         ),
@@ -973,10 +1187,32 @@ def _export_isolated_repeated_rollouts(
                 else {
                     "contract": APPROACH_PREFIX_CONTRACT,
                     "config": asdict(approach_prefix_config),
+                    "near_endpoint_config": (
+                        asdict(retreat_endpoint_config)
+                        if approach_prefix_config.mode == "near"
+                        else None
+                    ),
+                    "seed_stream": (
+                        "episode_seed"
+                        if approach_prefix_config.mode == "far"
+                        else "hash(episode_seed,near-approach)"
+                    ),
                     "reset_semantics": "fresh_seeded_reference_per_isolated_attempt",
                     "residual_gate": "zero_through_prefix_then_checkpoint_policy",
                     "deviation_terminal_gate": "disabled_through_prefix_then_0p10m_at_original_pre60_start",
                     "accepted_rows": accepted_approach_prefixes,
+                }
+            ),
+            "retreat_suffix": (
+                None
+                if retreat_suffix_config is None
+                else {
+                    "contract": RETREAT_SUFFIX_CONTRACT,
+                    "config": asdict(retreat_suffix_config),
+                    "seed_stream": "episode_seed",
+                    "reset_semantics": "fresh_seeded_retreat_per_isolated_attempt",
+                    "residual_gate": "zero_actions_smooth_cumulative_residual_decay_to_zero",
+                    "accepted_rows": accepted_retreat_suffixes,
                 }
             ),
         },
@@ -1025,6 +1261,7 @@ def _export_isolated_repeated_rollouts(
         "max_attempts_per_identity": max_attempts_per_identity,
         "checkpoint_sha256": checkpoint_sha,
         "approach_prefixes": accepted_approach_prefixes,
+        "retreat_suffixes": accepted_retreat_suffixes,
     }
 
 
@@ -1046,6 +1283,8 @@ def export_checkpoint_rollouts(
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
+    retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
+    retreat_suffix_config: RetreatSuffixConfig | None = None,
 ) -> dict[str, Any]:
     """Generate an accepted 1:N checkpoint rollout dataset per raw identity."""
 
@@ -1128,6 +1367,8 @@ def export_checkpoint_rollouts(
             object_xy_offset_m=object_xy_offset_m,
             approach_prefix_config=approach_prefix_config,
             accepted_parent=accepted_parent,
+            retreat_endpoint_config=retreat_endpoint_config,
+            retreat_suffix_config=retreat_suffix_config,
         )
     trajectories = (
         load_assigned_trajectory_batch(selection, num_envs=num_envs)
@@ -1190,6 +1431,7 @@ def export_checkpoint_rollouts(
     }
     rows: list[dict[str, Any]] = []
     accepted_approach_prefixes: list[dict[str, object]] = []
+    accepted_retreat_suffixes: list[dict[str, object]] = []
     observation_dim: int | None = None
     action_dim: int | None = None
 
@@ -1227,6 +1469,7 @@ def export_checkpoint_rollouts(
             observed_dim,
             acted_dim,
             attempt_augmentations,
+            attempt_retreats,
         ) = _run_attempt_batch(
             checkpoint=checkpoint,
             checkpoint_options=checkpoint_options,
@@ -1244,10 +1487,13 @@ def export_checkpoint_rollouts(
             object_xy_offset_m=object_xy_offset_m,
             approach_prefix_config=approach_prefix_config,
             accepted_parent=accepted_parent,
+            retreat_endpoint_config=retreat_endpoint_config,
+            retreat_suffix_config=retreat_suffix_config,
         )
         observation_dim = observed_dim
         action_dim = acted_dim
         accepted_approach_prefixes.extend(attempt_augmentations.values())
+        accepted_retreat_suffixes.extend(attempt_retreats.values())
         for identity in pending:
             row = attempt_rows.get(identity)
             if row is not None:
@@ -1340,6 +1586,7 @@ def export_checkpoint_rollouts(
         "row_source_identities": [row["provenance"]["source_identity"] for row in rows],
         "generated_uuids": [row["index"]["uuid"] for row in rows],
         "approach_prefixes": accepted_approach_prefixes,
+        "retreat_suffixes": accepted_retreat_suffixes,
         "accepted_parent": (
             None if accepted_parent is None else accepted_parent.to_dict()
         ),
@@ -1367,10 +1614,32 @@ def export_checkpoint_rollouts(
                 else {
                     "contract": APPROACH_PREFIX_CONTRACT,
                     "config": asdict(approach_prefix_config),
+                    "near_endpoint_config": (
+                        asdict(retreat_endpoint_config)
+                        if approach_prefix_config.mode == "near"
+                        else None
+                    ),
+                    "seed_stream": (
+                        "episode_seed"
+                        if approach_prefix_config.mode == "far"
+                        else "hash(episode_seed,near-approach)"
+                    ),
                     "reset_semantics": "fresh_seeded_reference_per_attempt",
                     "residual_gate": "zero_through_prefix_then_checkpoint_policy",
                     "deviation_terminal_gate": "disabled_through_prefix_then_0p10m_at_original_pre60_start",
                     "accepted_rows": accepted_approach_prefixes,
+                }
+            ),
+            "retreat_suffix": (
+                None
+                if retreat_suffix_config is None
+                else {
+                    "contract": RETREAT_SUFFIX_CONTRACT,
+                    "config": asdict(retreat_suffix_config),
+                    "seed_stream": "episode_seed",
+                    "reset_semantics": "fresh_seeded_retreat_per_attempt",
+                    "residual_gate": "zero_actions_smooth_cumulative_residual_decay_to_zero",
+                    "accepted_rows": accepted_retreat_suffixes,
                 }
             ),
         },
@@ -1418,6 +1687,7 @@ def export_checkpoint_rollouts(
         "max_attempts_per_identity": max_attempts_per_identity,
         "checkpoint_sha256": checkpoint_sha,
         "approach_prefixes": accepted_approach_prefixes,
+        "retreat_suffixes": accepted_retreat_suffixes,
     }
 
 
@@ -1479,6 +1749,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="JSON descriptor of one accepted prior scalable-synthesis row",
     )
+    parser.add_argument(
+        "--approach-mode",
+        choices=("far", "near"),
+        default="far",
+        help="far 30-70 cm start or independently seeded retreat-like near start",
+    )
     parser.add_argument("--approach-xy-radius-min-m", type=float, default=0.30)
     parser.add_argument("--approach-xy-radius-max-m", type=float, default=0.70)
     parser.add_argument("--approach-xy-deg", type=float, default=30.0)
@@ -1489,8 +1765,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--approach-nominal-speed-m-s", type=float, default=0.30)
     parser.add_argument("--approach-nominal-angular-speed-deg-s", type=float, default=90.0)
     parser.add_argument("--approach-duration-jitter-fraction", type=float, default=0.10)
-    parser.add_argument("--approach-orientation-perturbation-deg", type=float, default=12.0)
     parser.add_argument("--approach-vertical-arc-height-m", type=float, default=0.04)
+    parser.add_argument(
+        "--retreat-suffix",
+        action="store_true",
+        help="replace the post movement-end+15 tail with a seeded farther/higher retreat",
+    )
+    parser.add_argument("--retreat-horizontal-min-m", type=float, default=0.03)
+    parser.add_argument("--retreat-horizontal-max-m", type=float, default=0.15)
+    parser.add_argument("--retreat-xy-deg", type=float, default=30.0)
+    parser.add_argument("--retreat-z-min-m", type=float, default=0.04)
+    parser.add_argument("--retreat-z-max-m", type=float, default=0.10)
     args = parser.parse_args(argv)
     if args.num_envs < 1:
         parser.error("num-envs must be positive")
@@ -1518,6 +1803,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     try:
         args.approach_prefix_config = (
             ApproachPrefixConfig(
+                mode=args.approach_mode,
                 minimum_xy_radius_m=args.approach_xy_radius_min_m,
                 maximum_xy_radius_m=args.approach_xy_radius_max_m,
                 maximum_xy_offset_deg=args.approach_xy_deg,
@@ -1528,11 +1814,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                 nominal_speed_m_s=args.approach_nominal_speed_m_s,
                 nominal_angular_speed_deg_s=args.approach_nominal_angular_speed_deg_s,
                 duration_jitter_fraction=args.approach_duration_jitter_fraction,
-                maximum_orientation_perturbation_deg=args.approach_orientation_perturbation_deg,
                 vertical_arc_height_m=args.approach_vertical_arc_height_m,
             )
             if args.approach_prefix
             else None
+        )
+        args.retreat_endpoint_config = RetreatSuffixConfig(
+            minimum_extra_horizontal_m=args.retreat_horizontal_min_m,
+            maximum_extra_horizontal_m=args.retreat_horizontal_max_m,
+            maximum_xy_offset_deg=args.retreat_xy_deg,
+            minimum_z_offset_m=args.retreat_z_min_m,
+            maximum_z_offset_m=args.retreat_z_max_m,
+        )
+        args.retreat_suffix_config = (
+            args.retreat_endpoint_config if args.retreat_suffix else None
         )
     except (TypeError, ValueError) as exc:
         parser.error(str(exc))
@@ -1586,6 +1881,8 @@ def main(argv: list[str] | None = None) -> int:
         object_xy_offset_m=args.object_xy_offset_m,
         approach_prefix_config=args.approach_prefix_config,
         accepted_parent=args.accepted_parent_descriptor,
+        retreat_endpoint_config=args.retreat_endpoint_config,
+        retreat_suffix_config=args.retreat_suffix_config,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0

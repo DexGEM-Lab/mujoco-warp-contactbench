@@ -65,6 +65,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="stop after this many completed episodes instead of looping until the window closes",
     )
+    parser.add_argument(
+        "--approach-mode",
+        choices=("far", "near"),
+        default="far",
+        help="approach start distribution: far 30-70 cm, or near retreat-like object-relative (default: far)",
+    )
+    parser.add_argument(
+        "--retreat-suffix",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="replace the post movement-end+15 tail with a seeded farther/higher retreat (default: on)",
+    )
     args = parser.parse_args(argv)
     if args.seed < 0:
         parser.error("--seed must be non-negative")
@@ -91,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         speed=args.speed,
         print_every=args.print_every,
         max_episodes=args.max_episodes,
+        retreat_suffix=args.retreat_suffix,
+        approach_mode=args.approach_mode,
     )
     return 0
 

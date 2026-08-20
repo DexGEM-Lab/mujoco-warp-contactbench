@@ -125,6 +125,12 @@ class ReferenceTrajectory:
     # value makes exactly the generated prefix the pure-reference phase; the
     # original reference begins with residual/deviation semantics enabled.
     augmentation_prefix_frames: int = 0
+    # Synthesis-only policy-free tail-window length. Zero preserves normal
+    # policy semantics. A positive value closes policy/action accumulation at
+    # ``T-value`` and smoothly discharges existing cumulative residual;
+    # the anchor state remains immutable while subsequent tail XYZ may be a
+    # smooth deformation of the original post-contact retreat.
+    augmentation_suffix_frames: int = 0
 
     def __post_init__(self) -> None:
         expected = int(self.source_indices.shape[0])
@@ -197,6 +203,13 @@ class ReferenceTrajectory:
             and self.augmentation_prefix_frames >= movement_steps[0]
         ):
             raise ValueError("approach prefix must end before the movement window")
+        if (
+            not isinstance(self.augmentation_suffix_frames, int)
+            or isinstance(self.augmentation_suffix_frames, bool)
+            or self.augmentation_suffix_frames < 0
+            or self.augmentation_suffix_frames >= expected
+        ):
+            raise ValueError("augmentation_suffix_frames must be a non-negative in-range integer")
         if np.any(np.diff(self.source_indices) < 0):
             raise ValueError("source_indices must be non-decreasing")
         for name in (

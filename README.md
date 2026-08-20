@@ -362,25 +362,40 @@ python tools/select_manorl_synthetic_parent.py \
   --output /path/accepted-parent.json
 
 MANORL_SYNTH_APPROACH_PREFIX=true \
+MANORL_SYNTH_APPROACH_MODE=near \
+MANORL_SYNTH_RETREAT_SUFFIX=true \
 MANORL_SYNTH_ACCEPTED_PARENT=/path/accepted-parent.json \
 MANORL_PREDECODED_MANIFEST=/path/pre60-bundle/manifest.json \
 CHECKPOINT=/path/exact-parent-checkpoint.pt \
 ./synthesize.sh banana 01 1 0
 ```
 
-Each reset/attempt resamples a positive-Z hand approach (XY 0.30–0.70 m
-horizontal, 0.08–0.30 m above the object centre, ±30° azimuth). The new
-prefix does not call the RL policy; deterministic checkpoint policy inference
-starts at the original pre60 frame0. The parent descriptor binds the exact
-source identity, checkpoint SHA256, and successful object XY offset. Inspect
-episodes interactively with:
+`far` samples XY 0.30–0.70 m, world-up Z 0.08–0.30 m, and ±30° azimuth around
+the initial object→pre60 hand direction. `near` uses an independent seed and
+maps retreat-like endpoint XY from the final object to the initial object while
+preserving the sampled retreat endpoint's absolute world Z. Near and retreat
+share the same distribution family but not the same sample. Start
+XYZ is sampled; start `q_ref[3:28]` is copied from the raw source row frame0,
+then wrist orientation and all finger joints smoothly reach pre60 frame0.
+
+The approach prefix never calls the policy and rejects solved right-hand/table
+or right-hand/object contact above 0.2 N. Retreat deforms the source tail from
+the accepted parent's deterministic movement-end+15 anchor; policy and processed
+action are zero while entry cumulative residual smoothly decays to zero, and
+normal deviation termination remains active. Parent v3
+binds source/checkpoint/object offset/raw start pose and rejects rows whose last
+solved contact precedes movement-end or whose movement-end+15 tail has no nonzero
+horizontal retreat direction. Inspect episodes interactively with:
 
 ```bash
 python tools/view_manorl_approach_prefix.py \
   --checkpoint /path/exact-parent-checkpoint.pt \
   --accepted-parent /path/accepted-parent.json \
   --predecode-dir /path/pre60-bundle \
-  --seed 49
+  --approach-mode near \
+  --retreat-suffix \
+  --seed 49 \
+  --speed 1.0
 ```
 
 See

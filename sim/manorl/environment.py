@@ -2389,6 +2389,24 @@ class MujocoManoEnvironment:
             ],
             dtype=np.int64,
         )
+        # Synthesis-only retreat tail window. Policy forward and new residual
+        # accumulation close at ``T-window`` (the immutable movement-end+15
+        # anchor transition); existing cumulative residual is smoothly
+        # discharged while reference XYZ deforms the source retreat. Zero
+        # preserves normal tail semantics.
+        self.augmentation_suffix_frames = np.asarray(
+            [
+                int(getattr(item, "augmentation_suffix_frames", 0))
+                for item in self.trajectories
+            ],
+            dtype=np.int64,
+        )
+        if np.any(self.augmentation_suffix_frames < 0) or np.any(
+            self.augmentation_suffix_frames >= self.trajectory_lengths
+        ):
+            raise ValueError(
+                "augmented trajectory suffix does not map into its reference slice"
+            )
         # Deviation protection covers only the generated augmentation. Entering
         # the unchanged original pre60 reference re-enables the normal 0.10 m
         # terminal at the same boundary where residual action becomes live.
@@ -3318,6 +3336,8 @@ class MujocoManoEnvironment:
                     ~self.augmentation_prefix_mask,
                     dtype=bool,
                 ),
+                trajectory_lengths=self.trajectory_lengths,
+                final_decay_lengths=self.augmentation_suffix_frames,
                 config=self.config.residual_action,
             )
             action_results[side] = side_result

@@ -16,7 +16,9 @@ from typing import Final, Mapping
 
 import numpy as np
 
-ACCEPTED_SYNTHETIC_PARENT_CONTRACT: Final = "manorl_accepted_synthetic_parent_v1"
+ACCEPTED_SYNTHETIC_PARENT_CONTRACT: Final = "manorl_accepted_synthetic_parent_v3"
+RETREAT_ANCHOR_OFFSET_FRAMES: Final[int] = 15
+RETREAT_ANCHOR_CONTRACT: Final = "parent_movement_end_plus15_v2"
 _SYNTHETIC_ROW_CONTRACTS: Final = frozenset(
     {
         "synthetic_mano_target_replay_visual_v2_contact",
@@ -48,6 +50,14 @@ class AcceptedSyntheticParent:
     parent_generation_attempt: int
     object_init_xy_offset_m: tuple[float, float]
     reference_fps: int
+    retreat_last_contact_state_index: int | None = None
+    retreat_anchor_state_index: int | None = None
+    retreat_anchor_source_frame_index: int | None = None
+    retreat_anchor_horizontal_distance_m: float | None = None
+    retreat_anchor_contract: str = RETREAT_ANCHOR_CONTRACT
+    retreat_anchor_offset_frames: int = RETREAT_ANCHOR_OFFSET_FRAMES
+    parent_movement_end_state_index: int | None = None
+    source_row_frame0_right_q_ref_3_28: tuple[float, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.contract != ACCEPTED_SYNTHETIC_PARENT_CONTRACT:
@@ -82,10 +92,81 @@ class AcceptedSyntheticParent:
             )
         if self.reference_fps not in (100, 120):
             raise ValueError("accepted parent reference_fps must be 100 or 120")
+        retreat_fields = (
+            self.retreat_last_contact_state_index,
+            self.retreat_anchor_state_index,
+            self.retreat_anchor_source_frame_index,
+        )
+        if not all(
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+            for value in retreat_fields
+        ):
+            raise ValueError(
+                "accepted parent v3 requires all retreat anchor fields as non-negative integers"
+            )
+        if (
+            self.retreat_anchor_horizontal_distance_m is None
+            or not np.isfinite(self.retreat_anchor_horizontal_distance_m)
+            or self.retreat_anchor_horizontal_distance_m <= 1e-9
+        ):
+            raise ValueError(
+                "accepted parent v3 requires a positive horizontal retreat distance"
+            )
+        object.__setattr__(
+            self,
+            "retreat_anchor_horizontal_distance_m",
+            float(self.retreat_anchor_horizontal_distance_m),
+        )
+        if self.retreat_anchor_contract != RETREAT_ANCHOR_CONTRACT:
+            raise ValueError(
+                f"unsupported retreat anchor contract: {self.retreat_anchor_contract!r}"
+            )
+        if self.retreat_anchor_offset_frames != RETREAT_ANCHOR_OFFSET_FRAMES:
+            raise ValueError(
+                "accepted parent retreat_anchor_offset_frames must equal "
+                f"{RETREAT_ANCHOR_OFFSET_FRAMES}"
+            )
+        if (
+            not isinstance(self.parent_movement_end_state_index, int)
+            or isinstance(self.parent_movement_end_state_index, bool)
+            or self.parent_movement_end_state_index < 0
+        ):
+            raise ValueError(
+                "accepted parent v3 requires parent_movement_end_state_index"
+            )
+        if self.retreat_anchor_state_index != (
+            self.parent_movement_end_state_index
+            + self.retreat_anchor_offset_frames
+        ):
+            raise ValueError(
+                "accepted parent retreat anchor must equal movement end plus offset"
+            )
+        if self.retreat_last_contact_state_index < self.parent_movement_end_state_index:
+            raise ValueError(
+                "accepted parent last contact precedes movement end"
+            )
         if not self.parent_row_uuid or not self.parent_dataset_path:
             raise ValueError("accepted parent dataset path and row UUID are required")
         if not self.source_dataset_path:
             raise ValueError("accepted parent source dataset path is required")
+        if self.source_row_frame0_right_q_ref_3_28 is None:
+            raise ValueError(
+                "accepted parent v3 requires source-row frame0 right q_ref[3:28]"
+            )
+        initial_dof = np.asarray(
+            self.source_row_frame0_right_q_ref_3_28, dtype=np.float64
+        )
+        if initial_dof.shape != (25,) or not np.all(np.isfinite(initial_dof)):
+            raise ValueError(
+                "accepted parent source-row frame0 right q_ref[3:28] must be 25 finite values"
+            )
+        object.__setattr__(
+            self,
+            "source_row_frame0_right_q_ref_3_28",
+            tuple(float(value) for value in initial_dof),
+        )
         offset = np.asarray(self.object_init_xy_offset_m, dtype=np.float64)
         if offset.shape != (2,) or not np.all(np.isfinite(offset)):
             raise ValueError("accepted parent object XY offset must be a finite pair")
@@ -106,6 +187,10 @@ class AcceptedSyntheticParent:
     def to_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["object_init_xy_offset_m"] = list(self.object_init_xy_offset_m)
+        if self.source_row_frame0_right_q_ref_3_28 is not None:
+            result["source_row_frame0_right_q_ref_3_28"] = list(
+                self.source_row_frame0_right_q_ref_3_28
+            )
         return result
 
 
@@ -116,6 +201,9 @@ def accepted_parent_from_dict(values: Mapping[str, object]) -> AcceptedSynthetic
     offset = data.get("object_init_xy_offset_m")
     if isinstance(offset, list):
         data["object_init_xy_offset_m"] = tuple(offset)
+    initial_dof = data.get("source_row_frame0_right_q_ref_3_28")
+    if isinstance(initial_dof, list):
+        data["source_row_frame0_right_q_ref_3_28"] = tuple(initial_dof)
     try:
         return AcceptedSyntheticParent(**data)  # type: ignore[arg-type]
     except TypeError as exc:

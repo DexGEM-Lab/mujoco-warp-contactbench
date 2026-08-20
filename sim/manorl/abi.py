@@ -225,6 +225,8 @@ def process_residual_actions(
     early_phase_starts: NDArray[object] | None = None,
     early_phase_lengths: NDArray[object] | None = None,
     hold_early_exit_zero: NDArray[object] | None = None,
+    trajectory_lengths: NDArray[object] | None = None,
+    final_decay_lengths: NDArray[object] | None = None,
     config: ResidualActionConfig = ResidualActionConfig(),
 ) -> ResidualActionResult:
     """Apply the residual transformation for a 28-DoF MuJoCo hand.
@@ -302,8 +304,51 @@ def process_residual_actions(
             raise ValueError("hold_early_exit_zero must have shape (batch,)")
         hold_exit = hold_values.astype(bool, copy=False)
     exit_early = (steps == starts + early_lengths) & hold_exit
+    final_decay = np.zeros(batch, dtype=bool)
+    final_decay_ratio = np.ones(batch, dtype=np.float64)
+    if final_decay_lengths is not None:
+        final_values = _as_vector("final_decay_lengths", final_decay_lengths, batch)
+        if trajectory_lengths is None:
+            raise ValueError(
+                "trajectory_lengths is required when final_decay_lengths is provided"
+            )
+        total_values = _as_vector("trajectory_lengths", trajectory_lengths, batch)
+        if np.any(final_values < 0) or np.any(
+            (final_values > 0) & (final_values < 4)
+        ) or np.any(final_values > np.maximum(total_values, 0)):
+            raise ValueError(
+                "final_decay_lengths must be zero or at least four and within trajectory lengths"
+            )
+        final_starts = total_values - final_values
+        final_decay = (final_values > 0) & (steps >= final_starts)
+        phase_step = np.maximum(steps - final_starts, 0).astype(np.float64)
+        # ManoRL's delayed-terminal counter issues command indices 0..T-3;
+        # the final two state frames are observed but never commanded. A state
+        # tail window S=T-anchor therefore has its last command at phase S-3.
+        denominator = np.maximum(final_values - 3, 1).astype(np.float64)
+        current_phase = np.clip(phase_step / denominator, 0.0, 1.0)
+        previous_phase = np.clip((phase_step - 1.0) / denominator, 0.0, 1.0)
+
+        def remaining(phase: NDArray[np.float64]) -> NDArray[np.float64]:
+            return 1.0 - (
+                10.0 * phase**3 - 15.0 * phase**4 + 6.0 * phase**5
+            )
+
+        current_remaining = remaining(current_phase)
+        previous_remaining = remaining(previous_phase)
+        final_decay_ratio = np.where(
+            phase_step <= 0.0,
+            1.0,
+            np.divide(
+                current_remaining,
+                previous_remaining,
+                out=np.zeros_like(current_remaining),
+                where=previous_remaining > 1e-12,
+            ),
+        )
+    processed[final_decay] = 0.0
     zero_offset = ~residual | early | exit_early
-    accumulate = (steps != 0) & ~early & residual
+    accumulate = (steps != 0) & ~early & ~final_decay & residual
 
     position_scale = np.asarray(config.position_scale, dtype=np.float64)
     joint_scale = (
@@ -341,6 +386,12 @@ def process_residual_actions(
     next_joint = old_joint_offset.copy()
     next_position[zero_offset] = 0.0
     next_joint[zero_offset] = 0.0
+    next_position[final_decay] = (
+        position_offset[final_decay] * final_decay_ratio[final_decay, None]
+    )
+    next_joint[final_decay] = (
+        old_joint_offset[final_decay] * final_decay_ratio[final_decay, None]
+    )
     next_position[accumulate, :2] = (
         config.gamma_xy * next_position[accumulate, :2]
         + scaled_position[accumulate, :2]
