@@ -88,6 +88,7 @@ class RewardState:
     contact_end_frames: NDArray[np.int64]
     rotation_disabled_mask: NDArray[np.bool_]
     early_phase_starts: NDArray[np.int64] | None = None
+    early_phase_lengths: NDArray[np.int64] | None = None
 
 
 @dataclass(frozen=True)
@@ -221,7 +222,19 @@ def compute_rewards(
         early_starts = np.asarray(state.early_phase_starts)
         if early_starts.shape != (batch,) or not np.issubdtype(early_starts.dtype, np.integer):
             raise ValueError("early_phase_starts must be an integer (batch,) array")
-    early_phase = (steps >= early_starts) & (steps < early_starts + compatibility.early_phase_steps)
+    if state.early_phase_lengths is None:
+        early_lengths = np.full(
+            batch, compatibility.early_phase_steps, dtype=np.int64
+        )
+    else:
+        early_lengths = np.asarray(state.early_phase_lengths)
+        if (
+            early_lengths.shape != (batch,)
+            or not np.issubdtype(early_lengths.dtype, np.integer)
+            or np.any(early_lengths < 0)
+        ):
+            raise ValueError("early_phase_lengths must be a non-negative integer (batch,) array")
+    early_phase = (steps >= early_starts) & (steps < early_starts + early_lengths)
     distances = np.abs(object_position - target_position)
     ungated_x = config.distance_scales[0] * np.exp(-config.distance_decay * distances[:, 0])
     ungated_y = config.distance_scales[1] * np.exp(-config.distance_decay * distances[:, 1])

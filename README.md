@@ -334,9 +334,10 @@ verified package does not change its identity; changing any catalog byte does.
 ### Compact synthetic Lance synthesis
 
 `./synthesize.sh` defaults to the compact replay/visual contract
-`synthetic_mano_target_replay_visual_v1`. It retains target/recorded DOF,
-object poses, MANO global pose, 48D hand pose, 21-joint visual frames, and
-minimal lineage. Full checkpoint runtime metadata is recorded once in the
+`synthetic_mano_target_replay_visual_v2_contact`. It retains target/recorded
+DOF, object poses, MANO global pose, 48D hand pose, 21-joint visual frames,
+contact/reference/command mapping, and minimal lineage. Full checkpoint runtime
+metadata is recorded once in the
 sibling manifest or catalog; each row keeps its canonical metadata SHA256,
 checkpoint identity, and explicit Warp CCD settings. Compact rows carry the
 source v2.2/v2.3 clock contract and are directly consumable by target replay.
@@ -350,6 +351,55 @@ MANORL_SYNTH_OUTPUT_FORMAT=full \
 CHECKPOINT=outputs/manorl/<run>/training/checkpoint-000500.pt \
   ./synthesize.sh cube2 02 5 0
 ```
+
+To augment one row that already succeeded in a scalable synthetic publication,
+first create an accepted-parent descriptor, then synthesize with one active env:
+
+```bash
+python tools/select_manorl_synthetic_parent.py \
+  --input /path/prior-successes.lance \
+  --row-uuid <accepted-row-uuid> \
+  --output /path/accepted-parent.json
+
+MANORL_SYNTH_APPROACH_PREFIX=true \
+MANORL_SYNTH_APPROACH_MODE=near \
+MANORL_SYNTH_RETREAT_SUFFIX=true \
+MANORL_SYNTH_ACCEPTED_PARENT=/path/accepted-parent.json \
+MANORL_PREDECODED_MANIFEST=/path/pre60-bundle/manifest.json \
+CHECKPOINT=/path/exact-parent-checkpoint.pt \
+./synthesize.sh banana 01 1 0
+```
+
+`far` samples XY 0.30–0.70 m, world-up Z 0.08–0.30 m, and ±30° azimuth around
+the initial object→pre60 hand direction. `near` uses an independent seed and
+maps retreat-like endpoint XY from the final object to the initial object while
+preserving the sampled retreat endpoint's absolute world Z. Near and retreat
+share the same distribution family but not the same sample. Start
+XYZ is sampled; start `q_ref[3:28]` is copied from the raw source row frame0,
+then wrist orientation and all finger joints smoothly reach pre60 frame0.
+
+The approach prefix never calls the policy and rejects solved right-hand/table
+or right-hand/object contact above 0.2 N. Retreat deforms the source tail from
+the accepted parent's deterministic movement-end+15 anchor; policy and processed
+action are zero while entry cumulative residual smoothly decays to zero, and
+normal deviation termination remains active. Parent v3
+binds source/checkpoint/object offset/raw start pose and rejects rows whose last
+solved contact precedes movement-end or whose movement-end+15 tail has no nonzero
+horizontal retreat direction. Inspect episodes interactively with:
+
+```bash
+python tools/view_manorl_approach_prefix.py \
+  --checkpoint /path/exact-parent-checkpoint.pt \
+  --accepted-parent /path/accepted-parent.json \
+  --predecode-dir /path/pre60-bundle \
+  --approach-mode near \
+  --retreat-suffix \
+  --seed 49 \
+  --speed 1.0
+```
+
+See
+[`docs/manorl_synthesis_approach_prefix.md`](docs/manorl_synthesis_approach_prefix.md).
 
 Compact output is for replay and visualization, not offline policy training.
 Use `MANORL_SYNTH_OUTPUT_FORMAT=full` or

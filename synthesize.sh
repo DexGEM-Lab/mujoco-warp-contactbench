@@ -22,6 +22,10 @@ SEED=${MANORL_SYNTH_SEED:-42}
 EPISODES_PER_IDENTITY=${MANORL_SYNTH_EPISODES_PER_IDENTITY:-5}
 MAX_ATTEMPTS_PER_IDENTITY=${MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY:-10}
 OBJECT_XY_OFFSET_M=${MANORL_SYNTH_OBJECT_XY_OFFSET_M:-0.0}
+APPROACH_PREFIX=${MANORL_SYNTH_APPROACH_PREFIX:-false}
+APPROACH_MODE=${MANORL_SYNTH_APPROACH_MODE:-far}
+RETREAT_SUFFIX=${MANORL_SYNTH_RETREAT_SUFFIX:-false}
+ACCEPTED_PARENT=${MANORL_SYNTH_ACCEPTED_PARENT:-}
 
 if [[ -z "$CHECKPOINT" ]]; then
   echo "Set CHECKPOINT or MANORL_CHECKPOINT to a native ManoRL checkpoint." >&2
@@ -84,6 +88,27 @@ if [[ -n "$PREDECODED_MANIFEST" ]]; then
 fi
 if awk "BEGIN{exit !(\"$OBJECT_XY_OFFSET_M\" > 0)}"; then
   EXTRA_ARGS+=(--object-xy-offset-m "$OBJECT_XY_OFFSET_M")
+fi
+if [[ "$APPROACH_PREFIX" == "true" ]]; then
+  if [[ -z "$ACCEPTED_PARENT" ]]; then
+    echo "MANORL_SYNTH_ACCEPTED_PARENT is required with approach prefix" >&2
+    exit 2
+  fi
+  ACCEPTED_PARENT=$(realpath -e "$ACCEPTED_PARENT")
+  if [[ "$APPROACH_MODE" != "far" && "$APPROACH_MODE" != "near" ]]; then
+    echo "MANORL_SYNTH_APPROACH_MODE must be far or near, got: $APPROACH_MODE" >&2
+    exit 2
+  fi
+  EXTRA_ARGS+=(--approach-prefix --approach-mode "$APPROACH_MODE" --accepted-parent "$ACCEPTED_PARENT")
+elif [[ "$APPROACH_PREFIX" != "false" ]]; then
+  echo "MANORL_SYNTH_APPROACH_PREFIX must be true or false, got: $APPROACH_PREFIX" >&2
+  exit 2
+fi
+if [[ "$RETREAT_SUFFIX" == "true" ]]; then
+  EXTRA_ARGS+=(--retreat-suffix)
+elif [[ "$RETREAT_SUFFIX" != "false" ]]; then
+  echo "MANORL_SYNTH_RETREAT_SUFFIX must be true or false, got: $RETREAT_SUFFIX" >&2
+  exit 2
 fi
 
 exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \

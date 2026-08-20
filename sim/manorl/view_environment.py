@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 from dataclasses import dataclass, fields, replace
+import json
 import math
 import os
 from pathlib import Path
@@ -21,6 +22,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 
 from sim.manorl.abi import ResidualActionConfig, TARGET_MAX_DEVIATION_DISTANCE
+from sim.manorl.approach_prefix import (
+    ApproachPrefixConfig,
+    augment_trajectory_with_approach_prefix,
+    augment_trajectory_with_retreat_suffix,
+    augmentation_stream_seed,
+)
 from sim.manorl.assets import (
     COLLISION_GEOM_GROUP,
     compile_model,
@@ -35,11 +42,16 @@ from sim.manorl.environment import (
 )
 from sim.manorl.observations import SOURCE_ALIGNED_COMPATIBILITY
 from sim.manorl.rerun_recorder import ManoRerunRecorder
+from sim.manorl.synthetic_parent import (
+    AcceptedSyntheticParent,
+    load_accepted_synthetic_parent,
+)
 from sim.manorl.trajectory import (
     DEFAULT_POST_PADDING,
     DEFAULT_PRE_PADDING,
     DEFAULT_REFERENCE_FPS,
     SUPPORTED_REFERENCE_FPS,
+    ReferenceTrajectory,
     TrajectoryBatch,
     TrajectorySelection,
     load_assigned_trajectory_batch,
@@ -103,12 +115,54 @@ def _reset_runtime_done(runtime: Any, observations: Any, done: Any) -> Any:
 
 
 class _CheckpointPolicyStepper:
-    """Advance the wrapped environment with deterministic native PPO means."""
+    """Advance with deterministic PPO means after optional reference-only phases.
 
-    def __init__(self, runtime: ManoSkrlRuntime, observations: Any) -> None:
+    ``policy_enable_steps`` opens policy inference at the first live step of
+    each world (approach-prefix gate); ``policy_disable_steps`` closes it at
+    the movement-end+15 retreat anchor so the deformed tail never calls policy;
+    its entry residual is discharged without new action accumulation.
+    """
+
+    def __init__(
+        self,
+        runtime: ManoSkrlRuntime,
+        observations: Any,
+        *,
+        policy_enable_steps: np.ndarray | None = None,
+        policy_disable_steps: np.ndarray | None = None,
+    ) -> None:
         self._runtime = runtime
         self._observations = observations
         self._pending_done = None
+        self._policy_enable_steps = (
+            None
+            if policy_enable_steps is None
+            else np.asarray(policy_enable_steps, dtype=np.int64)
+        )
+        self._policy_disable_steps = (
+            None
+            if policy_disable_steps is None
+            else np.asarray(policy_disable_steps, dtype=np.int64)
+        )
+        if self._policy_enable_steps is not None or self._policy_disable_steps is not None:
+            environment = runtime.gymnasium_env.environment
+            expected = (environment.config.num_envs,)
+            if self._policy_enable_steps is not None and self._policy_enable_steps.shape != expected:
+                raise ValueError(
+                    "policy_enable_steps must contain one step per environment"
+                )
+            if self._policy_disable_steps is not None and self._policy_disable_steps.shape != expected:
+                raise ValueError(
+                    "policy_disable_steps must contain one step per environment"
+                )
+            if (
+                self._policy_enable_steps is not None
+                and self._policy_disable_steps is not None
+                and np.any(self._policy_disable_steps < self._policy_enable_steps)
+            ):
+                raise ValueError(
+                    "policy_disable_steps must not precede policy_enable_steps"
+                )
 
     def step(self) -> tuple[Any, np.ndarray, np.ndarray, Any]:
         if self._pending_done is not None and bool(self._pending_done.any()):
@@ -118,7 +172,32 @@ class _CheckpointPolicyStepper:
                 self._pending_done,
             )
             self._pending_done = None
-        actions = self._runtime.deterministic_actions(self._observations)
+        if self._policy_enable_steps is None and self._policy_disable_steps is None:
+            actions = self._runtime.deterministic_actions(self._observations)
+        else:
+            physical = self._runtime.gymnasium_env.environment
+            steps = np.asarray(physical.trajectory_steps, dtype=np.int64)
+            enabled = np.ones(physical.config.num_envs, dtype=bool)
+            if self._policy_enable_steps is not None:
+                enabled &= steps >= self._policy_enable_steps
+            if self._policy_disable_steps is not None:
+                enabled &= steps < self._policy_disable_steps
+            action_dim = int(getattr(physical, "action_dim", JOINT_DOF))
+            if np.all(enabled):
+                actions = self._runtime.deterministic_actions(self._observations)
+            elif not np.any(enabled):
+                actions = self._observations.new_zeros(
+                    (physical.config.num_envs, action_dim)
+                )
+            else:
+                actions = self._observations.new_zeros(
+                    (physical.config.num_envs, action_dim)
+                )
+                enabled_rows = np.flatnonzero(enabled)
+                policy_actions = self._runtime.deterministic_actions(
+                    self._observations[enabled_rows]
+                )
+                actions[enabled_rows] = policy_actions
         observations, rewards, terminated, truncated, info = self._runtime.env.step(actions)
         self._observations = observations
         rewards_array = rewards.detach().cpu().numpy().reshape(-1)
@@ -317,11 +396,24 @@ def _validate_checkpoint_path(checkpoint: Path) -> Path:
 
 
 def _build_checkpoint_stepper(
-    environment: MujocoManoEnvironment, checkpoint: Path
+    environment: MujocoManoEnvironment,
+    checkpoint: Path,
+    *,
+    policy_transfer: bool = False,
+    policy_enable_steps: np.ndarray | None = None,
+    policy_disable_steps: np.ndarray | None = None,
 ) -> ViewerStepper:
-    """Load the native policy and reset through its vector wrapper before rendering."""
+    """Load the native policy and reset through its vector wrapper before rendering.
 
-    from sim.manorl.checkpoint import load_skrl_checkpoint_for_inference
+    ``policy_transfer`` is reserved for synthesis references whose padding or
+    assets intentionally differ from the checkpoint. Ordinary viewer inference
+    remains strict by default.
+    """
+
+    from sim.manorl.checkpoint import (
+        load_skrl_checkpoint_for_inference,
+        load_skrl_checkpoint_for_policy_transfer_inference,
+    )
     from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
     from sim.manorl.skrl_runtime import ManoSkrlRuntime
 
@@ -333,11 +425,21 @@ def _build_checkpoint_stepper(
             use_film=_checkpoint_use_film(checkpoint),
         ),
     )
-    load_skrl_checkpoint_for_inference(runtime.agent, checkpoint)
+    loader = (
+        load_skrl_checkpoint_for_policy_transfer_inference
+        if policy_transfer
+        else load_skrl_checkpoint_for_inference
+    )
+    loader(runtime.agent, checkpoint)
     runtime.agent.enable_training_mode(False)
     runtime.model.eval()
     observations, _ = runtime.env.reset()
-    return _CheckpointPolicyStepper(runtime, observations)
+    return _CheckpointPolicyStepper(
+        runtime,
+        observations,
+        policy_enable_steps=policy_enable_steps,
+        policy_disable_steps=policy_disable_steps,
+    )
 
 
 def _telemetry(environment: MujocoManoEnvironment, env_id: int, reward: float, reset: bool) -> str:
@@ -1051,6 +1153,389 @@ def view_environment(
     finally:
         if recorder is not None:
             _close_rerun_recorder(recorder)
+
+
+def _reinstall_approach_prefix_reference(
+    environment: MujocoManoEnvironment,
+    stepper: ViewerStepper,
+    trajectory: ReferenceTrajectory,
+    *,
+    seed: int,
+    policy_disable_steps: np.ndarray | None = None,
+) -> None:
+    """Replace the single world's reference and reset the runtime in place.
+
+    The MJX-Warp physics model, Warp buffers, and checkpoint policy runtime
+    stay alive across resets; only the host reference tables, the reset qpos,
+    and the seeded observation change.  This is what makes the accepted-parent
+    viewer a true one-environment loop instead of rebuilding GPU runtimes per
+    seed (which previously exhausted Warp's allocator).
+    """
+
+    if environment.config.num_envs != 1 or environment.is_heterogeneous:
+        raise RuntimeError(
+            "approach-prefix reference reset requires one homogeneous world"
+        )
+    if trajectory.identity.identity != environment.trajectory.identity.identity:
+        raise RuntimeError("reset trajectory changed the accepted source identity")
+    if trajectory.hand_sides != environment.trajectory.hand_sides:
+        raise RuntimeError("reset trajectory changed hand topology")
+    if trajectory.reference_fps != environment.config.reference_fps:
+        raise RuntimeError("reset trajectory changed reference clock")
+
+    environment.trajectory = trajectory
+    environment.trajectories = (trajectory,)
+    environment._build_reference_tables()
+    environment._reset_qpos = environment._initial_qpos()
+    runtime = getattr(stepper, "_runtime", None)
+    if runtime is None:
+        raise RuntimeError("approach-prefix stepper must expose its skrl runtime")
+    observations, _ = runtime.env.reset(seed=seed)
+    stepper._observations = observations
+    stepper._pending_done = None
+    stepper._policy_enable_steps = environment.early_phase_lengths.copy()
+    resolved_disable_steps = policy_disable_steps
+    if resolved_disable_steps is None and getattr(
+        stepper, "_policy_disable_steps", None
+    ) is not None:
+        resolved_disable_steps = (
+            environment.trajectory_lengths
+            - environment.augmentation_suffix_frames
+        )
+    if resolved_disable_steps is not None:
+        stepper._policy_disable_steps = np.asarray(
+            resolved_disable_steps, dtype=np.int64
+        ).copy()
+
+
+def view_approach_prefix_episodes(
+    *,
+    checkpoint: Path,
+    accepted_parent: Path | AcceptedSyntheticParent,
+    predecode_dir: Path,
+    start_seed: int = 49,
+    speed: float = 1.0,
+    print_every: int = 20,
+    max_episodes: int | None = None,
+    retreat_suffix: bool = True,
+    approach_mode: str = "far",
+) -> None:
+    """View accepted-parent approach-prefix augmentation episodes in one window.
+
+    One active MJX-Warp environment and one checkpoint policy runtime are
+    reused across every reset.  Each terminal advances ``start_seed`` and
+    reinstalls the next seeded approach-prefixed reference derived from the
+    same accepted parent, so every episode starts from its own frame 0 with a
+    freshly sampled hand approach while the original pre60 reference and the
+    deterministic checkpoint policy continue unchanged.
+    """
+
+    if approach_mode not in ("far", "near"):
+        raise ValueError("approach_mode must be 'far' or 'near'")
+    if speed <= 0.0:
+        raise ValueError("speed must be positive")
+    if print_every < 1:
+        raise ValueError("print_every must be positive")
+    if not isinstance(start_seed, int) or isinstance(start_seed, bool) or start_seed < 0:
+        raise ValueError("start_seed must be a non-negative integer")
+    if max_episodes is not None and (
+        not isinstance(max_episodes, int)
+        or isinstance(max_episodes, bool)
+        or max_episodes < 1
+    ):
+        raise ValueError("max_episodes must be a positive integer or None")
+    _require_graphical_session()
+
+    parent = (
+        load_accepted_synthetic_parent(accepted_parent)
+        if isinstance(accepted_parent, Path)
+        else accepted_parent
+    )
+    predecode_dir = Path(predecode_dir)
+    manifest_path = predecode_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    records = {
+        str(record.get("identity")): record
+        for record in manifest.get("valid_records", [])
+    }
+    if parent.source_identity not in records:
+        raise LookupError(
+            f"predecoded manifest omits accepted identity {parent.source_identity}"
+        )
+    import pickle
+
+    with (predecode_dir / f"{parent.source_identity}.pkl").open("rb") as stream:
+        source = pickle.load(stream)
+    if source.reference_fps != parent.reference_fps:
+        raise ValueError("predecoded source clock differs from the accepted parent")
+    if parent.source_row_frame0_right_q_ref_3_28 is None:
+        raise ValueError(
+            "accepted parent lacks source-row frame0 right q_ref[3:28]"
+        )
+
+    checkpoint = _validate_checkpoint_path(checkpoint)
+    options = _checkpoint_environment_options(checkpoint)
+
+    anchor_source = parent.retreat_anchor_source_frame_index
+    if anchor_source is None:
+        raise ValueError(
+            "accepted parent lacks movement-end+15 retreat anchor provenance"
+        )
+    source_anchor_index = (
+        int(source.movement_end_step) + parent.retreat_anchor_offset_frames
+    )
+    if (
+        not 0 <= source_anchor_index < len(source.q_ref)
+        or int(source.source_indices[source_anchor_index]) != int(anchor_source)
+    ):
+        raise ValueError(
+            "base movement-end+offset anchor disagrees with accepted-parent source frame"
+        )
+
+    def sample(seed: int):
+        approach_seed = (
+            seed
+            if approach_mode == "far"
+            else augmentation_stream_seed(seed, "near-approach")
+        )
+        retreat_seed = seed
+        trajectory, prefix_sample = augment_trajectory_with_approach_prefix(
+            source,
+            seed=approach_seed,
+            config=ApproachPrefixConfig(mode=approach_mode),
+            near_anchor_reference_index=(
+                source_anchor_index if approach_mode == "near" else None
+            ),
+            start_q_ref_3_28=parent.source_row_frame0_right_q_ref_3_28,
+        )
+        suffix_sample = None
+        if retreat_suffix:
+            anchor_index = (
+                int(trajectory.movement_end_step)
+                + parent.retreat_anchor_offset_frames
+            )
+            if (
+                not 0 <= anchor_index < len(trajectory.q_ref)
+                or int(trajectory.source_indices[anchor_index]) != int(anchor_source)
+            ):
+                raise ValueError(
+                    "augmented movement-end+offset anchor disagrees with accepted parent"
+                )
+            trajectory, suffix_sample = augment_trajectory_with_retreat_suffix(
+                trajectory,
+                seed=retreat_seed,
+                anchor_reference_index=anchor_index,
+            )
+        return (
+            trajectory,
+            prefix_sample,
+            suffix_sample,
+            approach_seed,
+            retreat_seed,
+        )
+
+    seed = start_seed
+    (
+        trajectory,
+        prefix_sample,
+        suffix_sample,
+        approach_seed,
+        retreat_seed,
+    ) = sample(seed)
+    batch = TrajectoryBatch((trajectory,))
+    environment = MujocoManoEnvironment(
+        batch,
+        EnvironmentConfig(
+            num_envs=1,
+            device="gpu",
+            residual_enabled=True,
+            residual_action=options.residual_action,
+            compatibility=replace(
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=60,
+            ),
+            max_deviation_distance=0.10,
+            contact_capacity=recommended_warp_contact_capacity(1, batch.hand_sides),
+            reference_fps=120,
+            control_fps=120,
+            post_padding=250,
+            warp_ccd_iterations=options.warp_ccd_iterations,
+            warp_ccd_contacts_per_world=options.warp_ccd_contacts_per_world,
+            hand_side="right",
+            object_init_xy_offsets_m=(parent.object_init_xy_offset_m,),
+        ),
+    )
+    stepper = _build_checkpoint_stepper(
+        environment,
+        checkpoint,
+        policy_transfer=True,
+        policy_enable_steps=environment.early_phase_lengths,
+        policy_disable_steps=(
+            environment.trajectory_lengths - environment.augmentation_suffix_frames
+        ),
+    )
+
+    import mujoco
+    from mujoco import viewer as mujoco_viewer
+
+    mujoco_module, viewer_model = _compile_native_viewer_model(environment)
+    viewer_data = mujoco_module.MjData(viewer_model)
+    _mirror_native_viewer_data(
+        mujoco_module, viewer_model, viewer_data, environment.host_data(0)
+    )
+    print("ACCEPTED_PARENT", json.dumps(parent.to_dict(), sort_keys=True), flush=True)
+    print(
+        "RUNTIME",
+        json.dumps(
+            {"active_envs": 1, "runtime_reused_across_resets": True},
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+    def print_reset(current_seed: int) -> None:
+        reset_info: dict[str, object] = {
+            "seed": current_seed,
+            "approach_mode": approach_mode,
+            "approach_seed": approach_seed,
+            "retreat_seed": retreat_seed,
+            "progress": int(environment.progress[0]),
+            "trajectory_step": int(environment.trajectory_steps[0]),
+            "start_xyz_m": [
+                round(value, 6) for value in prefix_sample.start_position_m
+            ],
+            "xy_radius_m": round(prefix_sample.start_xy_radius_m, 6),
+            "z_offset_m": round(prefix_sample.start_z_offset_m, 6),
+            "distance_3d_m": round(prefix_sample.start_distance_m, 6),
+            "xy_angle_deg": round(prefix_sample.xy_offset_deg, 3),
+            "prefix_frames": prefix_sample.prefix_frames,
+            "effective_pre": prefix_sample.effective_pre_padding,
+            "object_xy_offset_m": list(parent.object_init_xy_offset_m),
+        }
+        if suffix_sample is not None:
+            reset_info.update(
+                {
+                    "suffix_anchor_reference_index": (
+                        suffix_sample.anchor_reference_index
+                    ),
+                    "suffix_frames": suffix_sample.suffix_frames,
+                    "suffix_end_xyz_m": [
+                        round(value, 6) for value in suffix_sample.end_position_m
+                    ],
+                    "suffix_original_horizontal_m": round(
+                        suffix_sample.original_horizontal_distance_m, 6
+                    ),
+                    "suffix_extra_horizontal_m": round(
+                        suffix_sample.extra_horizontal_offset_m, 6
+                    ),
+                    "suffix_end_horizontal_m": round(
+                        suffix_sample.end_horizontal_distance_m, 6
+                    ),
+                    "suffix_original_dz_m": round(
+                        suffix_sample.original_z_displacement_m, 6
+                    ),
+                    "suffix_extra_z_m": round(
+                        suffix_sample.extra_z_offset_m, 6
+                    ),
+                    "suffix_end_dz_m": round(
+                        suffix_sample.end_z_displacement_m, 6
+                    ),
+                    "suffix_original_direction_deg": round(
+                        suffix_sample.original_direction_deg, 3
+                    ),
+                    "suffix_angle_offset_deg": round(
+                        suffix_sample.xy_offset_deg, 3
+                    ),
+                }
+            )
+        print("RESET", json.dumps(reset_info, sort_keys=True), flush=True)
+
+    print_reset(seed)
+    episodes = 0
+    with mujoco_viewer.launch_passive(
+        viewer_model, viewer_data, show_left_ui=True, show_right_ui=True
+    ) as viewer:
+        with _viewer_lock(viewer):
+            viewer.opt.geomgroup[3] = 0
+            viewer.cam.azimuth = 135.0
+            viewer.cam.elevation = -22.0
+            viewer.cam.distance = 1.45
+            viewer.cam.lookat[:] = (0.18, -0.12, 0.12)
+            viewer.sync()
+        while viewer.is_running():
+            started = time.perf_counter()
+            _, rewards, resets, _ = stepper.step()
+            with _viewer_lock(viewer):
+                _mirror_native_viewer_data(
+                    mujoco_module,
+                    viewer_model,
+                    viewer_data,
+                    environment.host_data(0),
+                )
+                viewer.sync()
+            if int(environment.progress[0]) % print_every == 0:
+                print(
+                    "FRAME",
+                    json.dumps(
+                        {
+                            "seed": seed,
+                            "progress": int(environment.progress[0]),
+                            "trajectory_step": int(environment.trajectory_steps[0]),
+                            "prefix_frames": prefix_sample.prefix_frames,
+                            "suffix_frames": (
+                                0 if suffix_sample is None else suffix_sample.suffix_frames
+                            ),
+                            "policy_enabled": bool(
+                                environment.trajectory_steps[0]
+                                >= prefix_sample.prefix_frames
+                                and environment.trajectory_steps[0]
+                                < environment.trajectory_lengths[0]
+                                - environment.augmentation_suffix_frames[0]
+                            ),
+                            "reward": float(rewards[0]),
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+            if bool(resets[0]):
+                reason = int(environment.last_termination.reason_code[0])
+                print(
+                    "TERMINAL",
+                    json.dumps(
+                        {"seed": seed, "progress": int(environment.progress[0]), "reason": reason},
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+                episodes += 1
+                if max_episodes is not None and episodes >= max_episodes:
+                    print("STOP", json.dumps({"episodes": episodes}), flush=True)
+                    break
+                seed += 1
+                (
+                    trajectory,
+                    prefix_sample,
+                    suffix_sample,
+                    approach_seed,
+                    retreat_seed,
+                ) = sample(seed)
+                _reinstall_approach_prefix_reference(
+                    environment,
+                    stepper,
+                    trajectory,
+                    seed=seed,
+                )
+                print_reset(seed)
+                with _viewer_lock(viewer):
+                    _mirror_native_viewer_data(
+                        mujoco_module,
+                        viewer_model,
+                        viewer_data,
+                        environment.host_data(0),
+                    )
+                    viewer.sync()
+            time.sleep(max(0.0, 1.0 / (120.0 * speed) - (time.perf_counter() - started)))
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

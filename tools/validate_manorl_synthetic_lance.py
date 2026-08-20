@@ -315,21 +315,29 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
     import lance
 
     dataset = lance.dataset(str(path))
-    rows = dataset.take(
-        [row_index],
-        columns=[
-            "index",
-            "trajectory_metadata",
-            "timestamp",
-            "hands",
-            "objects",
-            "provenance",
-        ],
-    ).to_pylist()
+    schema_contract = _schema_metadata(dataset).get("schema_version")
+    columns = [
+        "index",
+        "trajectory_metadata",
+        "timestamp",
+        "hands",
+        "objects",
+        "provenance",
+    ]
+    if schema_contract == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT:
+        columns[5:5] = [
+            "contact",
+            "reference",
+            "command_reference_index",
+            "command_source_frame_index",
+        ]
+    rows = dataset.take([row_index], columns=columns).to_pylist()
     if len(rows) != 1:
         raise RuntimeError(f"Lance row {row_index} did not decode exactly once")
     row = rows[0]
     provenance = row.get("provenance") or {}
+    if provenance.get("contract") != schema_contract:
+        raise ValueError(f"row {row_index} compact provenance contract changed")
     if provenance.get("force_contract") != FORCE_DIRECTION_CONTRACT:
         raise ValueError(f"row {row_index} compact force contract changed")
     metadata_hash = provenance.get("checkpoint_metadata_sha256")
@@ -375,8 +383,101 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
         or np.max((mano_global_rot.inv() * expected_global_rot).magnitude()) > 1e-6
     ):
         raise ValueError(f"row {row_index} compact MANO global pose changed")
-    if any(name in row for name in ("contact", "reference", "rollout")):
-        raise ValueError("compact row contains full/audit top-level fields")
+    if schema_contract == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT:
+        if any(name in row for name in ("contact", "reference", "rollout")):
+            raise ValueError("compact v1 row contains full/audit top-level fields")
+    elif schema_contract == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT:
+        contacts = row.get("contact")
+        reference = row.get("reference") or {}
+        command_reference = np.asarray(
+            row.get("command_reference_index") or (), dtype=np.int64
+        )
+        command_source = np.asarray(
+            row.get("command_source_frame_index") or (), dtype=np.int64
+        )
+        reference_source = np.asarray(
+            reference.get("source_frame_index") or (), dtype=np.int64
+        )
+        reference_hand = np.asarray(
+            reference.get("hand_urdf_dof") or (), dtype=np.float64
+        )
+        reference_object = np.asarray(
+            reference.get("object_pos") or (), dtype=np.float64
+        )
+        reference_object_rot = np.asarray(
+            reference.get("object_rot_aa") or (), dtype=np.float64
+        )
+        if not isinstance(contacts, list) or len(contacts) != source.frames:
+            raise ValueError(f"row {row_index} compact contact frames differ from T")
+        if (
+            reference_source.shape != (source.frames,)
+            or reference_hand.shape != (source.frames, 28)
+            or reference_object.shape != (source.frames, 3)
+            or reference_object_rot.shape != (source.frames, 3)
+            or not np.all(np.isfinite(reference_hand))
+            or not np.all(np.isfinite(reference_object))
+            or not np.all(np.isfinite(reference_object_rot))
+        ):
+            raise ValueError(f"row {row_index} compact reference mapping is invalid")
+        if (
+            command_reference.shape != (source.transitions,)
+            or command_source.shape != (source.transitions,)
+            or np.any(command_reference < 0)
+            or np.any(command_reference >= source.frames)
+            or np.any(np.diff(command_reference) < 0)
+            or not np.array_equal(
+                command_source, reference_source[command_reference]
+            )
+        ):
+            raise ValueError(f"row {row_index} compact command mapping is invalid")
+        max_force_sum_error = 0.0
+        max_object_force_error = 0.0
+        object_rotations = Rotation.from_rotvec(
+            np.asarray(row["objects"][0]["rot_aa"], dtype=np.float64)
+        )
+        for frame_index, entries in enumerate(contacts):
+            for entry in entries:
+                total_world = np.asarray(
+                    entry.get("total_force_world") or (), dtype=np.float64
+                )
+                pairs = entry.get("contact_pairs") or []
+                pair_forces = np.asarray(
+                    [pair.get("force_normal") for pair in pairs], dtype=np.float64
+                )
+                if (
+                    total_world.shape != (3,)
+                    or pair_forces.ndim != 2
+                    or pair_forces.shape[1:] != (3,)
+                    or not np.all(np.isfinite(pair_forces))
+                ):
+                    raise ValueError(
+                        f"row {row_index} compact contact force shape is invalid"
+                    )
+                pair_sum = np.sum(pair_forces, axis=0)
+                max_force_sum_error = max(
+                    max_force_sum_error,
+                    float(np.linalg.norm(total_world - pair_sum)),
+                )
+                total_object = np.asarray(
+                    entry.get("total_force_object") or (), dtype=np.float64
+                )
+                expected_object = object_rotations[frame_index].inv().apply(
+                    total_world
+                )
+                if total_object.shape != (3,) or not np.all(np.isfinite(total_object)):
+                    raise ValueError(
+                        f"row {row_index} compact object force shape is invalid"
+                    )
+                max_object_force_error = max(
+                    max_object_force_error,
+                    float(np.linalg.norm(total_object - expected_object)),
+                )
+        if max_force_sum_error > 1e-5 or max_object_force_error > 1e-5:
+            raise ValueError(
+                f"row {row_index} compact contact force frames are inconsistent"
+            )
+    else:
+        raise ValueError(f"row {row_index} compact schema contract is unsupported")
     return {
         "row_index": row_index,
         "uuid": row["index"]["uuid"],
@@ -447,8 +548,17 @@ def validate_compact_dataset(
         "timestamp",
         "hands",
         "objects",
-        "provenance",
     ]
+    if metadata.get("schema_version") == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT:
+        expected_fields.extend(
+            [
+                "contact",
+                "reference",
+                "command_reference_index",
+                "command_source_frame_index",
+            ]
+        )
+    expected_fields.append("provenance")
     if dataset.schema.names != expected_fields:
         raise ValueError(f"compact schema fields differ: {dataset.schema.names}")
     row_count = int(dataset.count_rows())

@@ -71,6 +71,28 @@ def test_synthetic_export_cli_accepts_reference_fps_selection() -> None:
         ]
     )
     assert compact_args.output_format == "compact-replay-visual"
+    retreat_args = exporter_module.parse_args(
+        [
+            "--checkpoint",
+            "policy.pt",
+            "--output",
+            "rollout.lance",
+            "--retreat-suffix",
+            "--retreat-horizontal-min-m",
+            "0.03",
+            "--retreat-horizontal-max-m",
+            "0.15",
+            "--retreat-z-min-m",
+            "0.04",
+            "--retreat-z-max-m",
+            "0.10",
+        ]
+    )
+    assert retreat_args.retreat_suffix_config is not None
+    assert retreat_args.retreat_suffix_config.minimum_extra_horizontal_m == 0.03
+    assert retreat_args.retreat_suffix_config.maximum_extra_horizontal_m == 0.15
+    assert retreat_args.retreat_suffix_config.minimum_z_offset_m == 0.04
+    assert retreat_args.retreat_suffix_config.maximum_z_offset_m == 0.10
 
 
 def _state() -> MaterializedState:
@@ -390,6 +412,22 @@ def test_predecoded_manifest_selects_unique_hashed_identity_window(tmp_path) -> 
     )
     assert [item.identity.identity for item in batch.trajectories] == ["cube2_02_0002"]
 
+    exact = _load_predecoded_batch(
+        TrajectorySelection(
+            "cube2",
+            "02",
+            dataset_path=dataset,
+            expected_dataset_version=295,
+            hand_side="right",
+        ),
+        num_envs=1,
+        manifest_path=manifest,
+        exact_identities=("cube2_02_0001",),
+    )
+    assert [item.identity.identity for item in exact.trajectories] == [
+        "cube2_02_0001"
+    ]
+
 
 def test_predecoded_manifest_selects_multiple_homogeneous_pairs(tmp_path) -> None:
     dataset = tmp_path / "source.lance"
@@ -584,7 +622,7 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
     manifest = json.loads((tmp_path / "repeated.lance.manifest.json").read_text())
     assert manifest["complete"] is True
     assert manifest["rows"] == 5
-    assert manifest["schema"] == SYNTHETIC_LANCE_COMPACT_V1_CONTRACT
+    assert manifest["schema"] == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
     assert manifest["output_format"] == "compact-replay-visual"
     assert (
         manifest["synthesis"]["attempt_isolation"]
@@ -830,7 +868,7 @@ def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_pa
                 "total_force_world": [0.5, 1.0, -1.5],
                 "total_force_wrist": [0.1, 0.2, -0.3],
                 "total_force_joint": [0.2, 0.3, -0.4],
-                "total_force_object": [0.3, 0.4, -0.5],
+                "total_force_object": [0.5, 1.0, -1.5],
                 "contact_pairs": [
                     {
                         "force_normal": [0.5, 1.0, -1.5],
@@ -851,8 +889,8 @@ def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_pa
         "object_rot_aa": [[0.0] * 3] * 2,
     }
     full_row["rollout"] = {
-        "command_reference_index": [0, 1],
-        "command_source_frame_index": [440, 441],
+        "command_reference_index": [0],
+        "command_source_frame_index": [0],
     }
     compact = build_compact_row(
         full_row,
@@ -879,7 +917,7 @@ def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_pa
     assert compact["contact"][0][0]["joint_name"] == "thumb_ip"
     assert compact["contact"][0][0]["total_force_world"] == [0.5, 1.0, -1.5]
     assert compact["reference"]["source_frame_index"] == [0, 1]
-    assert compact["command_source_frame_index"] == [440, 441]
+    assert compact["command_source_frame_index"] == [0]
     output = tmp_path / "compact_120.lance"
     write_compact_lance([compact], output=output)
     import lance

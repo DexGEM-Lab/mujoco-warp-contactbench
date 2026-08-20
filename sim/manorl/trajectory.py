@@ -120,6 +120,17 @@ class ReferenceTrajectory:
     control_fps: int | None = None
     movement_start_step: int | None = None
     movement_end_step: int | None = None
+    # Synthesis-only immutable prefix length. Zero preserves the established
+    # fixed ``compatibility.early_phase_steps`` runtime contract. A positive
+    # value makes exactly the generated prefix the pure-reference phase; the
+    # original reference begins with residual/deviation semantics enabled.
+    augmentation_prefix_frames: int = 0
+    # Synthesis-only policy-free tail-window length. Zero preserves normal
+    # policy semantics. A positive value closes policy/action accumulation at
+    # ``T-value`` and smoothly discharges existing cumulative residual;
+    # the anchor state remains immutable while subsequent tail XYZ may be a
+    # smooth deformation of the original post-contact retreat.
+    augmentation_suffix_frames: int = 0
 
     def __post_init__(self) -> None:
         expected = int(self.source_indices.shape[0])
@@ -179,6 +190,26 @@ class ReferenceTrajectory:
             0 <= movement_steps[0] <= movement_steps[1] < expected
         ):
             raise ValueError("movement control steps must be an inclusive interval in the trajectory")
+        if (
+            not isinstance(self.augmentation_prefix_frames, int)
+            or isinstance(self.augmentation_prefix_frames, bool)
+            or self.augmentation_prefix_frames < 0
+            or self.augmentation_prefix_frames >= expected
+        ):
+            raise ValueError("augmentation_prefix_frames must be a non-negative in-range integer")
+        if (
+            self.augmentation_prefix_frames
+            and movement_steps[0] is not None
+            and self.augmentation_prefix_frames >= movement_steps[0]
+        ):
+            raise ValueError("approach prefix must end before the movement window")
+        if (
+            not isinstance(self.augmentation_suffix_frames, int)
+            or isinstance(self.augmentation_suffix_frames, bool)
+            or self.augmentation_suffix_frames < 0
+            or self.augmentation_suffix_frames >= expected
+        ):
+            raise ValueError("augmentation_suffix_frames must be a non-negative in-range integer")
         if np.any(np.diff(self.source_indices) < 0):
             raise ValueError("source_indices must be non-decreasing")
         for name in (

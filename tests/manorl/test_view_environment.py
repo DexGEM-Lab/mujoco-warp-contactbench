@@ -620,6 +620,116 @@ def test_checkpoint_stepper_uses_mean_actions_and_wrapped_done_flags() -> None:
     assert info == {"x": 1}
 
 
+def test_checkpoint_stepper_skips_policy_forward_until_prefix_end() -> None:
+    import torch
+
+    from sim.manorl.view_environment import _CheckpointPolicyStepper
+
+    class Physical:
+        action_dim = 28
+        trajectory_steps = np.asarray([0], dtype=np.int64)
+
+        class config:
+            num_envs = 1
+
+    physical = Physical()
+
+    class Wrapped:
+        def step(self, actions):
+            self.actions = actions.clone()
+            physical.trajectory_steps += 1
+            return (
+                torch.zeros((1, 2)),
+                torch.zeros(1),
+                torch.zeros(1, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.bool),
+                {},
+            )
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.env = Wrapped()
+            self.gymnasium_env = SimpleNamespace(environment=physical)
+            self.calls = 0
+
+        def deterministic_actions(self, observations):
+            self.calls += 1
+            return torch.ones((1, 28))
+
+    runtime = Runtime()
+    stepper = _CheckpointPolicyStepper(
+        runtime,
+        torch.zeros((1, 2)),
+        policy_enable_steps=np.asarray([2]),
+    )
+    stepper.step()
+    assert runtime.calls == 0
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 0.0)
+    stepper.step()
+    assert runtime.calls == 0
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 0.0)
+    stepper.step()
+    assert runtime.calls == 1
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 1.0)
+
+
+def test_checkpoint_stepper_stops_policy_forward_at_suffix_boundary() -> None:
+    import torch
+
+    from sim.manorl.view_environment import _CheckpointPolicyStepper
+
+    class Physical:
+        action_dim = 28
+        trajectory_steps = np.asarray([0], dtype=np.int64)
+
+        class config:
+            num_envs = 1
+
+    physical = Physical()
+
+    class Wrapped:
+        def step(self, actions):
+            self.actions = actions.clone()
+            physical.trajectory_steps += 1
+            return (
+                torch.zeros((1, 2)),
+                torch.zeros(1),
+                torch.zeros(1, dtype=torch.bool),
+                torch.zeros(1, dtype=torch.bool),
+                {},
+            )
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.env = Wrapped()
+            self.gymnasium_env = SimpleNamespace(environment=physical)
+            self.calls = 0
+
+        def deterministic_actions(self, observations):
+            self.calls += 1
+            return torch.ones((1, 28))
+
+    runtime = Runtime()
+    stepper = _CheckpointPolicyStepper(
+        runtime,
+        torch.zeros((1, 2)),
+        policy_enable_steps=np.asarray([1]),
+        policy_disable_steps=np.asarray([3]),
+    )
+    stepper.step()
+    assert runtime.calls == 0
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 0.0)
+    stepper.step()
+    assert runtime.calls == 1
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 1.0)
+    stepper.step()
+    assert runtime.calls == 2
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 1.0)
+    stepper.step()
+    assert runtime.calls == 2
+    np.testing.assert_array_equal(runtime.env.actions.numpy(), 0.0)
+
+
 def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -666,7 +776,12 @@ def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
     monkeypatch.setattr(
         checkpoint_module,
         "load_skrl_checkpoint_for_inference",
-        lambda agent, path: captured.update(path=path),
+        lambda agent, path: captured.update(path=path, loader="strict"),
+    )
+    monkeypatch.setattr(
+        checkpoint_module,
+        "load_skrl_checkpoint_for_policy_transfer_inference",
+        lambda agent, path: captured.update(path=path, loader="policy_transfer"),
     )
     monkeypatch.setattr(
         checkpoint_module,
@@ -677,6 +792,7 @@ def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
     stepper = _build_checkpoint_stepper(environment, checkpoint)
     assert captured["adapter_environment"] is environment
     assert captured["path"] == checkpoint
+    assert captured["loader"] == "strict"
     assert captured["config"].rollouts == 1
     assert captured["config"].minibatch_size == 2
     assert captured["config"].use_film is False
@@ -684,6 +800,9 @@ def test_checkpoint_builder_loads_eval_runtime_and_resets_wrapped_environment(
     assert captured["eval"] is True
     assert captured["reset"] is True
     assert stepper is not None
+
+    _build_checkpoint_stepper(environment, checkpoint, policy_transfer=True)
+    assert captured["loader"] == "policy_transfer"
 
 
 def test_inference_config_defaults_to_film_when_sidecar_has_no_model_variant(
@@ -1133,3 +1252,116 @@ def test_viewer_requires_a_graphical_session(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     with pytest.raises(RuntimeError, match="graphical session"):
         _require_graphical_session()
+
+
+def test_approach_prefix_reinstall_replaces_reference_and_resets_runtime() -> None:
+    from sim.manorl.view_environment import _reinstall_approach_prefix_reference
+
+    calls = {"build_reference_tables": 0, "initial_qpos": 0}
+    old_trajectory = SimpleNamespace(
+        identity=SimpleNamespace(identity="banana_01_052"),
+        hand_sides=("right",),
+        reference_fps=120,
+    )
+    new_trajectory = SimpleNamespace(
+        identity=SimpleNamespace(identity="banana_01_052"),
+        hand_sides=("right",),
+        reference_fps=120,
+    )
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=1, reference_fps=120),
+        is_heterogeneous=False,
+        trajectory=old_trajectory,
+        trajectories=(old_trajectory,),
+        early_phase_lengths=np.asarray([90], dtype=np.int64),
+        _build_reference_tables=lambda: calls.__setitem__("build_reference_tables", calls["build_reference_tables"] + 1),
+        _initial_qpos=lambda: calls.__setitem__("initial_qpos", calls["initial_qpos"] + 1),
+    )
+    reset_seeds = []
+
+    def fake_reset(*, seed):
+        reset_seeds.append(seed)
+        return (np.zeros(3), {"seed": seed})
+
+    runtime = SimpleNamespace(env=SimpleNamespace(reset=fake_reset))
+    stepper = SimpleNamespace(
+        _runtime=runtime,
+        _observations=None,
+        _pending_done=object(),
+        _policy_enable_steps=None,
+    )
+
+    _reinstall_approach_prefix_reference(
+        environment, stepper, new_trajectory, seed=63
+    )
+
+    assert environment.trajectory is new_trajectory
+    assert environment.trajectories == (new_trajectory,)
+    assert calls == {"build_reference_tables": 1, "initial_qpos": 1}
+    assert reset_seeds == [63]
+    np.testing.assert_array_equal(stepper._observations, np.zeros(3))
+    assert stepper._pending_done is None
+    np.testing.assert_array_equal(stepper._policy_enable_steps, np.asarray([90]))
+
+
+def test_approach_prefix_reinstall_rejects_identity_change() -> None:
+    from sim.manorl.view_environment import _reinstall_approach_prefix_reference
+
+    environment = SimpleNamespace(
+        config=SimpleNamespace(num_envs=1, reference_fps=120),
+        is_heterogeneous=False,
+        trajectory=SimpleNamespace(
+            identity=SimpleNamespace(identity="banana_01_052"),
+            hand_sides=("right",),
+            reference_fps=120,
+        ),
+    )
+    stepper = SimpleNamespace(_runtime=SimpleNamespace(env=SimpleNamespace(reset=lambda **_: (None, None))))
+    with pytest.raises(RuntimeError, match="accepted source identity"):
+        _reinstall_approach_prefix_reference(
+            environment,
+            stepper,
+            SimpleNamespace(
+                identity=SimpleNamespace(identity="cube1_01_0001"),
+                hand_sides=("right",),
+                reference_fps=120,
+            ),
+            seed=64,
+        )
+
+
+def test_approach_prefix_viewer_cli_validation(tmp_path: Path) -> None:
+    module = _load_tool("view_manorl_approach_prefix")
+    predecode = tmp_path / "predecode"
+    predecode.mkdir()
+    with pytest.raises(SystemExit):
+        module.parse_args(
+            [
+                "--checkpoint",
+                str(tmp_path / "checkpoint.pt"),
+                "--accepted-parent",
+                str(tmp_path / "parent.json"),
+                "--predecode-dir",
+                str(predecode),
+                "--seed",
+                "-1",
+            ]
+        )
+    (predecode / "manifest.json").write_text("{}", encoding="utf-8")
+    args = module.parse_args(
+        [
+            "--checkpoint",
+            str(tmp_path / "checkpoint.pt"),
+            "--accepted-parent",
+            str(tmp_path / "parent.json"),
+            "--predecode-dir",
+            str(predecode),
+            "--seed",
+            "49",
+            "--max-episodes",
+            "3",
+        ]
+    )
+    assert args.seed == 49
+    assert args.max_episodes == 3
+    assert args.predecode_dir == predecode
