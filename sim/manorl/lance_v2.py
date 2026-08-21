@@ -724,6 +724,7 @@ def build_compact_row(
         "seed": provenance.get("seed"),
         "episode_index": provenance.get("episode_index"),
         "generation_attempt": provenance.get("generation_attempt"),
+        "augmentation_identity": provenance.get("augmentation_identity"),
     }
     return {
         "index": dict(full_row["index"]),

@@ -922,6 +922,7 @@ def _export_isolated_repeated_rollouts(
     accepted_parents_by_identity: Mapping[str, AcceptedSyntheticParent] | None = None,
     retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
     retreat_suffix_config: RetreatSuffixConfig | None = None,
+    allow_partial_yield: bool = False,
 ) -> dict[str, Any]:
     """Run each attempt round in a fresh process and append accepted rows."""
 
@@ -1169,7 +1170,7 @@ def _export_isolated_repeated_rollouts(
     complete = all(
         counter["saved"] == episodes_per_identity for counter in counters.values()
     )
-    published = output if complete else partial
+    published = output if (complete or allow_partial_yield) else partial
     if building.exists():
         building.replace(published)
     child_manifest.unlink(missing_ok=True)
@@ -1297,10 +1298,11 @@ def _export_isolated_repeated_rollouts(
             for identity, counter in counters.items()
             if counter["saved"] < episodes_per_identity
         }
-        raise RuntimeError(
-            "synthesis target incomplete after bounded isolated attempts; "
-            f"partial={published}, manifest={manifest_path}, incomplete={incomplete}"
-        )
+        if not allow_partial_yield:
+            raise RuntimeError(
+                "synthesis target incomplete after bounded isolated attempts; "
+                f"partial={published}, manifest={manifest_path}, incomplete={incomplete}"
+            )
     return {
         "output": str(output),
         "manifest": str(manifest_path),
@@ -1335,6 +1337,7 @@ def export_checkpoint_rollouts(
     accepted_parents_by_identity: Mapping[str, AcceptedSyntheticParent] | None = None,
     retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
     retreat_suffix_config: RetreatSuffixConfig | None = None,
+    allow_partial_yield: bool = False,
 ) -> dict[str, Any]:
     """Generate an accepted 1:N checkpoint rollout dataset per raw identity."""
 
@@ -1423,6 +1426,7 @@ def export_checkpoint_rollouts(
             accepted_parents_by_identity=accepted_parents_by_identity,
             retreat_endpoint_config=retreat_endpoint_config,
             retreat_suffix_config=retreat_suffix_config,
+            allow_partial_yield=allow_partial_yield,
         )
     trajectories = (
         load_assigned_trajectory_batch(selection, num_envs=num_envs)
@@ -1835,6 +1839,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="replace the post movement-end+15 tail with a seeded farther/higher retreat",
     )
+    parser.add_argument(
+        "--allow-partial-yield",
+        action="store_true",
+        help="publish all accepted rows after the bounded attempt budget even when targets remain unmet",
+    )
     parser.add_argument("--retreat-horizontal-min-m", type=float, default=0.03)
     parser.add_argument("--retreat-horizontal-max-m", type=float, default=0.15)
     parser.add_argument("--retreat-xy-deg", type=float, default=30.0)
@@ -1930,13 +1939,29 @@ def main(argv: list[str] | None = None) -> int:
     if parent is None and parents_by_identity:
         first_parent = next(iter(parents_by_identity.values()))
         parent = first_parent
+    if parents_by_identity and not args.pairs:
+        raise ValueError(
+            "--accepted-parents-manifest requires an explicit --pairs selector"
+        )
     selection = TrajectorySelection(
-        object_type=(parent.object_type if parent is not None else args.object_type),
-        gesture=(parent.action_id if parent is not None else args.gesture),
-        selector=(
-            f"{parent.object_type}:{parent.action_id}"
+        object_type=(
+            parent.object_type
             if parent is not None
-            else args.pairs
+            else args.object_type
+        ),
+        gesture=(
+            parent.action_id
+            if parent is not None and not parents_by_identity
+            else args.gesture
+        ),
+        selector=(
+            args.pairs
+            if parents_by_identity
+            else (
+                f"{parent.object_type}:{parent.action_id}"
+                if parent is not None
+                else args.pairs
+            )
         ),
         dataset_path=(
             Path(parent.source_dataset_path)
@@ -1972,6 +1997,7 @@ def main(argv: list[str] | None = None) -> int:
         accepted_parents_by_identity=args.accepted_parents_by_identity,
         retreat_endpoint_config=args.retreat_endpoint_config,
         retreat_suffix_config=args.retreat_suffix_config,
+        allow_partial_yield=args.allow_partial_yield,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
     return 0
