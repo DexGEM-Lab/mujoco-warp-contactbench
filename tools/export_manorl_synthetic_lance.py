@@ -16,7 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -453,11 +453,23 @@ def _augment_attempt_trajectories(
     attempt_seed: int,
     config: ApproachPrefixConfig,
     accepted_parent: AcceptedSyntheticParent | None = None,
+    accepted_parents_by_identity: Mapping[str, AcceptedSyntheticParent] | None = None,
     near_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
 ) -> tuple[TrajectoryBatch, dict[str, ApproachPrefixSample]]:
+    if accepted_parent is not None and accepted_parents_by_identity is not None:
+        raise ValueError("single and per-identity accepted parents are mutually exclusive")
     augmented = []
     samples: dict[str, ApproachPrefixSample] = {}
     for trajectory in trajectories.trajectories:
+        parent = (
+            accepted_parents_by_identity.get(trajectory.identity.identity)
+            if accepted_parents_by_identity is not None
+            else accepted_parent
+        )
+        if parent is None and accepted_parents_by_identity is not None:
+            raise ValueError(
+                f"accepted-parent mapping omits trajectory identity {trajectory.identity.identity}"
+            )
         approach_seed = (
             attempt_seed
             if config.mode == "far"
@@ -465,29 +477,20 @@ def _augment_attempt_trajectories(
         )
         near_anchor = None
         if config.mode == "near":
-            if (
-                accepted_parent is None
-                or accepted_parent.retreat_anchor_source_frame_index is None
-            ):
+            if parent.retreat_anchor_source_frame_index is None:
                 raise ValueError(
                     "near approach requires accepted-parent movement-end anchor provenance"
                 )
-            near_anchor = (
-                int(trajectory.movement_end_step)
-                + accepted_parent.retreat_anchor_offset_frames
-            )
+            near_anchor = int(trajectory.movement_end_step) + parent.retreat_anchor_offset_frames
             if (
                 not 0 <= near_anchor < len(trajectory.q_ref)
                 or int(trajectory.source_indices[near_anchor])
-                != int(accepted_parent.retreat_anchor_source_frame_index)
+                != int(parent.retreat_anchor_source_frame_index)
             ):
                 raise ValueError(
                     "near-approach movement-end+offset anchor disagrees with accepted parent"
                 )
-        if (
-            accepted_parent is not None
-            and accepted_parent.source_row_frame0_right_q_ref_3_28 is None
-        ):
+        if parent is not None and parent.source_row_frame0_right_q_ref_3_28 is None:
             raise ValueError(
                 "approach synthesis requires source-row frame0 right q_ref[3:28] provenance"
             )
@@ -498,9 +501,7 @@ def _augment_attempt_trajectories(
             near_anchor_reference_index=near_anchor,
             near_endpoint_config=near_endpoint_config,
             start_q_ref_3_28=(
-                None
-                if accepted_parent is None
-                else accepted_parent.source_row_frame0_right_q_ref_3_28
+                None if parent is None else parent.source_row_frame0_right_q_ref_3_28
             ),
         )
         augmented.append(resolved)
@@ -524,6 +525,7 @@ def _run_attempt_batch(
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
+    accepted_parents_by_identity: Mapping[str, AcceptedSyntheticParent] | None = None,
     retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
     retreat_suffix_config: RetreatSuffixConfig | None = None,
 ) -> tuple[
@@ -537,6 +539,9 @@ def _run_attempt_batch(
     """Run one candidate episode for each identity in one attempt round."""
 
     _seed_attempt(attempt_seed, device)
+    if accepted_parent is not None and accepted_parents_by_identity is not None:
+        raise ValueError("single and per-identity accepted parents are mutually exclusive")
+    parents_by_identity = dict(accepted_parents_by_identity or {})
     if accepted_parent is not None:
         if trajectories.num_envs != 1 or (
             trajectories.trajectories[0].identity.identity
@@ -545,11 +550,18 @@ def _run_attempt_batch(
             raise ValueError(
                 "accepted-parent synthesis requires exactly its bound source identity"
             )
-        if approach_prefix_config is None:
-            raise ValueError("accepted-parent synthesis requires approach-prefix augmentation")
+        parents_by_identity[accepted_parent.source_identity] = accepted_parent
+    if approach_prefix_config is not None:
+        missing = [
+            item.identity.identity
+            for item in trajectories.trajectories
+            if item.identity.identity not in parents_by_identity
+        ]
+        if missing:
+            raise ValueError("accepted-parent synthesis mapping omits identities: " + ", ".join(missing))
     if retreat_suffix_config is not None and (
-        accepted_parent is None
-        or accepted_parent.retreat_anchor_source_frame_index is None
+        not parents_by_identity
+        or any(parent.retreat_anchor_source_frame_index is None for parent in parents_by_identity.values())
     ):
         raise ValueError(
             "retreat-suffix synthesis requires accepted-parent movement-end anchor provenance"
@@ -564,17 +576,16 @@ def _run_attempt_batch(
             attempt_seed=attempt_seed,
             config=approach_prefix_config,
             accepted_parent=accepted_parent,
+            accepted_parents_by_identity=parents_by_identity or None,
             near_endpoint_config=retreat_endpoint_config,
         )
     retreat_samples: dict[str, RetreatSuffixSample] = {}
     if retreat_suffix_config is not None:
         augmented = []
         for item in trajectories.trajectories:
-            anchor_source = int(accepted_parent.retreat_anchor_source_frame_index)
-            anchor_index = (
-                int(item.movement_end_step)
-                + accepted_parent.retreat_anchor_offset_frames
-            )
+            parent = parents_by_identity[item.identity.identity]
+            anchor_source = int(parent.retreat_anchor_source_frame_index)
+            anchor_index = int(item.movement_end_step) + parent.retreat_anchor_offset_frames
             if (
                 not 0 <= anchor_index < len(item.q_ref)
                 or int(item.source_indices[anchor_index]) != anchor_source
@@ -622,12 +633,15 @@ def _run_attempt_batch(
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
             hand_side="right",
             object_init_xy_offset_range_m=(
-                0.0 if accepted_parent is not None else object_xy_offset_m
+                0.0 if parents_by_identity else object_xy_offset_m
             ),
             object_init_xy_offsets_m=(
-                None
-                if accepted_parent is None
-                else (accepted_parent.object_init_xy_offset_m,)
+                tuple(
+                    parents_by_identity[item.identity.identity].object_init_xy_offset_m
+                    for item in trajectories.trajectories
+                )
+                if parents_by_identity
+                else None
             ),
         ),
     )
@@ -826,9 +840,10 @@ def _run_attempt_batch(
         }
         source_index, source_metadata = metadata_by_row[trajectory.identity.row_index]
         augmentation_identity = None
-        if accepted_parent is not None:
+        parent = parents_by_identity.get(identity)
+        if parent is not None:
             augmentation_identity = _augmentation_identity(
-                accepted_parent=accepted_parent,
+                accepted_parent=parent,
                 episode_seed=attempt_seed,
                 attempt_number=attempt_numbers[identity],
                 episode_index=episode_indices[identity],
@@ -904,6 +919,7 @@ def _export_isolated_repeated_rollouts(
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
+    accepted_parents_by_identity: Mapping[str, AcceptedSyntheticParent] | None = None,
     retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
     retreat_suffix_config: RetreatSuffixConfig | None = None,
 ) -> dict[str, Any]:
@@ -920,8 +936,12 @@ def _export_isolated_repeated_rollouts(
             manifest_path=predecoded_manifest,
             exact_identities=(
                 None
-                if accepted_parent is None
-                else (accepted_parent.source_identity,)
+                if accepted_parent is None and accepted_parents_by_identity is None
+                else (
+                    (accepted_parent.source_identity,)
+                    if accepted_parent is not None
+                    else tuple(accepted_parents_by_identity or {})
+                )
             ),
         )
     )
@@ -947,9 +967,26 @@ def _export_isolated_repeated_rollouts(
     output.parent.mkdir(parents=True, exist_ok=True)
     control_path = output.parent / f".{output.name}.attempt-control.json"
     accepted_parent_path = output.parent / f".{output.name}.accepted-parent.json"
+    accepted_parents_manifest_path = output.parent / f".{output.name}.accepted-parents.json"
     if accepted_parent is not None:
         accepted_parent_path.write_text(
             json.dumps(accepted_parent.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if accepted_parents_by_identity is not None:
+        accepted_parents_manifest_path.write_text(
+            json.dumps(
+                {
+                    "contract": "manorl_synthesis_accepted_parents_manifest_v1",
+                    "parents": {
+                        identity: parent.to_dict()
+                        for identity, parent in sorted(accepted_parents_by_identity.items())
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
     child_manifest = building.parent / f"{building.name}.manifest.json"
@@ -1029,6 +1066,8 @@ def _export_isolated_repeated_rollouts(
             command.extend(["--object-xy-offset-m", str(object_xy_offset_m)])
         if accepted_parent is not None:
             command.extend(["--accepted-parent", str(accepted_parent_path)])
+        if accepted_parents_by_identity is not None:
+            command.extend(["--accepted-parents-manifest", str(accepted_parents_manifest_path)])
         if approach_prefix_config is not None:
             command.extend(
                 [
@@ -1129,6 +1168,7 @@ def _export_isolated_repeated_rollouts(
     child_manifest.unlink(missing_ok=True)
     control_path.unlink(missing_ok=True)
     accepted_parent_path.unlink(missing_ok=True)
+    accepted_parents_manifest_path.unlink(missing_ok=True)
     checkpoint_sha = file_sha256(checkpoint)
     provenance_base = {
         "checkpoint_path": str(checkpoint.resolve()),
@@ -1283,6 +1323,7 @@ def export_checkpoint_rollouts(
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
+    accepted_parents_by_identity: Mapping[str, AcceptedSyntheticParent] | None = None,
     retreat_endpoint_config: RetreatSuffixConfig = RetreatSuffixConfig(),
     retreat_suffix_config: RetreatSuffixConfig | None = None,
 ) -> dict[str, Any]:
@@ -1297,9 +1338,12 @@ def export_checkpoint_rollouts(
         or object_xy_offset_m < 0.0
     ):
         raise ValueError("object_xy_offset_m must be a finite non-negative float")
-    if (approach_prefix_config is None) != (accepted_parent is None):
+    if approach_prefix_config is not None and accepted_parents_by_identity is not None:
+        if not accepted_parents_by_identity:
+            raise ValueError("accepted-parents-by-identity must be non-empty when provided")
+    if accepted_parent is not None and accepted_parents_by_identity is not None:
         raise ValueError(
-            "approach-prefix synthesis requires an accepted-parent descriptor"
+            "single accepted parent and per-identity parents are mutually exclusive"
         )
     if accepted_parent is not None:
         if num_envs != 1:
@@ -1367,6 +1411,7 @@ def export_checkpoint_rollouts(
             object_xy_offset_m=object_xy_offset_m,
             approach_prefix_config=approach_prefix_config,
             accepted_parent=accepted_parent,
+            accepted_parents_by_identity=accepted_parents_by_identity,
             retreat_endpoint_config=retreat_endpoint_config,
             retreat_suffix_config=retreat_suffix_config,
         )
@@ -1379,8 +1424,12 @@ def export_checkpoint_rollouts(
             manifest_path=predecoded_manifest,
             exact_identities=(
                 None
-                if accepted_parent is None
-                else (accepted_parent.source_identity,)
+                if accepted_parent is None and accepted_parents_by_identity is None
+                else (
+                    (accepted_parent.source_identity,)
+                    if accepted_parent is not None
+                    else tuple(accepted_parents_by_identity or {})
+                )
             ),
         )
     )
@@ -1487,6 +1536,7 @@ def export_checkpoint_rollouts(
             object_xy_offset_m=object_xy_offset_m,
             approach_prefix_config=approach_prefix_config,
             accepted_parent=accepted_parent,
+            accepted_parents_by_identity=accepted_parents_by_identity,
             retreat_endpoint_config=retreat_endpoint_config,
             retreat_suffix_config=retreat_suffix_config,
         )
@@ -1750,6 +1800,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="JSON descriptor of one accepted prior scalable-synthesis row",
     )
     parser.add_argument(
+        "--accepted-parents-manifest",
+        type=Path,
+        help="JSON mapping source_identity to an accepted-parent descriptor path",
+    )
+    parser.add_argument(
         "--approach-mode",
         choices=("far", "near"),
         default="far",
@@ -1798,8 +1853,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if args.accepted_parent is None
         else load_accepted_synthetic_parent(args.accepted_parent)
     )
-    if args.approach_prefix != (args.accepted_parent_descriptor is not None):
-        parser.error("--approach-prefix and --accepted-parent must be supplied together")
+    if args.accepted_parent is not None and args.accepted_parents_manifest is not None:
+        parser.error("--accepted-parent and --accepted-parents-manifest are mutually exclusive")
+    args.accepted_parents_by_identity = None
+    if args.accepted_parents_manifest is not None:
+        values = json.loads(args.accepted_parents_manifest.read_text(encoding="utf-8"))
+        parents = values.get("parents")
+        if not isinstance(parents, dict) or not parents:
+            parser.error("--accepted-parents-manifest must contain a non-empty parents mapping")
+        try:
+            args.accepted_parents_by_identity = {
+                str(identity): load_accepted_synthetic_parent(Path(path))
+                for identity, path in parents.items()
+            }
+        except (ValueError, OSError, TypeError) as exc:
+            parser.error(f"--accepted-parents-manifest descriptor failed: {exc}")
+    if args.approach_prefix != (
+        args.accepted_parent_descriptor is not None
+        or args.accepted_parents_by_identity is not None
+    ):
+        parser.error(
+            "--approach-prefix and an accepted-parent descriptor/manifest must be supplied together"
+        )
     try:
         args.approach_prefix_config = (
             ApproachPrefixConfig(
@@ -1842,6 +1917,10 @@ def main(argv: list[str] | None = None) -> int:
         else json.loads(args.internal_attempt_control.read_text(encoding="utf-8"))
     )
     parent = args.accepted_parent_descriptor
+    parents_by_identity = args.accepted_parents_by_identity
+    if parent is None and parents_by_identity:
+        first_parent = next(iter(parents_by_identity.values()))
+        parent = first_parent
     selection = TrajectorySelection(
         object_type=(parent.object_type if parent is not None else args.object_type),
         gesture=(parent.action_id if parent is not None else args.gesture),
@@ -1881,6 +1960,7 @@ def main(argv: list[str] | None = None) -> int:
         object_xy_offset_m=args.object_xy_offset_m,
         approach_prefix_config=args.approach_prefix_config,
         accepted_parent=args.accepted_parent_descriptor,
+        accepted_parents_by_identity=args.accepted_parents_by_identity,
         retreat_endpoint_config=args.retreat_endpoint_config,
         retreat_suffix_config=args.retreat_suffix_config,
     )
