@@ -16,6 +16,7 @@ from tools.run_manorl_synthesis_seed_plan import (
     PRODUCTION_APPROACH_VERTICAL_ARC_HEIGHT_M,
     RUN_CONTRACT,
     STATUS_CONTRACT,
+    _finalize_status,
     _parent_manifest,
     _sample_trajectory,
     load_plan,
@@ -187,6 +188,38 @@ def test_parent_manifest_records_actual_arc_and_required_retreat(tmp_path: Path)
     assert manifest["retreat_suffix_required"] is True
     assert manifest["approach_vertical_arc_height_m"] == 0.10
     assert STATUS_CONTRACT not in manifest
+
+
+def test_fixed_budget_status_distinguishes_yield_from_completion() -> None:
+    partial = {
+        "accepted": {str(index): {} for index in range(8)},
+        "exhausted": {"8": {}, "9": {}},
+    }
+    _finalize_status(partial, slot_count=10)
+    assert partial["attempts_complete"] is True
+    assert partial["all_slots_succeeded"] is False
+    assert partial["complete"] is True
+
+    full = {"accepted": {str(index): {} for index in range(10)}, "exhausted": {}}
+    _finalize_status(full, slot_count=10)
+    assert full["attempts_complete"] is True
+    assert full["all_slots_succeeded"] is True
+
+    running = {"accepted": {str(index): {} for index in range(9)}, "exhausted": {}}
+    _finalize_status(running, slot_count=10)
+    assert running["attempts_complete"] is False
+    assert running["all_slots_succeeded"] is False
+    assert running["complete"] is False
+
+
+def test_fixed_budget_status_rejects_overlapping_terminal_slot() -> None:
+    status = {"accepted": {"0": {}}, "exhausted": {"0": {}}}
+    try:
+        _finalize_status(status, slot_count=10)
+    except ValueError as exc:
+        assert "both accepted and exhausted" in str(exc)
+    else:  # pragma: no cover - assertion is the test
+        raise AssertionError("overlapping paired slot state was accepted")
 
 
 def test_cli_defaults_to_production_arc_and_accepts_parent_subset() -> None:
