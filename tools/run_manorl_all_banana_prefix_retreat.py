@@ -98,20 +98,39 @@ def _manifest_for_action(action: str, descriptor_root: Path) -> Path:
     return manifest_path
 
 
-def _run_action_worker(
+def _run_gpu_worker(
     *,
-    action: str,
     gpu: int,
+    actions: list[str],
     output_dir: Path,
     descriptor_root: Path,
     seed: int,
     replace: bool,
 ) -> int:
-    records = _parents_for_action(action)
+    records = []
+    for action in actions:
+        records.extend(_parents_for_action(action))
+    records.sort(key=lambda item: item["source_identity"])
     if not records:
         return 0
-    manifest = _manifest_for_action(action, descriptor_root)
-    output = output_dir / f"banana_action_{action}_prefix_retreat.lance"
+    manifest = descriptor_root / f"parents_gpu{gpu}.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "contract": "manorl_synthesis_accepted_parents_manifest_v1",
+                "parents": {
+                    record["source_identity"]: record["descriptor_path"]
+                    for record in records
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = output_dir / f"banana_gpu{gpu}_prefix_retreat.lance"
+    pairs = ",".join(f"banana:{action}" for action in actions)
     command = [
         sys.executable,
         str(
@@ -126,7 +145,9 @@ def _run_action_worker(
         "--object",
         "banana",
         "--gesture",
-        action,
+        actions[0],
+        "--pairs",
+        pairs,
         "--dataset-path",
         "/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance",
         "--dataset-version",
@@ -192,19 +213,22 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict[str, Any]] = []
     failed = False
     for gpu, action_list in per_gpu.items():
-        for action in action_list:
-            seed = args.action_seed + int(action)
-            rc = _run_action_worker(
-                action=action,
-                gpu=gpu,
-                output_dir=output_dir,
-                descriptor_root=descriptor_root,
-                seed=seed,
-                replace=args.replace,
-            )
-            results.append({"gpu": gpu, "action": action, "exit_code": rc})
-            if rc != 0:
-                failed = True
+        if not action_list:
+            continue
+        seed = args.action_seed + gpu
+        rc = _run_gpu_worker(
+            gpu=gpu,
+            actions=action_list,
+            output_dir=output_dir,
+            descriptor_root=descriptor_root,
+            seed=seed,
+            replace=args.replace,
+        )
+        results.append(
+            {"gpu": gpu, "actions": action_list, "exit_code": rc}
+        )
+        if rc != 0:
+            failed = True
     summary = {
         "contract": RUN_CONTRACT,
         "plan": str(plan_path),

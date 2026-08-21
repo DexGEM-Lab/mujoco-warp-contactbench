@@ -1939,13 +1939,29 @@ def main(argv: list[str] | None = None) -> int:
     if parent is None and parents_by_identity:
         first_parent = next(iter(parents_by_identity.values()))
         parent = first_parent
+    if parents_by_identity and not args.pairs:
+        raise ValueError(
+            "--accepted-parents-manifest requires an explicit --pairs selector"
+        )
     selection = TrajectorySelection(
-        object_type=(parent.object_type if parent is not None else args.object_type),
-        gesture=(parent.action_id if parent is not None else args.gesture),
-        selector=(
-            f"{parent.object_type}:{parent.action_id}"
+        object_type=(
+            parent.object_type
             if parent is not None
-            else args.pairs
+            else args.object_type
+        ),
+        gesture=(
+            parent.action_id
+            if parent is not None and not parents_by_identity
+            else args.gesture
+        ),
+        selector=(
+            args.pairs
+            if parents_by_identity
+            else (
+                f"{parent.object_type}:{parent.action_id}"
+                if parent is not None
+                else args.pairs
+            )
         ),
         dataset_path=(
             Path(parent.source_dataset_path)
