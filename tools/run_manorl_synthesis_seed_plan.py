@@ -76,13 +76,12 @@ from tools.export_manorl_synthetic_lance import (
 )
 
 PLAN_CONTRACT = "manorl_banana_vla_paired_seed_fallback_plan_v1"
-RUN_CONTRACT = "manorl_synthesis_paired_seed_plan_run_v2"
-STATUS_CONTRACT = "manorl_synthesis_parent_seed_status_v2"
-# The default 4 cm arc was empirically insufficient for the first original
-# near-distance cell: the hand touched the banana before the source splice.
-# Ten centimetres is still inside the approach contract and preserves the
-# sampled start position; it changes only the collision-avoidance path.
-PRODUCTION_APPROACH_VERTICAL_ARC_HEIGHT_M = 0.10
+RUN_CONTRACT = "manorl_synthesis_paired_seed_plan_run_v3"
+STATUS_CONTRACT = "manorl_synthesis_parent_seed_status_v3"
+# Preserve the established synthesis setting. Yield is measured under this
+# fixed 4 cm endpoint-smooth arc; failed candidates consume their bounded
+# attempt budget rather than changing physical parameters to meet a quota.
+PRODUCTION_APPROACH_VERTICAL_ARC_HEIGHT_M = ApproachPrefixConfig().vertical_arc_height_m
 
 
 def _atomic_json(path: Path, value: object) -> None:
@@ -488,10 +487,10 @@ def _finalize_status(status: dict[str, Any], *, slot_count: int) -> None:
         raise ValueError("paired status contains an unknown slot")
     status["attempts_complete"] = terminal_slots == expected_slots
     status["all_slots_succeeded"] = accepted == expected_slots
-    # ``complete`` means the fixed candidate budget has been fully consumed,
-    # not that every slot succeeded. ``all_slots_succeeded`` retains the quota
-    # distinction explicitly.
-    status["complete"] = status["attempts_complete"]
+    # Preserve exporter semantics: complete means the requested target was
+    # fully met. Bounded attempts finishing with partial yield are represented
+    # separately by attempts_complete=true and complete=false.
+    status["complete"] = status["all_slots_succeeded"]
 
 
 def _parent_manifest(
@@ -827,7 +826,10 @@ def main(argv: list[str] | None = None) -> int:
             approach_vertical_arc_height_m=args.approach_vertical_arc_height_m,
         )
         print(json.dumps(result, indent=2, sort_keys=True), flush=True)
-        return 0
+        # Match the ordinary exporter: preserve bounded partial yield, but do
+        # not report target completion when one or more slots exhausted all
+        # candidates. The outer shard records this nonzero result and continues.
+        return 0 if result["complete"] else 3
     indices = _selected_parent_indices(args.parent_indices, len(plan["parents_plan"]))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     results = []
