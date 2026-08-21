@@ -979,8 +979,10 @@ def _export_isolated_repeated_rollouts(
                 {
                     "contract": "manorl_synthesis_accepted_parents_manifest_v1",
                     "parents": {
-                        identity: parent.to_dict()
-                        for identity, parent in sorted(accepted_parents_by_identity.items())
+                        identity: str(
+                            output.parent / f".{output.name}.accepted-parent-{identity}.json"
+                        )
+                        for identity in sorted(accepted_parents_by_identity)
                     },
                 },
                 indent=2,
@@ -989,6 +991,11 @@ def _export_isolated_repeated_rollouts(
             + "\n",
             encoding="utf-8",
         )
+        for identity, parent in accepted_parents_by_identity.items():
+            (output.parent / f".{output.name}.accepted-parent-{identity}.json").write_text(
+                json.dumps(parent.to_dict(), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
     child_manifest = building.parent / f"{building.name}.manifest.json"
     counters = {
         identity: {"attempts": 0, "saved": 0, "failures": []} for identity in identities
@@ -1169,6 +1176,8 @@ def _export_isolated_repeated_rollouts(
     control_path.unlink(missing_ok=True)
     accepted_parent_path.unlink(missing_ok=True)
     accepted_parents_manifest_path.unlink(missing_ok=True)
+    for identity in (accepted_parents_by_identity or {}):
+        (output.parent / f".{output.name}.accepted-parent-{identity}.json").unlink(missing_ok=True)
     checkpoint_sha = file_sha256(checkpoint)
     provenance_base = {
         "checkpoint_path": str(checkpoint.resolve()),
