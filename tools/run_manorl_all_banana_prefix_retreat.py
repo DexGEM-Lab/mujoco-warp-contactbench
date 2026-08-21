@@ -35,24 +35,21 @@ ACTIONS = ("01", "02", "03", "04", "09", "14", "18")
 
 
 def _parents_for_action(action: str) -> list[dict[str, Any]]:
-    manifest = json.loads(
-        (Path(DESCRIPTOR_ROOT) / "manifest.json").read_text(encoding="utf-8")
+    by_action = json.loads(
+        (Path(DESCRIPTOR_ROOT) / "parents_by_action.json").read_text(encoding="utf-8")
     )
+    mapping = by_action.get("actions", {}).get(action, {})
     records = []
-    for path in manifest["descriptors"]:
-        identity = Path(path).name.removesuffix(".json")
-        if identity.split("_")[1] != action:
-            continue
-        parent = load_accepted_synthetic_parent(path)
+    for identity, descriptor_path in sorted(mapping.items()):
+        parent = load_accepted_synthetic_parent(descriptor_path)
         records.append(
             {
                 "source_identity": identity,
-                "descriptor_path": str(Path(path).resolve()),
+                "descriptor_path": str(Path(descriptor_path).resolve()),
                 "checkpoint_sha256": parent.checkpoint_sha256,
                 "reference_fps": parent.reference_fps,
             }
         )
-    records.sort(key=lambda item: item["source_identity"])
     return records
 
 

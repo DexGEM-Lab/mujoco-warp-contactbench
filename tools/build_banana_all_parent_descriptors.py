@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--source-dataset", type=Path, required=True)
     parser.add_argument("--source-version", type=int, default=295)
+    parser.add_argument(
+        "--predecoded-manifest",
+        type=Path,
+        help="optional pre60 predecoded bundle manifest for anchor verification",
+    )
     args = parser.parse_args(argv)
 
     import lance
@@ -76,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     written = []
+    unavailable = []
     for item in sorted(eligible, key=lambda row: row["source_identity"]):
         prov = provenance_by_index[item["row_index"]]
         raw = source_by_index[int(prov["row_index"])]
@@ -111,6 +117,40 @@ def main(argv: list[str] | None = None) -> int:
             parent_movement_end_state_index=item["movement_end"],
             source_row_frame0_right_q_ref_3_28=tuple(float(v) for v in frame0),
         )
+        anchor_reason = None
+        if args.predecoded_manifest is not None:
+            predecoded = json.loads(args.predecoded_manifest.read_text(encoding="utf-8"))
+            records = {
+                str(record.get("identity")): record
+                for record in predecoded.get("valid_records", [])
+            }
+            record = records.get(item["source_identity"])
+            if record is None:
+                anchor_reason = "missing_predecoded_trajectory"
+            else:
+                import pickle
+
+                trajectory_path = args.predecoded_manifest.parent / f"{record['identity']}.pkl"
+                with trajectory_path.open("rb") as stream:
+                    trajectory = pickle.load(stream)
+                anchor = int(trajectory.movement_end_step) + int(
+                    parent.retreat_anchor_offset_frames
+                )
+                if not 0 <= anchor < len(trajectory.source_indices):
+                    anchor_reason = "pre60_anchor_out_of_range"
+                elif int(trajectory.source_indices[anchor]) != int(
+                    parent.retreat_anchor_source_frame_index
+                ):
+                    anchor_reason = "pre60_anchor_source_frame_mismatch"
+        if anchor_reason is not None:
+            unavailable.append(
+                {
+                    "source_identity": item["source_identity"],
+                    "reason": anchor_reason,
+                    "parent_row_index": item["row_index"],
+                }
+            )
+            continue
         path = output / f"{item['source_identity']}.json"
         write_accepted_synthetic_parent(parent, path, replace=True)
         assert load_accepted_synthetic_parent(path) == parent
@@ -118,16 +158,53 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = {
         "contract": "manorl_banana_all_strict_accepted_parents_v1",
-        "eligible_sources": len(written),
+        "eligible_sources": len(eligible),
+        "verified_sources": len(written),
+        "unavailable_sources": len(unavailable),
         "production_dataset": str(args.production_dataset.resolve()),
         "source_dataset": str(args.source_dataset.resolve()),
         "source_version": args.source_version,
+        "predecoded_manifest": (
+            str(args.predecoded_manifest.resolve())
+            if args.predecoded_manifest is not None
+            else None
+        ),
         "descriptors": written,
+        "unavailable": unavailable,
     }
     (output / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print(json.dumps({"descriptors": len(written), "output": str(output)}, indent=2))
+    per_action = {}
+    for action in sorted({str(Path(path).name)[7:9] for path in written}):
+        per_action[action] = {
+            str(Path(path).name).removesuffix(".json"): str(path)
+            for path in written
+            if str(Path(path).name).startswith(f"banana_{action}_")
+        }
+    (output / "parents_by_action.json").write_text(
+        json.dumps(
+            {
+                "contract": "manorl_synthesis_accepted_parents_by_action_v1",
+                "actions": per_action,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {
+                "eligible": len(eligible),
+                "verified": len(written),
+                "unavailable": len(unavailable),
+                "output": str(output),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
