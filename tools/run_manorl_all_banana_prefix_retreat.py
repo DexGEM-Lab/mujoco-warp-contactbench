@@ -151,6 +151,7 @@ def _run_action_worker(
         "--accepted-parents-manifest",
         str(manifest),
         "--retreat-suffix",
+        "--allow-partial-yield",
     ]
     if replace:
         command.append("--replace")
