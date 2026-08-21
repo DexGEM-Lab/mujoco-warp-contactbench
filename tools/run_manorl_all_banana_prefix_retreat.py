@@ -88,7 +88,7 @@ def _manifest_for_action(action: str, descriptor_root: Path) -> Path:
             {
                 "contract": "manorl_synthesis_accepted_parents_manifest_v1",
                 "parents": {
-                    record["source_identity"]: str(record["descriptor_path"])
+                    record["source_identity"]: record["descriptor_path"]
                     for record in records
                 },
             },
