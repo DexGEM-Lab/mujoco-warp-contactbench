@@ -21,3 +21,10 @@
 - Production runner v2 therefore defaults both modes to a 10 cm collision-avoidance Z arc. This does not change the far/near start distributions or seed coverage. Retreat v4 remains mandatory for every mode.
 - Real runner smoke used the original paired fallback plan, parent index 0, slot 0, seed 100408. Near and far were atomically accepted at fallback rank 0. Output contained 2 compact `synthetic_mano_target_replay_visual_v2_contact` rows; validator passed, 120/480 Hz x4, zero decoder retries. Artifact: `/tmp/manorl_seed_plan_runner_smoke_v2`.
 - Focused validation: `29 passed` across seed-plan, accepted-parent, and approach-prefix tests.
+
+## 2026-08-21T12:12:52+08:00
+- User corrected the production frame: preserve the historical synthesis logic of a target ratio plus bounded maximum attempts, then deliver actual success yield. Do not change physics or success criteria to meet 700 rows.
+- Identified an unauthorized intervention: the first Server1 run used a 10 cm approach arc instead of the established 4 cm default. Stopped only its four task-owned process groups. It had 102 accepted pairs / 204 rows at stop; marked `/home/jay/data/manorl_banana_vla_700_server1_20260821/DIAGNOSTIC_ONLY.json`, `publish=false`. It will not be merged or published.
+- Restored runner production arc to `ApproachPrefixConfig().vertical_arc_height_m == 0.04`.
+- Added fixed-budget partial-yield semantics: an exhausted 12-candidate slot records zero yield and execution continues; `attempts_complete` means all slots accepted/exhausted, while `complete` retains ordinary exporter meaning that every requested slot succeeded.
+- Focused validation after correction: 31 tests passed across seed-plan, accepted-parent, and approach-prefix tests.

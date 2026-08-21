@@ -1,16 +1,23 @@
 ## Objective
-Implement and deploy a plan-driven ManoRL synthesis runner for the banana VLA dataset. Consume the fixed original 35-parent seed/fallback plan and produce exactly 10 accepted paired seeds per parent: one near and one far row, both with mandatory movement-end+15 retreat, for 700 compact v2_contact rows total.
+Run the fixed banana VLA near/far augmentation plan under the established ManoRL synthesis setting and deliver the actual bounded-attempt yield as one compact v2_contact Lance dataset.
 
 ## Contract
-- Inputs are the original 35 `manorl_accepted_synthetic_parent_v3` descriptors; a failed candidate never changes its parent.
-- The plan has 10 target distance cells per parent and 12 globally unique candidates per cell.
-- Near and far form an atomic pair: accept only when both succeed; otherwise discard both and try the next candidate in the same far/near distance cell.
-- Never substitute seed+1 silently.
-- Both modes use a 10 cm endpoint-smooth collision-avoidance Z arc; sampled start positions and distance coverage remain unchanged.
+- Inputs are the original 35 `manorl_accepted_synthetic_parent_v3` descriptors; a failed attempt never changes its parent.
+- The plan has 10 target distance cells per parent and 12 globally unique candidate seeds per cell.
+- Each candidate is an atomic near/far pair: accept only when both succeed; otherwise discard both and try the next candidate in the same distance cell.
+- Each slot stops after the first accepted pair or after all 12 candidates fail. An exhausted slot produces no rows and does not block later slots.
+- The target is at most 350 accepted pairs / 700 rows. Final yield is the number actually accepted under the fixed budget; never change physics, parent, distance cell, or success criteria to meet the target.
+- Preserve the established 4 cm endpoint-smooth approach Z arc from `ApproachPrefixConfig` for both modes.
 - Both modes require `synthetic_parent_movement_end_plus15_retreat_tail_xy_extra_z_extra_discrete_c2_v4`.
 - Preserve compact `synthetic_mano_target_replay_visual_v2_contact`, contact/reference/command mapping, accepted-parent augmentation UUID semantics, and checkpoint policy-transfer behavior.
 - Reuse one single-env MJX/checkpoint runtime within each parent worker; run one fresh process per parent to bound Warp allocator lifetime.
-- Persist accepted slots and failures atomically for resume without regenerating accepted rows.
+- Persist accepted slots, candidate failures, and exhausted slots atomically for resume without regenerating accepted rows.
+
+## Completion semantics
+- `attempts_complete`: all ten slots reached either accepted or 12-candidate exhausted state.
+- `complete` / `all_slots_succeeded`: all ten target pairs succeeded.
+- A parent can have `attempts_complete=true` and `complete=false`; its accepted rows remain valid partial yield.
+- The batch finishes after all 350 slots have terminal states, then merges every accepted pair and reports actual yield.
 
 ## Owned surface
 - `tools/run_manorl_synthesis_seed_plan.py`
@@ -18,17 +25,17 @@ Implement and deploy a plan-driven ManoRL synthesis runner for the banana VLA da
 - task memory
 
 ## Validation
-- Pure plan/schema/identity tests.
-- Real one-parent, one-slot near/far smoke under the original plan.
-- Compact validator on the two-row output.
-- Server1 four-GPU launch only after source/input hash preflight.
+- Pure plan/schema/status tests.
+- Server1 source/input hash preflight.
+- Compact validator on the merged actual-yield dataset.
+- Report overall and per-action/parent/distance-cell success and failure counts.
 
 ## Production delivery
 - Server1 only, four RTX 4090 GPUs, parent-index shards.
-- Merge 35 parent datasets deterministically into one 700-row Lance.
-- Validate 350 paired seeds, near/far 350 each, five parents/action, 100 rows/action, unique UUIDs, and preserved distance-decile coverage.
+- Merge successful parent rows deterministically into one actual-yield Lance.
+- Publish with local staging then `cp -r` to NAS; do not use rsync temporary files on CIFS.
 
 ## Constraints
-- Work only in `feat/synthesis-seed-plan-runner` until integration.
-- Do not modify primary `dev` worktree feature files or user `test.sh`.
+- Do not modify parent selection, seed-cell membership, contact/deviation thresholds, policy, retreat bounds, or approach setting to improve yield.
+- Do not modify primary worktree user files such as `test.sh`.
 - No subagents.

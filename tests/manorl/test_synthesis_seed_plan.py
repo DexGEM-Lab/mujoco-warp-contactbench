@@ -136,7 +136,7 @@ def test_plan_rejects_duplicate_candidate_seed(tmp_path: Path) -> None:
         raise AssertionError("duplicate planned seed was accepted")
 
 
-def test_sample_trajectory_uses_ten_cm_arc_and_mandatory_retreat() -> None:
+def test_sample_trajectory_preserves_default_arc_and_mandatory_retreat() -> None:
     source = _trajectory()
     parent = _parent("banana_01_001", source=source)
     trajectory, prefix, suffix = _sample_trajectory(
@@ -149,7 +149,7 @@ def test_sample_trajectory_uses_ten_cm_arc_and_mandatory_retreat() -> None:
             vertical_arc_height_m=PRODUCTION_APPROACH_VERTICAL_ARC_HEIGHT_M,
         ),
     )
-    assert PRODUCTION_APPROACH_VERTICAL_ARC_HEIGHT_M == 0.10
+    assert PRODUCTION_APPROACH_VERTICAL_ARC_HEIGHT_M == 0.04
     assert prefix.approach_mode == "near"
     assert suffix.contract.endswith("_v4")
     assert trajectory.augmentation_suffix_frames == suffix.suffix_frames
@@ -182,11 +182,11 @@ def test_parent_manifest_records_actual_arc_and_required_retreat(tmp_path: Path)
             "checkpoint_metadata": {},
         },
         status=status,
-        approach_vertical_arc_height_m=0.10,
+        approach_vertical_arc_height_m=0.04,
     )
     assert manifest["contract"] == RUN_CONTRACT
     assert manifest["retreat_suffix_required"] is True
-    assert manifest["approach_vertical_arc_height_m"] == 0.10
+    assert manifest["approach_vertical_arc_height_m"] == 0.04
     assert STATUS_CONTRACT not in manifest
 
 
@@ -198,7 +198,7 @@ def test_fixed_budget_status_distinguishes_yield_from_completion() -> None:
     _finalize_status(partial, slot_count=10)
     assert partial["attempts_complete"] is True
     assert partial["all_slots_succeeded"] is False
-    assert partial["complete"] is True
+    assert partial["complete"] is False
 
     full = {"accepted": {str(index): {} for index in range(10)}, "exhausted": {}}
     _finalize_status(full, slot_count=10)
@@ -237,5 +237,5 @@ def test_cli_defaults_to_production_arc_and_accepts_parent_subset() -> None:
             "0,4",
         ]
     )
-    assert args.approach_vertical_arc_height_m == 0.10
+    assert args.approach_vertical_arc_height_m == 0.04
     assert args.parent_indices == "0,4"
