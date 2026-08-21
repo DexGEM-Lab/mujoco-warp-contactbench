@@ -468,8 +468,30 @@ def _status_template(parent_plan: dict[str, Any]) -> dict[str, Any]:
         "parent_uuid": parent_plan["parent_uuid"],
         "accepted": {},
         "failures": {},
+        "exhausted": {},
+        "attempts_complete": False,
+        "all_slots_succeeded": False,
         "complete": False,
     }
+
+
+def _finalize_status(status: dict[str, Any], *, slot_count: int) -> None:
+    if slot_count < 1:
+        raise ValueError("slot_count must be positive")
+    accepted = set(status.get("accepted", {}))
+    exhausted = set(status.get("exhausted", {}))
+    if accepted & exhausted:
+        raise ValueError("one paired slot cannot be both accepted and exhausted")
+    terminal_slots = accepted | exhausted
+    expected_slots = {str(index) for index in range(slot_count)}
+    if not terminal_slots.issubset(expected_slots):
+        raise ValueError("paired status contains an unknown slot")
+    status["attempts_complete"] = terminal_slots == expected_slots
+    status["all_slots_succeeded"] = accepted == expected_slots
+    # ``complete`` means the fixed candidate budget has been fully consumed,
+    # not that every slot succeeded. ``all_slots_succeeded`` retains the quota
+    # distinction explicitly.
+    status["complete"] = status["attempts_complete"]
 
 
 def _parent_manifest(
@@ -490,6 +512,12 @@ def _parent_manifest(
         "output_format": "compact-replay-visual",
         "output": str(output.resolve()),
         "complete": bool(status["complete"]),
+        "attempts_complete": bool(status.get("attempts_complete", status["complete"])),
+        "all_slots_succeeded": bool(
+            status.get("all_slots_succeeded", status["complete"])
+        ),
+        "accepted_pairs": len(accepted),
+        "exhausted_slots": len(status.get("exhausted", {})),
         "rows": len(accepted) * 2,
         "generated_uuids": [
             uuid for item in accepted for uuid in (item["near_uuid"], item["far_uuid"])
@@ -566,6 +594,11 @@ def _run_parent(
     )
     if status.get("contract") != STATUS_CONTRACT:
         raise ValueError("parent status contract changed")
+    # Status v2 predates partial-yield delivery. Additive fields let an
+    # interrupted strict-quota run resume without rewriting accepted rows.
+    status.setdefault("exhausted", {})
+    status.setdefault("attempts_complete", False)
+    status.setdefault("all_slots_succeeded", False)
     if output.exists():
         import lance
 
@@ -592,7 +625,7 @@ def _run_parent(
     for slot in slots:
         slot_index = int(slot["slot_rank_by_far_distance"]) - 1
         key = str(slot_index)
-        if key in status["accepted"]:
+        if key in status["accepted"] or key in status["exhausted"]:
             continue
         slot_failures = status["failures"].setdefault(key, [])
         tried = {int(item["fallback_rank"]) for item in slot_failures}
@@ -689,10 +722,27 @@ def _run_parent(
             )
             break
         if not accepted:
-            raise RuntimeError(
-                f"all paired seed candidates failed for {identity} slot {slot_index}"
+            status["exhausted"][key] = {
+                "slot_index": slot_index,
+                "candidate_attempts": len(slot_failures),
+                "far_distance_decile": slot["target_far_distance_decile"],
+                "near_distance_decile": slot["target_near_distance_decile"],
+            }
+            _atomic_json(status_path, status)
+            print(
+                json.dumps(
+                    {
+                        "event": "paired_slot_exhausted",
+                        "parent_index": parent_index,
+                        "source_identity": identity,
+                        "slot_index": slot_index,
+                        "candidate_attempts": len(slot_failures),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
             )
-    status["complete"] = len(status["accepted"]) == len(slots)
+    _finalize_status(status, slot_count=len(slots))
     _atomic_json(status_path, status)
     manifest = _parent_manifest(
         output=output,
@@ -710,8 +760,10 @@ def _run_parent(
         "manifest": str(manifest_path),
         "status": str(status_path),
         "accepted_slots": len(status["accepted"]),
+        "exhausted_slots": len(status["exhausted"]),
         "rows": 2 * len(status["accepted"]),
         "complete": status["complete"],
+        "all_slots_succeeded": status["all_slots_succeeded"],
     }
 
 
@@ -819,7 +871,11 @@ def main(argv: list[str] | None = None) -> int:
                 "parent_index": parent_index,
                 "source_identity": parent["source_identity"],
                 "accepted_slots": len(status["accepted"]),
+                "exhausted_slots": len(status.get("exhausted", {})),
                 "complete": bool(status["complete"]),
+                "all_slots_succeeded": bool(
+                    status.get("all_slots_succeeded", status["complete"])
+                ),
             }
         )
     summary = {
