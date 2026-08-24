@@ -48,7 +48,7 @@ class ApproachPrefixConfig:
     mode: str = "far"
     required_base_pre_padding: int = 60
     minimum_xy_radius_m: float = 0.30
-    maximum_xy_radius_m: float = 0.70
+    maximum_xy_radius_m: float | None = None
     maximum_xy_offset_deg: float = 30.0
     minimum_z_offset_m: float = 0.08
     maximum_z_offset_m: float = 0.30
@@ -62,6 +62,14 @@ class ApproachPrefixConfig:
     def __post_init__(self) -> None:
         if self.mode not in APPROACH_MODES:
             raise ValueError(f"approach-prefix mode must be one of {APPROACH_MODES}")
+        if self.maximum_xy_radius_m is None:
+            # Near does not sample this Far-only field; retain its prior value so
+            # only Far defaults and Far augmentation identities change.
+            object.__setattr__(
+                self,
+                "maximum_xy_radius_m",
+                1.00 if self.mode == "far" else 0.70,
+            )
         if self.mode == "near" and (
             self.minimum_xy_radius_m,
             self.maximum_xy_radius_m,

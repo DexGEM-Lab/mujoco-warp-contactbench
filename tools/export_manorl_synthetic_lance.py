@@ -2002,10 +2002,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--approach-mode",
         choices=("far", "near"),
         default="far",
-        help="far 30-70 cm start or independently seeded retreat-like near start",
+        help="far 30-100 cm start or independently seeded retreat-like near start",
     )
     parser.add_argument("--approach-xy-radius-min-m", type=float, default=0.30)
-    parser.add_argument("--approach-xy-radius-max-m", type=float, default=0.70)
+    parser.add_argument(
+        "--approach-xy-radius-max-m",
+        type=float,
+        help="Far XY radius maximum (default: 1.00 m; Near retains 0.70 m as an unused identity field)",
+    )
     parser.add_argument("--approach-xy-deg", type=float, default=30.0)
     parser.add_argument("--approach-z-offset-min-m", type=float, default=0.08)
     parser.add_argument("--approach-z-offset-max-m", type=float, default=0.30)
