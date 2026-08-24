@@ -14,6 +14,10 @@ from typing import Any
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from sim.manorl.approach_prefix import (
+    APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT,
+    PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT,
+)
 from sim.manorl.contracts import simulation_clock
 from sim.manorl.lance_v2 import (
     FORCE_DIRECTION_CONTRACT,
@@ -301,6 +305,7 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         "seed": int(row["provenance"]["seed"]),
         "episode_index": int(row["provenance"]["episode_index"]),
         "generation_attempt": int(row["provenance"]["generation_attempt"]),
+        "augmentation_identity": row["provenance"].get("augmentation_identity"),
         "synthesis_acceptance": final_acceptance.to_dict(),
         "negative_contact_reward_steps": negative_contact_steps,
         "minimum_contact_reward": float(np.min(contact_reward, initial=0.0)),
@@ -536,11 +541,58 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
         "seed": int(provenance["seed"]),
         "episode_index": int(provenance["episode_index"]),
         "generation_attempt": int(provenance["generation_attempt"]),
+        "augmentation_identity": provenance.get("augmentation_identity"),
         "synthesis_acceptance": (
             None if final_acceptance is None else final_acceptance.to_dict()
         ),
         "warp_ccd_iterations": source.warp_ccd_iterations,
         "warp_ccd_contacts_per_world": source.warp_ccd_contacts_per_world,
+    }
+
+
+def _validate_prefix_only_contract(
+    *, manifest: dict[str, Any], rows: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    synthesis = manifest.get("synthesis") or {}
+    production_contract = synthesis.get("production_contract")
+    if production_contract is None:
+        return None
+    if production_contract != APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT:
+        raise ValueError("prefix-only production contract changed")
+    if synthesis.get("augmentation_identity_contract") != (
+        PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT
+    ):
+        raise ValueError("prefix-only augmentation identity contract changed")
+    if synthesis.get("retreat_suffix") is not None:
+        raise ValueError("prefix-only production manifest contains retreat suffix")
+    if manifest.get("retreat_suffixes"):
+        raise ValueError("prefix-only production records accepted retreat suffixes")
+    approach = synthesis.get("approach_prefix") or {}
+    config = approach.get("config") or {}
+    if (
+        int(config.get("required_base_pre_padding", -1)) != 60
+        or not np.isclose(
+            float(config.get("vertical_arc_height_m", np.nan)),
+            0.04,
+            rtol=0.0,
+            atol=1e-12,
+        )
+        or config.get("mode") not in ("far", "near")
+    ):
+        raise ValueError("prefix-only pre60/Far-Near/4cm contract changed")
+    augmentation_values = [row.get("augmentation_identity") for row in rows]
+    if any(
+        not isinstance(value, str)
+        or not value.startswith(PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT + ":")
+        for value in augmentation_values
+    ):
+        raise ValueError("prefix-only rows lack v4 augmentation identity")
+    return {
+        "contract": production_contract,
+        "mode": config["mode"],
+        "base_pre_padding": 60,
+        "vertical_arc_height_m": 0.04,
+        "retreat_suffix": None,
     }
 
 
@@ -580,11 +632,17 @@ def _validate_manifest_acceptance(
         outer_accepted = bool(attempt.get("accepted"))
         inner_accepted = bool(acceptance.get("accepted"))
         failure_reasons = acceptance.get("failure_reasons")
+        additional_failures = attempt.get("additional_failure_reasons", [])
         if (
-            outer_accepted != inner_accepted
-            or not isinstance(failure_reasons, list)
+            not isinstance(failure_reasons, list)
+            or not isinstance(additional_failures, list)
+            or any(
+                not isinstance(reason, str) or not reason
+                for reason in failure_reasons + additional_failures
+            )
             or (inner_accepted and failure_reasons)
             or (not inner_accepted and not failure_reasons)
+            or outer_accepted != (inner_accepted and not additional_failures)
         ):
             raise ValueError("attempt acceptance diagnostics are inconsistent")
         if outer_accepted:
@@ -848,6 +906,9 @@ def validate_compact_dataset(
         ),
         "isolated_decoder_attempts": sum(row["decoder_attempts"] for row in rows),
         "retried_row_count": sum(row["decoder_attempts"] > 1 for row in rows),
+        "prefix_only_production": _validate_prefix_only_contract(
+            manifest=manifest, rows=rows
+        ),
         "synthesis_acceptance": _validate_manifest_acceptance(
             manifest=manifest, rows=rows
         ),
@@ -1061,6 +1122,9 @@ def validate_dataset(
         ),
         "minimum_contact_reward": min(
             (row["minimum_contact_reward"] for row in rows), default=0.0
+        ),
+        "prefix_only_production": _validate_prefix_only_contract(
+            manifest=manifest, rows=rows
         ),
         "synthesis_acceptance": _validate_manifest_acceptance(
             manifest=manifest, rows=rows

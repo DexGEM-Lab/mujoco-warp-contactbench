@@ -361,9 +361,7 @@ python tools/select_manorl_synthetic_parent.py \
   --row-uuid <accepted-row-uuid> \
   --output /path/accepted-parent.json
 
-MANORL_SYNTH_APPROACH_PREFIX=true \
 MANORL_SYNTH_APPROACH_MODE=near \
-MANORL_SYNTH_RETREAT_SUFFIX=true \
 MANORL_SYNTH_ACCEPTED_PARENT=/path/accepted-parent.json \
 MANORL_PREDECODED_MANIFEST=/path/pre60-bundle/manifest.json \
 CHECKPOINT=/path/exact-parent-checkpoint.pt \
@@ -372,20 +370,19 @@ CHECKPOINT=/path/exact-parent-checkpoint.pt \
 
 `far` samples XY 0.30–0.70 m, world-up Z 0.08–0.30 m, and ±30° azimuth around
 the initial object→pre60 hand direction. `near` uses an independent seed and
-maps retreat-like endpoint XY from the final object to the initial object while
-preserving the sampled retreat endpoint's absolute world Z. Near and retreat
-share the same distribution family but not the same sample. Start
-XYZ is sampled; start `q_ref[3:28]` is copied from the raw source row frame0,
-then wrist orientation and all finger joints smoothly reach pre60 frame0.
+maps a movement-end+15 retreat-like endpoint to the initial object. That anchor
+only chooses the Near start; it never modifies the tail. Start XYZ is sampled;
+start `q_ref[3:28]` is copied from raw source frame 0, then wrist orientation and
+finger joints smoothly reach pre60 frame 0 along the established 4 cm arc.
 
-The approach prefix never calls the policy and rejects solved right-hand/table
-or right-hand/object contact above 0.2 N. Retreat deforms the source tail from
-the accepted parent's deterministic movement-end+15 anchor; policy and processed
-action are zero while entry cumulative residual smoothly decays to zero, and
-normal deviation termination remains active. Parent v3
-binds source/checkpoint/object offset/raw start pose and rejects rows whose last
-solved contact precedes movement-end or whose movement-end+15 tail has no nonzero
-horizontal retreat direction. Inspect episodes interactively with:
+The prefix never calls policy and rejects solved right-hand/table or
+right-hand/object contact above 0.2 N. After the prefix, checkpoint policy runs
+the complete original reference tail. Default production has no retreat suffix,
+no tail replacement, no tail policy shutdown, and no tail residual discharge.
+Saving additionally requires reason code 1, final XYZ Euler mean error ≤35°, and
+at least 101 right-hand/object contact frames strictly above 0.2 N.
+
+Inspect episodes interactively with:
 
 ```bash
 python tools/view_manorl_approach_prefix.py \
@@ -393,7 +390,6 @@ python tools/view_manorl_approach_prefix.py \
   --accepted-parent /path/accepted-parent.json \
   --predecode-dir /path/pre60-bundle \
   --approach-mode near \
-  --retreat-suffix \
   --seed 49 \
   --speed 1.0
 ```
@@ -447,8 +443,9 @@ termination codes, checkpoint SHA256, runtime sidecar, action contract, and
 source identity. The rollout also stores the positive raw expected-contact
 score and the final signed contact term for every transition.
 
-For synthesis without an approach prefix or retreat suffix, a candidate is
-accepted only when all three production quality rules pass:
+For default synthesis without a retreat suffix—including Far/Near
+approach-prefix production—a candidate is accepted only when all three quality
+rules pass:
 
 1. the rollout reaches the final reference state with termination reason `1`;
 2. the simulated and reference final object quaternions, converted independently
@@ -461,18 +458,15 @@ Reward is not an acceptance rule. A candidate failing any rule is not written;
 the manifest records its measured final XYZ errors, contact-frame count, and
 all failed predicates under
 `manorl_synthesis_complete_final_rotation_xyz_mean35deg_hand_object_contact_gt0p2n_gt100frames_v1`.
-Prefix/retreat augmentation keeps its separately versioned accepted-parent and
-prefix-collision contract; this no-prefix/no-retreat gate does not silently
-change previously produced augmentation data.
+Far/Near prefix-only attempts must also pass the prefix table/object collision
+gate. Historical prefix+retreat data keep their earlier versioned contract.
 
-By default each raw identity must produce five accepted episodes within ten
-attempts. Attempts use consecutive seeds from the base `42`; successful rows
-record `episode_index`, `generation_attempt`, and the attempt seed. An identity
-that cannot reach five accepted episodes after ten attempts causes a nonzero
-exit and a `.partial` dataset/manifest instead of a misleading complete
-publication. Each attempt round runs in a fresh process and appends one Lance
-fragment, bounding native MJX-Warp/Lance lifetime and host memory across the
-five episodes. Override the bounds with `--episodes-per-identity` and
+By default each accepted parent targets five accepted episodes within twelve
+attempts, and bounded partial yield is preserved. Attempts use consecutive
+seeds; successful rows record `episode_index`, `generation_attempt`, and the
+attempt seed. Each attempt round runs in a fresh process and appends one Lance
+fragment, bounding native MJX-Warp/Lance lifetime across the bounded budget.
+Override the bounds with `--episodes-per-identity` and
 `--max-attempts-per-identity`, or the corresponding
 `MANORL_SYNTH_EPISODES_PER_IDENTITY` and
 `MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY` wrapper variables.

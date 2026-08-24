@@ -23,6 +23,8 @@ import numpy as np
 from sim.manorl.abi import TARGET_MAX_DEVIATION_DISTANCE
 from sim.manorl.approach_prefix import (
     APPROACH_PREFIX_CONTRACT,
+    APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT,
+    PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT,
     RETREAT_SUFFIX_CONTRACT,
     ApproachPrefixConfig,
     ApproachPrefixSample,
@@ -105,8 +107,14 @@ def _augmentation_identity(
     # offsets, anchors, and raw start pose retain the complete semantic binding.
     parent_identity.pop("parent_dataset_path", None)
     parent_identity.pop("source_dataset_path", None)
+    prefix_only = approach_config is not None and retreat_config is None
+    identity_contract = (
+        PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT
+        if prefix_only
+        else AUGMENTATION_IDENTITY_CONTRACT
+    )
     payload = {
-        "contract": AUGMENTATION_IDENTITY_CONTRACT,
+        "contract": identity_contract,
         "accepted_parent": parent_identity,
         "episode_seed": episode_seed,
         "attempt_number": attempt_number,
@@ -135,9 +143,11 @@ def _augmentation_identity(
             }
         ),
     }
+    if prefix_only:
+        payload["production_contract"] = APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return f"{AUGMENTATION_IDENTITY_CONTRACT}:{digest}"
+    return f"{identity_contract}:{digest}"
 
 
 DEFAULT_DATASET = Path(
@@ -550,9 +560,33 @@ def _synthesis_acceptance_gate_enabled(
     approach_prefix_config: ApproachPrefixConfig | None,
     retreat_suffix_config: RetreatSuffixConfig | None,
 ) -> bool:
-    """The three-rule gate is the no-prefix/no-retreat save contract."""
+    """Apply the production quality gate whenever no tail replacement is used."""
 
-    return approach_prefix_config is None and retreat_suffix_config is None
+    del approach_prefix_config
+    return retreat_suffix_config is None
+
+
+def _resolve_parents_by_identity(
+    trajectories: TrajectoryBatch,
+    *,
+    accepted_parent: AcceptedSyntheticParent | None,
+    accepted_parents_by_identity: Mapping[str, AcceptedSyntheticParent] | None,
+) -> dict[str, AcceptedSyntheticParent]:
+    if accepted_parent is not None and accepted_parents_by_identity is not None:
+        raise ValueError(
+            "single and per-identity accepted parents are mutually exclusive"
+        )
+    resolved = dict(accepted_parents_by_identity or {})
+    if accepted_parent is not None:
+        if trajectories.num_envs != 1 or (
+            trajectories.trajectories[0].identity.identity
+            != accepted_parent.source_identity
+        ):
+            raise ValueError(
+                "accepted-parent synthesis requires exactly its bound source identity"
+            )
+        resolved[accepted_parent.source_identity] = accepted_parent
+    return resolved
 
 
 def _run_attempt_batch(
@@ -586,18 +620,11 @@ def _run_attempt_batch(
     """Run one candidate episode for each identity in one attempt round."""
 
     _seed_attempt(attempt_seed, device)
-    if accepted_parent is not None and accepted_parents_by_identity is not None:
-        raise ValueError("single and per-identity accepted parents are mutually exclusive")
-    parents_by_identity = dict(accepted_parents_by_identity or {})
-    if accepted_parent is not None:
-        if trajectories.num_envs != 1 or (
-            trajectories.trajectories[0].identity.identity
-            != accepted_parent.source_identity
-        ):
-            raise ValueError(
-                "accepted-parent synthesis requires exactly its bound source identity"
-            )
-        parents_by_identity[accepted_parent.source_identity] = accepted_parent
+    parents_by_identity = _resolve_parents_by_identity(
+        trajectories,
+        accepted_parent=accepted_parent,
+        accepted_parents_by_identity=accepted_parents_by_identity,
+    )
     if approach_prefix_config is not None:
         missing = [
             item.identity.identity
@@ -622,7 +649,6 @@ def _run_attempt_batch(
             trajectories,
             attempt_seed=attempt_seed,
             config=approach_prefix_config,
-            accepted_parent=accepted_parent,
             accepted_parents_by_identity=parents_by_identity or None,
             near_endpoint_config=retreat_endpoint_config,
         )
@@ -862,18 +888,30 @@ def _run_attempt_batch(
                         ),
                         contact_frames=contact_storage[env_id],
                     )
+                    additional_failures = (
+                        []
+                        if prefix_valid[env_id]
+                        else [str(prefix_invalid_reasons[env_id])]
+                    )
+                    overall_accepted = bool(
+                        acceptance.accepted and bool(prefix_valid[env_id])
+                    )
                     acceptance_diagnostics[identity] = {
                         "source_identity": identity,
                         "seed": attempt_seed,
                         "attempt_number": attempt_numbers[identity],
                         "episode_index": episode_indices[identity],
-                        "accepted": acceptance.accepted,
+                        "accepted": overall_accepted,
                         "acceptance": acceptance.to_dict(),
+                        "additional_failure_reasons": additional_failures,
                     }
-                    if acceptance.accepted:
+                    if overall_accepted:
                         succeeded[env_id] = True
                     else:
-                        failure_reasons[identity] = acceptance.failure_reasons[0]
+                        all_failures = additional_failures + list(
+                            acceptance.failure_reasons
+                        )
+                        failure_reasons[identity] = all_failures[0]
                 elif terminal_success and prefix_valid[env_id]:
                     succeeded[env_id] = True
                 elif not prefix_valid[env_id]:
@@ -1310,6 +1348,22 @@ def _export_isolated_repeated_rollouts(
             "episodes_per_identity": episodes_per_identity,
             "max_attempts_per_identity": max_attempts_per_identity,
             "base_seed": seed,
+            "production_contract": (
+                APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT
+                if approach_prefix_config is not None
+                and retreat_suffix_config is None
+                else None
+            ),
+            "augmentation_identity_contract": (
+                PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT
+                if approach_prefix_config is not None
+                and retreat_suffix_config is None
+                else (
+                    AUGMENTATION_IDENTITY_CONTRACT
+                    if approach_prefix_config is not None
+                    else None
+                )
+            ),
             "counters": counters,
             "attempt_isolation": "one_fresh_process_per_attempt_round",
             "acceptance_gate": (
@@ -1434,6 +1488,10 @@ def export_checkpoint_rollouts(
 
     if seed < 0:
         raise ValueError("seed must be non-negative")
+    if approach_prefix_config is not None and retreat_suffix_config is not None:
+        raise ValueError(
+            "approach-prefix production is prefix-only; retreat suffix is unsupported"
+        )
     if (
         not isinstance(object_xy_offset_m, (int, float))
         or isinstance(object_xy_offset_m, bool)
@@ -1764,6 +1822,22 @@ def export_checkpoint_rollouts(
             "episodes_per_identity": episodes_per_identity,
             "max_attempts_per_identity": max_attempts_per_identity,
             "base_seed": seed,
+            "production_contract": (
+                APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT
+                if approach_prefix_config is not None
+                and retreat_suffix_config is None
+                else None
+            ),
+            "augmentation_identity_contract": (
+                PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT
+                if approach_prefix_config is not None
+                and retreat_suffix_config is None
+                else (
+                    AUGMENTATION_IDENTITY_CONTRACT
+                    if approach_prefix_config is not None
+                    else None
+                )
+            ),
             "counters": counters,
             "acceptance_gate": (
                 synthesis_acceptance_manifest()
@@ -2031,6 +2105,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     except (TypeError, ValueError) as exc:
         parser.error(str(exc))
+    if args.approach_prefix_config is not None and args.retreat_suffix_config is not None:
+        parser.error(
+            "approach-prefix production is prefix-only; --retreat-suffix is unsupported"
+        )
     return args
 
 

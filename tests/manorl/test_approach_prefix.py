@@ -568,3 +568,63 @@ def test_prefix_masks_deviation_only_before_original_pre60_start() -> None:
         early_mask=early_phase_mask(lengths, steps=lengths),
     )
     np.testing.assert_array_equal(boundary.deviation_reset, True)
+
+
+def test_prefix_only_far_and_near_preserve_complete_original_reference_tail() -> None:
+    source = _trajectory()
+    parent_anchor = int(source.movement_end_step) + 15
+    source_indices = source.source_indices.copy()
+    source_indices[parent_anchor:] = source_indices[parent_anchor]
+    source = replace(source, source_indices=source_indices)
+    parent = AcceptedSyntheticParent(
+        contract=ACCEPTED_SYNTHETIC_PARENT_CONTRACT,
+        parent_dataset_path="/prior.lance",
+        parent_dataset_version=40,
+        parent_row_index=3,
+        parent_row_uuid="row-uuid",
+        parent_row_contract="synthetic_mano_target_replay_visual_v2_contact",
+        source_identity=source.identity.identity,
+        source_dataset_path=source.identity.dataset_path,
+        source_dataset_version=source.identity.dataset_version,
+        source_row_index=source.identity.row_index,
+        checkpoint_sha256="a" * 64,
+        checkpoint_update=1000,
+        parent_seed=42,
+        parent_episode_index=0,
+        parent_generation_attempt=1,
+        object_init_xy_offset_m=(0.0, 0.0),
+        reference_fps=120,
+        retreat_last_contact_state_index=120,
+        retreat_anchor_state_index=115,
+        retreat_anchor_source_frame_index=int(source_indices[parent_anchor]),
+        retreat_anchor_horizontal_distance_m=float(
+            np.linalg.norm(
+                source.q_ref[-1, :2] - source.q_ref[parent_anchor, :2]
+            )
+        ),
+        retreat_anchor_offset_frames=15,
+        parent_movement_end_state_index=100,
+        source_row_frame0_right_q_ref_3_28=tuple(source.q_ref[0, 3:28]),
+    )
+    from tools.export_manorl_synthetic_lance import _augment_attempt_trajectories
+
+    for mode in ("far", "near"):
+        augmented, samples = _augment_attempt_trajectories(
+            TrajectoryBatch((source,)),
+            attempt_seed=42,
+            config=ApproachPrefixConfig(mode=mode),
+            accepted_parent=parent,
+        )
+        resolved = augmented.trajectories[0]
+        prefix_frames = samples[source.identity.identity].prefix_frames
+        assert resolved.augmentation_suffix_frames == 0
+        np.testing.assert_array_equal(resolved.q_ref[prefix_frames:], source.q_ref)
+        np.testing.assert_array_equal(
+            resolved.source_indices[prefix_frames:], source.source_indices
+        )
+        np.testing.assert_array_equal(
+            resolved.object_pos[prefix_frames:], source.object_pos
+        )
+        np.testing.assert_array_equal(
+            resolved.object_quat_xyzw[prefix_frames:], source.object_quat_xyzw
+        )

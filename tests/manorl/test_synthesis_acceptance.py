@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from sim.manorl.approach_prefix import ApproachPrefixConfig, RetreatSuffixConfig
+from sim.manorl.approach_prefix import (
+    APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT,
+    PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT,
+    ApproachPrefixConfig,
+    RetreatSuffixConfig,
+)
 from sim.manorl.synthesis_acceptance import (
     FAILURE_CONTACT_FRAMES,
     FAILURE_FINAL_ROTATION,
@@ -200,11 +205,11 @@ def test_completion_requires_reason_code_one() -> None:
     assert FAILURE_TRAJECTORY_INCOMPLETE in result.failure_reasons
 
 
-def test_gate_scope_is_only_no_prefix_no_retreat() -> None:
+def test_gate_scope_is_every_no_retreat_candidate() -> None:
     assert _synthesis_acceptance_gate_enabled(
         approach_prefix_config=None, retreat_suffix_config=None
     )
-    assert not _synthesis_acceptance_gate_enabled(
+    assert _synthesis_acceptance_gate_enabled(
         approach_prefix_config=ApproachPrefixConfig(), retreat_suffix_config=None
     )
     assert not _synthesis_acceptance_gate_enabled(
@@ -306,3 +311,103 @@ def test_manifest_acceptance_binds_rows_and_rejects_bad_recomputation() -> None:
     )
     with pytest.raises(ValueError, match="keys are not unique"):
         _validate_manifest_acceptance(manifest=duplicate, rows=[row])
+
+
+def test_manifest_acceptance_allows_explicit_prefix_rejection() -> None:
+    from tools.validate_manorl_synthetic_lance import _validate_manifest_acceptance
+
+    acceptance = _evaluate().to_dict()
+    manifest = {
+        "synthesis": {
+            "acceptance_gate": synthesis_acceptance_manifest(),
+            "acceptance_attempts": [
+                {
+                    "source_identity": "cube1_01_001",
+                    "seed": 42,
+                    "attempt_number": 1,
+                    "episode_index": 0,
+                    "accepted": False,
+                    "acceptance": acceptance,
+                    "additional_failure_reasons": [
+                        "augmentation_prefix_hand_object_contact"
+                    ],
+                }
+            ],
+        }
+    }
+    summary = _validate_manifest_acceptance(manifest=manifest, rows=[])
+    assert summary is not None
+    assert summary["accepted_rows"] == 0
+    assert summary["rejected_attempts"] == 1
+
+
+def test_prefix_only_manifest_contract_requires_pre60_4cm_no_retreat() -> None:
+    from tools.validate_manorl_synthetic_lance import _validate_prefix_only_contract
+
+    manifest = {
+        "retreat_suffixes": [],
+        "synthesis": {
+            "production_contract": APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT,
+            "augmentation_identity_contract": (
+                PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT
+            ),
+            "approach_prefix": {
+                "config": {
+                    "mode": "near",
+                    "required_base_pre_padding": 60,
+                    "vertical_arc_height_m": 0.04,
+                }
+            },
+            "retreat_suffix": None,
+        },
+    }
+    rows = [
+        {
+            "augmentation_identity": (
+                PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT + ":abc"
+            )
+        }
+    ]
+    summary = _validate_prefix_only_contract(manifest=manifest, rows=rows)
+    assert summary == {
+        "contract": APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT,
+        "mode": "near",
+        "base_pre_padding": 60,
+        "vertical_arc_height_m": 0.04,
+        "retreat_suffix": None,
+    }
+    manifest["synthesis"]["retreat_suffix"] = {}
+    with pytest.raises(ValueError, match="contains retreat suffix"):
+        _validate_prefix_only_contract(manifest=manifest, rows=rows)
+
+
+def test_export_api_rejects_combined_prefix_and_retreat_before_io(tmp_path) -> None:
+    from sim.manorl.trajectory import TrajectorySelection
+    from tools.export_manorl_synthetic_lance import export_checkpoint_rollouts
+
+    with pytest.raises(ValueError, match="prefix-only"):
+        export_checkpoint_rollouts(
+            checkpoint=tmp_path / "checkpoint.pt",
+            output=tmp_path / "out.lance",
+            selection=TrajectorySelection(
+                "cube1",
+                "01",
+                dataset_path=tmp_path / "source.lance",
+                expected_dataset_version=295,
+                hand_side="right",
+            ),
+            num_envs=1,
+            device="cpu",
+            approach_prefix_config=ApproachPrefixConfig(),
+            retreat_suffix_config=RetreatSuffixConfig(),
+        )
+
+
+def test_prefix_only_attempt_diagnostic_is_json_serializable() -> None:
+    diagnostic = {
+        "accepted": bool(True and bool(np.bool_(True))),
+        "additional_failure_reasons": [],
+        "acceptance": _evaluate().to_dict(),
+    }
+    encoded = json.dumps(diagnostic, sort_keys=True)
+    assert '"accepted": true' in encoded

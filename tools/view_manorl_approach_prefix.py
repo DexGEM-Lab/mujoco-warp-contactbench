@@ -74,8 +74,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--retreat-suffix",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="replace the post movement-end+15 tail with a seeded farther/higher retreat (default: on)",
+        default=False,
+        help="historical tail-replacement viewer option (default: off; production is prefix-only)",
     )
     args = parser.parse_args(argv)
     if args.seed < 0:
