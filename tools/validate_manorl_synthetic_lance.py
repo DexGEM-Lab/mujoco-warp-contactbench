@@ -26,6 +26,12 @@ from sim.manorl.lance_v2 import (
     SYNTHETIC_LANCE_V22_CONTRACT,
 )
 from sim.manorl.rewards import PPO_REWARD_CONTRACT_ID, REWARD_CONTRACT_ID
+from sim.manorl.synthesis_acceptance import (
+    SYNTHESIS_ACCEPTANCE_CONTRACT,
+    count_hand_object_contact_frames,
+    evaluate_synthesis_acceptance,
+    synthesis_acceptance_manifest,
+)
 from sim.manorl.target_replay import target_replay_source_from_row
 
 
@@ -261,6 +267,20 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
                         )
                     ),
                 )
+    hand_object_contact_frames = count_hand_object_contact_frames(
+        row["contact"], target_object_name=str(row["index"]["scene"])
+    )
+    final_acceptance = evaluate_synthesis_acceptance(
+        trajectory_complete=True,
+        termination_reason_code=int(rollout["termination_reason_code"][-1]),
+        simulated_final_object_quaternion_xyzw=Rotation.from_rotvec(
+            np.asarray(obj["rot_aa"][-1], dtype=np.float64)
+        ).as_quat(),
+        reference_final_object_quaternion_xyzw=Rotation.from_rotvec(
+            np.asarray(row["reference"]["object_rot_aa"][-1], dtype=np.float64)
+        ).as_quat(),
+        hand_object_contact_frames=hand_object_contact_frames,
+    )
     result = {
         "row_index": row_index,
         "uuid": row["index"]["uuid"],
@@ -281,6 +301,7 @@ def validate_row(path: Path, row_index: int) -> dict[str, Any]:
         "seed": int(row["provenance"]["seed"]),
         "episode_index": int(row["provenance"]["episode_index"]),
         "generation_attempt": int(row["provenance"]["generation_attempt"]),
+        "synthesis_acceptance": final_acceptance.to_dict(),
         "negative_contact_reward_steps": negative_contact_steps,
         "minimum_contact_reward": float(np.min(contact_reward, initial=0.0)),
         "max_mano_global_position_error_m": global_position_error,
@@ -478,6 +499,26 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
             )
     else:
         raise ValueError(f"row {row_index} compact schema contract is unsupported")
+    final_acceptance = None
+    if schema_contract == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT:
+        hand_object_contact_frames = count_hand_object_contact_frames(
+            row.get("contact") or [],
+            target_object_name=str(row["index"]["scene"]),
+        )
+        final_acceptance = evaluate_synthesis_acceptance(
+            trajectory_complete=True,
+            termination_reason_code=1,
+            simulated_final_object_quaternion_xyzw=Rotation.from_rotvec(
+                np.asarray(row["objects"][0]["rot_aa"][-1], dtype=np.float64)
+            ).as_quat(),
+            reference_final_object_quaternion_xyzw=Rotation.from_rotvec(
+                np.asarray(
+                    (row.get("reference") or {})["object_rot_aa"][-1],
+                    dtype=np.float64,
+                )
+            ).as_quat(),
+            hand_object_contact_frames=hand_object_contact_frames,
+        )
     return {
         "row_index": row_index,
         "uuid": row["index"]["uuid"],
@@ -492,8 +533,136 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
         "checkpoint_sha256": source.checkpoint_sha256,
         "checkpoint_metadata_sha256": metadata_hash,
         "checkpoint_update": source.checkpoint_update,
+        "seed": int(provenance["seed"]),
+        "episode_index": int(provenance["episode_index"]),
+        "generation_attempt": int(provenance["generation_attempt"]),
+        "synthesis_acceptance": (
+            None if final_acceptance is None else final_acceptance.to_dict()
+        ),
         "warp_ccd_iterations": source.warp_ccd_iterations,
         "warp_ccd_contacts_per_world": source.warp_ccd_contacts_per_world,
+    }
+
+
+def _validate_manifest_acceptance(
+    *,
+    manifest: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Recompute and bind every saved row to one accepted attempt diagnostic."""
+
+    synthesis = manifest.get("synthesis") or {}
+    gate = synthesis.get("acceptance_gate")
+    if gate is None:
+        return None
+    expected_gate = synthesis_acceptance_manifest()
+    if gate != expected_gate or gate.get("contract") != SYNTHESIS_ACCEPTANCE_CONTRACT:
+        raise ValueError("synthesis acceptance gate manifest changed")
+    attempts = synthesis.get("acceptance_attempts")
+    if not isinstance(attempts, list):
+        raise ValueError("synthesis manifest omits acceptance_attempts")
+
+    accepted_attempts: dict[tuple[str, int, int, int], dict[str, Any]] = {}
+    all_attempt_keys: set[tuple[str, int, int, int]] = set()
+    for attempt in attempts:
+        acceptance = attempt.get("acceptance") or {}
+        if acceptance.get("contract") != SYNTHESIS_ACCEPTANCE_CONTRACT:
+            raise ValueError("attempt acceptance contract changed")
+        key = (
+            str(attempt.get("source_identity")),
+            int(attempt.get("seed")),
+            int(attempt.get("attempt_number")),
+            int(attempt.get("episode_index")),
+        )
+        if key in all_attempt_keys:
+            raise ValueError("synthesis acceptance attempt keys are not unique")
+        all_attempt_keys.add(key)
+        outer_accepted = bool(attempt.get("accepted"))
+        inner_accepted = bool(acceptance.get("accepted"))
+        failure_reasons = acceptance.get("failure_reasons")
+        if (
+            outer_accepted != inner_accepted
+            or not isinstance(failure_reasons, list)
+            or (inner_accepted and failure_reasons)
+            or (not inner_accepted and not failure_reasons)
+        ):
+            raise ValueError("attempt acceptance diagnostics are inconsistent")
+        if outer_accepted:
+            accepted_attempts[key] = attempt
+
+    row_keys: set[tuple[str, int, int, int]] = set()
+    for row in rows:
+        acceptance = row.get("synthesis_acceptance") or {}
+        if not bool(acceptance.get("accepted")):
+            raise ValueError(
+                f"saved row {row.get('row_index')} fails synthesis acceptance"
+            )
+        key = (
+            str(row["source_identity"]),
+            int(row["seed"]),
+            int(row["generation_attempt"]),
+            int(row["episode_index"]),
+        )
+        recorded_attempt = accepted_attempts.get(key)
+        if recorded_attempt is None:
+            raise ValueError("saved row has no accepted attempt diagnostic")
+        recorded = recorded_attempt.get("acceptance") or {}
+        exact_fields = (
+            "accepted",
+            "trajectory_complete",
+            "termination_reason_code",
+            "hand_object_contact_frames",
+            "failure_reasons",
+        )
+        if any(recorded.get(field) != acceptance.get(field) for field in exact_fields):
+            raise ValueError(
+                "saved row acceptance differs from manifest diagnostics"
+            )
+        recorded_xyz = np.asarray(
+            recorded.get("final_rotation_xyz_abs_error_deg"), dtype=np.float64
+        )
+        recomputed_xyz = np.asarray(
+            acceptance.get("final_rotation_xyz_abs_error_deg"), dtype=np.float64
+        )
+        if (
+            recorded_xyz.shape != (3,)
+            or recomputed_xyz.shape != (3,)
+            or not np.allclose(recorded_xyz, recomputed_xyz, rtol=0.0, atol=1e-4)
+            or not np.isclose(
+                float(recorded.get("final_rotation_xyz_mean_error_deg")),
+                float(acceptance.get("final_rotation_xyz_mean_error_deg")),
+                rtol=0.0,
+                atol=1e-4,
+            )
+        ):
+            raise ValueError(
+                "saved row rotation acceptance differs from manifest diagnostics"
+            )
+        if key in row_keys:
+            raise ValueError("saved synthesis acceptance keys are not unique")
+        row_keys.add(key)
+    if row_keys != set(accepted_attempts):
+        raise ValueError("saved rows differ from accepted attempt diagnostics")
+
+    contact_frames = [
+        int(row["synthesis_acceptance"]["hand_object_contact_frames"])
+        for row in rows
+    ]
+    rotation_errors = [
+        float(row["synthesis_acceptance"]["final_rotation_xyz_mean_error_deg"])
+        for row in rows
+    ]
+    return {
+        "contract": SYNTHESIS_ACCEPTANCE_CONTRACT,
+        "accepted_rows": len(rows),
+        "attempts": len(attempts),
+        "rejected_attempts": len(attempts) - len(rows),
+        "hand_object_contact_frames_min_max": (
+            [min(contact_frames), max(contact_frames)] if contact_frames else [0, 0]
+        ),
+        "final_rotation_xyz_mean_error_deg_max": (
+            max(rotation_errors, default=0.0)
+        ),
     }
 
 
@@ -609,6 +778,11 @@ def validate_compact_dataset(
         raise ValueError("compact dataset rows do not share one checkpoint SHA256")
     catalog_path = path.parent / f"{path.name}.checkpoint-metadata.json"
     manifest_path = path.parent / f"{path.name}.manifest.json"
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.exists()
+        else {}
+    )
     if catalog_path.exists():
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         entries = catalog.get("entries")
@@ -630,11 +804,6 @@ def validate_compact_dataset(
                 raise ValueError("compact checkpoint metadata catalog hash mismatch")
         metadata_source = str(catalog_path)
     else:
-        manifest = (
-            json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest_path.exists()
-            else {}
-        )
         checkpoint_metadata = (manifest.get("checkpoint") or {}).get(
             "checkpoint_metadata"
         )
@@ -679,6 +848,9 @@ def validate_compact_dataset(
         ),
         "isolated_decoder_attempts": sum(row["decoder_attempts"] for row in rows),
         "retried_row_count": sum(row["decoder_attempts"] > 1 for row in rows),
+        "synthesis_acceptance": _validate_manifest_acceptance(
+            manifest=manifest, rows=rows
+        ),
     }
     target = output or path.parent / f"{path.name}.validation.json"
     target.write_text(
@@ -840,6 +1012,12 @@ def validate_dataset(
     seeds = {row["seed"] for row in rows}
     if len(checkpoint_hashes) != 1:
         raise ValueError("dataset rows do not share one checkpoint SHA256")
+    manifest_path = path.parent / f"{path.name}.manifest.json"
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.exists()
+        else {}
+    )
     summary = {
         "schema": schema_contract,
         "schema_metadata": metadata,
@@ -883,6 +1061,9 @@ def validate_dataset(
         ),
         "minimum_contact_reward": min(
             (row["minimum_contact_reward"] for row in rows), default=0.0
+        ),
+        "synthesis_acceptance": _validate_manifest_acceptance(
+            manifest=manifest, rows=rows
         ),
         "checkpoint_sha256": next(iter(checkpoint_hashes)) if rows else None,
         "checkpoint_environment_contract": (

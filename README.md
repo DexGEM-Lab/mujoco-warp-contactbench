@@ -447,11 +447,29 @@ termination codes, checkpoint SHA256, runtime sidecar, action contract, and
 source identity. The rollout also stores the positive raw expected-contact
 score and the final signed contact term for every transition.
 
-By default each raw identity must produce five accepted complete episodes within
-ten attempts. Attempts use consecutive seeds from the base `42`; successful
-rows record `episode_index`, `generation_attempt`, and the attempt seed. An
-identity that cannot reach five accepted episodes after ten attempts causes a
-nonzero exit and a `.partial` dataset/manifest instead of a misleading complete
+For synthesis without an approach prefix or retreat suffix, a candidate is
+accepted only when all three production quality rules pass:
+
+1. the rollout reaches the final reference state with termination reason `1`;
+2. the simulated and reference final object quaternions, converted independently
+   to intrinsic `XYZ` Euler angles, have a mean per-axis shortest wrapped
+   absolute error no greater than 35 degrees; and
+3. at least 101 distinct state frames contain solved right-hand/target-object
+   normal force strictly greater than 0.2 N.
+
+Reward is not an acceptance rule. A candidate failing any rule is not written;
+the manifest records its measured final XYZ errors, contact-frame count, and
+all failed predicates under
+`manorl_synthesis_complete_final_rotation_xyz_mean35deg_hand_object_contact_gt0p2n_gt100frames_v1`.
+Prefix/retreat augmentation keeps its separately versioned accepted-parent and
+prefix-collision contract; this no-prefix/no-retreat gate does not silently
+change previously produced augmentation data.
+
+By default each raw identity must produce five accepted episodes within ten
+attempts. Attempts use consecutive seeds from the base `42`; successful rows
+record `episode_index`, `generation_attempt`, and the attempt seed. An identity
+that cannot reach five accepted episodes after ten attempts causes a nonzero
+exit and a `.partial` dataset/manifest instead of a misleading complete
 publication. Each attempt round runs in a fresh process and appends one Lance
 fragment, bounding native MJX-Warp/Lance lifetime and host memory across the
 five episodes. Override the bounds with `--episodes-per-identity` and
