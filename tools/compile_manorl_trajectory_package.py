@@ -93,7 +93,7 @@ def _selection_payload(selection: TrajectorySelection) -> dict[str, object]:
     return {
         "object_type": selection.object_type,
         "gesture": selection.gesture,
-        "selector": "all",
+        "selector": selection.canonical_selector,
         "dataset_path": str(selection.dataset_path),
         "dataset_version": selection.expected_dataset_version,
         "pre_padding": selection.pre_padding,
@@ -324,6 +324,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dataset-path", type=Path, required=True)
     parser.add_argument("--dataset-version", type=int, required=True)
+    parser.add_argument(
+        "--pairs",
+        help="optional comma-separated object:action subset; default compiles all pairs",
+    )
     parser.add_argument("--reference-fps", type=int, choices=SUPPORTED_REFERENCE_FPS, default=DEFAULT_REFERENCE_FPS)
     parser.add_argument("--hand-side", choices=("right", "left", "both"), default="right")
     parser.add_argument("--pre-padding", type=int, default=DEFAULT_PRE_PADDING)
@@ -338,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.shard_size < 1 or args.max_attempts < 1:
         parser.error("shard-size and max-attempts must be positive")
     selection = TrajectorySelection(
-        selector="all",
+        selector=args.pairs or "all",
         dataset_path=args.dataset_path.expanduser().resolve(),
         expected_dataset_version=args.dataset_version,
         pre_padding=args.pre_padding,

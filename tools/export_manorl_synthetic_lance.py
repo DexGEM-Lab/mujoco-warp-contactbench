@@ -602,6 +602,7 @@ def _run_attempt_batch(
     attempt_numbers: dict[str, int],
     episode_indices: dict[str, int],
     provenance_base: dict[str, Any],
+    policy_transfer: bool = False,
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
@@ -721,7 +722,7 @@ def _run_attempt_batch(
     stepper = _build_checkpoint_stepper(
         environment,
         checkpoint,
-        policy_transfer=approach_prefix_config is not None,
+        policy_transfer=policy_transfer or approach_prefix_config is not None,
         policy_enable_steps=(
             environment.early_phase_lengths
             if approach_prefix_config is not None
@@ -1031,6 +1032,7 @@ def _export_isolated_repeated_rollouts(
     seed: int,
     episodes_per_identity: int,
     max_attempts_per_identity: int,
+    policy_transfer: bool = False,
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
@@ -1186,6 +1188,8 @@ def _export_isolated_repeated_rollouts(
             command.extend(["--pairs", selection.canonical_selector])
         if predecoded_manifest is not None:
             command.extend(["--predecoded-manifest", str(predecoded_manifest)])
+        if policy_transfer:
+            command.append("--policy-transfer")
         if object_xy_offset_m > 0.0:
             command.extend(["--object-xy-offset-m", str(object_xy_offset_m)])
         if accepted_parent is not None:
@@ -1366,6 +1370,9 @@ def _export_isolated_repeated_rollouts(
             ),
             "counters": counters,
             "attempt_isolation": "one_fresh_process_per_attempt_round",
+            "checkpoint_loading": (
+                "policy_transfer" if policy_transfer else "strict_inference"
+            ),
             "acceptance_gate": (
                 synthesis_acceptance_manifest()
                 if _synthesis_acceptance_gate_enabled(
@@ -1476,6 +1483,7 @@ def export_checkpoint_rollouts(
     max_attempts_per_identity: int = 10,
     output_format: str = SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
     internal_attempt_control: dict[str, Any] | None = None,
+    policy_transfer: bool = False,
     object_xy_offset_m: float = 0.0,
     approach_prefix_config: ApproachPrefixConfig | None = None,
     accepted_parent: AcceptedSyntheticParent | None = None,
@@ -1569,6 +1577,7 @@ def export_checkpoint_rollouts(
             seed=seed,
             episodes_per_identity=episodes_per_identity,
             max_attempts_per_identity=max_attempts_per_identity,
+            policy_transfer=policy_transfer,
             object_xy_offset_m=object_xy_offset_m,
             approach_prefix_config=approach_prefix_config,
             accepted_parent=accepted_parent,
@@ -1697,6 +1706,7 @@ def export_checkpoint_rollouts(
             attempt_numbers=attempt_numbers,
             episode_indices=episode_indices,
             provenance_base=provenance_base,
+            policy_transfer=policy_transfer,
             object_xy_offset_m=object_xy_offset_m,
             approach_prefix_config=approach_prefix_config,
             accepted_parent=accepted_parent,
@@ -1839,6 +1849,9 @@ def export_checkpoint_rollouts(
                 )
             ),
             "counters": counters,
+            "checkpoint_loading": (
+                "policy_transfer" if policy_transfer else "strict_inference"
+            ),
             "acceptance_gate": (
                 synthesis_acceptance_manifest()
                 if _synthesis_acceptance_gate_enabled(
@@ -1966,6 +1979,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--episodes-per-identity", type=int, default=5)
     parser.add_argument("--max-attempts-per-identity", type=int, default=10)
     parser.add_argument("--replace", action="store_true")
+    parser.add_argument(
+        "--policy-transfer",
+        action="store_true",
+        help=(
+            "explicitly transfer checkpoint policy/normalizers to a different "
+            "trajectory-package signature; model and reward/environment families "
+            "remain fail-closed"
+        ),
+    )
     parser.add_argument("--internal-attempt-control", type=Path, help=argparse.SUPPRESS)
     parser.add_argument(
         "--predecoded-manifest",
@@ -2180,6 +2202,7 @@ def main(argv: list[str] | None = None) -> int:
         episodes_per_identity=args.episodes_per_identity,
         max_attempts_per_identity=args.max_attempts_per_identity,
         internal_attempt_control=internal_control,
+        policy_transfer=args.policy_transfer,
         object_xy_offset_m=args.object_xy_offset_m,
         approach_prefix_config=args.approach_prefix_config,
         accepted_parent=args.accepted_parent_descriptor,

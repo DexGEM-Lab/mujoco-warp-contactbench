@@ -284,6 +284,15 @@ PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
   --dataset-version 295 --reference-fps 120 --hand-side right \
   --pre-padding 180 --post-padding 250
 
+# Compile only named pairs when a later pinned source version adds a new object.
+# The selector is persisted into discovery, package identity, and validation.
+PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.compile_manorl_trajectory_package \
+  --output /local/filesystem/cylinder6-03-09-pre180.pending \
+  --dataset-path /path/to/pinned-source.lance --dataset-version <version> \
+  --pairs cylinder6:03,cylinder6:09 --reference-fps 120 --hand-side right \
+  --pre-padding 180 --post-padding 250
+
 # CIFS does not provide the directory-rename primitive used by the local atomic
 # writer. Publish to NAS with READY withheld until destination-side hashes pass.
 PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
@@ -374,6 +383,13 @@ maps a movement-end+15 retreat-like endpoint to the initial object. That anchor
 only chooses the Near start; it never modifies the tail. Start XYZ is sampled;
 start `q_ref[3:28]` is copied from raw source frame 0, then wrist orientation and
 finger joints smoothly reach pre60 frame 0 along the established 4 cm arc.
+
+For a new pinned package that intentionally differs from the checkpoint
+trajectory-package signature, base-parent bootstrap may explicitly pass
+`--policy-transfer` to `tools/export_manorl_synthetic_lance.py`. The manifest
+records `checkpoint_loading=policy_transfer`. This boundary still validates the
+checkpoint reward/environment family, model architecture, tensor finiteness, and
+state-dict shapes; ordinary inference remains strict by default.
 
 The prefix never calls policy and rejects solved right-hand/table or
 right-hand/object contact above 0.2 N. After the prefix, checkpoint policy runs

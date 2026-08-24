@@ -579,6 +579,7 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
     def fake_child(command, check):
         assert command[command.index("--pairs") + 1] == "cube2:02"
         assert command[command.index("--output-format") + 1] == "compact-replay-visual"
+        assert "--policy-transfer" in command
         output = Path(command[command.index("--output") + 1])
         control_path = Path(command[command.index("--internal-attempt-control") + 1])
         control = json.loads(control_path.read_text())
@@ -652,6 +653,7 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
         episodes_per_identity=5,
         max_attempts_per_identity=10,
         output_format="compact-replay-visual",
+        policy_transfer=True,
     )
 
     assert result["rows"] == 5
@@ -682,6 +684,7 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
         manifest["synthesis"]["attempt_isolation"]
         == "one_fresh_process_per_attempt_round"
     )
+    assert manifest["synthesis"]["checkpoint_loading"] == "policy_transfer"
     assert manifest["synthesis"]["counters"][identity.identity]["attempts"] == 5
     assert manifest["synthesis"]["counters"][identity.identity]["saved"] == 5
     gate = manifest["synthesis"]["acceptance_gate"]
