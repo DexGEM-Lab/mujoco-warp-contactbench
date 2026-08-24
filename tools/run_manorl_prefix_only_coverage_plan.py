@@ -260,6 +260,8 @@ def _collect_episode(
     seed: int,
     slot_index: int,
     fallback_rank: int,
+    episode_index: int,
+    attempt_number: int,
     prefix: ApproachPrefixSample,
     config: ApproachPrefixConfig,
     reinstall: bool,
@@ -390,8 +392,8 @@ def _collect_episode(
         "mode": mode,
         "seed": seed,
         "slot_index": slot_index,
-        "episode_index": slot_index,
-        "attempt_number": fallback_rank + 1,
+        "episode_index": episode_index,
+        "attempt_number": attempt_number,
         "fallback_rank": fallback_rank,
         "accepted": accepted,
         "acceptance": acceptance.to_dict(),
@@ -405,8 +407,8 @@ def _collect_episode(
     augmentation_identity = _augmentation_identity(
         accepted_parent=parent,
         episode_seed=seed,
-        attempt_number=fallback_rank + 1,
-        episode_index=slot_index,
+        attempt_number=attempt_number,
+        episode_index=episode_index,
         approach_config=config,
         approach_sample=prefix,
         near_endpoint_config=RetreatSuffixConfig(),
@@ -416,8 +418,8 @@ def _collect_episode(
     provenance = {
         **provenance_base,
         "seed": seed,
-        "episode_index": slot_index,
-        "generation_attempt": fallback_rank + 1,
+        "episode_index": episode_index,
+        "generation_attempt": attempt_number,
         "augmentation_identity": augmentation_identity,
     }
     full_row = build_v2_row(
@@ -446,6 +448,8 @@ def _status_template(task: dict[str, Any]) -> dict[str, Any]:
         "pair": task["pair"],
         "source_identity": task["source_identity"],
         "mode": task["mode"],
+        "attempts_total": 0,
+        "pending_attempt": None,
         "accepted": {},
         "failures": {},
         "exhausted": {},
@@ -529,7 +533,7 @@ def _task_manifest(
             "max_attempts_per_slot": task["fallbacks_per_slot"],
             "counters": {
                 task["source_identity"]: {
-                    "attempts": len(attempts),
+                    "attempts": int(status["attempts_total"]),
                     "saved": len(accepted),
                     "failures": [
                         reason
@@ -577,6 +581,52 @@ def _task_manifest(
     }
 
 
+def _recover_pending_attempt(
+    *,
+    output: Path,
+    status: dict[str, Any],
+) -> None:
+    pending = status.get("pending_attempt")
+    accepted_count = len(status["accepted"])
+    output_count = 0
+    last_uuid = None
+    if output.exists():
+        import lance
+
+        dataset = lance.dataset(str(output))
+        output_count = int(dataset.count_rows())
+        if output_count:
+            row = dataset.take([output_count - 1], columns=["index"]).to_pylist()[0]
+            last_uuid = (row.get("index") or {}).get("uuid")
+    if pending is None:
+        if output_count != accepted_count:
+            raise RuntimeError("coverage Lance row count disagrees with status")
+        return
+    if not isinstance(pending, dict):
+        raise ValueError("coverage pending attempt must be an object or null")
+    phase = pending.get("phase")
+    if output_count == accepted_count:
+        # No durable row exists. Re-run this deterministic candidate under the
+        # same globally unique attempt number.
+        status["attempts_total"] = int(pending["attempt_number"]) - 1
+        status["pending_attempt"] = None
+        return
+    if (
+        output_count == accepted_count + 1
+        and phase == "accepted_ready"
+        and last_uuid == pending.get("uuid")
+    ):
+        key = str(pending["slot_index"])
+        if key in status["accepted"] or key in status["exhausted"]:
+            raise RuntimeError("pending coverage slot is already terminal")
+        status["accepted"][key] = pending["accepted_record"]
+        status["pending_attempt"] = None
+        return
+    raise RuntimeError(
+        "coverage pending journal cannot reconcile Lance/status state"
+    )
+
+
 def _run_task(
     plan_path: Path,
     plan: dict[str, Any],
@@ -610,11 +660,11 @@ def _run_task(
     status = json.loads(status_path.read_text()) if status_path.is_file() else _status_template(task)
     if status.get("contract") != STATUS_CONTRACT or status.get("task_index") != task_index:
         raise ValueError("coverage status contract changed")
-    if output.exists():
-        import lance
-        if lance.dataset(str(output)).count_rows() != len(status["accepted"]):
-            raise RuntimeError("coverage Lance row count disagrees with status")
-    elif status["accepted"]:
+    status.setdefault("attempts_total", 0)
+    status.setdefault("pending_attempt", None)
+    _recover_pending_attempt(output=output, status=status)
+    _atomic_json(status_path, status)
+    if not output.exists() and status["accepted"]:
         raise RuntimeError("coverage status records rows but Lance output is absent")
     options = _checkpoint_environment_options(checkpoint)
     provenance_base = {
@@ -640,6 +690,18 @@ def _run_task(
             if fallback_rank in tried:
                 continue
             seed = int(candidate["episode_seed"])
+            attempt_number = int(status["attempts_total"]) + 1
+            episode_index = len(status["accepted"])
+            status["attempts_total"] = attempt_number
+            status["pending_attempt"] = {
+                "phase": "running",
+                "slot_index": slot_index,
+                "fallback_rank": fallback_rank,
+                "episode_seed": seed,
+                "episode_index": episode_index,
+                "attempt_number": attempt_number,
+            }
+            _atomic_json(status_path, status)
             trajectory, prefix, config = _sample_trajectory(
                 source, parent, mode=mode, seed=seed
             )
@@ -670,6 +732,8 @@ def _run_task(
                 seed=seed,
                 slot_index=slot_index,
                 fallback_rank=fallback_rank,
+                episode_index=episode_index,
+                attempt_number=attempt_number,
                 prefix=prefix,
                 config=config,
                 reinstall=reinstall,
@@ -678,12 +742,10 @@ def _run_task(
             diagnostic["planned_start"] = candidate["sampled_start"]
             if row is None:
                 failures.append(diagnostic)
+                status["pending_attempt"] = None
                 _atomic_json(status_path, status)
                 continue
-            write_compact_lance(
-                [row], output=output, replace=False, append=output.exists()
-            )
-            status["accepted"][key] = {
+            accepted_record = {
                 "slot_index": slot_index,
                 "seed": seed,
                 "fallback_rank": fallback_rank,
@@ -694,6 +756,22 @@ def _run_task(
                 "approach_prefix": prefix.to_manifest(),
                 "diagnostic": diagnostic,
             }
+            status["pending_attempt"] = {
+                "phase": "accepted_ready",
+                "slot_index": slot_index,
+                "fallback_rank": fallback_rank,
+                "episode_seed": seed,
+                "episode_index": episode_index,
+                "attempt_number": attempt_number,
+                "uuid": row["index"]["uuid"],
+                "accepted_record": accepted_record,
+            }
+            _atomic_json(status_path, status)
+            write_compact_lance(
+                [row], output=output, replace=False, append=output.exists()
+            )
+            status["accepted"][key] = accepted_record
+            status["pending_attempt"] = None
             _atomic_json(status_path, status)
             accepted = True
             print(

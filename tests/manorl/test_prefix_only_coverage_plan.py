@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -15,6 +17,7 @@ from tools.build_manorl_prefix_only_coverage_plan import (
 from tools.run_manorl_prefix_only_coverage_plan import (
     STATUS_CONTRACT,
     _finalize_status,
+    _recover_pending_attempt,
     _sample_trajectory,
     load_plan,
 )
@@ -174,6 +177,63 @@ def test_coverage_sampling_is_prefix_only_and_preserves_complete_tail() -> None:
             augmented.source_indices[prefix.prefix_frames :],
             source.source_indices,
         )
+
+
+def test_pending_attempt_without_durable_row_rewinds_for_deterministic_retry(
+    tmp_path: Path,
+) -> None:
+    status = {
+        "accepted": {},
+        "exhausted": {},
+        "attempts_total": 4,
+        "pending_attempt": {
+            "phase": "running",
+            "slot_index": 0,
+            "fallback_rank": 3,
+            "episode_seed": 42,
+            "episode_index": 0,
+            "attempt_number": 4,
+        },
+    }
+    _recover_pending_attempt(output=tmp_path / "absent.lance", status=status)
+    assert status["attempts_total"] == 3
+    assert status["pending_attempt"] is None
+
+
+def test_pending_written_row_recovers_by_uuid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "written.lance"
+    output.mkdir()
+    accepted_record = {"slot_index": 0, "uuid": "generated-uuid"}
+    status = {
+        "accepted": {},
+        "exhausted": {},
+        "attempts_total": 1,
+        "pending_attempt": {
+            "phase": "accepted_ready",
+            "slot_index": 0,
+            "fallback_rank": 0,
+            "episode_seed": 42,
+            "episode_index": 0,
+            "attempt_number": 1,
+            "uuid": "generated-uuid",
+            "accepted_record": accepted_record,
+        },
+    }
+    dataset = SimpleNamespace(
+        count_rows=lambda: 1,
+        take=lambda indices, columns: SimpleNamespace(
+            to_pylist=lambda: [{"index": {"uuid": "generated-uuid"}}]
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules, "lance", SimpleNamespace(dataset=lambda path: dataset)
+    )
+    _recover_pending_attempt(output=output, status=status)
+    assert status["pending_attempt"] is None
+    assert status["accepted"] == {"0": accepted_record}
+    assert status["attempts_total"] == 1
 
 
 def test_coverage_status_distinguishes_bounded_completion() -> None:
