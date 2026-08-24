@@ -562,11 +562,40 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
         name = identity.identity
         episode = control["episode_indices"][name]
         child_manifest = output.parent / f"{output.name}.manifest.json"
+        acceptance = {
+            "contract": exporter_module.synthesis_acceptance_manifest()["contract"],
+            "accepted": True,
+            "trajectory_complete": True,
+            "termination_reason_code": 1,
+            "final_rotation_xyz_abs_error_deg": [1.0, 2.0, 3.0],
+            "final_rotation_xyz_mean_error_deg": 2.0,
+            "final_rotation_xyz_mean_error_max_deg": 35.0,
+            "hand_object_contact_frames": 101,
+            "hand_object_contact_force_threshold_N": 0.2,
+            "hand_object_contact_frame_count_comparison": ">",
+            "hand_object_contact_frame_count_threshold": 100,
+            "hand_object_contact_minimum_frames": 101,
+            "failure_reasons": [],
+        }
         child_manifest.write_text(
             json.dumps(
                 {
                     "synthesis": {
-                        "counters": {name: {"attempts": 1, "saved": 1, "failures": []}}
+                        "counters": {
+                            name: {"attempts": 1, "saved": 1, "failures": []}
+                        },
+                        "acceptance_attempts": [
+                            {
+                                "source_identity": name,
+                                "seed": int(control["attempt_seed"]),
+                                "attempt_number": int(
+                                    control["attempt_numbers"][name]
+                                ),
+                                "episode_index": int(episode),
+                                "accepted": True,
+                                "acceptance": acceptance,
+                            }
+                        ],
                     },
                     "generated_uuids": [f"generated-{episode}"],
                     "row_source_identities": [name],
@@ -630,6 +659,19 @@ def test_repeated_synthesis_isolates_five_attempt_rounds(tmp_path, monkeypatch) 
     )
     assert manifest["synthesis"]["counters"][identity.identity]["attempts"] == 5
     assert manifest["synthesis"]["counters"][identity.identity]["saved"] == 5
+    gate = manifest["synthesis"]["acceptance_gate"]
+    assert gate["operator"] == "all"
+    assert gate["rules"]["trajectory_complete"]["termination_reason_code"] == 1
+    assert gate["rules"]["final_object_rotation"]["maximum_mean_error_deg"] == 35.0
+    assert gate["rules"]["hand_object_contact_frames"]["minimum_passing_frames"] == 101
+    acceptance_attempts = manifest["synthesis"]["acceptance_attempts"]
+    assert len(acceptance_attempts) == 5
+    assert all(item["accepted"] for item in acceptance_attempts)
+    assert [item["episode_index"] for item in acceptance_attempts] == list(range(5))
+    assert all(
+        item["acceptance"]["hand_object_contact_frames"] == 101
+        for item in acceptance_attempts
+    )
 
 
 def test_v2_writer_round_trip_preserves_nested_contract(tmp_path) -> None:
@@ -949,3 +991,135 @@ def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_pa
             warp_ccd_iterations=16,
             warp_ccd_contacts_per_world=16,
         )
+
+
+def test_rejected_acceptance_attempt_is_not_written_and_is_manifested(
+    tmp_path, monkeypatch
+) -> None:
+    identity = TrajectoryIdentity(
+        dataset_path=str(tmp_path / "source.lance"),
+        dataset_version=295,
+        row_index=3,
+        object_index=0,
+        uuid="499dab41-1e12-4595-a040-c5ec979fc3bb",
+        file_uuid="f",
+        identity="cube2_02_0004",
+        source_start=0,
+        source_stop=2,
+        movement_start_raw=0,
+        movement_end_raw=1,
+    )
+    trajectory = ReferenceTrajectory(
+        identity=identity,
+        dataset_version=295,
+        source_indices=np.asarray([0, 1]),
+        timestamps=np.asarray([0.0, 0.005]),
+        q_ref=np.zeros((2, 28)),
+        object_pos_raw=np.zeros((2, 3)),
+        object_pos=np.zeros((2, 3)),
+        object_quat_xyzw=np.asarray([[0.0, 0.0, 0.0, 1.0]] * 2),
+        object_z_shift=0.0,
+    )
+    batch = TrajectoryBatch((trajectory,))
+    checkpoint = tmp_path / "checkpoint-000500.pt"
+    monkeypatch.setattr(exporter_module, "_validate_checkpoint_path", lambda path: path)
+    monkeypatch.setattr(
+        exporter_module,
+        "_checkpoint_environment_options",
+        lambda path: SimpleNamespace(
+            reference_fps=None,
+            control_fps=200,
+            pre_padding=100,
+            post_padding=250,
+        ),
+    )
+    monkeypatch.setattr(
+        exporter_module,
+        "load_assigned_trajectory_batch",
+        lambda selection, num_envs: batch,
+    )
+    monkeypatch.setattr(
+        exporter_module,
+        "_source_metadata",
+        lambda trajectories, lineage_by_row: {3: ({}, {})},
+    )
+    monkeypatch.setattr(exporter_module, "file_sha256", lambda path: "checkpoint-sha")
+    monkeypatch.setattr(exporter_module, "checkpoint_runtime_metadata", lambda path: {})
+    monkeypatch.setattr(exporter_module, "_software_commit", lambda: "commit")
+    diagnostic = {
+        "source_identity": identity.identity,
+        "seed": 42,
+        "attempt_number": 1,
+        "episode_index": 0,
+        "accepted": False,
+        "acceptance": {
+            "contract": exporter_module.synthesis_acceptance_manifest()["contract"],
+            "accepted": False,
+            "trajectory_complete": True,
+            "termination_reason_code": 1,
+            "final_rotation_xyz_abs_error_deg": [10.0, 20.0, 30.0],
+            "final_rotation_xyz_mean_error_deg": 20.0,
+            "final_rotation_xyz_mean_error_max_deg": 35.0,
+            "hand_object_contact_frames": 100,
+            "hand_object_contact_force_threshold_N": 0.2,
+            "hand_object_contact_frame_count_comparison": ">",
+            "hand_object_contact_frame_count_threshold": 100,
+            "hand_object_contact_minimum_frames": 101,
+            "failure_reasons": ["hand_object_contact_frames_not_above_100"],
+        },
+    }
+    monkeypatch.setattr(
+        exporter_module,
+        "_run_attempt_batch",
+        lambda **kwargs: (
+            {},
+            {identity.identity: "hand_object_contact_frames_not_above_100"},
+            480,
+            28,
+            {},
+            {},
+            {identity.identity: diagnostic},
+        ),
+    )
+
+    def fail_writer(*args, **kwargs):
+        raise AssertionError("a rejected candidate must never reach a Lance writer")
+
+    monkeypatch.setattr(exporter_module, "write_v2_lance", fail_writer)
+    monkeypatch.setattr(exporter_module, "write_compact_lance", fail_writer)
+    output = tmp_path / "rejected.lance"
+    result = export_checkpoint_rollouts(
+        checkpoint=checkpoint,
+        output=output,
+        selection=TrajectorySelection(
+            "cube2",
+            "02",
+            selector="cube2:02",
+            dataset_path=tmp_path / "source.lance",
+            expected_dataset_version=295,
+            hand_side="right",
+        ),
+        num_envs=1,
+        device="cpu",
+        episodes_per_identity=1,
+        max_attempts_per_identity=1,
+        output_format="compact-replay-visual",
+        allow_partial_yield=True,
+    )
+
+    partial = tmp_path / "rejected.lance.partial"
+    manifest_path = tmp_path / "rejected.lance.partial.manifest.json"
+    assert result["rows"] == 0
+    assert result["output"] == str(partial)
+    assert not output.exists()
+    assert not partial.exists()
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["complete"] is False
+    assert manifest["rows"] == 0
+    assert manifest["synthesis"]["acceptance_attempts"] == [diagnostic]
+    counter = manifest["synthesis"]["counters"][identity.identity]
+    assert counter == {
+        "attempts": 1,
+        "saved": 0,
+        "failures": ["hand_object_contact_frames_not_above_100"],
+    }

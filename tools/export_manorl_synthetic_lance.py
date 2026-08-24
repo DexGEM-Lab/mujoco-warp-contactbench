@@ -63,6 +63,13 @@ from sim.manorl.synthetic_parent import (
     AcceptedSyntheticParent,
     load_accepted_synthetic_parent,
 )
+from sim.manorl.synthesis_acceptance import (
+    SynthesisAcceptanceResult,
+    count_hand_object_contact_frames,
+    evaluate_synthesis_acceptance,
+    persisted_rotation_quaternion_xyzw,
+    synthesis_acceptance_manifest,
+)
 from sim.manorl.trajectory import (
     SUPPORTED_REFERENCE_FPS,
     TrajectoryBatch,
@@ -426,6 +433,35 @@ def _append_state(
         storage[name].append(value.copy())
 
 
+def _evaluate_collected_candidate(
+    *,
+    trajectory: Any,
+    state_storage: Mapping[str, list[np.ndarray]],
+    trajectory_complete: bool,
+    termination_reason_code: int,
+    contact_frames: list[list[dict[str, Any]]],
+) -> SynthesisAcceptanceResult:
+    """Evaluate one terminal candidate against the production save contract."""
+
+    orientations = state_storage.get("object_orientation_xyzw")
+    if not orientations:
+        raise RuntimeError("synthesis candidate has no collected object orientation")
+    return evaluate_synthesis_acceptance(
+        trajectory_complete=trajectory_complete,
+        termination_reason_code=termination_reason_code,
+        simulated_final_object_quaternion_xyzw=persisted_rotation_quaternion_xyzw(
+            np.asarray(orientations[-1], dtype=np.float64)
+        ),
+        reference_final_object_quaternion_xyzw=persisted_rotation_quaternion_xyzw(
+            np.asarray(trajectory.object_quat_xyzw[-1], dtype=np.float64)
+        ),
+        hand_object_contact_frames=count_hand_object_contact_frames(
+            contact_frames,
+            target_object_name=trajectory.identity.identity.split("_", 1)[0],
+        ),
+    )
+
+
 def _seed_attempt(seed: int, device: str) -> None:
     np.random.seed(seed)
     if device == "gpu":
@@ -509,6 +545,16 @@ def _augment_attempt_trajectories(
     return _trajectory_subset(trajectories, augmented), samples
 
 
+def _synthesis_acceptance_gate_enabled(
+    *,
+    approach_prefix_config: ApproachPrefixConfig | None,
+    retreat_suffix_config: RetreatSuffixConfig | None,
+) -> bool:
+    """The three-rule gate is the no-prefix/no-retreat save contract."""
+
+    return approach_prefix_config is None and retreat_suffix_config is None
+
+
 def _run_attempt_batch(
     *,
     checkpoint: Path,
@@ -533,6 +579,7 @@ def _run_attempt_batch(
     dict[str, str],
     int,
     int,
+    dict[str, dict[str, object]],
     dict[str, dict[str, object]],
     dict[str, dict[str, object]],
 ]:
@@ -660,6 +707,10 @@ def _run_attempt_batch(
             else None
         ),
     )
+    acceptance_gate_enabled = _synthesis_acceptance_gate_enabled(
+        approach_prefix_config=approach_prefix_config,
+        retreat_suffix_config=retreat_suffix_config,
+    )
     right_model_index = environment.model_hand_sides.index("right")
     right_model_slice = slice(
         right_model_index * JOINT_DOF, (right_model_index + 1) * JOINT_DOF
@@ -670,6 +721,7 @@ def _run_attempt_batch(
     active = np.ones(num_envs, dtype=bool)
     succeeded = np.zeros(num_envs, dtype=bool)
     failure_reasons: dict[str, str] = {}
+    acceptance_diagnostics: dict[str, dict[str, object]] = {}
 
     (
         initial_contacts,
@@ -796,9 +848,33 @@ def _run_attempt_batch(
                 int(transition.termination.reason_code[env_id])
             )
             if terminal:
-                identity = environment.trajectories[env_id].identity.identity
+                trajectory = environment.trajectories[env_id]
+                identity = trajectory.identity.identity
                 active[env_id] = False
-                if bool(transition.termination.success[env_id]) and prefix_valid[env_id]:
+                terminal_success = bool(transition.termination.success[env_id])
+                if acceptance_gate_enabled:
+                    acceptance = _evaluate_collected_candidate(
+                        trajectory=trajectory,
+                        state_storage=state_storage[env_id],
+                        trajectory_complete=terminal_success,
+                        termination_reason_code=int(
+                            transition.termination.reason_code[env_id]
+                        ),
+                        contact_frames=contact_storage[env_id],
+                    )
+                    acceptance_diagnostics[identity] = {
+                        "source_identity": identity,
+                        "seed": attempt_seed,
+                        "attempt_number": attempt_numbers[identity],
+                        "episode_index": episode_indices[identity],
+                        "accepted": acceptance.accepted,
+                        "acceptance": acceptance.to_dict(),
+                    }
+                    if acceptance.accepted:
+                        succeeded[env_id] = True
+                    else:
+                        failure_reasons[identity] = acceptance.failure_reasons[0]
+                elif terminal_success and prefix_valid[env_id]:
                     succeeded[env_id] = True
                 elif not prefix_valid[env_id]:
                     failure_reasons[identity] = str(prefix_invalid_reasons[env_id])
@@ -899,6 +975,7 @@ def _run_attempt_batch(
         environment.action_dim,
         accepted_augmentations,
         accepted_retreats,
+        acceptance_diagnostics,
     )
 
 
@@ -1005,6 +1082,7 @@ def _export_isolated_repeated_rollouts(
     row_source_identities: list[str] = []
     accepted_approach_prefixes: list[dict[str, object]] = []
     accepted_retreat_suffixes: list[dict[str, object]] = []
+    acceptance_attempts: list[dict[str, object]] = []
 
     for attempt_round in range(1, max_attempts_per_identity + 1):
         pending = [
@@ -1149,6 +1227,9 @@ def _export_isolated_repeated_rollouts(
         row_source_identities.extend(child["row_source_identities"])
         accepted_approach_prefixes.extend(child.get("approach_prefixes", []))
         accepted_retreat_suffixes.extend(child.get("retreat_suffixes", []))
+        acceptance_attempts.extend(
+            child.get("synthesis", {}).get("acceptance_attempts", [])
+        )
         print(
             json.dumps(
                 {
@@ -1231,6 +1312,15 @@ def _export_isolated_repeated_rollouts(
             "base_seed": seed,
             "counters": counters,
             "attempt_isolation": "one_fresh_process_per_attempt_round",
+            "acceptance_gate": (
+                synthesis_acceptance_manifest()
+                if _synthesis_acceptance_gate_enabled(
+                    approach_prefix_config=approach_prefix_config,
+                    retreat_suffix_config=retreat_suffix_config,
+                )
+                else None
+            ),
+            "acceptance_attempts": acceptance_attempts,
             "approach_prefix": (
                 None
                 if approach_prefix_config is None
@@ -1313,6 +1403,7 @@ def _export_isolated_repeated_rollouts(
         "checkpoint_sha256": checkpoint_sha,
         "approach_prefixes": accepted_approach_prefixes,
         "retreat_suffixes": accepted_retreat_suffixes,
+        "acceptance_attempts": acceptance_attempts,
     }
 
 
@@ -1494,6 +1585,7 @@ def export_checkpoint_rollouts(
     rows: list[dict[str, Any]] = []
     accepted_approach_prefixes: list[dict[str, object]] = []
     accepted_retreat_suffixes: list[dict[str, object]] = []
+    acceptance_attempts: list[dict[str, object]] = []
     observation_dim: int | None = None
     action_dim: int | None = None
 
@@ -1532,6 +1624,7 @@ def export_checkpoint_rollouts(
             acted_dim,
             attempt_augmentations,
             attempt_retreats,
+            attempt_acceptance,
         ) = _run_attempt_batch(
             checkpoint=checkpoint,
             checkpoint_options=checkpoint_options,
@@ -1557,6 +1650,7 @@ def export_checkpoint_rollouts(
         action_dim = acted_dim
         accepted_approach_prefixes.extend(attempt_augmentations.values())
         accepted_retreat_suffixes.extend(attempt_retreats.values())
+        acceptance_attempts.extend(attempt_acceptance.values())
         for identity in pending:
             row = attempt_rows.get(identity)
             if row is not None:
@@ -1671,6 +1765,15 @@ def export_checkpoint_rollouts(
             "max_attempts_per_identity": max_attempts_per_identity,
             "base_seed": seed,
             "counters": counters,
+            "acceptance_gate": (
+                synthesis_acceptance_manifest()
+                if _synthesis_acceptance_gate_enabled(
+                    approach_prefix_config=approach_prefix_config,
+                    retreat_suffix_config=retreat_suffix_config,
+                )
+                else None
+            ),
+            "acceptance_attempts": acceptance_attempts,
             "approach_prefix": (
                 None
                 if approach_prefix_config is None
@@ -1727,7 +1830,11 @@ def export_checkpoint_rollouts(
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
-    if not complete and internal_attempt_control is None:
+    if (
+        not complete
+        and internal_attempt_control is None
+        and not allow_partial_yield
+    ):
         incomplete = {
             identity: counter
             for identity, counter in counters.items()
