@@ -14,7 +14,15 @@ from sim.manorl.synthetic_parent import (
     load_accepted_synthetic_parent,
     write_accepted_synthetic_parent,
 )
-from tools.export_manorl_synthetic_lance import _augmentation_identity
+from sim.manorl.approach_prefix import (
+    APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT,
+    PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT,
+)
+from tools.export_manorl_synthetic_lance import (
+    AUGMENTATION_IDENTITY_CONTRACT,
+    _augmentation_identity,
+    _resolve_parents_by_identity,
+)
 from tools.select_manorl_synthetic_parent import select_parent
 
 
@@ -64,6 +72,8 @@ def test_augmentation_identity_distinguishes_mode_and_config() -> None:
     def identity(
         approach: ApproachPrefixConfig,
         endpoint: RetreatSuffixConfig = endpoint_config,
+        *,
+        retreat: bool = False,
     ) -> str:
         return _augmentation_identity(
             accepted_parent=parent,
@@ -73,7 +83,7 @@ def test_augmentation_identity_distinguishes_mode_and_config() -> None:
             approach_config=approach,
             approach_sample=None,
             near_endpoint_config=endpoint,
-            retreat_config=endpoint_config,
+            retreat_config=endpoint_config if retreat else None,
             retreat_sample=None,
         )
 
@@ -86,6 +96,13 @@ def test_augmentation_identity_distinguishes_mode_and_config() -> None:
     assert far != near
     assert near != custom_near
     assert near == identity(ApproachPrefixConfig(mode="near"))
+    assert far.startswith(PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT + ":")
+    historical = identity(ApproachPrefixConfig(mode="far"), retreat=True)
+    assert historical.startswith(AUGMENTATION_IDENTITY_CONTRACT + ":")
+    assert historical != far
+    assert APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT in (
+        "manorl_pre60_far_near_approach_prefix_only_complete_original_tail_v1",
+    )
 
 
 def test_accepted_parent_rejects_stale_or_missing_v3_fields() -> None:
@@ -264,3 +281,29 @@ def test_accepted_parent_rejects_invalid_checkpoint_and_offset() -> None:
     values["object_init_xy_offset_m"] = [0.0]
     with pytest.raises(ValueError, match="object XY offset"):
         AcceptedSyntheticParent(**values)
+
+
+def test_single_parent_normalizes_to_one_identity_mapping() -> None:
+    from sim.manorl.trajectory import TrajectoryBatch
+    from tests.manorl.test_approach_prefix import _trajectory
+
+    trajectory = _trajectory()
+    parent = _parent()
+    parent = AcceptedSyntheticParent(
+        **{**parent.to_dict(), "source_identity": trajectory.identity.identity}
+    )
+    batch = TrajectoryBatch((trajectory,))
+    assert _resolve_parents_by_identity(
+        batch, accepted_parent=parent, accepted_parents_by_identity=None
+    ) == {trajectory.identity.identity: parent}
+    assert _resolve_parents_by_identity(
+        batch,
+        accepted_parent=None,
+        accepted_parents_by_identity={trajectory.identity.identity: parent},
+    ) == {trajectory.identity.identity: parent}
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _resolve_parents_by_identity(
+            batch,
+            accepted_parent=parent,
+            accepted_parents_by_identity={trajectory.identity.identity: parent},
+        )

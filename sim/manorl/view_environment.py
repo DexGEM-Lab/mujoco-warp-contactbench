@@ -1217,7 +1217,7 @@ def view_approach_prefix_episodes(
     speed: float = 1.0,
     print_every: int = 20,
     max_episodes: int | None = None,
-    retreat_suffix: bool = True,
+    retreat_suffix: bool = False,
     approach_mode: str = "far",
 ) -> None:
     """View accepted-parent approach-prefix augmentation episodes in one window.

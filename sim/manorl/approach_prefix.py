@@ -23,6 +23,12 @@ from sim.manorl.trajectory import ReferenceTrajectory
 APPROACH_PREFIX_CONTRACT: Final = (
     "synthetic_approach_prefix_far_or_retreat_xy_near_world_z_c1_v4"
 )
+APPROACH_PREFIX_ONLY_PRODUCTION_CONTRACT: Final = (
+    "manorl_pre60_far_near_approach_prefix_only_complete_original_tail_v1"
+)
+PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT: Final = (
+    "manorl_synthesis_prefix_only_augmentation_identity_v4"
+)
 APPROACH_MODES: Final = ("far", "near")
 RETREAT_SUFFIX_CONTRACT: Final = (
     "synthetic_parent_movement_end_plus15_retreat_tail_xy_extra_z_extra_discrete_c2_v4"

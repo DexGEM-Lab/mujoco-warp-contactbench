@@ -71,28 +71,6 @@ def test_synthetic_export_cli_accepts_reference_fps_selection() -> None:
         ]
     )
     assert compact_args.output_format == "compact-replay-visual"
-    retreat_args = exporter_module.parse_args(
-        [
-            "--checkpoint",
-            "policy.pt",
-            "--output",
-            "rollout.lance",
-            "--retreat-suffix",
-            "--retreat-horizontal-min-m",
-            "0.03",
-            "--retreat-horizontal-max-m",
-            "0.15",
-            "--retreat-z-min-m",
-            "0.04",
-            "--retreat-z-max-m",
-            "0.10",
-        ]
-    )
-    assert retreat_args.retreat_suffix_config is not None
-    assert retreat_args.retreat_suffix_config.minimum_extra_horizontal_m == 0.03
-    assert retreat_args.retreat_suffix_config.maximum_extra_horizontal_m == 0.15
-    assert retreat_args.retreat_suffix_config.minimum_z_offset_m == 0.04
-    assert retreat_args.retreat_suffix_config.maximum_z_offset_m == 0.10
 
 
 def _state() -> MaterializedState:
@@ -200,7 +178,10 @@ def test_v2_schema_has_explicit_contract_and_28d_rollout_fields() -> None:
     assert schema.field("rollout").type[0].name == "transition_count"
     provenance_fields = [field.name for field in schema.field("provenance").type]
     assert "checkpoint_update" in provenance_fields
-    assert provenance_fields[-1] == "generation_attempt"
+    assert provenance_fields[-2:] == [
+        "generation_attempt",
+        "augmentation_identity",
+    ]
 
     schema_120 = build_v2_schema(
         observation_dim=480,
@@ -290,6 +271,9 @@ def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
             "seed": 42,
             "episode_index": 0,
             "generation_attempt": 1,
+            "augmentation_identity": (
+                "manorl_synthesis_prefix_only_augmentation_identity_v4:test"
+            ),
         },
     )
     assert row["trajectory_metadata"]["data_fps"] == 200
@@ -299,6 +283,9 @@ def test_v2_row_requires_complete_t_and_t_minus_one_alignment() -> None:
     assert row["provenance"]["seed"] == 42
     assert row["provenance"]["episode_index"] == 0
     assert row["provenance"]["generation_attempt"] == 1
+    assert row["provenance"]["augmentation_identity"] == (
+        "manorl_synthesis_prefix_only_augmentation_identity_v4:test"
+    )
     trajectory_120 = replace(
         trajectory,
         timestamps=np.asarray([0.0, 1.0 / 120.0]),
@@ -901,6 +888,9 @@ def _compact_full_row(*, data_fps: int = 200) -> dict[str, object]:
 
 def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_path) -> None:
     full_row = _compact_full_row(data_fps=120)
+    full_row["provenance"]["augmentation_identity"] = (
+        "manorl_synthesis_prefix_only_augmentation_identity_v4:test"
+    )
     full_row["contact"] = [
         [
             {
@@ -955,6 +945,9 @@ def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_pa
     assert compact["provenance"]["contract"] == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
     assert compact["provenance"]["source_contract"] == SYNTHETIC_LANCE_CONTRACT
     assert compact["provenance"]["physics_substeps_per_control"] == 4
+    assert compact["provenance"]["augmentation_identity"] == (
+        "manorl_synthesis_prefix_only_augmentation_identity_v4:test"
+    )
     assert np.asarray(compact["hands"][0]["mano_joint_pos"]).shape == (2, 21, 3)
     assert compact["contact"][0][0]["joint_name"] == "thumb_ip"
     assert compact["contact"][0][0]["total_force_world"] == [0.5, 1.0, -1.5]
@@ -973,6 +966,9 @@ def test_compact_projection_preserves_visuals_clock_contact_and_reference(tmp_pa
         == SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT.encode()
     )
     decoded = dataset.take([0]).to_pylist()[0]
+    assert decoded["provenance"]["augmentation_identity"] == (
+        "manorl_synthesis_prefix_only_augmentation_identity_v4:test"
+    )
     source = target_replay_source_from_row(
         decoded, dataset_path=output, dataset_version=1, row_index=0
     )

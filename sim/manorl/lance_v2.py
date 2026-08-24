@@ -498,6 +498,7 @@ def build_v2_schema(
                         ("seed", pa.int64()),
                         ("episode_index", pa.int64()),
                         ("generation_attempt", pa.int64()),
+                        ("augmentation_identity", pa.string()),
                     ]
                 ),
             ),
@@ -642,6 +643,7 @@ def build_compact_schema(
                         ("seed", pa.int64()),
                         ("episode_index", pa.int64()),
                         ("generation_attempt", pa.int64()),
+                        ("augmentation_identity", pa.string()),
                     ]
                 ),
             ),
@@ -1094,6 +1096,7 @@ def build_v2_row(
             "seed": int(provenance["seed"]),
             "episode_index": episode_index,
             "generation_attempt": generation_attempt,
+            "augmentation_identity": augmentation_identity,
         },
     }
     return row

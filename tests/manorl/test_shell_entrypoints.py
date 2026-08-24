@@ -183,3 +183,76 @@ def test_synthesis_exporter_accepts_xy_offset_arg() -> None:
     )
     assert result.returncode == 0
     assert "--object-xy-offset-m" in result.stdout
+
+
+def test_default_synthesis_requires_pre60_bundle(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint-000001.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    Path(f"{checkpoint}.json").write_text("{}", encoding="utf-8")
+    parent = tmp_path / "parent.json"
+    parent.write_text("{}", encoding="utf-8")
+    result = subprocess.run(
+        [str(ROOT / "synthesize.sh"), "cube2", "02", "1", "0"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CHECKPOINT": str(checkpoint),
+            "MANORL_PYTHON": "/bin/true",
+            "MANORL_SYNTH_ACCEPTED_PARENT": str(parent),
+        },
+    )
+    assert result.returncode == 2
+    assert "canonical pre60 bundle" in result.stderr
+
+
+def test_synthesis_defaults_to_prefix_only_and_rejects_retreat(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint-000001.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    Path(f"{checkpoint}.json").write_text("{}", encoding="utf-8")
+    parent = tmp_path / "parent.json"
+    parent.write_text("{}", encoding="utf-8")
+    predecoded = tmp_path / "pre60-manifest.json"
+    predecoded.write_text("{}", encoding="utf-8")
+    fake_python = tmp_path / "python"
+    fake_python.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+    fake_python.chmod(0o755)
+    result = subprocess.run(
+        [str(ROOT / "synthesize.sh"), "cube2", "02", "1", "0"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CHECKPOINT": str(checkpoint),
+            "MANORL_PYTHON": str(fake_python),
+            "MANORL_SYNTH_ACCEPTED_PARENT": str(parent),
+            "MANORL_PREDECODED_MANIFEST": str(predecoded),
+        },
+        check=True,
+    )
+    arguments = result.stdout.splitlines()
+    assert "--approach-prefix" in arguments
+    assert arguments[arguments.index("--approach-mode") + 1] == "far"
+    assert "--accepted-parent" in arguments
+    assert "--retreat-suffix" not in arguments
+    assert "--allow-partial-yield" in arguments
+    assert arguments[arguments.index("--max-attempts-per-identity") + 1] == "12"
+    assert arguments[arguments.index("--predecoded-manifest") + 1] == str(
+        predecoded.resolve()
+    )
+
+    rejected = subprocess.run(
+        [str(ROOT / "synthesize.sh"), "cube2", "02", "1", "0"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CHECKPOINT": str(checkpoint),
+            "MANORL_PYTHON": str(fake_python),
+            "MANORL_SYNTH_ACCEPTED_PARENT": str(parent),
+            "MANORL_PREDECODED_MANIFEST": str(predecoded),
+            "MANORL_SYNTH_RETREAT_SUFFIX": "true",
+        },
+    )
+    assert rejected.returncode == 2
+    assert "no longer part of the default production contract" in rejected.stderr

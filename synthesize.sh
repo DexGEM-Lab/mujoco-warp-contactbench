@@ -20,9 +20,9 @@ PYTHON=${MANORL_PYTHON:-$ROOT/.venv/bin/python}
 PREDECODED_MANIFEST=${MANORL_PREDECODED_MANIFEST:-}
 SEED=${MANORL_SYNTH_SEED:-42}
 EPISODES_PER_IDENTITY=${MANORL_SYNTH_EPISODES_PER_IDENTITY:-5}
-MAX_ATTEMPTS_PER_IDENTITY=${MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY:-10}
+MAX_ATTEMPTS_PER_IDENTITY=${MANORL_SYNTH_MAX_ATTEMPTS_PER_IDENTITY:-12}
 OBJECT_XY_OFFSET_M=${MANORL_SYNTH_OBJECT_XY_OFFSET_M:-0.0}
-APPROACH_PREFIX=${MANORL_SYNTH_APPROACH_PREFIX:-false}
+APPROACH_PREFIX=${MANORL_SYNTH_APPROACH_PREFIX:-true}
 APPROACH_MODE=${MANORL_SYNTH_APPROACH_MODE:-far}
 RETREAT_SUFFIX=${MANORL_SYNTH_RETREAT_SUFFIX:-false}
 ACCEPTED_PARENT=${MANORL_SYNTH_ACCEPTED_PARENT:-}
@@ -94,6 +94,10 @@ if [[ "$APPROACH_PREFIX" == "true" ]]; then
     echo "MANORL_SYNTH_ACCEPTED_PARENT is required with approach prefix" >&2
     exit 2
   fi
+  if [[ -z "$PREDECODED_MANIFEST" ]]; then
+    echo "MANORL_PREDECODED_MANIFEST must name the canonical pre60 bundle" >&2
+    exit 2
+  fi
   ACCEPTED_PARENT=$(realpath -e "$ACCEPTED_PARENT")
   if [[ "$APPROACH_MODE" != "far" && "$APPROACH_MODE" != "near" ]]; then
     echo "MANORL_SYNTH_APPROACH_MODE must be far or near, got: $APPROACH_MODE" >&2
@@ -105,9 +109,10 @@ elif [[ "$APPROACH_PREFIX" != "false" ]]; then
   exit 2
 fi
 if [[ "$RETREAT_SUFFIX" == "true" ]]; then
-  EXTRA_ARGS+=(--retreat-suffix)
+  echo "Retreat suffix is no longer part of the default production contract." >&2
+  exit 2
 elif [[ "$RETREAT_SUFFIX" != "false" ]]; then
-  echo "MANORL_SYNTH_RETREAT_SUFFIX must be true or false, got: $RETREAT_SUFFIX" >&2
+  echo "MANORL_SYNTH_RETREAT_SUFFIX must be false, got: $RETREAT_SUFFIX" >&2
   exit 2
 fi
 
@@ -124,4 +129,5 @@ exec "$PYTHON" "$ROOT/tools/export_manorl_synthetic_lance.py" \
   --seed "$SEED" \
   --episodes-per-identity "$EPISODES_PER_IDENTITY" \
   --max-attempts-per-identity "$MAX_ATTEMPTS_PER_IDENTITY" \
+  --allow-partial-yield \
   "${EXTRA_ARGS[@]}"
