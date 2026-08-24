@@ -368,7 +368,7 @@ CHECKPOINT=/path/exact-parent-checkpoint.pt \
 ./synthesize.sh banana 01 1 0
 ```
 
-`far` samples XY 0.30–0.70 m, world-up Z 0.08–0.30 m, and ±30° azimuth around
+`far` samples XY 0.30–1.00 m, world-up Z 0.08–0.30 m, and ±30° azimuth around
 the initial object→pre60 hand direction. `near` uses an independent seed and
 maps a movement-end+15 retreat-like endpoint to the initial object. That anchor
 only chooses the Near start; it never modifies the tail. Start XYZ is sampled;

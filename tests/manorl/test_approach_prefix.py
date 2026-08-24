@@ -91,7 +91,7 @@ def test_approach_prefix_is_seeded_positive_z_and_suffix_exact() -> None:
     assert sample.to_manifest() != changed_sample.to_manifest()
     assert not np.array_equal(augmented.q_ref[: sample.prefix_frames], changed.q_ref[: changed_sample.prefix_frames])
 
-    assert 0.30 <= sample.start_xy_radius_m <= 0.70
+    assert 0.30 <= sample.start_xy_radius_m <= 1.00
     assert 0.08 <= sample.start_z_offset_m <= 0.30
     assert -30.0 <= sample.xy_offset_deg <= 30.0
     assert 100 <= sample.effective_pre_padding <= 360
@@ -260,6 +260,18 @@ def test_near_approach_allows_start_below_object_center_for_contact_validation()
     )
     assert sample.start_z_offset_m < 0.0
     assert np.all(np.isfinite(sample.start_position_m))
+
+
+def test_only_far_default_radius_expands_to_1m() -> None:
+    far = ApproachPrefixConfig(mode="far")
+    near = ApproachPrefixConfig(mode="near")
+    assert far.minimum_xy_radius_m == 0.30
+    assert far.maximum_xy_radius_m == 1.00
+    assert near.minimum_xy_radius_m == 0.30
+    assert near.maximum_xy_radius_m == 0.70
+
+    _, sample = augment_trajectory_with_approach_prefix(_trajectory(), seed=44)
+    assert 0.70 < sample.start_xy_radius_m <= 1.00
 
 
 def test_near_approach_rejects_far_only_distribution_overrides() -> None:

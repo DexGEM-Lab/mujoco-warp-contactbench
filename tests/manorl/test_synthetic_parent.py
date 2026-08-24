@@ -95,7 +95,13 @@ def test_augmentation_identity_distinguishes_mode_and_config() -> None:
     )
     assert far != near
     assert near != custom_near
-    assert near == identity(ApproachPrefixConfig(mode="near"))
+    assert near == identity(
+        ApproachPrefixConfig(mode="near", maximum_xy_radius_m=0.70)
+    )
+    assert far != identity(
+        ApproachPrefixConfig(mode="far", maximum_xy_radius_m=0.70)
+    )
+    assert ApproachPrefixConfig(mode="near").maximum_xy_radius_m == 0.70
     assert far.startswith(PREFIX_ONLY_AUGMENTATION_IDENTITY_CONTRACT + ":")
     historical = identity(ApproachPrefixConfig(mode="far"), retreat=True)
     assert historical.startswith(AUGMENTATION_IDENTITY_CONTRACT + ":")

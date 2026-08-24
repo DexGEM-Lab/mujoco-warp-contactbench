@@ -19,7 +19,7 @@ entrypoints do not request tail replacement.
 
 ## What is added
 
-Far starts 0.30–0.70 m horizontally from the initial object, 0.08–0.30 m above
+Far starts 0.30–1.00 m horizontally from the initial object, 0.08–0.30 m above
 it, within ±30° of the initial object-to-hand direction. Near independently
 samples a retreat-like start from accepted-parent movement-end+15 geometry and
 maps it to the initial object. For Near, movement-end+15 chooses only the

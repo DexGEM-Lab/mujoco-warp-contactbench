@@ -47,7 +47,9 @@ from tools.validate_manorl_synthetic_lance import (
 )
 
 
-def test_synthetic_export_cli_accepts_reference_fps_selection() -> None:
+def test_synthetic_export_cli_accepts_reference_fps_selection(
+    monkeypatch, tmp_path
+) -> None:
     args = exporter_module.parse_args(
         [
             "--checkpoint",
@@ -71,6 +73,42 @@ def test_synthetic_export_cli_accepts_reference_fps_selection() -> None:
         ]
     )
     assert compact_args.output_format == "compact-replay-visual"
+    parent = tmp_path / "parent.json"
+    parent.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        exporter_module,
+        "load_accepted_synthetic_parent",
+        lambda path: object(),
+    )
+    far_args = exporter_module.parse_args(
+        [
+            "--checkpoint",
+            "policy.pt",
+            "--output",
+            "rollout.lance",
+            "--approach-prefix",
+            "--accepted-parent",
+            str(parent),
+        ]
+    )
+    assert far_args.approach_prefix_config is not None
+    assert far_args.approach_prefix_config.minimum_xy_radius_m == 0.30
+    assert far_args.approach_prefix_config.maximum_xy_radius_m == 1.00
+    near_args = exporter_module.parse_args(
+        [
+            "--checkpoint",
+            "policy.pt",
+            "--output",
+            "rollout.lance",
+            "--approach-prefix",
+            "--accepted-parent",
+            str(parent),
+            "--approach-mode",
+            "near",
+        ]
+    )
+    assert near_args.approach_prefix_config is not None
+    assert near_args.approach_prefix_config.maximum_xy_radius_m == 0.70
 
 
 def _state() -> MaterializedState:

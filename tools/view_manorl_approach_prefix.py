@@ -69,7 +69,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--approach-mode",
         choices=("far", "near"),
         default="far",
-        help="approach start distribution: far 30-70 cm, or near retreat-like object-relative (default: far)",
+        help="approach start distribution: far 30-100 cm, or near retreat-like object-relative (default: far)",
     )
     parser.add_argument(
         "--retreat-suffix",
