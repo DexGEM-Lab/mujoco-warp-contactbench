@@ -1,22 +1,29 @@
 # Current model
 
-## Available sources and parents
-banana:02, banana:18, and bowl:04 have 32, 29, and 48 accepted-parent descriptors. Five parents per pair have been selected deterministically from the farther half of pre60 frame-0 right-wrist/object distances, then diversified by relative XYZ/azimuth coverage.
+## Parent qualification has two distinct layers
+`manorl_accepted_synthetic_parent_v3` proves a row can supply source identity, raw hand start, object offset, movement_end+15 mapping, and late-contact geometry. It does not prove that the historical row passes the newer persisted-float32 three-rule gate.
 
-Cylinder6 is absent from v295/all75 but clean v530 contains 50 trajectories for each of cylinder6:03 and cylinder6:09. All 100 pass authoritative right-hand decoding, pre60/pre180 compilation, finite-value checks, and movement_end+15 validity. Runtime assets pass. Canonical path-bound packages are:
-- pre60 package `a5656f99d6788ed0cbb91f8e4a9a4879b3b095f7d42c3ffe3d8ddffbd0e991aa`, catalog `2a94792e73645f3ffe2acbefd1a751d212bafd9b79e3815cc58013c50d803a3a`.
-- pre180 package `9ca04e74f5bfd0d599213a497f4dbf492c50a53b63d46c40b5a27162c17a16cc`, catalog `2df50d15daf4e65bbb2b125af9adc7e1d31d87781204094ede757d76316f33e3`.
-Cylinder6 still needs GPU base-parent bootstrap and five-parent selection per pair.
+Every production parent must pass both:
+1. current parent-row gate: completion evidence from success-only parent provenance, final XYZ mean rotation <=35 deg, and >=101 persisted right-hand/object contact frames;
+2. v3 descriptor eligibility: solved contact reaches at least movement end and movement_end+15/source mapping plus nonzero later horizontal geometry remain valid.
 
-## Production mechanism
-Base-parent bootstrap uses pre180 plus explicit policy transfer. Final augmentation uses pre60, parent-bound object offset/raw start/anchor, 4 cm prefix, complete original tail, and no retreat.
+A real GPU counterexample established the distinction. Historical descriptor `banana_02_1256` produced 12 Far and 12 Near candidates in one fixed coverage cell. Every candidate completed, had 226–237 contact frames, and had no prefix collision; all failed only final rotation at 46.03–56.27 deg. The old 15-parent/1,200-target plan is diagnostic-only and must not be produced.
 
-Coverage is explicit rather than post-hoc random. Every selected parent has 50 Far slots (5 radius x 5 azimuth x 2 height) and 30 Near slots (5 empirical distance x 3 azimuth x 2 height). Each slot has twelve fallback seeds selected near that cell center. A failure only advances within the same cell, so bounded shortfall is visible and accepted positions do not silently collapse into easy regions. Near and Far are independent.
+Historical current-gate audit leaves enough candidates to reselect existing pairs: banana:02 25/32, banana:18 9/29, bowl:04 47/48. The replacement gate-qualified plan has digest `1dc8714355876c428a3715559cd02e5c96f6edc56fde8c001a2106a42d2b254b`.
 
-The runner reuses one MJX/checkpoint runtime per parent/mode, but every candidate is independently reset and evaluated by the same production three-rule gate plus prefix collision gate. Only accepted rows reach Lance. Status and manifests support interruption/resume and bind accepted rows to slot/seed/attempt diagnostics.
+## Cylinder6 source and policy evidence
+Clean v530 provides 50 trajectories each for cylinder6:03 and cylinder6:09; canonical pre60 and pre180 packages/predecoded bundles contain all 100 with zero source rejection. Explicit policy transfer successfully runs both actions to reason 1.
 
-## Current plan
-The existing three pairs have a frozen plan at `/home/jay/data/manorl_targeted_five_pair_augmentation_20260824/existing_pairs_coverage_plan_v1.json`: 15 parents, 30 tasks, 1,200 target rows, 14,400 unique fallback seeds, digest `0d96bed5018bc17b6462d4c46ab61aad089aee6cb6e6998f001ecc4447572d67`.
+Zero-offset seed42 all100 bootstrap isolates different failure mechanisms:
+- action03: rotation is usually accurate (median 5.27 deg), but contact is too short (median 85.5 frames); four rows pass the atomic gate and only `cylinder6_03_3951` remains descriptor-eligible.
+- action09: contact is ample (median 360 frames), but final rotation is wrong (median 89.04 deg); only `cylinder6_09_4040` passes and remains descriptor-eligible.
 
-## Live uncertainty
-All Server1 GPUs are currently occupied by other users, so no production has started. The next discriminating evidence is one Far and one Near coverage-slot smoke on an available GPU, followed by cylinder6 pre180 base smoke. If cylinder6 fails, the blocker is policy generalization rather than source/asset availability.
+The established 2 cm XY variation at seed43 changes the attraction basin rather than improving one fixed direction. Atomic-gate yield is one action03 and four action09 rows. Descriptor eligibility retains `cylinder6_03_3945` and action09 identities `cylinder6_09_4013`, `cylinder6_09_4043`, `cylinder6_09_4069`; the fourth action09 gate pass loses contact before movement end. Across seed42+43, current distinct eligible counts are action03=2 and action09=4, below the required 5+5.
+
+Successful seed43 XY offsets span multiple quadrants, so no single offset direction explains the intervention. Seed44 repeats the same symmetric XY02 distribution as an independent replication. Prediction: it should yield a small set of different source identities if XY perturbation genuinely exposes nearby policy basins. Stop when merged descriptor sets reach five distinct identities per action; if action03 remains below five, inspect late-contact dynamics before any further seed.
+
+## Multi-round identity rule
+Different bootstrap rounds may produce multiple eligible parents for the same source. They are never silently overwritten. The selected variant maximizes the weakest normalized margin among rotation headroom to 35 deg, contact headroom above 100 frames, and late-contact headroom through movement_end+15; all variants remain auditable.
+
+## Final augmentation mechanism
+For each gate-qualified selected parent, Far has 50 fixed spatial slots (5 radius x 5 azimuth x 2 height) and Near has 30 empirical slots (5 distance x 3 azimuth x 2 height), each with 12 same-cell fallback seeds. Failures cannot cross cells. The runner preserves the complete pre60 source tail, uses no retreat, applies the atomic gate plus prefix collision gate before Lance append, and journals pending writes for deterministic recovery.

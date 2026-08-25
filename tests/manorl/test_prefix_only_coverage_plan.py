@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
 from sim.manorl.approach_prefix import ApproachPrefixConfig
 from tools.build_manorl_prefix_only_coverage_plan import (
@@ -14,6 +15,7 @@ from tools.build_manorl_prefix_only_coverage_plan import (
     _canonical_digest,
     _cell_candidates,
 )
+from tools.merge_manorl_parent_descriptor_sets import _rank
 from tools.run_manorl_prefix_only_coverage_plan import (
     STATUS_CONTRACT,
     _finalize_status,
@@ -21,7 +23,10 @@ from tools.run_manorl_prefix_only_coverage_plan import (
     _sample_trajectory,
     load_plan,
 )
-from tools.select_manorl_targeted_parents import select_records
+from tools.select_manorl_targeted_parents import (
+    _current_parent_acceptance,
+    select_records,
+)
 from tests.manorl.test_approach_prefix import _trajectory
 from tests.manorl.test_synthesis_seed_plan import _parent
 
@@ -88,6 +93,85 @@ def _plan(tmp_path: Path) -> Path:
     path = tmp_path / "plan.json"
     path.write_text(json.dumps(values), encoding="utf-8")
     return path
+
+
+def _contact_frames(count: int) -> list[list[dict[str, object]]]:
+    return [
+        [
+            {
+                "hand_name": "right",
+                "object_name": "banana",
+                "contact_pairs": [{"force_normal": [0.0, 0.0, 0.3]}],
+            }
+        ]
+        for _ in range(count)
+    ]
+
+
+def test_current_parent_acceptance_recomputes_persisted_rotation_and_contact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = SimpleNamespace(
+        parent_dataset_path="/tmp/parent.lance",
+        parent_dataset_version=7,
+        parent_row_index=3,
+        parent_row_uuid="parent-uuid",
+        source_identity="banana_02_001",
+    )
+    failing_rotvec = Rotation.from_euler(
+        "XYZ", [50.0, 50.0, 50.0], degrees=True
+    ).as_rotvec().tolist()
+    row = {
+        "index": {"uuid": "parent-uuid"},
+        "provenance": {"source_identity": "banana_02_001"},
+        "objects": [{"rot_aa": [failing_rotvec]}],
+        "reference": {"object_rot_aa": [[0.0, 0.0, 0.0]]},
+        "contact": _contact_frames(101),
+    }
+    dataset = SimpleNamespace(
+        take=lambda indices, columns: SimpleNamespace(to_pylist=lambda: [row])
+    )
+    monkeypatch.setitem(
+        sys.modules, "lance", SimpleNamespace(dataset=lambda path, version: dataset)
+    )
+    acceptance = _current_parent_acceptance(
+        parent, object_type="banana", dataset_cache={}
+    )
+    assert acceptance["accepted"] is False
+    assert acceptance["hand_object_contact_frames"] == 101
+    assert acceptance["failure_reasons"] == [
+        "final_object_rotation_xyz_mean_error_above_35deg"
+    ]
+
+    row["objects"][0]["rot_aa"][-1] = [0.0, 0.0, 0.0]
+    acceptance = _current_parent_acceptance(
+        parent, object_type="banana", dataset_cache={}
+    )
+    assert acceptance["accepted"] is True
+
+
+def test_parent_variant_rank_prefers_larger_weakest_margin() -> None:
+    fragile_rotation = {
+        "weakest_normalized_margin": 0.05,
+        "sum_normalized_margins": 2.0,
+        "acceptance": {
+            "final_rotation_xyz_mean_error_deg": 33.25,
+            "hand_object_contact_frames": 300,
+        },
+        "late_contact_margin_frames": 30,
+        "parent_uuid": "fragile",
+    }
+    balanced = {
+        "weakest_normalized_margin": 0.4,
+        "sum_normalized_margins": 1.2,
+        "acceptance": {
+            "final_rotation_xyz_mean_error_deg": 20.0,
+            "hand_object_contact_frames": 150,
+        },
+        "late_contact_margin_frames": 8,
+        "parent_uuid": "balanced",
+    }
+    assert max((fragile_rotation, balanced), key=_rank) is balanced
 
 
 def test_targeted_selection_prefers_farther_half_and_spatial_coverage() -> None:

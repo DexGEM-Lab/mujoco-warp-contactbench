@@ -11,13 +11,75 @@ import pickle
 from typing import Any
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from sim.manorl.lance_v2 import file_sha256
 from sim.manorl.synthetic_parent import load_accepted_synthetic_parent
+from sim.manorl.synthesis_acceptance import (
+    count_hand_object_contact_frames,
+    evaluate_synthesis_acceptance,
+)
 from sim.manorl.trajectory import ReferenceTrajectory
 
 CONFIG_CONTRACT = "manorl_targeted_parent_selection_config_v1"
 SELECTION_CONTRACT = "manorl_targeted_parent_selection_v1"
+
+
+def _current_parent_acceptance(
+    parent: Any,
+    *,
+    object_type: str,
+    dataset_cache: dict[tuple[str, int], Any],
+) -> dict[str, object]:
+    """Recompute the current production gate from one persisted parent row."""
+
+    import lance
+
+    key = (parent.parent_dataset_path, parent.parent_dataset_version)
+    dataset = dataset_cache.get(key)
+    if dataset is None:
+        dataset = lance.dataset(
+            parent.parent_dataset_path, version=parent.parent_dataset_version
+        )
+        dataset_cache[key] = dataset
+    row = dataset.take(
+        [parent.parent_row_index],
+        columns=["index", "objects", "contact", "reference", "provenance"],
+    ).to_pylist()[0]
+    if (
+        (row.get("index") or {}).get("uuid") != parent.parent_row_uuid
+        or (row.get("provenance") or {}).get("source_identity")
+        != parent.source_identity
+    ):
+        raise RuntimeError("accepted-parent descriptor no longer binds its Lance row")
+    objects = row.get("objects") or []
+    reference = row.get("reference") or {}
+    if len(objects) != 1:
+        raise ValueError("accepted parent must persist exactly one object")
+    simulated_rotvec = np.asarray(
+        objects[0].get("rot_aa")[-1], dtype=np.float32
+    ).astype(np.float64)
+    reference_rotvec = np.asarray(
+        reference.get("object_rot_aa")[-1], dtype=np.float32
+    ).astype(np.float64)
+    contact_frames = count_hand_object_contact_frames(
+        row.get("contact") or [], target_object_name=object_type
+    )
+    # Historical v3 descriptors come from success-only parent rows. They do
+    # not persist termination codes, so descriptor eligibility supplies the
+    # completion predicate while rotation/contact are independently recomputed
+    # from the exact persisted row representation.
+    return evaluate_synthesis_acceptance(
+        trajectory_complete=True,
+        termination_reason_code=1,
+        simulated_final_object_quaternion_xyzw=Rotation.from_rotvec(
+            simulated_rotvec
+        ).as_quat(),
+        reference_final_object_quaternion_xyzw=Rotation.from_rotvec(
+            reference_rotvec
+        ).as_quat(),
+        hand_object_contact_frames=contact_frames,
+    ).to_dict()
 
 
 def _feature(
@@ -167,7 +229,7 @@ def _candidate_records(
     pair: str,
     parents_by_action: Path,
     predecoded_manifest: Path,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     object_type, action = pair.split(":", maxsplit=1)
     parents = json.loads(parents_by_action.read_text(encoding="utf-8"))
     mapping = (parents.get("actions") or {}).get(action)
@@ -180,6 +242,8 @@ def _candidate_records(
         if record.get("pair") == pair
     }
     output = []
+    rejected_by_gate = []
+    dataset_cache: dict[tuple[str, int], Any] = {}
     for identity, descriptor_raw in sorted(mapping.items()):
         record = records.get(identity)
         if record is None:
@@ -201,11 +265,27 @@ def _candidate_records(
             or parent.source_row_index != trajectory.identity.row_index
         ):
             raise RuntimeError(f"parent/pre60 identity binding changed: {identity}")
+        acceptance = _current_parent_acceptance(
+            parent,
+            object_type=object_type,
+            dataset_cache=dataset_cache,
+        )
+        candidate_base = {
+            "pair": pair,
+            "identity": identity,
+            "descriptor_path": str(descriptor_path.resolve()),
+            "parent_uuid": parent.parent_row_uuid,
+            "parent_acceptance": acceptance,
+        }
+        if not bool(acceptance["accepted"]):
+            rejected_by_gate.append(candidate_base)
+            continue
         delta = np.asarray(trajectory.q_ref[0, :3], dtype=np.float64) - np.asarray(
             trajectory.object_pos[0], dtype=np.float64
         )
         output.append(
             {
+                **candidate_base,
                 "pair": pair,
                 "identity": identity,
                 "descriptor_path": str(descriptor_path.resolve()),
@@ -224,12 +304,14 @@ def _candidate_records(
                 "pre60_azimuth_deg": math.degrees(
                     math.atan2(float(delta[1]), float(delta[0]))
                 ),
-                "parent_uuid": parent.parent_row_uuid,
             }
         )
     if len(output) < 5:
-        raise LookupError(f"{pair} has only {len(output)} bound parent/pre60 candidates")
-    return output
+        raise LookupError(
+            f"{pair} has only {len(output)} current-gate-qualified "
+            "parent/pre60 candidates"
+        )
+    return output, rejected_by_gate
 
 
 def select_from_config(config_path: Path, *, output_dir: Path) -> Path:
@@ -250,12 +332,18 @@ def select_from_config(config_path: Path, *, output_dir: Path) -> Path:
         runtime_manifest = str(
             item.get("runtime_predecoded_manifest") or local_manifest
         )
-        candidates = _candidate_records(
+        candidates, rejected_by_gate = _candidate_records(
             pair=pair,
             parents_by_action=Path(str(item["parents_by_action"])),
             predecoded_manifest=local_manifest,
         )
         selected, method = select_records(candidates, count=5)
+        method["current_gate_qualified_count"] = len(candidates)
+        method["current_gate_rejected_count"] = len(rejected_by_gate)
+        method["qualification_rule"] = (
+            "manorl_accepted_synthetic_parent_v3 completion evidence AND "
+            "current persisted-float32 final rotation/contact gate"
+        )
         pair_slug = pair.replace(":", "_")
         sidecar = output_dir / f"{pair_slug}.json"
         sidecar.write_text(
@@ -265,7 +353,8 @@ def select_from_config(config_path: Path, *, output_dir: Path) -> Path:
                     "pair": pair,
                     "method": method,
                     "selected": selected,
-                    "all_candidates": candidates,
+                    "all_qualified_candidates": candidates,
+                    "rejected_by_current_gate": rejected_by_gate,
                 },
                 indent=2,
                 sort_keys=True,
@@ -288,6 +377,7 @@ def select_from_config(config_path: Path, *, output_dir: Path) -> Path:
                             "pre60_wrist_object_xy_distance_m",
                             "pre60_wrist_object_distance_m",
                             "pre60_azimuth_deg",
+                            "parent_acceptance",
                         )
                     },
                 }
