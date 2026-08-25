@@ -20,5 +20,11 @@ Total target: 2,000 rows. This is bounded physical production; failed candidates
 - compact `synthetic_mano_target_replay_visual_v2_contact`.
 - Atomic quality gate: reason 1, final XYZ mean <=35 deg, >=101 persisted right-hand/target-object frames >0.2 N, plus prefix collision gate.
 
+# Parent screening
+Parent bootstrap may use bounded 2 cm object-XY variation to batch-screen more policy outcomes. Screening artifacts are intermediate and `publish=false`. Select five different source identities per pair only after the atomic gate and accepted-parent late-contact/anchor eligibility, prioritizing quality margin, pre60 distance, and spatial coverage.
+
+# Formal production XY contract
+Formal Near/Far collection does not draw a new random object-XY offset (`object_init_xy_offset_range_m = 0`). It reuses each selected accepted parent's fixed object offset as part of the parent ABI. Screening-time randomness is therefore frozen into the selected parent descriptor rather than resampled during production.
+
 # Infrastructure
 Server1 only. Inspect GPU ownership before launching. Do not interrupt other users. Deploy exact committed code and explicit artifacts with SHA256.

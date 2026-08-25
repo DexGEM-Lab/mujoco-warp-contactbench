@@ -185,6 +185,7 @@ def test_targeted_selection_prefers_farther_half_and_spatial_coverage() -> None:
             {
                 "identity": f"banana_02_{index:03d}",
                 "pre60_wrist_object_distance_m": distance,
+                "parent_quality": {"score": 0.5},
                 "pre60_wrist_object_delta_m": [
                     distance * np.cos(angle),
                     distance * np.sin(angle),
@@ -195,12 +196,26 @@ def test_targeted_selection_prefers_farther_half_and_spatial_coverage() -> None:
     selected, method = select_records(records, count=5)
     assert len(selected) == 5
     assert len({record["identity"] for record in selected}) == 5
-    assert all(
-        record["pre60_wrist_object_distance_m"]
-        >= method["farther_pool_threshold_m"]
-        for record in selected
-    )
+    assert method["qualified_pool_count"] == 10
     assert selected[0]["identity"] == "banana_02_009"
+
+
+def test_targeted_selection_does_not_choose_fragile_farthest_parent_first() -> None:
+    records = []
+    for index in range(10):
+        distance = 0.10 + 0.01 * index
+        quality = 0.02 if index == 9 else 0.8
+        records.append(
+            {
+                "identity": f"banana_02_{index:03d}",
+                "pre60_wrist_object_distance_m": distance,
+                "parent_quality": {"score": quality},
+                "pre60_wrist_object_delta_m": [distance, 0.01 * index, 0.0],
+            }
+        )
+    selected, _ = select_records(records, count=5)
+    assert selected[0]["identity"] != "banana_02_009"
+    assert selected[0]["parent_quality"]["score"] == 0.8
 
 
 def test_coverage_plan_rejects_descriptor_replacement(tmp_path: Path) -> None:

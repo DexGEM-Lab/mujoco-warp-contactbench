@@ -16,6 +16,8 @@ from scipy.spatial.transform import Rotation
 from sim.manorl.lance_v2 import file_sha256
 from sim.manorl.synthetic_parent import load_accepted_synthetic_parent
 from sim.manorl.synthesis_acceptance import (
+    SYNTHESIS_FINAL_ROTATION_XYZ_MEAN_ERROR_MAX_DEG,
+    SYNTHESIS_HAND_OBJECT_CONTACT_FRAME_COUNT_THRESHOLD,
     count_hand_object_contact_frames,
     evaluate_synthesis_acceptance,
 )
@@ -117,13 +119,11 @@ def select_records(
         dtype=np.float64,
     )
     threshold = float(np.quantile(distances, 0.5))
-    pool = [
-        record
-        for record in records
-        if float(record["pre60_wrist_object_distance_m"]) >= threshold
-    ]
-    if len(pool) < count:
-        raise RuntimeError("farther half contains fewer candidates than requested")
+    # Distance is a preference, not an eligibility gate. A hard farther-half
+    # cutoff can force a threshold-fragile parent when only five distant rows
+    # exist. Keep every physically qualified candidate and score distance
+    # softly alongside robustness and spatial separation.
+    pool = list(records)
     xy = [
         float(
             np.linalg.norm(
@@ -153,20 +153,32 @@ def select_records(
         / (distance_high - distance_low if distance_high > distance_low else 1.0)
         for record in pool
     }
-    selected = [
-        max(
-            pool,
-            key=lambda record: (
-                float(record["pre60_wrist_object_distance_m"]),
-                str(record["identity"]),
-            ),
-        )
-    ]
+    quality = {
+        str(record["identity"]): float(record["parent_quality"]["score"])
+        for record in pool
+    }
+    first = max(
+        pool,
+        key=lambda record: (
+            0.70 * quality[str(record["identity"])]
+            + 0.30 * distance_preference[str(record["identity"])],
+            quality[str(record["identity"])],
+            distance_preference[str(record["identity"])],
+            str(record["identity"]),
+        ),
+    )
+    selected = [first]
     trace: list[dict[str, Any]] = [
         {
             "rank": 1,
-            "selected_identity": selected[0]["identity"],
-            "reason": "maximum_pre60_wrist_object_distance",
+            "selected_identity": first["identity"],
+            "score": (
+                0.70 * quality[str(first["identity"])]
+                + 0.30 * distance_preference[str(first["identity"])]
+            ),
+            "quality_score": quality[str(first["identity"])],
+            "distance_preference": distance_preference[str(first["identity"])],
+            "reason": "maximum_0p70_quality_plus_0p30_distance",
         }
     ]
     while len(selected) < count:
@@ -183,21 +195,36 @@ def select_records(
                 )
                 for chosen in selected
             )
+            normalized_spatial_distance = min(
+                1.0, minimum_feature_distance / math.sqrt(6.0)
+            )
             score = (
-                0.75 * minimum_feature_distance
-                + 0.25 * distance_preference[identity]
+                0.50 * quality[identity]
+                + 0.35 * normalized_spatial_distance
+                + 0.15 * distance_preference[identity]
             )
             scored.append(
                 (
                     score,
-                    minimum_feature_distance,
+                    quality[identity],
+                    normalized_spatial_distance,
                     distance_preference[identity],
                     identity,
                     record,
                 )
             )
-        score, feature_distance, radial_score, identity, winner = max(
-            scored, key=lambda value: (value[0], value[1], value[2], value[3])
+        (
+            score,
+            quality_score,
+            feature_distance,
+            radial_score,
+            identity,
+            winner,
+        ) = max(
+            scored,
+            key=lambda value: (
+                value[0], value[1], value[2], value[3], value[4]
+            ),
         )
         selected.append(winner)
         trace.append(
@@ -205,20 +232,19 @@ def select_records(
                 "rank": len(selected),
                 "selected_identity": identity,
                 "score": score,
-                "minimum_feature_distance": feature_distance,
+                "quality_score": quality_score,
+                "normalized_minimum_spatial_distance": feature_distance,
                 "distance_preference": radial_score,
             }
         )
     return selected, {
         "candidate_count": len(records),
-        "farther_pool_rule": (
-            "pre60 frame0 right-wrist/initial-object 3D distance >= pair median"
-        ),
-        "farther_pool_threshold_m": threshold,
-        "farther_pool_count": len(pool),
+        "distance_preference_reference_median_m": threshold,
+        "qualified_pool_count": len(pool),
         "selection_rule": (
-            "first maximum distance; then greedy 0.75 normalized relative "
-            "XYZ/azimuth coverage + 0.25 normalized distance preference"
+            "all hard-qualified candidates; first 0.70 weakest quality margin + "
+            "0.30 distance; then greedy 0.50 quality + 0.35 normalized relative "
+            "XYZ/azimuth separation + 0.15 distance"
         ),
         "trace": trace,
     }
@@ -280,6 +306,38 @@ def _candidate_records(
         if not bool(acceptance["accepted"]):
             rejected_by_gate.append(candidate_base)
             continue
+        rotation_margin = min(
+            1.0,
+            max(
+                0.0,
+                (
+                    SYNTHESIS_FINAL_ROTATION_XYZ_MEAN_ERROR_MAX_DEG
+                    - float(acceptance["final_rotation_xyz_mean_error_deg"])
+                )
+                / SYNTHESIS_FINAL_ROTATION_XYZ_MEAN_ERROR_MAX_DEG,
+            ),
+        )
+        contact_margin = min(
+            1.0,
+            max(
+                0.0,
+                (
+                    int(acceptance["hand_object_contact_frames"])
+                    - SYNTHESIS_HAND_OBJECT_CONTACT_FRAME_COUNT_THRESHOLD
+                )
+                / SYNTHESIS_HAND_OBJECT_CONTACT_FRAME_COUNT_THRESHOLD,
+            ),
+        )
+        late_contact_frames = (
+            parent.retreat_last_contact_state_index
+            - parent.parent_movement_end_state_index
+        )
+        late_contact_margin = min(1.0, max(0.0, late_contact_frames / 15.0))
+        quality_margins = {
+            "final_rotation": rotation_margin,
+            "contact_frames": contact_margin,
+            "late_contact": late_contact_margin,
+        }
         delta = np.asarray(trajectory.q_ref[0, :3], dtype=np.float64) - np.asarray(
             trajectory.object_pos[0], dtype=np.float64
         )
@@ -290,6 +348,11 @@ def _candidate_records(
                 "identity": identity,
                 "descriptor_path": str(descriptor_path.resolve()),
                 "source_row_index": int(trajectory.identity.row_index),
+                "parent_quality": {
+                    "score": min(quality_margins.values()),
+                    "normalized_margins": quality_margins,
+                    "late_contact_margin_frames": late_contact_frames,
+                },
                 "pre60_wrist_position_m": np.asarray(
                     trajectory.q_ref[0, :3], dtype=np.float64
                 ).tolist(),
@@ -378,6 +441,7 @@ def select_from_config(config_path: Path, *, output_dir: Path) -> Path:
                             "pre60_wrist_object_distance_m",
                             "pre60_azimuth_deg",
                             "parent_acceptance",
+                            "parent_quality",
                         )
                     },
                 }
