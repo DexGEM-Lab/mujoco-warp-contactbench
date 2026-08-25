@@ -33,8 +33,8 @@ Current submodules:
 
 ```text
 assets/mano_hand_s02 -> git@192.168.10.116:ai/group-ai-public/group-sim-assets/mano_hand_s02.git
-assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ e7910212e54367008ecb7484e5e9354e822de03e (fixed pin)
-assets/all_assets/Assets/sim/mano_assets -> git@192.168.10.116:ai/group-dexcanvas/mano_assets.git @ 31596655f25281b0f4e20c47bf20ef0b19ff8f4a (nested fixed pin)
+assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ 7228b5cfce8d9a072ed4bded7a489cf73d521b68 (fixed pin)
+assets/all_assets/Assets/sim/mano_assets -> git@192.168.10.116:ai/group-dexcanvas/mano_assets.git @ cde03ef94816b589f574ca6f358695005d3d1a3f (nested fixed pin)
 3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
 ```
 
@@ -673,8 +673,8 @@ errors. No Isaac parity claim is made without an Isaac trace.
 The existing `3rd_party/lance_manager` pin may be broken or unavailable and is
 irrelevant to this input-only replay: this slice depends only on the public
 `pylance` reader. Authoritative multi-object runtimes use `all_assets` commit
-`e7910212e54367008ecb7484e5e9354e822de03e` with nested `mano_assets` commit
-`31596655f25281b0f4e20c47bf20ef0b19ff8f4a`; runtime entries pin every required
+`7228b5cfce8d9a072ed4bded7a489cf73d521b68` with nested `mano_assets` commit
+`cde03ef94816b589f574ca6f358695005d3d1a3f`; runtime entries pin every required
 URDF and CoACD piece by SHA256. The original curated hand/cube compatibility
 manifest retains its own source provenance and digests.
 

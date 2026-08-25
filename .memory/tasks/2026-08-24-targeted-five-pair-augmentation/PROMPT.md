@@ -1,7 +1,7 @@
 # Objective
-Produce prefix-only ManoRL augmentation for five pairs: banana:02, banana:18, bowl:04, cylinder6:03, cylinder6:14.
+Produce prefix-only ManoRL augmentation for three pairs: banana:02, banana:18, bowl:04.
 
-The original `cylinder6:09` Far/Near tasks were explicitly retired after cross-parent, cross-cell zero yield. Preserve their failure sidecars and zero-row evidence, but never resume them. Replace their 250 Far + 150 Near slots with a separately source-bound and digest-bound `cylinder6:14` plan; do not mutate the original plan.
+All Cylinder6 actions are cancelled by the user. Never resume `cylinder6:03`, `cylinder6:09`, or the diagnostic `cylinder6:14` replacement. Preserve their accepted rows, failure sidecars, packages, parent descriptors, and smoke evidence as `publish=false`, but exclude every Cylinder6 row from final validation, merge, and publication. Do not mutate the original plan; record runtime exclusions separately.
 
 # Selection
 For each pair select five source/accepted-parent trajectories. Prefer greater raw-reference right-wrist-to-initial-object distance at canonical pre60 frame 0, while maximizing coverage of relative wrist XYZ/direction rather than taking five clustered maxima.
@@ -11,7 +11,7 @@ Per pair, across the five selected parents:
 - Near: 150 accepted rows total.
 - Far: 250 accepted rows total.
 
-Total target remains 2,000 bounded slots before operational exclusions: the original `banana_02_1251/Far` exclusion removes 50 slots, while `cylinder6:14` replaces the retired `cylinder6:09` 400 slots. Failed candidates are never saved and shortfall must be reported honestly.
+The remaining three-pair plan contains 1,200 bounded slots before operational exclusions. The original `banana_02_1251/Far` exclusion removes 50 slots, leaving an operational target of 1,150 slots. Failed candidates are never saved and shortfall must be reported honestly.
 
 # Production contract
 - 120 Hz control/reference, 480 Hz physics x4.

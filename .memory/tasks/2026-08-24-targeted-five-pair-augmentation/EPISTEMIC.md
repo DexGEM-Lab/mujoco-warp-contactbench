@@ -36,8 +36,10 @@ The final selection has five parents for each of banana:02, banana:18, bowl:04, 
 
 The runner preserves the complete pre60 source tail, uses no retreat, disables formal random XY, reuses the parent fixed offset, applies atomic acceptance plus prefix collision gate before append, and journals pending writes for deterministic recovery.
 
-## Live question
-The original plan continues only for tasks other than index 0 and `cylinder6:09` indices 40–49. The immediate question is whether three action14 parent-screen rounds yield at least five different current-gate and late-contact-qualified source identities. If yes, select five quality-first diverse parents, build an independent 400-slot replacement plan, require Far/Near smoke plus independent validation, and then run it alongside the resumable original-plan remainder. If fewer than five emerge, inspect the failure mechanism before adding another screening round.
+## Current production scope
+The user cancelled all Cylinder6 actions after action09 and action14 both showed cross-parent zero prefix yield. Final production now contains only banana:02, banana:18, and bowl:04. Original-plan tasks 30–49 and excluded task0 never resume; Cylinder6 rows already written remain immutable `publish=false` evidence and are excluded from final merge/publication. The remaining operational target is 1,150 slots (three pairs ×400 minus banana_02_1251/Far 50). Resume only original-plan tasks 1–29, excluding task0.
+
+Action14 yielded 47 valid sources and five base-parent descriptors under both pre180-derived and corrected pre60 screening paths, but each five-parent Far/Near slot0 test produced 120/120 `deviation_before_source_completion` failures and zero accepted prefix rows. This rules out further action14 production under the current checkpoint/prefix ABI without a materially new mechanism; the user elected to stop instead.
 
 ## Vector production mechanism
 The serial coverage bottleneck was runner scheduling, not the environment or checkpoint: it built `EnvironmentConfig(num_envs=1)` and advanced one candidate at a time. `MujocoManoEnvironment` natively accepts per-world `TrajectoryBatch` references and one policy call consumes the full observation batch. Formal production now uses homogeneous-object waves, mixing action IDs, accepted parents, and Far/Near modes while avoiding cross-object model routing costs.
