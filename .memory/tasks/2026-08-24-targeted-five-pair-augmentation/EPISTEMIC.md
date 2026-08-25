@@ -7,15 +7,19 @@ Parent discovery is now deliberately broad and simple: batch-run candidates, app
 
 This removed fragile distance-only choices. Existing-pair selected minimum quality margins are banana:02 0.630, banana:18 0.190, bowl:04 0.892.
 
-## Cylinder6 pool
-Clean v530 pre60/pre180 bundles contain all 100 source trajectories. Explicit policy transfer runs both actions to reason 1. Screening rounds seed42–48 used zero offset once and bounded XY02 thereafter. XY02 is screening-only and every artifact is `publish=false`.
+## Cylinder6 pool and action replacement
+Clean v530 pre60/pre180 bundles contain all 100 source trajectories for the original actions 03/09. Explicit policy transfer runs both actions to reason 1. Screening rounds seed42–48 used zero offset once and bounded XY02 thereafter. XY02 is screening-only and every artifact is `publish=false`.
 
-Bulk seeds46–48 added enough late-contact parents. Merging all descriptor sets yields:
+Bulk seeds46–48 added enough late-contact parents. Merging all descriptor sets yielded:
 - cylinder6:03 — 8 distinct eligible source identities.
 - cylinder6:09 — 10 distinct eligible source identities.
 - 31 physical parent variants across 18 sources.
 
-Different no-prefix bootstrap datasets can reuse the same generated base UUID because legacy UUID identity omits seed/offset. Parent variants are therefore identified by accepted-parent descriptor SHA, which includes parent dataset/version/row, seed, fixed offset, checkpoint, source, and anchors. The final plan binds this SHA and fails closed on replacement. Final prefix rows remain unique through v4 augmentation identity.
+Formal coverage falsified parent-screen success as sufficient for action09: five selected parents across Far/Near produced zero accepted rows through 360 attempts and 20 exhausted cells, dominated by `deviation_before_source_completion`. The user retired all ten `cylinder6:09` tasks. They remain immutable zero-row negative evidence and must never resume.
+
+`cylinder6:14` replaces action09 under a new source/package/parent/plan chain. v530 contains 48 raw action14 rows; 47 decode under both pre60 and pre180, while `cylinder6_14_4943` is fixed-rejected because timestamps are not strictly increasing. Canonical package digests are pre60 `d8f155df676788097de891625901b40f51b63f40b817594ad9bffc0ca4a6c575` and pre180 `ed9a385db5218224faf57cefeed71f5841c83c5ef0d504e88139829ea3cdbb0c`. Parent screening uses pre180 policy transfer and bounded XY02; formal action14 coverage remains pre60, fixed-parent-offset, random XY=0.
+
+Different no-prefix bootstrap datasets can reuse the same generated base UUID because legacy UUID identity omits seed/offset. Parent variants are therefore identified by accepted-parent descriptor SHA, which includes parent dataset/version/row, seed, fixed offset, checkpoint, source, and anchors. Every final plan binds this SHA and fails closed on replacement. Final prefix rows remain unique through v4 augmentation identity.
 
 ## Formal XY contract
 Formal Near/Far collection draws no new random object XY offset: `formal_random_object_xy_offset_range_m = 0.0`. Each selected accepted parent retains its fixed object offset as part of the parent ABI. Screening randomness is frozen into the selected descriptor and is not resampled during production.
@@ -33,7 +37,7 @@ The final selection has five parents for each of banana:02, banana:18, bowl:04, 
 The runner preserves the complete pre60 source tail, uses no retreat, disables formal random XY, reuses the parent fixed offset, applies atomic acceptance plus prefix collision gate before append, and journals pending writes for deterministic recovery.
 
 ## Live question
-A formal-runner smoke is running on the highest-quality selected cylinder6:03 and cylinder6:09 parents for Far/Near slot0. The decisive evidence is at least one accepted row plus independent validation of v4 identity, random XY=0 manifest, parent fixed offset, complete tail, and atomic gate. On success, start the resumable formal 2,000-slot run.
+The original plan continues only for tasks other than index 0 and `cylinder6:09` indices 40–49. The immediate question is whether three action14 parent-screen rounds yield at least five different current-gate and late-contact-qualified source identities. If yes, select five quality-first diverse parents, build an independent 400-slot replacement plan, require Far/Near smoke plus independent validation, and then run it alongside the resumable original-plan remainder. If fewer than five emerge, inspect the failure mechanism before adding another screening round.
 
 ## Vector production mechanism
 The serial coverage bottleneck was runner scheduling, not the environment or checkpoint: it built `EnvironmentConfig(num_envs=1)` and advanced one candidate at a time. `MujocoManoEnvironment` natively accepts per-world `TrajectoryBatch` references and one policy call consumes the full observation batch. Formal production now uses homogeneous-object waves, mixing action IDs, accepted parents, and Far/Near modes while avoiding cross-object model routing costs.

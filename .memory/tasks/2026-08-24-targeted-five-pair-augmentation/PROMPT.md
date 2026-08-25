@@ -1,5 +1,7 @@
 # Objective
-Produce prefix-only ManoRL augmentation for five pairs: banana:02, banana:18, bowl:04, cylinder6:03, cylinder6:09.
+Produce prefix-only ManoRL augmentation for five pairs: banana:02, banana:18, bowl:04, cylinder6:03, cylinder6:14.
+
+The original `cylinder6:09` Far/Near tasks were explicitly retired after cross-parent, cross-cell zero yield. Preserve their failure sidecars and zero-row evidence, but never resume them. Replace their 250 Far + 150 Near slots with a separately source-bound and digest-bound `cylinder6:14` plan; do not mutate the original plan.
 
 # Selection
 For each pair select five source/accepted-parent trajectories. Prefer greater raw-reference right-wrist-to-initial-object distance at canonical pre60 frame 0, while maximizing coverage of relative wrist XYZ/direction rather than taking five clustered maxima.
@@ -9,7 +11,7 @@ Per pair, across the five selected parents:
 - Near: 150 accepted rows total.
 - Far: 250 accepted rows total.
 
-Total target: 2,000 rows. This is bounded physical production; failed candidates are never saved and shortfall must be reported honestly.
+Total target remains 2,000 bounded slots before operational exclusions: the original `banana_02_1251/Far` exclusion removes 50 slots, while `cylinder6:14` replaces the retired `cylinder6:09` 400 slots. Failed candidates are never saved and shortfall must be reported honestly.
 
 # Production contract
 - 120 Hz control/reference, 480 Hz physics x4.
