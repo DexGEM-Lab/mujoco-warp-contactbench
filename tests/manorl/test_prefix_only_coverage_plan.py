@@ -24,6 +24,12 @@ from tools.run_manorl_prefix_only_coverage_plan import (
     _sample_trajectory,
     load_plan,
 )
+from tools.run_manorl_prefix_only_coverage_plan_vectorized import (
+    CandidateAssignment,
+    TaskState,
+    _mark_running,
+    _next_candidate,
+)
 from tools.select_manorl_targeted_parents import (
     _current_parent_acceptance,
     select_records,
@@ -97,6 +103,76 @@ def _plan(tmp_path: Path) -> Path:
     path = tmp_path / "plan.json"
     path.write_text(json.dumps(values), encoding="utf-8")
     return path
+
+
+def _task_state(tmp_path: Path) -> TaskState:
+    task = {
+        "task_index": 3,
+        "pair": "banana:02",
+        "source_identity": "banana_02_001",
+        "mode": "far",
+        "slots": _slots(2, seed_start=1_000),
+    }
+    status = {
+        "contract": STATUS_CONTRACT,
+        "task_index": 3,
+        "pair": "banana:02",
+        "source_identity": "banana_02_001",
+        "mode": "far",
+        "attempts_total": 0,
+        "pending_attempt": None,
+        "accepted": {},
+        "failures": {},
+        "exhausted": {},
+        "attempts_complete": False,
+        "all_slots_succeeded": False,
+        "complete": False,
+    }
+    return TaskState(
+        task=task,
+        parent=SimpleNamespace(),
+        source=SimpleNamespace(),
+        source_index={},
+        source_metadata={},
+        output=tmp_path / "row.lance",
+        status_path=tmp_path / "task.status.json",
+        manifest_path=tmp_path / "row.lance.manifest.json",
+        status=status,
+    )
+
+
+def test_vector_scheduler_reserves_one_task_local_candidate(tmp_path: Path) -> None:
+    state = _task_state(tmp_path)
+    state.status["failures"]["0"] = [
+        {"fallback_rank": rank} for rank in range(3)
+    ]
+    assignment = _next_candidate(state)
+    assert assignment == CandidateAssignment(
+        task_index=3,
+        slot_index=0,
+        fallback_rank=3,
+        seed=1_003,
+        attempt_number=1,
+        episode_index=0,
+    )
+    _mark_running(state, assignment)
+    assert state.status["attempts_total"] == 1
+    assert state.status["pending_attempt"]["episode_seed"] == 1_003
+    with pytest.raises(RuntimeError, match="already has a pending attempt"):
+        _mark_running(state, assignment)
+
+
+def test_vector_scheduler_exhausts_one_slot_then_advances(tmp_path: Path) -> None:
+    state = _task_state(tmp_path)
+    state.status["failures"]["0"] = [
+        {"fallback_rank": rank} for rank in range(12)
+    ]
+    assignment = _next_candidate(state)
+    assert assignment is not None
+    assert assignment.slot_index == 1
+    assert assignment.fallback_rank == 0
+    assert assignment.seed == 1_012
+    assert state.status["exhausted"]["0"]["candidate_attempts"] == 12
 
 
 def _contact_frames(count: int) -> list[list[dict[str, object]]]:
