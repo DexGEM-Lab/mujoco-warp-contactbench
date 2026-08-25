@@ -1,7 +1,7 @@
 # Objective
-Produce prefix-only ManoRL augmentation for three pairs: banana:02, banana:18, bowl:04.
+Produce prefix-only ManoRL augmentation for four pairs: banana:02, banana:18, bowl:04, mayonnaisebottle:04.
 
-All Cylinder6 actions are cancelled by the user. Never resume `cylinder6:03`, `cylinder6:09`, or the diagnostic `cylinder6:14` replacement. Preserve their accepted rows, failure sidecars, packages, parent descriptors, and smoke evidence as `publish=false`, but exclude every Cylinder6 row from final validation, merge, and publication. Do not mutate the original plan; record runtime exclusions separately.
+All Cylinder6 actions are cancelled by the user. Never resume `cylinder6:03`, `cylinder6:09`, or the diagnostic `cylinder6:14` replacement. Preserve their accepted rows, failure sidecars, packages, parent descriptors, and smoke evidence as `publish=false`, but exclude every Cylinder6 row from final validation, merge, and publication. Mayonnaisebottle:04 replaces the cancelled Cylinder6 400-slot allocation under a separate immutable plan; do not mutate the original five-pair plan.
 
 # Selection
 For each pair select five source/accepted-parent trajectories. Prefer greater raw-reference right-wrist-to-initial-object distance at canonical pre60 frame 0, while maximizing coverage of relative wrist XYZ/direction rather than taking five clustered maxima.
@@ -11,7 +11,7 @@ Per pair, across the five selected parents:
 - Near: 150 accepted rows total.
 - Far: 250 accepted rows total.
 
-The remaining three-pair plan contains 1,200 bounded slots before operational exclusions. The original `banana_02_1251/Far` exclusion removes 50 slots, leaving an operational target of 1,150 slots. Failed candidates are never saved and shortfall must be reported honestly.
+The retained original three-pair plan contains 1,200 bounded slots before operational exclusions. The original `banana_02_1251/Far` exclusion removes 50 slots, leaving 1,150 original-plan slots. The independent mayonnaisebottle:04 replacement contributes 400 slots, so aggregate operational target is 1,550 slots. Failed candidates are never saved and shortfall must be reported honestly.
 
 # Production contract
 - 120 Hz control/reference, 480 Hz physics x4.
