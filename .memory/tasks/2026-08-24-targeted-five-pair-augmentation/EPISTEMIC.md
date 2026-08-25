@@ -1,29 +1,36 @@
 # Current model
 
-## Parent qualification has two distinct layers
-`manorl_accepted_synthetic_parent_v3` proves a row can supply source identity, raw hand start, object offset, movement_end+15 mapping, and late-contact geometry. It does not prove that the historical row passes the newer persisted-float32 three-rule gate.
+## Parent qualification and selection
+A production parent must pass both the current persisted-float32 atomic gate and accepted-parent late-contact/anchor eligibility. Historical descriptor existence alone is insufficient; `banana_02_1256` was the GPU counterexample (24/24 prefix candidates complete/contact-qualified but 46.03–56.27 deg final rotation).
 
-Every production parent must pass both:
-1. current parent-row gate: completion evidence from success-only parent provenance, final XYZ mean rotation <=35 deg, and >=101 persisted right-hand/object contact frames;
-2. v3 descriptor eligibility: solved contact reaches at least movement end and movement_end+15/source mapping plus nonzero later horizontal geometry remain valid.
+Parent discovery is now deliberately broad and simple: batch-run candidates, apply hard gates, then choose robust and spatially diverse parents. The final selector uses every hard-qualified candidate; pre60 wrist/object distance is a soft preference. Quality is the weakest normalized margin among final rotation to 35 deg, contact frames above 100, and last-contact lateness through movement_end+15. The first parent scores 0.70 quality + 0.30 distance; subsequent parents score 0.50 quality + 0.35 spatial separation + 0.15 distance.
 
-A real GPU counterexample established the distinction. Historical descriptor `banana_02_1256` produced 12 Far and 12 Near candidates in one fixed coverage cell. Every candidate completed, had 226–237 contact frames, and had no prefix collision; all failed only final rotation at 46.03–56.27 deg. The old 15-parent/1,200-target plan is diagnostic-only and must not be produced.
+This removed fragile distance-only choices. Existing-pair selected minimum quality margins are banana:02 0.630, banana:18 0.190, bowl:04 0.892.
 
-Historical current-gate audit leaves enough candidates to reselect existing pairs: banana:02 25/32, banana:18 9/29, bowl:04 47/48. The replacement gate-qualified plan has digest `1dc8714355876c428a3715559cd02e5c96f6edc56fde8c001a2106a42d2b254b`.
+## Cylinder6 pool
+Clean v530 pre60/pre180 bundles contain all 100 source trajectories. Explicit policy transfer runs both actions to reason 1. Screening rounds seed42–48 used zero offset once and bounded XY02 thereafter. XY02 is screening-only and every artifact is `publish=false`.
 
-## Cylinder6 source and policy evidence
-Clean v530 provides 50 trajectories each for cylinder6:03 and cylinder6:09; canonical pre60 and pre180 packages/predecoded bundles contain all 100 with zero source rejection. Explicit policy transfer successfully runs both actions to reason 1.
+Bulk seeds46–48 added enough late-contact parents. Merging all descriptor sets yields:
+- cylinder6:03 — 8 distinct eligible source identities.
+- cylinder6:09 — 10 distinct eligible source identities.
+- 31 physical parent variants across 18 sources.
 
-Zero-offset seed42 all100 bootstrap isolates different failure mechanisms:
-- action03: rotation is usually accurate (median 5.27 deg), but contact is too short (median 85.5 frames); four rows pass the atomic gate and only `cylinder6_03_3951` remains descriptor-eligible.
-- action09: contact is ample (median 360 frames), but final rotation is wrong (median 89.04 deg); only `cylinder6_09_4040` passes and remains descriptor-eligible.
+Different no-prefix bootstrap datasets can reuse the same generated base UUID because legacy UUID identity omits seed/offset. Parent variants are therefore identified by accepted-parent descriptor SHA, which includes parent dataset/version/row, seed, fixed offset, checkpoint, source, and anchors. The final plan binds this SHA and fails closed on replacement. Final prefix rows remain unique through v4 augmentation identity.
 
-The established 2 cm XY variation at seed43 changes the attraction basin rather than improving one fixed direction. Atomic-gate yield is one action03 and four action09 rows. Descriptor eligibility retains `cylinder6_03_3945` and action09 identities `cylinder6_09_4013`, `cylinder6_09_4043`, `cylinder6_09_4069`; the fourth action09 gate pass loses contact before movement end. Across seed42+43, current distinct eligible counts are action03=2 and action09=4, below the required 5+5.
+## Formal XY contract
+Formal Near/Far collection draws no new random object XY offset: `formal_random_object_xy_offset_range_m = 0.0`. Each selected accepted parent retains its fixed object offset as part of the parent ABI. Screening randomness is frozen into the selected descriptor and is not resampled during production.
 
-Successful seed43 XY offsets span multiple quadrants, so no single offset direction explains the intervention. Seed44 repeats the same symmetric XY02 distribution as an independent replication. Prediction: it should yield a small set of different source identities if XY perturbation genuinely exposes nearby policy basins. Stop when merged descriptor sets reach five distinct identities per action; if action03 remains below five, inspect late-contact dynamics before any further seed.
+## Final plan
+The final selection has five parents for each of banana:02, banana:18, bowl:04, cylinder6:03, cylinder6:09. Plan:
+- path: `/mnt/user-home/jay/data/manorl_targeted_five_pair_augmentation_20260824/final_five_pair_coverage_plan_v1.json`
+- digest: `6d320ada8c6bf3de6ed057a02a3bd26bc99ef867fcd50d51ee633a2275434d9d`
+- 25 parents, 50 parent/mode tasks.
+- 250 Far and 150 Near target slots per pair; 2,000 total.
+- 24,000 unique same-cell fallback seeds.
+- Far: 5 radius x 5 azimuth x 2 height per parent.
+- Near: 5 empirical distance x 3 azimuth x 2 height per parent.
 
-## Multi-round identity rule
-Different bootstrap rounds may produce multiple eligible parents for the same source. They are never silently overwritten. The selected variant maximizes the weakest normalized margin among rotation headroom to 35 deg, contact headroom above 100 frames, and late-contact headroom through movement_end+15; all variants remain auditable.
+The runner preserves the complete pre60 source tail, uses no retreat, disables formal random XY, reuses the parent fixed offset, applies atomic acceptance plus prefix collision gate before append, and journals pending writes for deterministic recovery.
 
-## Final augmentation mechanism
-For each gate-qualified selected parent, Far has 50 fixed spatial slots (5 radius x 5 azimuth x 2 height) and Near has 30 empirical slots (5 distance x 3 azimuth x 2 height), each with 12 same-cell fallback seeds. Failures cannot cross cells. The runner preserves the complete pre60 source tail, uses no retreat, applies the atomic gate plus prefix collision gate before Lance append, and journals pending writes for deterministic recovery.
+## Live question
+A formal-runner smoke is running on the highest-quality selected cylinder6:03 and cylinder6:09 parents for Far/Near slot0. The decisive evidence is at least one accepted row plus independent validation of v4 identity, random XY=0 manifest, parent fixed offset, complete tail, and atomic gate. On success, start the resumable formal 2,000-slot run.
