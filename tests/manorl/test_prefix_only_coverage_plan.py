@@ -79,6 +79,8 @@ def _plan(tmp_path: Path) -> Path:
                 "parent_uuid": "parent",
                 "descriptor_path": str(descriptor),
                 "descriptor_sha256": file_sha256(descriptor),
+                "parent_object_init_xy_offset_m": [0.01, -0.01],
+                "formal_random_object_xy_offset_range_m": 0.0,
                 "predecoded_manifest": str(manifest),
                 "mode": mode,
                 "target_rows": count,
@@ -216,6 +218,18 @@ def test_targeted_selection_does_not_choose_fragile_farthest_parent_first() -> N
     selected, _ = select_records(records, count=5)
     assert selected[0]["identity"] != "banana_02_009"
     assert selected[0]["parent_quality"]["score"] == 0.8
+
+
+def test_coverage_plan_rejects_formal_random_xy_sampling(tmp_path: Path) -> None:
+    path = _plan(tmp_path)
+    values = json.loads(path.read_text())
+    values["tasks"][0]["formal_random_object_xy_offset_range_m"] = 0.02
+    values["plan_digest"] = _canonical_digest(
+        {key: value for key, value in values.items() if key != "plan_digest"}
+    )
+    path.write_text(json.dumps(values), encoding="utf-8")
+    with pytest.raises(ValueError, match="disable random object XY"):
+        load_plan(path)
 
 
 def test_coverage_plan_rejects_descriptor_replacement(tmp_path: Path) -> None:

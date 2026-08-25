@@ -266,6 +266,8 @@ def _build_task(
         "parent_uuid": parent.parent_row_uuid,
         "descriptor_path": str(descriptor_path.resolve()),
         "descriptor_sha256": file_sha256(descriptor_path),
+        "parent_object_init_xy_offset_m": list(parent.object_init_xy_offset_m),
+        "formal_random_object_xy_offset_range_m": 0.0,
         "predecoded_manifest": str(predecoded_manifest.resolve()),
         "predecoded_record_sha256": record.get("pickle_sha256"),
         "source_dataset_path_alias": (

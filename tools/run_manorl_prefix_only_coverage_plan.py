@@ -118,6 +118,8 @@ def load_plan(path: Path) -> dict[str, Any]:
             raise ValueError("coverage task mode/slot count changed")
         if task.get("target_rows") != expected_slots:
             raise ValueError("coverage task target differs from slot count")
+        if task.get("formal_random_object_xy_offset_range_m") != 0.0:
+            raise ValueError("formal coverage task must disable random object XY sampling")
         for slot_index, slot in enumerate(slots):
             if slot.get("slot_index") != slot_index:
                 raise ValueError("coverage slot indices must be contiguous")
@@ -550,6 +552,11 @@ def _task_manifest(
                         )[:1]
                     ],
                 }
+            },
+            "object_xy": {
+                "formal_random_offset_range_m": 0.0,
+                "parent_fixed_offset_m": task["parent_object_init_xy_offset_m"],
+                "semantics": "no formal resampling; reuse accepted-parent ABI offset",
             },
             "coverage": {
                 "plan_contract": PLAN_CONTRACT,
