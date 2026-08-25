@@ -34,3 +34,15 @@ The runner preserves the complete pre60 source tail, uses no retreat, disables f
 
 ## Live question
 A formal-runner smoke is running on the highest-quality selected cylinder6:03 and cylinder6:09 parents for Far/Near slot0. The decisive evidence is at least one accepted row plus independent validation of v4 identity, random XY=0 manifest, parent fixed offset, complete tail, and atomic gate. On success, start the resumable formal 2,000-slot run.
+
+## Vector production mechanism
+The serial coverage bottleneck was runner scheduling, not the environment or checkpoint: it built `EnvironmentConfig(num_envs=1)` and advanced one candidate at a time. `MujocoManoEnvironment` natively accepts per-world `TrajectoryBatch` references and one policy call consumes the full observation batch. Formal production now uses homogeneous-object waves, mixing action IDs, accepted parents, and Far/Near modes while avoiding cross-object model routing costs.
+
+Candidate semantics remain independent. Every vector row binds its plan seed, parent fixed XY offset, point-template seed, prefix sample, attempt/episode number, collision result, atomic acceptance, UUID, status journal, and per-task Lance dataset. A new per-env point-template seed API reproduces the one-world reset RNG contract rather than using one shared batch RNG or `seed+env_id`.
+
+Measured Server1 GPU2 throughput:
+- Serial N=1: about 240 candidate episodes/hour.
+- N=10: 529.51/hour, peak 18,959 MiB.
+- N=32: 1,449.22/hour, peak 18,987 MiB, about 6.04x serial.
+
+Warp contact rollouts are not bitwise reproducible even across same-seed serial process restarts; contact dynamics amplify tiny floating-point differences. Therefore equivalence is defined by unchanged reference/ABI and independent actual-row gates, not identical final poses for a seed. Vector smoke rows independently passed validators and retained float32-exact canonical tails.
