@@ -10,6 +10,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from sim.manorl.approach_prefix import ApproachPrefixConfig
+from sim.manorl.lance_v2 import file_sha256
 from tools.build_manorl_prefix_only_coverage_plan import (
     PLAN_CONTRACT,
     _canonical_digest,
@@ -77,6 +78,7 @@ def _plan(tmp_path: Path) -> Path:
                 "source_identity": "banana_02_001",
                 "parent_uuid": "parent",
                 "descriptor_path": str(descriptor),
+                "descriptor_sha256": file_sha256(descriptor),
                 "predecoded_manifest": str(manifest),
                 "mode": mode,
                 "target_rows": count,
@@ -199,6 +201,15 @@ def test_targeted_selection_prefers_farther_half_and_spatial_coverage() -> None:
         for record in selected
     )
     assert selected[0]["identity"] == "banana_02_009"
+
+
+def test_coverage_plan_rejects_descriptor_replacement(tmp_path: Path) -> None:
+    path = _plan(tmp_path)
+    plan = load_plan(path)
+    descriptor = Path(plan["tasks"][0]["descriptor_path"])
+    descriptor.write_text('{"changed": true}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="descriptor hash changed"):
+        load_plan(path)
 
 
 def test_coverage_plan_loads_50_far_30_near_and_rejects_tampering(

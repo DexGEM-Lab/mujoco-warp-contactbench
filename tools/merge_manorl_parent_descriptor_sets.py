@@ -34,6 +34,7 @@ def _variant_record(
     dataset_cache: dict[tuple[str, int], Any],
 ) -> dict[str, Any]:
     parent = load_accepted_synthetic_parent(descriptor_path)
+    descriptor_sha256 = file_sha256(descriptor_path)
     object_type, action, _ = parent.source_identity.split("_", maxsplit=2)
     acceptance = _current_parent_acceptance(
         parent, object_type=object_type, dataset_cache=dataset_cache
@@ -65,7 +66,10 @@ def _variant_record(
         "source_identity": parent.source_identity,
         "action": action,
         "descriptor_path": str(descriptor_path.resolve()),
-        "descriptor_sha256": file_sha256(descriptor_path),
+        "descriptor_sha256": descriptor_sha256,
+        "variant_identity": (
+            "manorl_accepted_parent_descriptor_variant_v1:" + descriptor_sha256
+        ),
         "parent_uuid": parent.parent_row_uuid,
         "parent_dataset_path": parent.parent_dataset_path,
         "parent_dataset_version": parent.parent_dataset_version,
@@ -123,9 +127,13 @@ def merge_sets(inputs: list[Path], *, output_dir: Path) -> Path:
     selected: dict[str, dict[str, Any]] = {}
     actions: dict[str, dict[str, str]] = {}
     for identity, variants in sorted(variants_by_identity.items()):
-        uuids = [str(record["parent_uuid"]) for record in variants]
-        if len(set(uuids)) != len(uuids):
-            raise ValueError(f"duplicate parent UUID variant for {identity}")
+        semantic_ids = [str(record["variant_identity"]) for record in variants]
+        if len(set(semantic_ids)) != len(semantic_ids):
+            raise ValueError(f"duplicate parent descriptor variant for {identity}")
+        # Base rollout UUIDs intentionally predate seed/offset identity and can
+        # repeat across bootstrap datasets. The descriptor digest includes the
+        # parent dataset/version/row, seed, offset, checkpoint, and anchors, so
+        # it is the correct physical parent-variant identity.
         winner = max(variants, key=_rank)
         action = str(winner["action"])
         actions.setdefault(action, {})[identity] = str(winner["descriptor_path"])
@@ -149,6 +157,10 @@ def merge_sets(inputs: list[Path], *, output_dir: Path) -> Path:
                 "contact_frames": "(frames-100)/100",
                 "late_contact": "(last_contact-movement_end)/15",
             },
+            "variant_identity": (
+                "SHA256 of canonical accepted-parent descriptor; base rollout UUID "
+                "may repeat across no-prefix seed/offset bootstrap datasets"
+            ),
             "ties": (
                 "maximum sum margins, lower rotation error, more contact frames, "
                 "later contact, lexical parent UUID"

@@ -133,8 +133,13 @@ def load_plan(path: Path) -> dict[str, Any]:
                 if seed in seen_seeds:
                     raise ValueError(f"coverage plan repeats episode seed {seed}")
                 seen_seeds.add(seed)
-        if not Path(str(task.get("descriptor_path") or "")).is_file():
+        descriptor_path = Path(str(task.get("descriptor_path") or ""))
+        if not descriptor_path.is_file():
             raise FileNotFoundError(f"accepted-parent descriptor is absent for task {task_index}")
+        if file_sha256(descriptor_path) != task.get("descriptor_sha256"):
+            raise RuntimeError(
+                f"accepted-parent descriptor hash changed for task {task_index}"
+            )
         if not Path(str(task.get("predecoded_manifest") or "")).is_file():
             raise FileNotFoundError(f"predecoded manifest is absent for task {task_index}")
     return values

@@ -265,6 +265,7 @@ def _build_task(
         "source_identity": identity,
         "parent_uuid": parent.parent_row_uuid,
         "descriptor_path": str(descriptor_path.resolve()),
+        "descriptor_sha256": file_sha256(descriptor_path),
         "predecoded_manifest": str(predecoded_manifest.resolve()),
         "predecoded_record_sha256": record.get("pickle_sha256"),
         "source_dataset_path_alias": (
