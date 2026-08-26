@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Kinematic retreat-row construction for +30 clear rows (batch 1).
+"""Kinematic retreat-row construction for +30 clear rows (batch 1) and
+per-row first-clear anchor rows (batch 2).
 
-Mechanism: for each base row whose persisted float32 solved right-hand/target-object
-normal force at movement_end+30 is <= 0.2 N, construct a 30-frame (250 ms @120 Hz)
-deterministic retreat trajectory. Frame 0 is byte-equal to the base row anchor state;
-the right hand wrist follows a C2 quintic out to a per-pair Near-cell target; fingers
-hold the anchor pose; the object holds the anchor pose exactly. No MuJoCo re-simulation.
+Mechanism: for each base row, select the anchor at the first offset in
+{30, 40, 50, 75} after movement_end whose persisted float32 solved
+right-hand/target-object normal force is <= 0.2 N. Frame 0 of the retreat is
+byte-equal to that anchor state; the right hand wrist follows a C2 quintic out
+to a per-pair Near-cell target; fingers and object hold the anchor pose.
+No MuJoCo re-simulation.
 
-Validation (per row, hard gate): finite values, wrist C2 smoothness, hand-object
-clearance along the path (conservative point-to-mesh), joint limits, monotone
-timestamps, endpoint cell hit, object static. Any failure excludes the row.
+Validation (per row, hard gate): finite values, wrist XYZ joint limits,
+monotone timestamps, monotone hand-object OBB separation, final OBB clearance,
+object static, frame0 exact. Clearance failures retry with fresh cell targets
+up to --retry-clearance attempts. Any unresolved failure excludes the row.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from sim.manorl.lance_v2 import (
 )
 
 THRESHOLD_N = 0.2
-ANCHOR_OFFSET = 30
+ANCHOR_OFFSETS = (30, 40, 50, 75)
 RETREAT_STEPS = 30
 CELL_SHAPE = (5, 3, 2)
 CLEARANCE_M = 0.02
@@ -49,9 +52,8 @@ def _canonical_digest(value: object) -> str:
     ).hexdigest()
 
 
-def anchor_contact(row: dict, object_name: str) -> bool:
-    end = int(row["trajectory_metadata"]["trajectory_info"]["object_move"][0]["end_frame"])
-    frame = row["contact"][ANCHOR_OFFSET + end]
+def anchor_contact_at(row: dict, object_name: str, index: int) -> bool:
+    frame = row["contact"][index]
     for entry in frame or []:
         if entry.get("hand_name") != "right" or entry.get("object_name") != object_name:
             continue
@@ -60,6 +62,19 @@ def anchor_contact(row: dict, object_name: str) -> bool:
             if f.shape == (3,) and np.linalg.norm(f) > np.float32(THRESHOLD_N):
                 return True
     return False
+
+
+def first_clear_offset(row: dict, object_name: str) -> int | None:
+    """First offset in ANCHOR_OFFSETS with no solved hand-object contact."""
+    end = int(row["trajectory_metadata"]["trajectory_info"]["object_move"][0]["end_frame"])
+    total = int(row["trajectory_metadata"]["total_frames"])
+    for off in ANCHOR_OFFSETS:
+        index = end + off
+        if index >= total:
+            continue
+        if not anchor_contact_at(row, object_name, index):
+            return off
+    return None
 
 
 def _quintic(start: np.ndarray, end: np.ndarray, frames: int, dt: float) -> np.ndarray:
@@ -98,7 +113,6 @@ def _obb_distances(
     points: np.ndarray, object_world: np.ndarray, object_quat_xyzw: np.ndarray,
     object_vertices_local: np.ndarray,
 ) -> np.ndarray:
-    """Signed-ish distance from points to the object OBB (>=0 outside, 0 inside)."""
     R = Rotation.from_quat(object_quat_xyzw).as_matrix()
     proj = object_vertices_local @ R.T
     lo = proj.min(axis=0) + object_world
@@ -118,12 +132,11 @@ def _hand_object_clearance(
     object_vertices_local: np.ndarray,
     margin: float,
 ) -> bool:
-    """A retreat path is valid if the wrist moves monotonically away from the
-    object (min per-frame keypoint OBB distance is non-decreasing) and the final
+    """Retreat path is valid if the wrist moves monotonically away from the
+    object (min per-frame keypoint OBB distance non-decreasing) and the final
     frame is outside the OBB by at least ``margin``. The anchor itself may
-    legally overlap the object (no solved contact >0.2 N at +30, but the hand can
-    still hover close); requiring the whole path to be outside would reject every
-    real retreat."""
+    legally overlap the object (no solved contact >0.2 N at the anchor, but the
+    hand can still hover close)."""
     anchor_dist = _obb_distances(anchor_mano_joint_pos, object_world, object_quat_xyzw, object_vertices_local)
     min_anchor = float(np.min(anchor_dist))
     for delta in wrist_deltas:
@@ -141,6 +154,7 @@ def _hand_object_clearance(
 def build_retreat_row(
     base: dict,
     *,
+    anchor_offset: int,
     target: np.ndarray,
     object_world: np.ndarray,
     object_quat_xyzw: np.ndarray,
@@ -149,10 +163,14 @@ def build_retreat_row(
     joint_upper: np.ndarray,
     cell: tuple[int, int, int],
     attempt_seed: int,
+    batch_tag: str,
 ) -> tuple[dict | None, dict]:
     right = base["trajectory_metadata"]["hand_slots"].index("right")
     end = int(base["trajectory_metadata"]["trajectory_info"]["object_move"][0]["end_frame"])
-    anchor = ANCHOR_OFFSET + end
+    anchor = anchor_offset + end
+    total = int(base["trajectory_metadata"]["total_frames"])
+    if anchor + RETREAT_STEPS > total:
+        return None, {"excluded": "insufficient_frames", "anchor_offset": anchor_offset, "remaining_frames": total - anchor}
     T = RETREAT_STEPS
     dt = 1.0 / 120.0
     q_anchor = np.asarray(base["hands"][right]["urdf_dof"][anchor], dtype=np.float64)
@@ -163,6 +181,8 @@ def build_retreat_row(
     wrist_deltas = path - wrist_anchor
     diag = {
         "cell": list(cell),
+        "anchor_offset": anchor_offset,
+        "remaining_frames": total - anchor,
         "target_object_local": target.tolist(),
         "endpoint_world": wrist_target_abs.tolist(),
         "path_speed_max_m_s": float(np.max(np.linalg.norm(np.diff(path, axis=0), axis=1)) / dt),
@@ -198,7 +218,7 @@ def build_retreat_row(
 
     prov = dict(base["provenance"])
     prov["contract"] = SYNTHETIC_LANCE_COMPACT_V2_CONTACT_CONTRACT
-    prov["augmentation_identity"] = "manorl_retreat_extension_v1_batch1:kinematic"
+    prov["augmentation_identity"] = f"manorl_retreat_extension_v1_{batch_tag}:kinematic"
     prov["seed"] = attempt_seed
     new_uuid = str(uuid_mod.uuid4())
     row = {
@@ -270,20 +290,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--row-filter", choices=("clear", "contact", "both"), default="both")
+    parser.add_argument("--anchor-mode", choices=("first-clear", "fixed"), default="first-clear")
+    parser.add_argument("--fixed-offset", type=int, default=30)
+    parser.add_argument("--retry-clearance", type=int, default=0)
+    parser.add_argument("--include-uuids", type=Path, default=None)
+    parser.add_argument("--batch-tag", type=str, default="batch1")
     args = parser.parse_args(argv)
 
-    from sim.manorl.assets import object_collision_vertices
+    from sim.manorl.assets import compile_model, object_collision_vertices, ServoConfig
 
     rows = load_base_rows(args.source)
-    eligible = []
-    for r in rows:
+
+    def contact_at_30(r: dict) -> bool:
         obj = r["index"]["scene"]
-        if anchor_contact(r, obj):
-            continue
-        eligible.append(r)
-    print(f"base={len(rows)} eligible={len(eligible)}", flush=True)
-    per_pair = {}
-    for r in eligible:
+        end = int(r["trajectory_metadata"]["trajectory_info"]["object_move"][0]["end_frame"])
+        return anchor_contact_at(r, obj, end + 30)
+
+    if args.row_filter == "clear":
+        selected = [r for r in rows if not contact_at_30(r)]
+    elif args.row_filter == "contact":
+        selected = [r for r in rows if contact_at_30(r)]
+    else:
+        selected = list(rows)
+    if args.include_uuids is not None:
+        wanted = set(json.loads(args.include_uuids.read_text()))
+        extra = [r for r in rows if r["index"]["uuid"] in wanted]
+        selected = list(dict.fromkeys(selected + extra))
+    print(f"base={len(rows)} selected={len(selected)}", flush=True)
+
+    per_pair: dict[str, list[dict]] = {}
+    for r in selected:
         pair = f"{r['index']['scene']}:{str(r['trajectory_metadata']['gesture']).zfill(2)}"
         per_pair.setdefault(pair, []).append(r)
     out_rows = []
@@ -292,49 +329,72 @@ def main(argv: list[str] | None = None) -> int:
     for pair, group in sorted(per_pair.items()):
         obj_type = pair.split(":")[0]
         vertices = object_collision_vertices(obj_type)
-        cells = [(a, b, c) for a in range(5) for b in range(3) for c in range(2)]
-        from sim.manorl.assets import compile_model, ServoConfig
         _mujoco, _model = compile_model(
             ServoConfig(), object_type=obj_type, hand_side="right",
             physics_timestep=1.0 / 480.0,
         )
         joint_lower = np.asarray(_model.jnt_range[:JOINT_DOF, 0], dtype=np.float64)
         joint_upper = np.asarray(_model.jnt_range[:JOINT_DOF, 1], dtype=np.float64)
+        cells = [(a, b, c) for a in range(5) for b in range(3) for c in range(2)]
         for idx, r in enumerate(group):
-            cell = cells[idx % len(cells)]
-            anchor = ANCHOR_OFFSET + int(r["trajectory_metadata"]["trajectory_info"]["object_move"][0]["end_frame"])
+            obj = r["index"]["scene"]
+            if args.anchor_mode == "first-clear":
+                off = first_clear_offset(r, obj)
+            else:
+                off = args.fixed_offset
+            if off is None:
+                diagnostics.append({"pair": pair, "source_uuid": r["index"]["uuid"], "excluded": "no_clear_anchor"})
+                continue
+            end = int(r["trajectory_metadata"]["trajectory_info"]["object_move"][0]["end_frame"])
+            anchor = end + off
             object_world = np.asarray(r["objects"][0]["pos"][anchor], dtype=np.float64)
-            rotvec = np.asarray(r["objects"][0]["rot_aa"][anchor], dtype=np.float64)
-            object_quat = Rotation.from_rotvec(rotvec).as_quat()
-            target = _cell_target(pair, cell, rng)
-            row, diag = build_retreat_row(
-                r,
-                target=target,
-                object_world=object_world,
-                object_quat_xyzw=object_quat,
-                vertices_local=vertices,
-                joint_lower=joint_lower,
-                joint_upper=joint_upper,
-                cell=cell,
-                attempt_seed=args.seed + idx,
-            )
-            diag["pair"] = pair
-            diag["source_uuid"] = r["index"]["uuid"]
-            diagnostics.append(diag)
+            object_quat = Rotation.from_rotvec(
+                np.asarray(r["objects"][0]["rot_aa"][anchor], dtype=np.float64)
+            ).as_quat()
+            row = None
+            last_diag: dict = {}
+            for attempt in range(1 + max(0, args.retry_clearance)):
+                cell = cells[(idx + attempt) % len(cells)]
+                target = _cell_target(pair, cell, rng)
+                row, last_diag = build_retreat_row(
+                    r,
+                    anchor_offset=off,
+                    target=target,
+                    object_world=object_world,
+                    object_quat_xyzw=object_quat,
+                    vertices_local=vertices,
+                    joint_lower=joint_lower,
+                    joint_upper=joint_upper,
+                    cell=cell,
+                    attempt_seed=args.seed + idx * 1000 + attempt,
+                    batch_tag=args.batch_tag,
+                )
+                if row is not None:
+                    last_diag["attempts"] = attempt + 1
+                    break
+                if last_diag.get("excluded") != "hand_object_clearance":
+                    break
+            last_diag.setdefault("pair", pair)
+            last_diag.setdefault("source_uuid", r["index"]["uuid"])
+            last_diag.setdefault("anchor_offset", off)
+            last_diag.setdefault("attempts", 1)
+            diagnostics.append(last_diag)
             if row is not None:
                 out_rows.append(row)
+
     accepted = len(out_rows)
-    excluded = len(diagnostics) - accepted
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_compact_lance_stream(out_rows, output=args.output, replace=True, batch_size=64)
     plan_digest = _canonical_digest(
         {
-            "contract": "manorl_retreat_extension_v1_batch1_kinematic",
+            "contract": f"manorl_retreat_extension_v1_{args.batch_tag}_kinematic",
             "source": str(args.source),
-            "eligible": len(eligible),
+            "row_filter": args.row_filter,
+            "anchor_mode": args.anchor_mode,
+            "anchor_offsets": list(ANCHOR_OFFSETS),
+            "selected": len(selected),
             "accepted": accepted,
-            "excluded": excluded,
-            "anchor_offset": ANCHOR_OFFSET,
+            "excluded": len(diagnostics) - accepted,
             "retreat_steps": RETREAT_STEPS,
             "cell_shape": list(CELL_SHAPE),
             "clearance_m": CLEARANCE_M,
@@ -342,17 +402,18 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
     summary = {
-        "contract": "manorl_retreat_extension_v1_batch1_kinematic",
+        "contract": f"manorl_retreat_extension_v1_{args.batch_tag}_kinematic",
         "source": str(args.source),
         "output": str(args.output),
         "base_rows": len(rows),
-        "eligible": len(eligible),
+        "selected": len(selected),
         "accepted": accepted,
-        "excluded": excluded,
+        "excluded": len(diagnostics) - accepted,
         "retreat_steps": RETREAT_STEPS,
-        "anchor_offset": ANCHOR_OFFSET,
         "cell_shape": list(CELL_SHAPE),
         "clearance_m": CLEARANCE_M,
+        "anchor_offsets_used": {str(k): sum(1 for d in diagnostics if d.get("anchor_offset") == k) for k in ANCHOR_OFFSETS},
+        "retry_distribution": {str(k): sum(1 for d in diagnostics if d.get("attempts", 1) == k) for k in sorted({d.get("attempts", 1) for d in diagnostics})},
         "digest": plan_digest,
         "accepted_per_pair": {k: sum(1 for d in diagnostics if d["pair"] == k and d.get("accepted")) for k in per_pair},
         "excluded_reasons": {k: sum(1 for d in diagnostics if d.get("excluded") == k) for k in sorted({str(d.get("excluded")) for d in diagnostics})},
