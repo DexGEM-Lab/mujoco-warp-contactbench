@@ -413,6 +413,15 @@ python tools/view_manorl_approach_prefix.py \
 See
 [`docs/manorl_synthesis_approach_prefix.md`](docs/manorl_synthesis_approach_prefix.md).
 
+**Standard post-processing since 2026-08-27:** every published synthesis dataset
+is a two-stage product. Stage 1 simulates the prefix + complete base trajectory
+(real solver contact). Stage 2 builds the retreat offline and kinematically with
+`tools/build_manorl_full_retreat.py`: anchor = true last solved contact frame +
+15, then replaces the entire tail (155-251 frames) in right-wrist XYZ only,
+preserving length, timestamps, fingers, object, contact and reference. Published
+datasets carry the `_with_retreat` suffix (e.g.
+`for_vla_manorl_prefix_near_far_4pairs_20260826_with_retreat.lance`).
+
 Compact output is for replay and visualization, not offline policy training.
 Use `MANORL_SYNTH_OUTPUT_FORMAT=full` or
 `--output-format full` when observations, actions, rewards, contact forces, or
