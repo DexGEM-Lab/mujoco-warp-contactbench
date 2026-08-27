@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from sim.manorl.contracts import JOINT_DOF
 from sim.manorl.lance_v2 import write_compact_lance_stream
 
 THRESHOLD_N = 0.2
@@ -146,6 +147,8 @@ def build_full_retreat_row(
     anchor: int,
     seed: int,
     batch_tag: str,
+    joint_lower: np.ndarray,
+    joint_upper: np.ndarray,
 ) -> tuple[dict | None, dict]:
     right = base["trajectory_metadata"]["hand_slots"].index("right")
     T = int(base["trajectory_metadata"]["total_frames"])
@@ -167,15 +170,10 @@ def build_full_retreat_row(
     q_new = q.copy()
     q_new[anchor + 1 :, :3] = retreat_position
 
-    # 关节限位: 只查构造的 XYZ
-    from sim.manorl.assets import compile_model, ServoConfig
-    _mujoco, _model = compile_model(
-        ServoConfig(), object_type=object_name, hand_side="right",
-        physics_timestep=1.0 / 480.0,
-    )
-    lower = np.asarray(_model.jnt_range[:28, 0], dtype=np.float64)
-    upper = np.asarray(_model.jnt_range[:28, 1], dtype=np.float64)
-    if np.any(q_new[anchor + 1 :, :3] < lower[:3] - 1e-6) or np.any(q_new[anchor + 1 :, :3] > upper[:3] + 1e-6):
+    # 关节限位: 只查构造的 XYZ (手指维照抄 base, 不判)
+    if np.any(q_new[anchor + 1 :, :3] < joint_lower[:3] - 1e-6) or np.any(
+        q_new[anchor + 1 :, :3] > joint_upper[:3] + 1e-6
+    ):
         return None, {"excluded": "joint_limits", "anchor": anchor}
 
     # splice 连续性与端点检查 (历史语义)
@@ -225,11 +223,25 @@ def main(argv: list[str] | None = None) -> int:
 
     import lance
 
+    from sim.manorl.assets import compile_model, ServoConfig
+
     rows = lance.dataset(str(args.source)).scanner(batch_size=8, scan_in_order=True).to_table().to_pylist()
+    # 每个物体类型编译一次模型取真实关节限位 (全量 1000+ 行共享同一模型)
+    limits_by_object: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     out_rows = []
     diagnostics = []
     for r in rows:
         obj = r["index"]["scene"]
+        if obj not in limits_by_object:
+            _mujoco, _model = compile_model(
+                ServoConfig(), object_type=obj, hand_side="right",
+                physics_timestep=1.0 / 480.0,
+            )
+            limits_by_object[obj] = (
+                np.asarray(_model.jnt_range[:JOINT_DOF, 0], dtype=np.float64),
+                np.asarray(_model.jnt_range[:JOINT_DOF, 1], dtype=np.float64),
+            )
+        joint_lower, joint_upper = limits_by_object[obj]
         last = last_contact_frame(r, obj)
         if last is None:
             diagnostics.append({"uuid": r["index"]["uuid"], "pair": f"{obj}:{str(r['trajectory_metadata']['gesture']).zfill(2)}", "excluded": "no_contact"})
@@ -242,7 +254,10 @@ def main(argv: list[str] | None = None) -> int:
             out_rows.append(r)
             continue
         seed = int(r["provenance"]["seed"])
-        row, diag = build_full_retreat_row(r, anchor=anchor, seed=seed, batch_tag=args.batch_tag)
+        row, diag = build_full_retreat_row(
+            r, anchor=anchor, seed=seed, batch_tag=args.batch_tag,
+            joint_lower=joint_lower, joint_upper=joint_upper,
+        )
         diag["uuid"] = r["index"]["uuid"]
         diag["pair"] = f"{obj}:{str(r['trajectory_metadata']['gesture']).zfill(2)}"
         diag["last_contact"] = last
