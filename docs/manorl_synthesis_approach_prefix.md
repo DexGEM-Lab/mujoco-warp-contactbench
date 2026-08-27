@@ -125,3 +125,39 @@ skeleton, not a complete retreat).
 Tool: `tools/build_manorl_full_retreat.py`
 Published example: `for_vla_manorl_prefix_near_far_4pairs_20260826_with_retreat.lance`
 (1035 rows, all with full-length retreat).
+
+## Compact row semantics (v2_contact)
+
+- MANO global translation is exactly `urdf_dof[:, :3]`; global axis-angle is
+  derived from the URDF floating-root intrinsic `XYZ` composition `Rx @ Ry @ Rz`
+  (`mano_global_frame_contract=urdf_floating_root_translation_intrinsic_XYZ_to_rotvec_v1`).
+- `force_normal` contains the solved normal component with scale `1.0`; all
+  force frames use a consistent hand-to-object direction. `pos_joint` and
+  `total_force_joint` use the live collision-link transform rather than the
+  historical wrist fallback.
+- Shape metadata contains only the raw right-hand shape declared by
+  `hand_names=["right"]`.
+- Schema contract: `synthetic_mano_target_replay_visual_v2_contact`; source
+  contract `synthetic_mano_28d_checkpoint_rollout_v2_3`. Schema metadata,
+  row provenance, `data_fps`, and timestamps record the actual 100/120/200 Hz
+  control clock together with its physics rate and substep count. The
+  validator retains read support for fixed-200-Hz v2.2 datasets.
+- Each compact row stores 28D physical and controller targets, 21 keypoints,
+  reference frame indices, checkpoint SHA256, runtime sidecar, action
+  contract, and source identity. Observations/actions/rewards are dropped in
+  compact mode; full mode retains them as the explicit audit contract.
+
+## Example delivery
+
+The validated all-action cube2 delivery generated from contact-v2
+`checkpoint-000800.pt` is:
+
+```text
+/mnt/nas-222-project/sunjieqiang/mujoco_synthetic/
+cube2_all_actions_checkpoint800_ratio5_seed42_v22.lance
+```
+
+It contains 213 raw identities across actions `01,02,03,04,10,11`, five
+accepted episodes per identity (1,065 rows), and adjacent manifest, validation,
+and SHA256 checksum sidecars. All identities completed in five attempts; the
+ten-attempt limit remained fail-closed and was not consumed.
