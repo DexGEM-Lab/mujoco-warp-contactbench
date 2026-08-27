@@ -19,6 +19,7 @@ from sim.manorl.trajectory_package import (
     load_trajectory_package,
     write_trajectory_package,
 )
+from tools.compile_manorl_trajectory_package import _selection_payload
 from tools.publish_manorl_trajectory_package import publish
 
 
@@ -82,6 +83,14 @@ def _selection(**overrides: object) -> TrajectorySelection:
     }
     values.update(overrides)
     return TrajectorySelection(**values)
+
+
+def test_compiler_selection_payload_preserves_explicit_pairs() -> None:
+    selection = _selection(selector="cylinder6:03,cylinder6:09")
+    payload = _selection_payload(selection)
+    assert payload["selector"] == "cylinder6:03,cylinder6:09"
+    assert payload["pre_padding"] == 180
+    assert payload["post_padding"] == 250
 
 
 def _catalog_values() -> tuple[ReferenceTrajectory, ...]:

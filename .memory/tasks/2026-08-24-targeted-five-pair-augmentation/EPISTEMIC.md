@@ -1,0 +1,56 @@
+# Current model
+
+## Parent qualification and selection
+A production parent must pass both the current persisted-float32 atomic gate and accepted-parent late-contact/anchor eligibility. Historical descriptor existence alone is insufficient; `banana_02_1256` was the GPU counterexample (24/24 prefix candidates complete/contact-qualified but 46.03–56.27 deg final rotation).
+
+Parent discovery is now deliberately broad and simple: batch-run candidates, apply hard gates, then choose robust and spatially diverse parents. The final selector uses every hard-qualified candidate; pre60 wrist/object distance is a soft preference. Quality is the weakest normalized margin among final rotation to 35 deg, contact frames above 100, and last-contact lateness through movement_end+15. The first parent scores 0.70 quality + 0.30 distance; subsequent parents score 0.50 quality + 0.35 spatial separation + 0.15 distance.
+
+This removed fragile distance-only choices. Existing-pair selected minimum quality margins are banana:02 0.630, banana:18 0.190, bowl:04 0.892.
+
+## Cylinder6 pool and action replacement
+Clean v530 pre60/pre180 bundles contain all 100 source trajectories for the original actions 03/09. Explicit policy transfer runs both actions to reason 1. Screening rounds seed42–48 used zero offset once and bounded XY02 thereafter. XY02 is screening-only and every artifact is `publish=false`.
+
+Bulk seeds46–48 added enough late-contact parents. Merging all descriptor sets yielded:
+- cylinder6:03 — 8 distinct eligible source identities.
+- cylinder6:09 — 10 distinct eligible source identities.
+- 31 physical parent variants across 18 sources.
+
+Formal coverage falsified parent-screen success as sufficient for action09: five selected parents across Far/Near produced zero accepted rows through 360 attempts and 20 exhausted cells, dominated by `deviation_before_source_completion`. The user retired all ten `cylinder6:09` tasks. They remain immutable zero-row negative evidence and must never resume.
+
+`cylinder6:14` replaces action09 under a new source/package/parent/plan chain. v530 contains 48 raw action14 rows; 47 decode under both pre60 and pre180, while `cylinder6_14_4943` is fixed-rejected because timestamps are not strictly increasing. Canonical package digests are pre60 `d8f155df676788097de891625901b40f51b63f40b817594ad9bffc0ca4a6c575` and pre180 `ed9a385db5218224faf57cefeed71f5841c83c5ef0d504e88139829ea3cdbb0c`. Parent screening uses pre180 policy transfer and bounded XY02; formal action14 coverage remains pre60, fixed-parent-offset, random XY=0.
+
+Different no-prefix bootstrap datasets can reuse the same generated base UUID because legacy UUID identity omits seed/offset. Parent variants are therefore identified by accepted-parent descriptor SHA, which includes parent dataset/version/row, seed, fixed offset, checkpoint, source, and anchors. Every final plan binds this SHA and fails closed on replacement. Final prefix rows remain unique through v4 augmentation identity.
+
+## Formal XY contract
+Formal Near/Far collection draws no new random object XY offset: `formal_random_object_xy_offset_range_m = 0.0`. Each selected accepted parent retains its fixed object offset as part of the parent ABI. Screening randomness is frozen into the selected descriptor and is not resampled during production.
+
+## Final plan
+The final selection has five parents for each of banana:02, banana:18, bowl:04, cylinder6:03, cylinder6:09. Plan:
+- path: `/mnt/user-home/jay/data/manorl_targeted_five_pair_augmentation_20260824/final_five_pair_coverage_plan_v1.json`
+- digest: `6d320ada8c6bf3de6ed057a02a3bd26bc99ef867fcd50d51ee633a2275434d9d`
+- 25 parents, 50 parent/mode tasks.
+- 250 Far and 150 Near target slots per pair; 2,000 total.
+- 24,000 unique same-cell fallback seeds.
+- Far: 5 radius x 5 azimuth x 2 height per parent.
+- Near: 5 empirical distance x 3 azimuth x 2 height per parent.
+
+The runner preserves the complete pre60 source tail, uses no retreat, disables formal random XY, reuses the parent fixed offset, applies atomic acceptance plus prefix collision gate before append, and journals pending writes for deterministic recovery.
+
+## Current production scope
+The user cancelled all Cylinder6 actions after action09 and action14 both showed cross-parent zero prefix yield. Final production contains banana:02, banana:18, bowl:04, and the replacement mayonnaisebottle:04. Original-plan tasks 30–49 and excluded task0 never resume; Cylinder6 rows already written remain immutable `publish=false` evidence and are excluded from final merge/publication. Original-plan operational target is 1,150 slots; the independent mayonnaise replacement adds 400, yielding 1,550 aggregate slots.
+
+Action14 yielded 47 valid sources and five base-parent descriptors under both pre180-derived and corrected pre60 screening paths, but each five-parent Far/Near slot0 test produced 120/120 `deviation_before_source_completion` failures and zero accepted prefix rows. This ruled out action14 under the current checkpoint/prefix ABI.
+
+Mayonnaisebottle:04 is a supported v295/all75 pair with 49 canonical pre60 sources and 42 historical late-contact parent descriptors. Current persisted-float32 re-evaluation retained 37; a Near support audit retained 34 whose 5×3×2 empirical grid has at least twelve candidates per cell at every parent task position. Real prefix screening—not base score alone—selected final parents `2745,2749,2757,2764,2768`: each passed both Far and Near under the unchanged gate. Independent validation and float32-exact canonical-tail checks passed the smoke rows. Final replacement plan `/mnt/user-home/jay/data/manorl_targeted_five_pair_augmentation_20260824/mayonnaisebottle_04_replacement/mayonnaisebottle_04_replacement_coverage_plan_v4.json`, digest `b329878d6adc05e53cb362cffac40e380327a8127c3848e46e42f359edc06f95`, has ten tasks, 400 slots, 4,800 unique selected fallback seeds, and formal random XY=0. Its formal transition wrote 10 accepted = 10 Lance rows with zero pending/mismatch; continuous production is active.
+
+## Vector production mechanism
+The serial coverage bottleneck was runner scheduling, not the environment or checkpoint: it built `EnvironmentConfig(num_envs=1)` and advanced one candidate at a time. `MujocoManoEnvironment` natively accepts per-world `TrajectoryBatch` references and one policy call consumes the full observation batch. Formal production now uses homogeneous-object waves, mixing action IDs, accepted parents, and Far/Near modes while avoiding cross-object model routing costs.
+
+Candidate semantics remain independent. Every vector row binds its plan seed, parent fixed XY offset, point-template seed, prefix sample, attempt/episode number, collision result, atomic acceptance, UUID, status journal, and per-task Lance dataset. A new per-env point-template seed API reproduces the one-world reset RNG contract rather than using one shared batch RNG or `seed+env_id`.
+
+Measured Server1 GPU2 throughput:
+- Serial N=1: about 240 candidate episodes/hour.
+- N=10: 529.51/hour, peak 18,959 MiB.
+- N=32: 1,449.22/hour, peak 18,987 MiB, about 6.04x serial.
+
+Warp contact rollouts are not bitwise reproducible even across same-seed serial process restarts; contact dynamics amplify tiny floating-point differences. Therefore equivalence is defined by unchanged reference/ABI and independent actual-row gates, not identical final poses for a seed. Vector smoke rows independently passed validators and retained float32-exact canonical tails.

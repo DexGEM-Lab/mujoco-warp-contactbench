@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+import sim.manorl.environment as environment_module
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, check_termination
 from sim.manorl.assets import OBJECT_MESH, compile_model
 from sim.manorl.contracts import JOINT_DOF, KEYPOINT_NAMES
@@ -1205,6 +1208,54 @@ def test_heterogeneous_object_router_preserves_global_order_and_indexed_reset(tr
     np.testing.assert_array_equal(env.progress, (1, 0, 1))
     assert env.last_physical is not None
     assert env.last_physical.object_position.shape == (3, 3)
+
+
+def test_per_env_point_template_seeds_are_validated_without_gpu() -> None:
+    env = object.__new__(MujocoManoEnvironment)
+    env.config = SimpleNamespace(num_envs=3)
+    env._object_routes = {}
+    env.reseed_point_templates_per_env(np.asarray([11, 22, 33], dtype=np.int64))
+    np.testing.assert_array_equal(
+        env._pending_point_template_seeds, np.asarray([11, 22, 33])
+    )
+    with pytest.raises(ValueError, match="one integer per environment"):
+        env.reseed_point_templates_per_env(np.asarray([11, 22]))
+    with pytest.raises(ValueError, match="non-negative"):
+        env.reseed_point_templates_per_env(np.asarray([11, -1, 33]))
+
+
+def test_per_env_point_template_seeds_match_serial_sampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_seed = {"value": None}
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            manual_seed_all=lambda seed: current_seed.__setitem__("value", int(seed))
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        environment_module,
+        "_torch_global_surface_templates",
+        lambda batch_size, object_type: np.full(
+            (batch_size, 64, 3), float(current_seed["value"]), dtype=np.float64
+        ),
+    )
+    env = object.__new__(MujocoManoEnvironment)
+    env.config = SimpleNamespace(
+        num_envs=3,
+        compatibility=SOURCE_ALIGNED_COMPATIBILITY,
+        point_sampling_backend="torch_cuda_global",
+    )
+    env._dynamic_templates = None
+    env._pending_point_template_seeds = np.asarray([11, 22, 33], dtype=np.int64)
+    env._initializing_point_templates = False
+    env.object_type = "banana"
+    env.object_types = ("banana",) * 3
+    env._unified_object_batch = False
+    env._set_dynamic_templates(np.arange(3, dtype=np.int64))
+    np.testing.assert_array_equal(env._dynamic_templates[:, 0, 0], [11, 22, 33])
+    assert env._pending_point_template_seeds is None
 
 
 def test_dynamic_template_variant_preserves_raw_surface_coordinates(trajectory) -> None:

@@ -2507,7 +2507,10 @@ class MujocoManoEnvironment:
             return
         if self._dynamic_templates is None:
             self._dynamic_templates = np.zeros((self.config.num_envs, POINT_COUNT, 3), dtype=np.float64)
+        explicit_seeds = getattr(self, "_pending_point_template_seeds", None)
         if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
+            import torch
+
             for object_type in (
                 sorted(set(self.object_types[index] for index in env_ids))
                 if getattr(self, "_unified_object_batch", False)
@@ -2528,10 +2531,21 @@ class MujocoManoEnvironment:
                     self._dynamic_templates[selected] = np.stack(
                         [_source_surface_points(42, object_type) for _ in selected]
                     )
+                elif explicit_seeds is not None:
+                    # Coverage candidates own independent episode seeds. Generate
+                    # every row as the corresponding one-world reset would,
+                    # rather than letting batch position advance one global RNG.
+                    for env_id in selected:
+                        torch.cuda.manual_seed_all(int(explicit_seeds[int(env_id)]))
+                        self._dynamic_templates[int(env_id)] = (
+                            _torch_global_surface_templates(1, object_type)[0]
+                        )
                 else:
                     self._dynamic_templates[selected] = _torch_global_surface_templates(
                         len(selected), object_type
                     )
+            if explicit_seeds is not None:
+                self._pending_point_template_seeds = None
             return
         for env_id in env_ids:
             object_type = (
@@ -2539,15 +2553,48 @@ class MujocoManoEnvironment:
                 if getattr(self, "_unified_object_batch", False)
                 else self.object_type
             )
-            self._dynamic_templates[env_id] = _dynamic_surface_template(
-                self._point_rngs[int(env_id)], object_type
+            generator = (
+                np.random.default_rng(int(explicit_seeds[int(env_id)]))
+                if explicit_seeds is not None
+                else self._point_rngs[int(env_id)]
             )
+            self._dynamic_templates[env_id] = _dynamic_surface_template(
+                generator, object_type
+            )
+        if explicit_seeds is not None:
+            self._pending_point_template_seeds = None
+
+    def reseed_point_templates_per_env(self, seeds: NDArray[object]) -> None:
+        """Bind the next full reset's dynamic point template to each episode seed.
+
+        A serial synthesis candidate resets one world with its episode seed. A
+        vectorized synthesis wave must reproduce that contract row by row;
+        ``seed + env_id`` or one shared batch RNG would change policy inputs.
+        """
+
+        values = np.asarray(seeds)
+        if values.shape != (self.config.num_envs,) or not np.issubdtype(
+            values.dtype, np.integer
+        ):
+            raise ValueError(
+                "point-template seeds must contain one integer per environment"
+            )
+        values = values.astype(np.int64, copy=False)
+        if np.any(values < 0):
+            raise ValueError("point-template seeds must be non-negative")
+        if self.is_heterogeneous:
+            for env_ids, route in self._object_routes.values():
+                route.reseed_point_templates_per_env(values[env_ids])
+            return
+        self._pending_point_template_seeds = values.copy()
 
     def reseed_point_templates(self, seed: int) -> None:
         """Set deterministic reset-local RNGs without changing static templates."""
 
         if not isinstance(seed, (int, np.integer)):
             raise TypeError("point-template seed must be an integer")
+        # A scalar reset supersedes any not-yet-consumed vector-wave seeds.
+        self._pending_point_template_seeds = None
         if self.is_heterogeneous:
             if self.config.point_sampling_backend == POINT_SAMPLING_TORCH_CUDA_GLOBAL:
                 import torch
