@@ -148,7 +148,7 @@ def load_plan(path: Path) -> dict[str, Any]:
 
 
 def _predecoded_source(
-    manifest_path: Path, identity: str
+    manifest_path: Path, identity: str, *, required_pre_padding: int = 60
 ) -> tuple[ReferenceTrajectory, dict[str, Any], dict[str, Any]]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     records = {
@@ -165,8 +165,13 @@ def _predecoded_source(
         source = pickle.load(stream)
     if not isinstance(source, ReferenceTrajectory):
         raise TypeError("predecoded source is not ReferenceTrajectory")
-    if source.identity.identity != identity or source.movement_start_step != 60:
-        raise RuntimeError("predecoded identity or pre60 contract changed")
+    if (
+        source.identity.identity != identity
+        or source.movement_start_step != required_pre_padding
+    ):
+        raise RuntimeError(
+            f"predecoded identity or pre{required_pre_padding} contract changed"
+        )
     return (
         source,
         dict(record.get("source_index") or {}),
@@ -180,8 +185,11 @@ def _sample_trajectory(
     *,
     mode: str,
     seed: int,
+    required_pre_padding: int = 60,
 ) -> tuple[ReferenceTrajectory, ApproachPrefixSample, ApproachPrefixConfig]:
-    config = ApproachPrefixConfig(mode=mode)
+    config = ApproachPrefixConfig(
+        mode=mode, required_base_pre_padding=required_pre_padding
+    )
     anchor = int(source.movement_end_step) + parent.retreat_anchor_offset_frames
     if mode == "near":
         if (
@@ -216,6 +224,7 @@ def _new_runtime(
     *,
     seed: int,
     device: str,
+    required_pre_padding: int = 60,
 ) -> tuple[MujocoManoEnvironment, Any, Any]:
     options = _checkpoint_environment_options(checkpoint)
     _seed_attempt(seed, device)
@@ -228,7 +237,8 @@ def _new_runtime(
             residual_enabled=True,
             residual_action=options.residual_action,
             compatibility=replace(
-                SOURCE_ALIGNED_COMPATIBILITY, movement_pre_padding=60
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=required_pre_padding,
             ),
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE,
             contact_capacity=recommended_warp_contact_capacity(1, batch.hand_sides),
@@ -660,7 +670,8 @@ def _run_task(
     if file_sha256(checkpoint) != parent.checkpoint_sha256:
         raise ValueError("coverage checkpoint differs from accepted parent")
     source, source_index, source_metadata = _predecoded_source(
-        Path(task["predecoded_manifest"]), identity
+        Path(task["predecoded_manifest"]), identity,
+        required_pre_padding=int(task.get("required_pre_padding", 60)),
     )
     output, status_path, manifest_path = _task_paths(output_dir, task)
     if replace_output:
@@ -715,7 +726,8 @@ def _run_task(
             }
             _atomic_json(status_path, status)
             trajectory, prefix, config = _sample_trajectory(
-                source, parent, mode=mode, seed=seed
+                source, parent, mode=mode, seed=seed,
+                required_pre_padding=int(task.get("required_pre_padding", 60)),
             )
             planned = candidate["sampled_start"]
             if not (
@@ -726,7 +738,8 @@ def _run_task(
                 raise RuntimeError("coverage-plan sampled start changed")
             if environment is None:
                 environment, stepper, options = _new_runtime(
-                    trajectory, parent, checkpoint, seed=seed, device=device
+                    trajectory, parent, checkpoint, seed=seed, device=device,
+                    required_pre_padding=int(task.get("required_pre_padding", 60)),
                 )
                 reinstall = False
             else:

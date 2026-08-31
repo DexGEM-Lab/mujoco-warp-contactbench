@@ -211,7 +211,8 @@ def _prepare_states(
         ):
             raise ValueError(f"coverage task {task_index} parent binding changed")
         source, source_index, source_metadata = _predecoded_source(
-            Path(task["predecoded_manifest"]), str(task["source_identity"])
+            Path(task["predecoded_manifest"]), str(task["source_identity"]),
+            required_pre_padding=int(task.get("required_pre_padding", 60)),
         )
         output, status_path, manifest_path = _task_paths(output_dir, task)
         status = (
@@ -254,6 +255,7 @@ def _new_batch_runtime(
     *,
     seeds: list[int],
     device: str,
+    required_pre_padding: int = 60,
 ) -> tuple[MujocoManoEnvironment, Any, Any]:
     if not trajectories or len(trajectories) != len(parents) or len(parents) != len(seeds):
         raise ValueError("vector wave trajectories/parents/seeds must align")
@@ -271,7 +273,8 @@ def _new_batch_runtime(
             residual_enabled=True,
             residual_action=options.residual_action,
             compatibility=replace(
-                SOURCE_ALIGNED_COMPATIBILITY, movement_pre_padding=60
+                SOURCE_ALIGNED_COMPATIBILITY,
+                movement_pre_padding=required_pre_padding,
             ),
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE,
             contact_capacity=recommended_warp_contact_capacity(
@@ -581,10 +584,12 @@ def _run_internal_wave(control_path: Path) -> int:
     for task, assignment in zip(tasks, assignments, strict=True):
         parent = load_accepted_synthetic_parent(Path(task["descriptor_path"]))
         source, source_index, metadata = _predecoded_source(
-            Path(task["predecoded_manifest"]), str(task["source_identity"])
+            Path(task["predecoded_manifest"]), str(task["source_identity"]),
+            required_pre_padding=int(task.get("required_pre_padding", 60)),
         )
         trajectory, prefix, config = _sample_trajectory(
-            source, parent, mode=str(task["mode"]), seed=assignment.seed
+            source, parent, mode=str(task["mode"]), seed=assignment.seed,
+            required_pre_padding=int(task.get("required_pre_padding", 60)),
         )
         slot, candidate = _planned_candidate(task, assignment)
         planned = candidate["sampled_start"]
@@ -617,6 +622,7 @@ def _run_internal_wave(control_path: Path) -> int:
         checkpoint,
         seeds=[item.seed for item in assignments],
         device=device,
+        required_pre_padding=int(tasks[0].get("required_pre_padding", 60)),
     )
     results = _collect_batch(
         environment=environment,
