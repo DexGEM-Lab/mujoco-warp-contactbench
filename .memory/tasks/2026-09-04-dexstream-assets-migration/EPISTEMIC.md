@@ -53,12 +53,13 @@ viewer shutdown interaction, not an asset/model failure.
 
 ## Current claim
 The DexStream asset migration, fresh-checkout closure, env=1 runtime checks,
-local visual acceptance, and isolated Server1 and Server2 deployments are
-complete and integrated on `dev`. Both deployments use the same root/source
-pins and fully materialized 298-file runtime closures. Server1's deployment
-works without GitHub credentials through the offline materialized path; Server2
-completed a fresh authenticated Git/LFS checkout. New work uses the isolated
-DexStream deployment on each host; old shared snapshots remain explicitly
-legacy while external consumers exist. The migration branches used for
+local visual acceptance, and Server1/Server2 deployment migration are complete
+and integrated on `dev`. Both hosts have a DexStream deployment with the same
+source pin and fully materialized 298-file runtime closure. Server1 uses the
+offline materialized path because it lacks GitHub credentials; Server2 has a
+fresh authenticated Git/LFS deployment, and its canonical materialized snapshot
+also now carries the same provenance marker. Server2's stale feature snapshot
+has no old physical runtime assets. Server1's old shared assets remain legacy
+because external jobs are still running. The migration branches used for
 implementation and evidence are merged and can be removed without losing
 reachable commits; unrelated worktrees and active jobs must remain.
