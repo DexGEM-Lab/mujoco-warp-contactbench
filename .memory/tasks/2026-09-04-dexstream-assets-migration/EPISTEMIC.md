@@ -55,7 +55,9 @@ viewer shutdown interaction, not an asset/model failure.
 The DexStream asset migration, fresh-checkout closure, env=1 runtime check, visual
 acceptance, and an isolated Server1 deployment are complete and integrated on
 `dev`. The deployment uses the same root/source pins and a fully materialized
-298-file runtime closure without depending on Server1 GitHub credentials. The
-migration branches used for implementation and evidence are merged and can be
-removed without losing reachable commits; unrelated worktrees, active jobs, and
-legacy snapshots must remain.
+298-file runtime closure without depending on Server1 GitHub credentials. New
+Server1 work uses `/home/jay/dexrobot/FromSSH/manoRL_mujoco_dexstream`; the old
+shared snapshot is intentionally retained as legacy while external jobs exist.
+The migration branches used for implementation and evidence are merged and can
+be removed without losing reachable commits; unrelated worktrees and active
+jobs must remain.
