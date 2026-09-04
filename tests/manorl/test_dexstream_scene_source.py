@@ -46,3 +46,22 @@ def test_mano_pose_axes_are_read_from_the_pinned_urdf() -> None:
     }
     for logical, joint_name in _AXIS_JOINTS.items():
         np.testing.assert_allclose(_source_axes()[logical], source[joint_name])
+
+
+def test_dataset_manifest_asset_provenance_is_checked(monkeypatch) -> None:
+    from tools import validate_manorl_synthetic_lance as validator
+
+    identity = {
+        "asset_source_repository": "repo",
+        "asset_source_commit": "commit",
+        "asset_manifest_sha256": "a" * 64,
+    }
+    monkeypatch.setattr(
+        "sim.manorl.assets.asset_provenance", lambda: dict(identity)
+    )
+    assert validator._validate_asset_provenance({"asset_provenance": identity}) == identity
+    with pytest.raises(ValueError, match="asset provenance"):
+        validator._validate_asset_provenance(
+            {"asset_provenance": {**identity, "asset_source_commit": "other"}}
+        )
+    assert validator._validate_asset_provenance({}) is None

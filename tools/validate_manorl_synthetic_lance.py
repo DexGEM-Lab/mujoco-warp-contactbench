@@ -550,6 +550,26 @@ def validate_compact_row(path: Path, row_index: int) -> dict[str, Any]:
     }
 
 
+def _validate_asset_provenance(manifest: dict[str, Any]) -> dict[str, str] | None:
+    """Check the physical source recorded by a post-migration dataset manifest."""
+
+    recorded = manifest.get("asset_provenance")
+    if recorded is None:
+        return None
+    if not isinstance(recorded, dict):
+        raise ValueError("dataset asset_provenance must be an object")
+    from sim.manorl.assets import asset_provenance
+
+    current = asset_provenance()
+    for field, expected in current.items():
+        if recorded.get(field) != expected:
+            raise ValueError(
+                f"dataset asset provenance {field} differs from current source: "
+                f"{recorded.get(field)!r} != {expected!r}"
+            )
+    return current
+
+
 def _validate_prefix_only_contract(
     *, manifest: dict[str, Any], rows: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -841,6 +861,7 @@ def validate_compact_dataset(
         if manifest_path.exists()
         else {}
     )
+    asset_identity = _validate_asset_provenance(manifest)
     if catalog_path.exists():
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         entries = catalog.get("entries")
@@ -879,6 +900,7 @@ def validate_compact_dataset(
         metadata_source = str(manifest_path)
     summary = {
         "schema": str(metadata.get("schema_version")),
+        "asset_provenance": asset_identity,
         "source_contract": source_contract,
         "schema_metadata": metadata,
         "rows": row_count,
@@ -1079,8 +1101,10 @@ def validate_dataset(
         if manifest_path.exists()
         else {}
     )
+    asset_identity = _validate_asset_provenance(manifest)
     summary = {
         "schema": schema_contract,
+        "asset_provenance": asset_identity,
         "schema_metadata": metadata,
         "rows": row_count,
         "unique_identities": len(grouped),

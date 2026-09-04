@@ -297,11 +297,18 @@ def test_native_visual_model_mirrors_collision_only_state_and_hides_collision_ge
         for geom in scene.geoms[: scene.ngeom]
         if int(geom.objtype) == int(mujoco.mjtObj.mjOBJ_GEOM)
     }
-    assert {"palm_visual", "cube1_visual"} <= rendered_geom_names
+    assert "cube1_visual" in rendered_geom_names
+    assert "palm_visual" not in rendered_geom_names
     assert not any(
         name is not None and name.endswith("_collision")
         for name in rendered_geom_names
     )
+    rendered_skin = {
+        mujoco.mj_id2name(viewer_model, mujoco.mjtObj.mjOBJ_SKIN, int(geom.objid))
+        for geom in scene.geoms[: scene.ngeom]
+        if int(geom.objtype) == int(mujoco.mjtObj.mjOBJ_SKIN)
+    }
+    assert "mano_skin" in rendered_skin
 
 
 def test_passive_viewer_lock_guards_native_mirror_and_sync(

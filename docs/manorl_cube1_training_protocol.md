@@ -17,9 +17,11 @@ Lance/PyArrow incident, MTP package lifecycle, validation procedure, and
 production recovery commands are in
 [`docs/manorl_lance_isolation_runbook.md`](manorl_lance_isolation_runbook.md).
 
-The s02 catalog has runtime support for all 13 discovered objects. Each object
-uses its pinned URDF, decomposed collision mesh, mass/inertia, geometry encoding,
-support points, and grasp mapping. Mixed batches route environments through one
+The pinned DexStream catalog currently exposes 28 discovered DexGEM object
+bundles. Each object uses its source URDF, all declared CoACD collision meshes,
+mass/inertia, geometry encoding, support points, and the ManoRL task-owned grasp
+mapping. The selected MANO hand is the `sunke` right/left bundle from the same
+DexStream source. Mixed batches route environments through one
 static MJX-Warp model per object and scatter outputs back to global environment
 order. Mixed-object training is headless: the viewer and Rerun recorder require
 one native MuJoCo model and therefore reject a batch containing multiple object
@@ -285,6 +287,15 @@ package digest, manifest SHA256, and catalog digest are recorded in metrics and
 checkpoint runtime configuration. Strict resume requires all four identities to
 match; cross-package transfer uses explicit warm-start lineage and resets
 optimizer, scheduler, memory, and progress.
+
+Physical assets are a separate checkpoint identity. The runtime uses
+`git@github.com:DexGEM-Lab/dexstream_digital-assets.git` at the pinned
+`f98da997f316c8a6b4bc2931cabed19e831ef163` revision, with the `sunke` MANO
+bundle and current DexGEM collision/inertial data. The asset manifest SHA is
+recorded in each new native checkpoint signature. Strict resume/inference
+rejects missing or mismatched asset provenance; `--warm-start-checkpoint` or
+policy-transfer is the explicit route for intentionally moving learned weights
+across the removed asset version, without claiming identical physics.
 
 The validated Gym checkpoint's resolved run config uses a 4096-sample
 minibatch. ManoRL therefore defaults to the largest divisor shared by `4096`
