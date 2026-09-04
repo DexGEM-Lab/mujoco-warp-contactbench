@@ -52,7 +52,10 @@ in-process renderer for automated screenshots and clean exit status. This is a
 viewer shutdown interaction, not an asset/model failure.
 
 ## Current claim
-The DexStream asset migration, fresh-checkout closure, env=1 runtime check, and
-visual acceptance are complete and integrated on `dev`. The migration branches
-used for implementation and evidence are merged and can be removed without
-losing reachable commits; unrelated worktrees and user files must remain.
+The DexStream asset migration, fresh-checkout closure, env=1 runtime check, visual
+acceptance, and an isolated Server1 deployment are complete and integrated on
+`dev`. The deployment uses the same root/source pins and a fully materialized
+298-file runtime closure without depending on Server1 GitHub credentials. The
+migration branches used for implementation and evidence are merged and can be
+removed without losing reachable commits; unrelated worktrees, active jobs, and
+legacy snapshots must remain.
