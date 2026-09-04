@@ -1,79 +1,58 @@
 # Epistemic Model
 
 ## Phenomenon
-ManoRL previously mixed the `assets/all_assets` object submodule,
-`assets/mano_hand_s02` hand submodule, and copied hand/cube files under
-`sim/manorl/runtime_assets`. The target is now implemented on the protected
-`dev` line: one reproducible physical source for both hand and objects, with a
-fresh-checkout installation contract and no silent fallback.
+ManoRL had mixed the old object submodule, old hand submodule, and copied
+runtime meshes. The integrated target is one reproducible DexStream source for
+both physical objects and MANO hand, with a fresh-checkout LFS closure and no
+fallback that can silently mix geometry.
 
 ## Supported mechanism
-- `assets/dexstream_digital_assets` is the sole physical source, pinned to
+- `assets/dexstream_digital_assets` is pinned to
   `f98da997f316c8a6b4bc2931cabed19e831ef163` from
   `git@github.com:DexGEM-Lab/dexstream_digital-assets.git`.
-- ManoRL consumes `hand/mano/sunke/{right,left}`. Both bundles satisfy the
-  28-DoF `cmc3_mcp2_28dof`, z-up, 16-link collision/visual contract; pose axes
-  are read from the pinned URDF.
-- ManoRL discovers 28 same-name rigid `objects/DexGEM` URDF bundles and reads
-  all collision pieces/scales from their declarations. `CAMERA1`/`CAMERA2`
-  source directory case is normalized only at the adapter boundary.
-- `dexstream_manifest.json` pins required Git/LFS files by source commit,
-  SHA-256, and size. Its MANO file set closes all 16 URDF visual meshes, all 16
-  collision meshes, the XML skin fragment, binary `.skn`, and bind `.npz`, so
-  skip-smudge setup does not rely on a machine's unrelated LFS cache. Optional
-  USD binaries are outside the ManoRL runtime closure.
-- Expected-contact aliases remain ManoRL-owned task metadata because the
-  physical source does not provide them. Strict checkpoint signatures include
-  repository, source commit, and manifest SHA; explicit weight transfer is
-  the cross-version boundary.
+- ManoRL uses `hand/mano/sunke/{right,left}` and preserves the 28-DoF z-up
+  contract. MANO axes are read from the pinned URDF.
+- The adapter discovers 28 same-name rigid `objects/DexGEM` bundles, reads every
+  URDF-declared collision/visual path and scale, and normalizes only the two
+  uppercase camera directory names at the API boundary.
+- The generated manifest pins all runtime-required Git/LFS files: hand URDF,
+  metadata, 16 visual meshes, 16 collision meshes, skin fragment, `.skn`, and
+  `.npz`; object URDF/visual/collision files are pinned likewise. Optional USD
+  assets are outside the ManoRL runtime closure.
+- Expected-contact aliases are ManoRL task metadata, not physical geometry.
+  Strict checkpoints and generated-data manifests record the DexStream identity.
 
 ## Evidence
+- Fresh skip-smudge setup on the integrated `dev` line materializes and hashes
+  the complete runtime closure; no selected hand runtime file is an LFS pointer.
 - All 28 homogeneous object models and right/left/bimanual unified models
-  compile with the materialized source. The fresh-checkout setup script and
-  post-merge 32-test core suite pass.
-- A real v530 Lance→CPU MJX-Warp path on `dev` loaded `banana_09_1384` with
-  `num_envs=1`, returned `(1,480)` observations, and stepped through nonzero
-  contacts.
-- Local `DISPLAY=:1` rendering produced a manually inspected banana + MANO
-  skin image; the surface is complete and continuous at finger joints. A
-  collision companion image showed the expected hand links and banana CoACD
-  pieces.
-- The source changes MANO palm collision scale from the removed runtime's 0.7
-  to 1.0 and changes several object CoACD/inertial assets. It is a new
-  physical version, and old checkpoint rollout equivalence is not claimed.
-- The specified source no longer contains `bottlewithcap` or `scissor`; the
-  runtime fails explicitly for those historical names rather than substituting
-  different geometry.
-- Generic legacy fixture metadata now uses the `mano_sunke` identity; its
-  historical 26D field layout is documented separately from the physical hand
-  source.
-- The primary worktree now has no old physical asset directories. Its only
-  remaining dirty files are the user's pre-existing `test.sh` and unrelated
-  untracked work.
+  compile with visual skin enabled.
+- Post-closure asset/scene/submodule/grasp/checkpoint/Lance tests pass 58/58.
+- A real v530 `banana:09` trajectory loads and steps through CPU MJX-Warp with
+  `num_envs=1`, 480D observations, and nonzero contacts.
+- With `DISPLAY=:1`, a single-world banana+MANO scene renders visibly and the
+  saved image shows a complete, continuous MANO skin and correct banana visual.
+- Old physical asset directories are absent from the primary `dev` worktree;
+  only unrelated pre-existing user files remain dirty.
 
-## Ruled out
-- A URL-only replacement cannot work because DexStream reorganizes paths and
-  removes some historical object names.
-- Mapping removed names to another object would silently change geometry and
-  is prohibited.
-- Copied runtime meshes or unmaterialized LFS pointers cannot be fallbacks;
-  both create mixed provenance or hidden setup failures.
-- The live-window SIGSEGV observed after an external X11 capture or during
-  Python/GLFW teardown is not evidence of a bad asset: the rendered frame is
-  correct, no-capture control scenes compile and exit, and the in-process EGL
-  render is stable.
+## Known physical boundary
+The current DexStream snapshot is a new physical version: MANO palm collision
+scale is 1.0 rather than the removed runtime's 0.7, and several object CoACD
+and inertial assets changed. Legacy checkpoint tensor compatibility therefore
+does not imply rollout/contact equivalence. Strict resume/inference rejects
+missing or mismatched asset provenance; policy-transfer/warm-start is explicit.
+The source no longer contains `bottlewithcap` or `scissor`, so those names fail
+rather than being mapped to different geometry.
+
+## Known operational boundary
+The historical default trajectory viewer fixture is unavailable locally, but
+modern v530 env=1 and asset-only visual paths are validated. External X11
+`ImageGrab` during GLFW teardown can return 139 after a rendered frame; use the
+in-process renderer for automated screenshots and clean exit status. This is a
+viewer shutdown interaction, not an asset/model failure.
 
 ## Current claim
-The asset migration is complete and integrated on `dev`. The repository now
-uses one pinned DexStream hand/object source, validates the complete runtime
-asset closure (including binary skin dependencies), removes the old physical
-sources, records asset identity in checkpoints and dataset manifests, and has
-passed structural, dynamic env=1, and visual checks.
-
-## Remaining boundary
-- The historical default trajectory viewer fixture is absent on this machine;
-  modern v530 env=1 and asset-only visible paths are validated.
-- Automated screenshot capture should use the in-process renderer rather than
-  racing an active GLFW window during interpreter shutdown.
-- Remove the delivered migration/repair/evidence worktrees and branches only
-  after their commits are reachable from `dev`; preserve unrelated worktrees.
+The DexStream asset migration, fresh-checkout closure, env=1 runtime check, and
+visual acceptance are complete and integrated on `dev`. The migration branches
+used for implementation and evidence are merged and can be removed without
+losing reachable commits; unrelated worktrees and user files must remain.
