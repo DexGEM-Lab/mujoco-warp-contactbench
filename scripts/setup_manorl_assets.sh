@@ -6,10 +6,6 @@ asset_root="${repo_root}/assets/dexstream_digital_assets"
 manifest="${repo_root}/sim/manorl/task_assets/dexstream_manifest.json"
 python_bin="${PYTHON:-python3}"
 
-if ! command -v git-lfs >/dev/null 2>&1 && ! git lfs version >/dev/null 2>&1; then
-  printf '%s\n' 'error: git-lfs is required to materialize DexStream assets' >&2
-  exit 2
-fi
 if [[ ! -f "${manifest}" ]]; then
   printf 'error: DexStream manifest is absent: %s\n' "${manifest}" >&2
   exit 2
@@ -76,6 +72,10 @@ for relative in "${lfs_paths[@]}"; do
   fi
 done
 if [[ "${needs_lfs_pull}" -eq 1 ]]; then
+  if ! command -v git-lfs >/dev/null 2>&1 && ! git lfs version >/dev/null 2>&1; then
+    printf '%s\n' 'error: manifest LFS files are incomplete and git-lfs is unavailable' >&2
+    exit 2
+  fi
   include="$(IFS=,; printf '%s' "${lfs_paths[*]}")"
   git -C "${asset_root}" lfs pull --include="${include}"
 else
