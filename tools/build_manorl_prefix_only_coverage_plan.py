@@ -49,7 +49,7 @@ def _canonical_digest(value: object) -> str:
 
 
 def _load_source(
-    manifest_path: Path, identity: str
+    manifest_path: Path, identity: str, *, required_pre_padding: int = 60
 ) -> tuple[ReferenceTrajectory, dict[str, Any]]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     records = {
@@ -68,8 +68,11 @@ def _load_source(
         raise TypeError("predecoded source is not a ReferenceTrajectory")
     if trajectory.identity.identity != identity:
         raise RuntimeError("predecoded source identity changed")
-    if trajectory.movement_start_step != 60:
-        raise ValueError(f"{identity} is not canonical pre60")
+    if trajectory.movement_start_step != required_pre_padding:
+        raise ValueError(
+            f"{identity} is not canonical pre{required_pre_padding} "
+            f"(movement_start_step={trajectory.movement_start_step})"
+        )
     return trajectory, record
 
 
@@ -191,11 +194,15 @@ def _build_task(
     mode: str,
     seed_base: int,
     candidate_pool: int,
+    required_pre_padding: int = 60,
 ) -> dict[str, Any]:
     parent = load_accepted_synthetic_parent(descriptor_path)
     if parent.source_identity != identity:
         raise ValueError("selected parent descriptor identity changed")
-    trajectory, record = _load_source(predecoded_manifest, identity)
+    trajectory, record = _load_source(
+        predecoded_manifest, identity,
+        required_pre_padding=required_pre_padding,
+    )
     source_path_alias = parent.source_dataset_path != str(
         trajectory.identity.dataset_path
     )
@@ -284,6 +291,7 @@ def _build_task(
         "fallbacks_per_slot": FALLBACKS_PER_SLOT,
         "candidate_pool": candidate_pool,
         "seed_range": [seeds[0], seeds[-1]],
+        "required_pre_padding": required_pre_padding,
         "slots": slots,
     }
 
@@ -294,6 +302,7 @@ def build_plan(
     output: Path,
     seed_base: int = 10_000_000,
     candidate_pool: int = CANDIDATE_POOL_PER_TASK,
+    required_pre_padding: int = 60,
 ) -> Path:
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     if selection.get("contract") != SELECTION_CONTRACT:
@@ -323,6 +332,7 @@ def build_plan(
                     mode=mode,
                     seed_base=seed_base,
                     candidate_pool=candidate_pool,
+                    required_pre_padding=required_pre_padding,
                 )
             )
             tasks[-1]["predecoded_manifest"] = str(
@@ -372,6 +382,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--candidate-pool", type=int, default=CANDIDATE_POOL_PER_TASK
     )
+    parser.add_argument(
+        "--pre-padding", type=int, default=60,
+        help="canonical pre-padding of the predecoded bundle (60 or 180)",
+    )
     args = parser.parse_args(argv)
     if args.seed_base < 0:
         parser.error("--seed-base must be non-negative")
@@ -387,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
         output=args.output.expanduser().resolve(),
         seed_base=args.seed_base,
         candidate_pool=args.candidate_pool,
+        required_pre_padding=args.pre_padding,
     )
     values = json.loads(output.read_text(encoding="utf-8"))
     print(

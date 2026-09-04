@@ -161,3 +161,36 @@ It contains 213 raw identities across actions `01,02,03,04,10,11`, five
 accepted episodes per identity (1,065 rows), and adjacent manifest, validation,
 and SHA256 checksum sidecars. All identities completed in five attempts; the
 ten-attempt limit remained fail-closed and was not consumed.
+
+## Scene-level augmentation (XY translate / Z rotate) — v2 standard
+
+Since 2026-08-27, published synthesis datasets may be augmented with whole-scene
+rigid transforms for VLA generalization. **Both `urdf_dof` AND `urdf_dof_target`
+must be transformed** (they are isomorphic 28D rows: `[:3]` wrist XYZ, `[3:6]`
+extrinsic-XYZ euler, `[6:]` fingers).
+
+### Representations (verified, do not mix)
+
+| Field | Representation |
+|---|---|
+| `objects[].rot_aa`, `reference.object_rot_aa` | axis-angle rotvec (`\|v\| <= pi`) |
+| `hands[].urdf_dof[:,3:6]`, `urdf_dof_target[:,3:6]` | extrinsic-XYZ euler (scipy uppercase `"XYZ"` = fixed world axes) |
+| `hands[].mano_global_rot_aa` | axis-angle rotvec (mirror of the euler) |
+
+The contract name `...intrinsic_XYZ...` is historical/misleading; the actual
+convention is extrinsic (verified: `from_euler("XYZ")` matches
+`mano_global_rot_aa` to 1.2e-7, `"xyz"` intrinsic does not).
+
+### Transform rules (v2, corrected)
+
+- **positions** (hand XYZ, contact `pos_world`): `p' = Rz(p - o) + o` (row-vector `@ R.T`)
+- **object orientation** (rotvec): `v' = log(Rz @ Rodrigues(v))` — compose `R @ mats`, NOT `mats @ R.T`
+- **hand orientation**: `R' = Rz @ R` — write back euler in the SAME extrinsic-XYZ
+  order AND update `mano_global_rot_aa` to the new rotvec
+- **forces** (`force_normal`, `total_force_world`): `f' = Rz f`
+- **unchanged**: `pos_wrist/joint/object` local frames, fingers, timestamps
+- **`urdf_dof_target`**: same transform as `urdf_dof` (positions + euler), always
+
+Tools: `tools/build_manorl_xy_translate.py` (v2), `tools/build_manorl_xy_rotate.py` (v3).
+Sampling: Latin hypercube, 1:1:1 base:translate:rotate, translate +/-0.20 m,
+rotate +/-30 deg about the per-frame object center (world Z).
