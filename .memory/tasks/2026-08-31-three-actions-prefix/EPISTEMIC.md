@@ -14,3 +14,10 @@
 2. 成功率必须分探针/正式两阶段，不可混用
 3. pre60/pre180 分 ckp 训练合同 vs 合成合同
 4. 新任务开始先读 SOP 第 0 节，不凭记忆重建合同
+
+## 收尾状态（2026-09-01）
+- 3 数据集 NAS 回读全部验证通过；任务批次完成。
+- pre60 bundle 完整性复核通过（pickle SHA 全匹配）——数据可追溯性闭环。
+- 吞吐教训：单卡 env 并行不线性（固定开销主导），生产提速靠多卡 × 小 batch（~96 env/卡）。
+- 资产一致性：Server1 与 coder exp-state50 生产物体完全一致，仅 3 个非生产物体有差异。
+- 可复用方法论已落 docs/manorl_synthesis_methodology_prompt.md。
