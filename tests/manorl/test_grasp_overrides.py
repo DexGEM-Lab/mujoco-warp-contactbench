@@ -10,7 +10,7 @@ from sim.manorl.contracts import KEYPOINT_NAMES
 from sim.manorl.environment import _expected_keypoint_ids
 
 
-_CURATED_GRASP_EXPECTATIONS = (
+_TASK_MAPPING_EXPECTATIONS = (
     ("cylinder4", "14", ("thumb_ip", "index_dip", "middle_dip", "ring_dip")),
     ("cylinder4", "16", ("index_pip", "index_dip", "middle_pip", "middle_dip")),
     ("iphone", "02", ("thumb_ip", "index_dip", "middle_dip")),
@@ -52,12 +52,13 @@ def _install_mapping(tmp_path, monkeypatch, payload: dict[str, object]) -> None:
         "sim.manorl.environment.object_runtime",
         lambda _: SimpleNamespace(grasp_mapping_path=mapping),
     )
+    _expected_keypoint_ids.cache_clear()
 
 
 @pytest.mark.parametrize(
-    ("object_type", "action_id", "expected_names"), _CURATED_GRASP_EXPECTATIONS
+    ("object_type", "action_id", "expected_names"), _TASK_MAPPING_EXPECTATIONS
 )
-def test_curated_new_capture_grasp_pairs_resolve_exact_keypoints(
+def test_task_mapping_new_capture_grasp_pairs_resolve_exact_keypoints(
     tmp_path,
     monkeypatch,
     object_type: str,
@@ -73,7 +74,7 @@ def test_curated_new_capture_grasp_pairs_resolve_exact_keypoints(
     np.testing.assert_array_equal(actual, expected)
 
 
-def test_source_grasp_mapping_remains_authoritative_over_curated_pair(
+def test_task_mapping_remains_authoritative_over_pair_fallback(
     tmp_path, monkeypatch
 ) -> None:
     _install_mapping(
@@ -88,7 +89,7 @@ def test_source_grasp_mapping_remains_authoritative_over_curated_pair(
     )
 
 
-def test_iphone_07_without_source_or_curated_mapping_uses_exact_keypoints(
+def test_iphone_07_without_task_mapping_uses_exact_keypoints(
     tmp_path, monkeypatch
 ) -> None:
     _install_mapping(tmp_path, monkeypatch, {"iphone": {}})

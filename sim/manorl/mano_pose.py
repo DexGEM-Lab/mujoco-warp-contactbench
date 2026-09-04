@@ -1,41 +1,43 @@
 """Deterministic 28D URDF-to-MANO pose conversion for synthetic exports.
 
-The right-hand axes and composition order are the current 22-finger-DOF
-contract used by manohand_reconstruction's ``URDFToMANOConverter``.  Keeping
-this small conversion local makes checkpoint exports self-contained while
-preserving the source MANO 48D layout.
+The right-hand axes and composition order are read from the pinned DexStream
+`hand/mano/sunke/right` URDF. Keeping this small conversion local makes
+checkpoint exports self-contained while preserving the source MANO 48D layout.
 """
 
 from __future__ import annotations
+
+from functools import lru_cache
+import xml.etree.ElementTree as ET
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation
 
 
-_RIGHT_AXES = {
-    "thumb_cmc_abd": (0.13838553, 0.9562202, 0.25786126),
-    "thumb_cmc_flex": (0.983308, -0.16371468, 0.07939028),
-    "thumb_cmc_twist": (0.11813027, 0.24257056, -0.9629147),
-    "thumb_mcp_flex": (0.3696764866888757, -0.8790409917024125, 0.3010419075414728),
-    "thumb_mcp_abd": (-0.5716182768686316, -0.4705844355444832, -0.6721628036220215),
-    "thumb_ip": (0.3696764866888757, -0.8790409917024125, 0.3010419075414728),
-    "index_mcp_abd": (0.061695436024444154, -0.9980950221165086, 0.0),
-    "index_mcp_flex": (-0.007558282177929706, -0.0004672015231318583, 0.999971326635547),
-    "index_pip": (-0.007558282177929706, -0.0004672015231318583, 0.999971326635547),
-    "index_dip": (-0.007558282177929706, -0.0004672015231318583, 0.999971326635547),
-    "middle_mcp_abd": (0.059278674, -0.99806947, -0.018527139),
-    "middle_mcp_flex": (-0.16968586, -0.02836441, 0.98508996),
-    "middle_pip": (-0.16968586, -0.02836441, 0.98508996),
-    "middle_dip": (-0.16968586, -0.02836441, 0.98508996),
-    "ring_mcp_abd": (0.03498914, -0.9917128, 0.12361857),
-    "ring_mcp_flex": (-0.31276166, 0.10661509, 0.9438292),
-    "ring_pip": (-0.31276166, 0.10661509, 0.9438292),
-    "ring_dip": (-0.31276166, 0.10661508, 0.9438292),
-    "pinky_mcp_abd": (-0.12182937, -0.9582415, 0.25870955),
-    "pinky_mcp_flex": (-0.52631825, 0.283357, 0.80168444),
-    "pinky_pip": (-0.52631825, 0.283357, 0.80168444),
-    "pinky_dip": (-0.52631825, 0.283357, 0.80168444),
+_AXIS_JOINTS = {
+    "thumb_cmc_abd": "j1_thumb_cmc_abd",
+    "thumb_cmc_flex": "j1_thumb_cmc_flex",
+    "thumb_cmc_twist": "j1_thumb_cmc_twist",
+    "thumb_mcp_flex": "j1_thumb_mcp_flex",
+    "thumb_mcp_abd": "j1_thumb_mcp_abd",
+    "thumb_ip": "j1_thumb_ip",
+    "index_mcp_abd": "j2_index_mcp_abd",
+    "index_mcp_flex": "j2_index_mcp_flex",
+    "index_pip": "j2_index_pip",
+    "index_dip": "j2_index_dip",
+    "middle_mcp_abd": "j3_middle_mcp_abd",
+    "middle_mcp_flex": "j3_middle_mcp_flex",
+    "middle_pip": "j3_middle_pip",
+    "middle_dip": "j3_middle_dip",
+    "ring_mcp_abd": "j4_ring_mcp_abd",
+    "ring_mcp_flex": "j4_ring_mcp_flex",
+    "ring_pip": "j4_ring_pip",
+    "ring_dip": "j4_ring_dip",
+    "pinky_mcp_abd": "j5_pinky_mcp_abd",
+    "pinky_mcp_flex": "j5_pinky_mcp_flex",
+    "pinky_pip": "j5_pinky_pip",
+    "pinky_dip": "j5_pinky_dip",
 }
 
 _MANO_SLICES = {
@@ -67,8 +69,38 @@ _FINGER_LAYOUT = {
 }
 
 
+@lru_cache(maxsize=1)
+def _source_axes() -> dict[str, NDArray[np.float64]]:
+    """Read the exact axis vectors from the selected DexStream MANO URDF."""
+
+    from sim.manorl.assets import hand_urdf_path
+
+    root = ET.parse(hand_urdf_path("right")).getroot()
+    axes: dict[str, NDArray[np.float64]] = {}
+    by_joint = {
+        joint.get("name", ""): joint
+        for joint in root.findall("joint")
+    }
+    for logical_name, joint_name in _AXIS_JOINTS.items():
+        joint = by_joint.get(joint_name)
+        axis = None if joint is None else joint.find("axis")
+        if axis is None or not axis.get("xyz"):
+            raise ValueError(f"DexStream MANO URDF has no axis for {joint_name}")
+        value = np.fromstring(axis.get("xyz", ""), sep=" ", dtype=np.float64)
+        if value.shape != (3,) or not np.all(np.isfinite(value)):
+            raise ValueError(f"invalid DexStream MANO axis for {joint_name}")
+        norm = float(np.linalg.norm(value))
+        if not np.isclose(norm, 1.0, atol=1e-6, rtol=0):
+            raise ValueError(f"DexStream MANO axis is not unit length for {joint_name}: {norm}")
+        axes[logical_name] = value
+    return axes
+
+
 def _axis(name: str) -> NDArray[np.float64]:
-    return np.asarray(_RIGHT_AXES[name], dtype=np.float64)
+    try:
+        return _source_axes()[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown MANO axis {name!r}") from exc
 
 
 def _compose(angles: NDArray[np.float64], axes: list[NDArray[np.float64]]) -> NDArray[np.float64]:

@@ -1,0 +1,759 @@
+# ManoRL task metadata. This file defines expected contact keypoints per object/action;
+# it is not physical geometry and is intentionally owned by ManoRL rather than the
+# DexStream digital-asset repository. Empty action maps use the runtime fingertip
+# default when no source-specific contact subset is available.
+
+banana:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  09:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '14':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '18':
+  - thumb3
+  - index3
+bottle: {}
+bowl:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  08:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '18':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+camera1: {}
+camera2: {}
+cap: {}
+cube1:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '07':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  09:
+  - thumb3
+  - thumb2
+  - index3
+  - index2
+  - middle3
+  - middle2
+  - ring3
+  - ring2
+  - pinky3
+  - pinky2
+  '10':
+  - thumb3
+  - thumb2
+  - index3
+  - index2
+  - middle3
+  - middle2
+  - ring3
+  - ring2
+  '18':
+  - thumb3
+  - index3
+cube2:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  09:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '10':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '11':
+  - thumb3
+  - index3
+  - middle3
+  '18':
+  - thumb3
+  - index3
+cuboid1:
+  09:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '24':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '29':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+cuboid2:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  09:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '10':
+  - thumb3
+  - thumb2
+  - thumb1
+  - index3
+  - middle3
+  - ring3
+  - ring2
+  '14':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '15':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+cuboid3:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '18':
+  - thumb3
+  - index3
+cylinder1:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  09:
+  - thumb3
+  - index3
+  - index2
+  - middle3
+  - middle2
+  - ring3
+  - ring2
+  - pinky3
+  - pinky2
+  '10':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '13':
+  - thumb3
+  - index3
+  - index2
+  '14':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '15':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '18':
+  - thumb3
+  - index3
+cylinder2:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  08:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '14':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '18':
+  - index2
+  - index3
+  - middle2
+  - middle3
+cylinder3:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '07':
+  - thumb3
+  - index3
+  - index2
+  09:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '10':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '14':
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '18':
+  - thumb3
+  - index3
+cylinder4:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '18':
+  - thumb3
+  - index3
+cylinder5:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+cylinder6:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  08:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  09:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '18':
+  - thumb3
+  - index3
+cylinder7:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '37':
+  - thumb3
+  - index3
+  - middle3
+disposablecup: {}
+iphone:
+  '01':
+  - thumb3
+  - index3
+  '40':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '41':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '42':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+largeclamp:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+mayonnaisebottle:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  08:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+pitcherbase:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '10':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '15':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+powerdrill:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  09:
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+sphere1:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '04':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '11':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+sphere2:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '14':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '15':
+  - thumb3
+  - index3
+  - middle3
+  '17':
+  - thumb3
+  - index3
+  '19':
+  - thumb3
+  - index3
+  '20':
+  - thumb3
+  - index3
+  '24':
+  - thumb3
+  - index3
+  '25':
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '26':
+  - thumb3
+  - index3
+  '32':
+  - thumb3
+  - index3
+  '33':
+  - thumb3
+  - index3
+sphere3:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '14':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '15':
+  - thumb3
+  - index3
+  '17':
+  - thumb3
+  - index3
+  '20':
+  - thumb3
+  - index3
+  '24':
+  - thumb3
+  - index3
+  '25':
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '26':
+  - thumb3
+  - index3
+  '32':
+  - thumb3
+  - index3
+  '33':
+  - thumb3
+  - index3
+sphere4:
+  '01':
+  - thumb3
+  - index3
+  '02':
+  - thumb3
+  - index3
+  - middle3
+  '03':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  '14':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '15':
+  - thumb3
+  - index3
+  - middle3
+  '17':
+  - thumb3
+  - index3
+  '19':
+  - thumb3
+  - index3
+  '20':
+  - thumb3
+  - index3
+  '24':
+  - thumb3
+  - index3
+  '25':
+  - index3
+  - middle3
+  - ring3
+  - pinky3
+  '26':
+  - thumb3
+  - index3
+  '32':
+  - thumb3
+  - index3
+  '33':
+  - thumb3
+  - index3
+  '38':
+  - thumb3
+  - index3
+  - middle3
+  - ring3
+  - pinky3

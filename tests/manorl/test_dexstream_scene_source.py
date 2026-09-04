@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import importlib.util
+
+import pytest
+
+from sim.scene import build_live_scene_xml, resolve_mano_asset
+
+
+def test_generic_scene_resolves_only_pinned_dexstream_mano(tmp_path) -> None:
+    path = resolve_mano_asset()
+    assert "assets/dexstream_digital_assets/hand/mano/sunke/right" in path.as_posix()
+    output = tmp_path / "mano.xml"
+    build_live_scene_xml(output)
+    xml = output.read_text(encoding="utf-8")
+    assert "mano_hand_s02" not in xml
+    assert "../meshes/" not in xml
+    assert "../skin/" not in xml
+    assert "dexstream_digital_assets" in xml
+
+
+@pytest.mark.skipif(importlib.util.find_spec("mujoco") is None, reason="mujoco is not installed")
+def test_generic_scene_compiles_with_dexstream_skin(tmp_path) -> None:
+    import mujoco
+
+    output = tmp_path / "mano.xml"
+    build_live_scene_xml(output)
+    model = mujoco.MjModel.from_xml_path(str(output))
+    assert model.nq == 28
+    assert model.nv == 28
+    assert model.nskin == 1
+
+
+def test_mano_pose_axes_are_read_from_the_pinned_urdf() -> None:
+    import xml.etree.ElementTree as ET
+    import numpy as np
+
+    from sim.manorl.assets import hand_urdf_path
+    from sim.manorl.mano_pose import _AXIS_JOINTS, _source_axes
+
+    root = ET.parse(hand_urdf_path("right")).getroot()
+    source = {
+        joint.get("name"): np.fromstring(joint.find("axis").get("xyz"), sep=" ")
+        for joint in root.findall("joint")
+        if joint.find("axis") is not None
+    }
+    for logical, joint_name in _AXIS_JOINTS.items():
+        np.testing.assert_allclose(_source_axes()[logical], source[joint_name])

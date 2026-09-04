@@ -8,6 +8,7 @@ import pytest
 
 from sim.manorl.assets import (
     HAND_SELF_COLLISION_GROUPS,
+    asset_provenance,
     build_scene_xml,
     build_unified_scene_xml,
     compile_model,
@@ -20,15 +21,29 @@ from sim.manorl.assets import (
 from sim.manorl.contracts import EFFORT, JOINT_NAMES, ServoConfig
 
 
-def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None:
-    manifest = validate_asset_manifest()
-    assert manifest["source_repository"] == "sibling:manohand_reconstruction/model/all_assets"
-    assert manifest["source_commit"] == "033b358b73c57e5f437f6582b6a9b0d4add7f9ee"
-    assert len(manifest["files"]) == 21
+def test_asset_provenance_matches_pinned_manifest() -> None:
+    manifest = validate_asset_manifest("cube1")
+    provenance = asset_provenance()
+    assert provenance["asset_source_repository"] == manifest["source_repository"]
+    assert provenance["asset_source_commit"] == manifest["source_commit"]
+    assert len(provenance["asset_manifest_sha256"]) == 64
     assert all(
-        entry["curated_path"].startswith(("hand/", "cube1/"))
-        for entry in manifest["files"]
+        character in "0123456789abcdef"
+        for character in provenance["asset_manifest_sha256"]
     )
+
+
+def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None:
+    manifest = validate_asset_manifest("cube1")
+    assert (
+        manifest["source_repository"]
+        == "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
+    )
+    assert manifest["source_commit"] == "f98da997f316c8a6b4bc2931cabed19e831ef163"
+    assert manifest["hand_operator"] == "sunke"
+    assert set(manifest["hands"]) == {"left", "right"}
+    assert len(manifest["objects"]) == 28
+    assert manifest["task_metadata"]["grasp_mapping"]["storage"] == "project"
 
     root = ET.fromstring(build_scene_xml())
     compiled_order = tuple(
@@ -55,7 +70,7 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
     )
     np.testing.assert_allclose(palm_quat, expected, atol=5e-10)
     palm_mesh = root.find("./asset/mesh[@name='hand_palm']")
-    assert palm_mesh is not None and palm_mesh.get("scale") == "0.7 0.7 0.7"
+    assert palm_mesh is not None and palm_mesh.get("scale") is None
 
 
 @pytest.mark.parametrize(
@@ -76,6 +91,39 @@ def test_selected_clock_compiles_exact_physics_timestep(
     for _ in range(4):
         mujoco.mj_step(model, data)
     assert data.time == pytest.approx(1.0 / policy_fps)
+
+
+@pytest.mark.parametrize(
+    ("hand_side", "expected_nq", "expected_nv", "expected_nu", "expected_hand_geoms"),
+    (
+        ("right", 35, 34, 28, 16),
+        ("left", 35, 34, 28, 16),
+        ("both", 63, 62, 56, 32),
+    ),
+)
+def test_dexstream_single_and_bimanual_models_compile(
+    hand_side: str,
+    expected_nq: int,
+    expected_nv: int,
+    expected_nu: int,
+    expected_hand_geoms: int,
+) -> None:
+    mujoco, model = compile_model(object_type="cube1", hand_side=hand_side)
+    assert (model.nq, model.nv, model.nu) == (expected_nq, expected_nv, expected_nu)
+    object_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "cube1")
+    hand_geoms = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) not in (0, object_id)
+    ]
+    assert len(hand_geoms) == expected_hand_geoms
+    if hand_side == "both":
+        actuator_names = tuple(
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index)
+            for index in range(model.nu)
+        )
+        assert all(name.startswith("right_") for name in actuator_names[:28])
+        assert all(name.startswith("left_") for name in actuator_names[28:])
 
 
 @pytest.mark.parametrize("unified", (False, True))
@@ -118,39 +166,48 @@ def test_generated_scene_uses_checkerboard_floor_material(unified: bool) -> None
     assert floor.get("friction") == "1 0.01 0.001"
 
 
-def test_visual_scene_uses_urdf_visual_meshes_without_collision_bits() -> None:
+def test_visual_scene_replaces_rigid_partition_with_mano_skin() -> None:
     root = ET.fromstring(build_scene_xml(visual_meshes=True))
 
+    # The rigid per-link visual partition is gone; the MANO skin replaces it.
     hand_visual_assets = [
         mesh
         for mesh in root.findall("./asset/mesh")
         if mesh.get("name", "").startswith("hand_visual_")
     ]
-    assert len(hand_visual_assets) == 16
-    palm_asset = root.find("./asset/mesh[@name='hand_visual_palm_visual']")
-    assert palm_asset is not None
-    assert palm_asset.get("file", "").endswith("/visual_palm.stl")
+    assert hand_visual_assets == []
+    assert root.find(".//body[@name='palm']/geom[@name='palm_visual']") is None
 
-    palm_visual = root.find(".//body[@name='palm']/geom[@name='palm_visual']")
-    assert palm_visual is not None
-    assert palm_visual.get("mesh") == "hand_visual_palm_visual"
-    assert palm_visual.get("rgba") == "0.95 0.75 0.65 1.0"
-    assert palm_visual.get("contype") == "0"
-    assert palm_visual.get("conaffinity") == "0"
-    assert palm_visual.get("group") == "2"
-
-    fingertip_marker = root.find(
-        ".//body[@name='thumb_ip']/geom[@name='thumb_ip_visual_1']"
-    )
-    assert fingertip_marker is not None
-    assert fingertip_marker.get("type") == "sphere"
-    assert fingertip_marker.get("size") == "0.0025"
+    skin = root.find("./deformable/skin")
+    assert skin is not None
+    assert skin.get("name") == "mano_skin"
+    assert skin.get("rgba") == "0.95 0.75 0.65 1"
+    bones = skin.findall("bone")
+    assert len(bones) == 16
+    assert {bone.get("body") for bone in bones} == {
+        "palm",
+        "thumb_cmc",
+        "thumb_mcp",
+        "thumb_ip",
+        "index_mcp",
+        "index_pip",
+        "index_dip",
+        "middle_mcp",
+        "middle_pip",
+        "middle_dip",
+        "ring_mcp",
+        "ring_pip",
+        "ring_dip",
+        "pinky_mcp",
+        "pinky_pip",
+        "pinky_dip",
+    }
 
     object_asset = root.find("./asset/mesh[@name='cube1_visual_mesh']")
     object_visual = root.find(".//body[@name='cube1']/geom[@name='cube1_visual']")
     object_collision = root.find(".//body[@name='cube1']/geom[@name='cube1_collision']")
     assert object_asset is not None
-    assert object_asset.get("file", "").endswith("/objects/cube1/cube1.obj")
+    assert object_asset.get("file", "").endswith("/objects/DexGEM/cube1/cube1.obj")
     assert object_asset.get("scale") == "0.001 0.001 0.001"
     assert object_visual is not None
     assert (object_visual.get("contype"), object_visual.get("conaffinity")) == ("0", "0")
@@ -160,6 +217,16 @@ def test_visual_scene_uses_urdf_visual_meshes_without_collision_bits() -> None:
     assert object_collision.get("group") == "3"
 
 
+def test_bimanual_visual_scene_binds_one_skin_per_hand() -> None:
+    root = ET.fromstring(build_scene_xml(hand_side="both", visual_meshes=True))
+    skins = root.findall("./deformable/skin")
+    assert [skin.get("name") for skin in skins] == ["right_mano_skin", "left_mano_skin"]
+    for skin, prefix in zip(skins, ("right_", "left_"), strict=True):
+        bones = skin.findall("bone")
+        assert len(bones) == 16
+        assert all(bone.get("body", "").startswith(prefix) for bone in bones)
+
+
 def test_compiled_visual_model_retains_collision_only_physics_selection() -> None:
     if importlib.util.find_spec("mujoco") is None:
         pytest.skip("mujoco is not installed in this environment")
@@ -167,7 +234,10 @@ def test_compiled_visual_model_retains_collision_only_physics_selection() -> Non
     mujoco, collision_model = compile_model()
     _, visual_model = compile_model(visual_meshes=True)
     assert collision_model.ngeom == 18
-    assert visual_model.ngeom == 40
+    # 16 hand collision geoms + cube1 collision + floor + cube1 visual; hand
+    # visuals are the skinned MANO surface and add no geoms.
+    assert visual_model.ngeom == 19
+    assert visual_model.nskin == 1
     assert (
         mujoco.mj_name2id(
             collision_model,
@@ -185,20 +255,73 @@ def test_compiled_visual_model_retains_collision_only_physics_selection() -> Non
         == -1
     )
 
-    for name in ("palm_visual", "cube1_visual"):
-        geom_id = mujoco.mj_name2id(visual_model, mujoco.mjtObj.mjOBJ_GEOM, name)
-        assert geom_id >= 0
-        assert (visual_model.geom_contype[geom_id], visual_model.geom_conaffinity[geom_id]) == (
-            0,
-            0,
-        )
+    assert (
+        mujoco.mj_name2id(visual_model, mujoco.mjtObj.mjOBJ_GEOM, "palm_visual")
+        == -1
+    )
+    cube1_visual = mujoco.mj_name2id(
+        visual_model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_visual"
+    )
+    assert cube1_visual >= 0
+    assert (
+        visual_model.geom_contype[cube1_visual],
+        visual_model.geom_conaffinity[cube1_visual],
+    ) == (0, 0)
     object_collision = mujoco.mj_name2id(
         visual_model, mujoco.mjtObj.mjOBJ_GEOM, "cube1_collision"
     )
-    assert (visual_model.geom_contype[object_collision], visual_model.geom_conaffinity[object_collision]) == (
-        2,
-        5,
+    assert (
+        visual_model.geom_contype[object_collision],
+        visual_model.geom_conaffinity[object_collision],
+    ) == (2, 5)
+
+
+def test_mano_skin_bind_frames_match_compiled_zero_pose() -> None:
+    if importlib.util.find_spec("mujoco") is None:
+        pytest.skip("mujoco is not installed in this environment")
+
+    import sim.manorl.assets as assets
+
+    for side in ("right", "left"):
+        mujoco, model = compile_model(object_type="cube1", hand_side=side, visual_meshes=True)
+        data = mujoco.MjData(model)
+        mujoco.mj_kinematics(model, data)
+        fragment = ET.parse(assets._hand_skin_path(side)).getroot()
+        skin = fragment.find("skin")
+        assert model.nskin == 1
+        max_pos_error = 0.0
+        max_quat_error = 0.0
+        for bone in skin.findall("bone"):
+            body_name = bone.get("body")
+            body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            assert body_id >= 0, body_name
+            bindpos = np.fromstring(bone.get("bindpos", ""), sep=" ")
+            bindquat = np.fromstring(bone.get("bindquat", ""), sep=" ")
+            max_pos_error = max(
+                max_pos_error, float(np.linalg.norm(data.xpos[body_id] - bindpos))
+            )
+            max_quat_error = max(
+                max_quat_error,
+                min(
+                    float(np.linalg.norm(data.xquat[body_id] - bindquat)),
+                    float(np.linalg.norm(data.xquat[body_id] + bindquat)),
+                ),
+            )
+        assert max_pos_error < 5e-8, f"{side} skin bind drift {max_pos_error}"
+        assert max_quat_error < 1e-9, f"{side} skin bind quat drift {max_quat_error}"
+
+    mujoco, bimanual = compile_model(
+        object_type="cube1", hand_side="both", visual_meshes=True
     )
+    assert bimanual.nskin == 2
+    right_skin = ET.parse(assets._hand_skin_path("right")).getroot().find("skin")
+    for bone in right_skin.findall("bone"):
+        assert (
+            mujoco.mj_name2id(
+                bimanual, mujoco.mjtObj.mjOBJ_BODY, f"right_{bone.get('body')}"
+            )
+            >= 0
+        )
 
 
 def test_unified_visual_scene_contains_each_object_visual_mesh() -> None:
@@ -217,35 +340,15 @@ def test_unified_visual_scene_contains_each_object_visual_mesh() -> None:
         assert (visual.get("contype"), visual.get("conaffinity")) == ("0", "0")
 
 
-def test_s02_object_registry_is_closed_materialized_and_digest_checked() -> None:
-    expected = (
-        "banana",
-        "bottlewithcap",
-        "bowl",
-        "cube1",
-        "cube2",
-        "cuboid1",
-        "cuboid2",
-        "cuboid3",
-        "cylinder1",
-        "cylinder2",
-        "cylinder3",
-        "cylinder4",
-        "cylinder5",
-        "cylinder6",
-        "cylinder7",
-        "iphone",
-        "largeclamp",
-        "mayonnaisebottle",
-        "pitcherbase",
-        "powerdrill",
-        "scissor",
-        "sphere1",
-        "sphere2",
-        "sphere3",
-    )
+def test_dexstream_object_registry_is_discovered_materialized_and_digest_checked() -> None:
+    manifest = validate_asset_manifest()
+    expected = tuple(sorted(manifest["objects"]))
+    assert len(expected) == 28
     assert supported_object_types() == expected
-    validate_asset_manifest()
+    assert {"banana", "cube2", "largeclamp", "mayonnaisebottle"} <= set(expected)
+    assert not {"bottlewithcap", "scissor", "iphone17", "iphone17_T", "phone_sunke"} & set(expected)
+    assert object_runtime("camera1").urdf_path.name == "CAMERA1.urdf"
+    assert object_runtime("camera2").urdf_path.name == "CAMERA2.urdf"
 
     bounds = {}
     for object_type in expected:
@@ -264,7 +367,7 @@ def test_s02_object_registry_is_closed_materialized_and_digest_checked() -> None
         object_runtime("unknown_object")
 
 
-def test_all_s02_object_models_compile_with_object_specific_mass_and_geometry() -> None:
+def test_all_dexstream_object_models_compile_with_object_specific_mass_and_geometry() -> None:
     if importlib.util.find_spec("mujoco") is None:
         pytest.skip("mujoco is not installed in this environment")
 
@@ -288,7 +391,10 @@ def test_all_s02_object_models_compile_with_object_specific_mass_and_geometry() 
             tuple(np.round(np.ptp(object_collision_vertices(object_type), axis=0), 6)),
         )
 
-    assert len(set(signatures.values())) == len(signatures)
+    # Every DexStream object has its own authoritative URDF path, even when
+    # source meshes intentionally share physical geometry.
+    assert len(signatures) == len(supported_object_types())
+    assert len({object_runtime(name).urdf_path for name in signatures}) == len(signatures)
 
 
 def test_independent_zero_fk_contains_fixed_palm_rotation() -> None:
