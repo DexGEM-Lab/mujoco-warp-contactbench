@@ -169,16 +169,31 @@ def _hand_manifest(asset_root: Path, side: str) -> dict[str, Any]:
             f"collision meshes={len(collision_paths)}, visual meshes={len(visual_paths)}"
         )
     # The rigid visual STLs are superseded by the MANO skin: ManoRL consumes
-    # only the URDF, metadata, collision meshes, and the skin fragment. Keep
-    # the 16-visual-mesh assertion above as a source-structure guard, but do
-    # not pin the visual STL files in the runtime manifest.
+    # the URDF, metadata, collision meshes, and every file named by the
+    # metadata skin bundle. In particular, the XML fragment references the
+    # binary .skn file; pinning only the fragment would leave a raw LFS pointer
+    # in a fresh skip-smudge checkout.
     file_paths = [urdf_path, metadata_path, *collision_paths]
-    skin_path = f"{root_path}/skin/mano_skin_mjcf_fragment.xml"
-    # The MANO skin fragment carries the full 778-vertex LBS surface; the 16
-    # rigid visual STLs are only a provenance fallback and tear at joints by
-    # construction. Pin the fragment so the runtime can resolve it exactly.
-    _git_blob(asset_root, skin_path)
-    file_paths.append(skin_path)
+    skin_metadata = metadata.get("skin")
+    skin_files = skin_metadata.get("files") if isinstance(skin_metadata, dict) else None
+    if not isinstance(skin_files, list) or not skin_files:
+        raise ValueError(f"{side} MANO metadata has no skin file list")
+    skin_paths: list[str] = []
+    for relative in skin_files:
+        if not isinstance(relative, str) or not relative or relative.startswith(("/", "../")):
+            raise ValueError(f"{side} MANO metadata has an invalid skin path: {relative!r}")
+        path = posixpath.normpath(f"{root_path}/{relative}")
+        if not path.startswith(f"{root_path}/"):
+            raise ValueError(f"{side} MANO skin path escapes its bundle: {relative!r}")
+        _git_blob(asset_root, path)
+        skin_paths.append(path)
+    skin_path = next(
+        (path for path in skin_paths if path.endswith("/mano_skin_mjcf_fragment.xml")),
+        None,
+    )
+    if skin_path is None:
+        raise ValueError(f"{side} MANO metadata skin bundle has no XML fragment")
+    file_paths.extend(skin_paths)
     if len(set(file_paths)) != len(file_paths):
         raise ValueError(f"{side} MANO manifest contains duplicate files")
     return {
@@ -186,6 +201,7 @@ def _hand_manifest(asset_root: Path, side: str) -> dict[str, Any]:
         "urdf": urdf_path,
         "metadata": metadata_path,
         "skin": skin_path,
+        "skin_files": skin_paths,
         "joint_names": joint_names,
         "betas": metadata.get("betas"),
         "palm_collision_scale": metadata.get("palm_collision_scale"),

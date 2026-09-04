@@ -41,8 +41,8 @@ assets/dexstream_digital_assets -> git@github.com:DexGEM-Lab/dexstream_digital-a
 ```
 
 `sim/manorl/task_assets/dexstream_manifest.json` records the source commit and
-SHA-256/size of every MANO URDF, required collision mesh, skin fragment, and
-registered DexGEM object URDF/visual/collision file. Runtime validation rejects
+SHA-256/size of every MANO URDF, required collision mesh, complete skin bundle,
+and registered DexGEM object URDF/visual/collision file. Runtime validation rejects
 a missing file, an unmaterialized LFS pointer, a digest mismatch, or a checkout
 at a different source commit. Regenerate the manifest only when intentionally
 moving the submodule pin:
