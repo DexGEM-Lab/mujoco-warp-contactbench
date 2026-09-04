@@ -25,14 +25,24 @@ asset provenance.
   cross-physical-version boundary.
 
 ## Evidence
-- New source audit: 28 DexGEM URDFs, each one rigid link with one visual mesh
-  and at least one collision mesh; all mesh references resolve.
-- Manifest setup validation passed for both MANO sides and every object.
+- Source audit found 28 valid DexGEM URDF bundles; every one has one rigid link,
+  one visual mesh, at least one collision mesh, finite inertial data, and
+  resolvable mesh references.
+- Manifest generation is deterministic. The setup script verifies both MANO
+  sides and all 28 objects, rejects source-pin drift/unmaterialized LFS files,
+  and does not modify GitGuard hooks.
 - Native MuJoCo compilation passed for all 28 homogeneous models, right/left/
   bimanual cube1 models, representative visual+skin scenes, and right/left/
   bimanual unified models containing all 28 objects.
-- Focused tests passed: asset/submodule/grasp/scene/checkpoint/Lance tests
-  (56 tests), plus the updated viewer skin check.
+- Focused migration regressions passed 159 tests (7 skipped); the final core
+  rerun passed 76 tests (5 deselected). The broader suite's observed blockers
+  are the pre-existing absent external Lance fixture and an unrelated dual-
+  contact reducer assertion.
+- Local visual acceptance passed with `DISPLAY=:1`, a materialized new source,
+  and one world: the rendered banana and MANO skin were manually inspected in
+  both an offscreen image and a real GLFW window. A real v530 Lance→CPU
+  MJX-Warp path also loaded `banana_09_1384` with `num_envs=1`, returned 480D
+  observations, and stepped through nonzero contacts.
 - The current source changes MANO palm collision scale from the removed
   runtime's 0.7 to 1.0 and changes several object CoACD/inertial assets. The
   current source is therefore a new physical version even where dimensions or
@@ -48,19 +58,25 @@ asset provenance.
   and hide missing Git LFS materialization; the copies are removed.
 - Treating the task-owned grasp map as a DexStream physical asset is incorrect;
   it encodes the ManoRL observation/reward contract.
+- The live-window SIGSEGV is not evidence of a bad asset: the same DexStream
+  scene renders successfully, a minimal viewer exits cleanly, and the failure
+  appears only when an external X11 screenshot races the GLFW teardown.
 
 ## Current claim
-The feature branch has a structurally complete migration: one physical asset
-submodule, source-pinned manifest and LFS setup, direct MANO/object resolution,
-no executable old-source fallback, generic-scene adaptation, and checkpoint
-provenance binding. The migration intentionally does not claim behavioral
-equivalence for legacy checkpoints or trajectories because the physical source
-changed.
+The feature branch has a complete, source-pinned asset migration and a
+successful single-world visual/runtime acceptance. It provides one physical
+source, explicit task metadata, no executable old-source fallback, generic
+scene adaptation, and checkpoint provenance binding. The migration intentionally
+does not claim behavioral equivalence for legacy checkpoints or trajectories
+because the physical source changed.
 
-## Remaining validation
-- Run the complete repository test target where the external reference Lance
-  fixture is available; current local full-test blockers are the pre-existing
-  missing `/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/npy_s02_v3.lance`
-  fixture and an unrelated dual-contact reducer assertion.
-- Review and commit only migration files on this feature branch; do not stage
-  the primary worktree's unrelated user modifications.
+## Remaining boundary
+- The full trajectory-driven policy viewer using the historical default fixture
+  remains unavailable on this machine because
+  `/mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake/npy_s02_v3.lance`
+  is absent. Asset-only and modern-v530 env=1 paths are validated.
+- The external-capture/GLFW teardown issue is operational; use the saved
+  renderer image or the viewer's own capture path rather than racing X11
+  `ImageGrab` when a clean exit code is required.
+- Before integration, merge only this feature branch into `dev`; preserve the
+  primary worktree's unrelated user changes.

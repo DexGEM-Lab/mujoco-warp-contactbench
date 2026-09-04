@@ -37,3 +37,9 @@ Work only in the assigned feature worktree.
 Preserve all unrelated user modifications in the primary worktree.
 Do not delete old assets before replacement validation passes.
 Do not add generated datasets, credentials, or machine-local paths to Git.
+
+## Unattended visual acceptance extension
+- Continue until a real local single-environment (`num_envs=1`) visual check succeeds.
+- Use `DISPLAY=:1` for the visible MuJoCo path when the X11 session is available; save a screenshot and inspect it rather than treating process exit as proof.
+- Check GPU memory before starting and avoid occupied GPUs. Keep visual tests bounded and do not generate training/synthetic datasets.
+- If the visible scene cannot run because the display is unavailable, prove the exact environmental blocker and run an equivalent offscreen render only as a secondary check; do not silently call that visual acceptance.
