@@ -62,4 +62,6 @@ also now carries the same provenance marker. Server2's stale feature snapshot
 has no old physical runtime assets. Server1's old shared assets remain legacy
 because external jobs are still running. The migration branches used for
 implementation and evidence are merged and can be removed without losing
-reachable commits; unrelated worktrees and active jobs must remain.
+reachable commits; unrelated worktrees and active jobs must remain. Deployment
+markers are machine-local provenance artifacts and are excluded from Unison so
+they cannot flow back into the primary source tree.
