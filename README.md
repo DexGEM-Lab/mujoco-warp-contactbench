@@ -45,7 +45,8 @@ SHA-256/size of every MANO URDF, all URDF-referenced hand visual/collision
 meshes, complete skin bundle, and registered DexGEM object URDF/visual/collision
 file. Runtime validation rejects
 a missing file, an unmaterialized LFS pointer, a digest mismatch, or a checkout
-at a different source commit. Regenerate the manifest only when intentionally
+at a different source commit. Setup preserves a correctly pinned, already
+materialized deployment and does not require a second network fetch. Regenerate the manifest only when intentionally
 moving the submodule pin:
 
 ```bash

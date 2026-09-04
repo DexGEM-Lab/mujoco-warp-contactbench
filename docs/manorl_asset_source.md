@@ -26,7 +26,11 @@ scripts/setup_manorl_assets.sh
 
 `setup_manorl_assets.sh` pulls only the LFS files named by the manifest and then
 checks both MANO sides and every DexGEM object. A raw LFS pointer, missing file,
-wrong size, digest mismatch, or submodule commit drift is an error.
+wrong size, digest mismatch, or submodule commit drift is an error. If an
+existing deployment checkout is already at the manifest commit and all listed
+files are materialized, setup preserves it and skips both submodule checkout and
+network LFS access; this supports offline/deployment snapshots without hiding
+incomplete files.
 
 ## ManoRL hand contract
 
