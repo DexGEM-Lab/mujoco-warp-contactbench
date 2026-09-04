@@ -65,3 +65,16 @@ def test_dataset_manifest_asset_provenance_is_checked(monkeypatch) -> None:
             {"asset_provenance": {**identity, "asset_source_commit": "other"}}
         )
     assert validator._validate_asset_provenance({}) is None
+
+
+def test_manifest_closes_direct_mano_urdf_visual_dependencies() -> None:
+    import json
+    from sim.manorl.assets import ASSET_MANIFEST
+
+    manifest = json.loads(ASSET_MANIFEST.read_text(encoding="utf-8"))
+    for side in ("right", "left"):
+        hand = manifest["hands"][side]
+        assert len(hand["visual_files"]) == 16
+        paths = {record["path"] for record in hand["files"]}
+        assert set(hand["visual_files"]) <= paths
+        assert set(hand["skin_files"]) <= paths

@@ -177,7 +177,9 @@ def make_minimal_generated_trajectory(contact: list[list[dict[str, Any]]]) -> di
         "trajectory_metadata": {
             "data_fps": 60,
             "total_frames": total_frames,
-            "hand_names": ["mano_hand_s02"],
+            # Metadata identity follows the selected DexStream MANO subject;
+            # this legacy fixture still intentionally uses its 26D schema.
+            "hand_names": ["mano_sunke"],
             "object_names": ["contact_object"],
             "mano_hand_shapes": [np.zeros(10, dtype=np.float32)],
             "raw_data_info": {

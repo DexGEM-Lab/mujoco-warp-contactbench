@@ -124,6 +124,102 @@
           "storage": "lfs"
         },
         {
+          "path": "hand/mano/sunke/left/meshes/visual_palm.stl",
+          "sha256": "00d6f5b1d1de5aa462571f84c2a39c5d09c040534ceceacd35eca24a012cb633",
+          "size": 19284,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_thumb1.stl",
+          "sha256": "dabebc3124acf451db64b2a1cdcd27cef04bda9ea89c5854bf98a377a1a89fb4",
+          "size": 1984,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_thumb2.stl",
+          "sha256": "e1d79b77bea6fb490c8cbcd224851fc29d9ec4e8eb66e11597810ce33dda9c3a",
+          "size": 3234,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_thumb3.stl",
+          "sha256": "3905b224763fee5dc72e471a89cb3e7b32408bae155c7240606d1b2245b5ff24",
+          "size": 5584,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_index1.stl",
+          "sha256": "bee0ebe9f408ede342bb71d277f3088571fd82f23e7dd3b496e46d25689611fb",
+          "size": 3634,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_index2.stl",
+          "sha256": "02da27d68d9684a3956fa12309919287dead222d33309814119cc811a684d341",
+          "size": 3234,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_index3.stl",
+          "sha256": "dbf711fe845cc743d339bcd80f37c6b0558a56f471f70ca952e557d15d155b01",
+          "size": 5534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_middle1.stl",
+          "sha256": "726f7c349a26c417499e96bdf463bbc50732d4ce1521cc4e5e42379a9b907957",
+          "size": 3634,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_middle2.stl",
+          "sha256": "965d2379c59dbf273121c1b9af42bda57fcd29e52398c15ab4d9d09eabb9fbd8",
+          "size": 2834,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_middle3.stl",
+          "sha256": "2ea41014d83d8245a51fdacd7b17e31a1f7b648fbe2e9e63487743c291ac394b",
+          "size": 5484,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_ring1.stl",
+          "sha256": "b3e469a6e2921326d0aab05fcda7cabb379da23c498981f459d9c6d298c16435",
+          "size": 3334,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_ring2.stl",
+          "sha256": "47db8e13b3b9c8200a45cd0d200e6b54831e656fd819232674bff8fe1e69c2ab",
+          "size": 3484,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_ring3.stl",
+          "sha256": "ce222c4376460e4e01dded6a79f25762cb25ae488f7c091d9213a15b3cc35ee0",
+          "size": 5534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_pinky1.stl",
+          "sha256": "927886d8e19101241ec88920c8eee4c367a41e55dabf3848295b6bc48902ed58",
+          "size": 2434,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_pinky2.stl",
+          "sha256": "f53e78a28bcb6925f8b4723fee29347a45646eccaa093b0803b88479dd253612",
+          "size": 3534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/visual_pinky3.stl",
+          "sha256": "68e4979827e81fcc482a8b7e8e868648a6b679da70c24735ca9365913d3d81cd",
+          "size": 5484,
+          "storage": "lfs"
+        },
+        {
           "path": "hand/mano/sunke/left/skin/mano_skin_mjcf.skn",
           "sha256": "f6f553e4bd6a0ad3cf6778f7f3ca0dab4434e0b74bda684ddc702f0d5cd9d1de",
           "size": 45184,
@@ -181,7 +277,25 @@
         "hand/mano/sunke/left/skin/mano_skin_mjcf_fragment.xml",
         "hand/mano/sunke/left/skin/mano_skin_bind.npz"
       ],
-      "urdf": "hand/mano/sunke/left/urdf/mano_left_hand_floating.urdf"
+      "urdf": "hand/mano/sunke/left/urdf/mano_left_hand_floating.urdf",
+      "visual_files": [
+        "hand/mano/sunke/left/meshes/visual_palm.stl",
+        "hand/mano/sunke/left/meshes/visual_thumb1.stl",
+        "hand/mano/sunke/left/meshes/visual_thumb2.stl",
+        "hand/mano/sunke/left/meshes/visual_thumb3.stl",
+        "hand/mano/sunke/left/meshes/visual_index1.stl",
+        "hand/mano/sunke/left/meshes/visual_index2.stl",
+        "hand/mano/sunke/left/meshes/visual_index3.stl",
+        "hand/mano/sunke/left/meshes/visual_middle1.stl",
+        "hand/mano/sunke/left/meshes/visual_middle2.stl",
+        "hand/mano/sunke/left/meshes/visual_middle3.stl",
+        "hand/mano/sunke/left/meshes/visual_ring1.stl",
+        "hand/mano/sunke/left/meshes/visual_ring2.stl",
+        "hand/mano/sunke/left/meshes/visual_ring3.stl",
+        "hand/mano/sunke/left/meshes/visual_pinky1.stl",
+        "hand/mano/sunke/left/meshes/visual_pinky2.stl",
+        "hand/mano/sunke/left/meshes/visual_pinky3.stl"
+      ]
     },
     "right": {
       "betas": [
@@ -306,6 +420,102 @@
           "storage": "lfs"
         },
         {
+          "path": "hand/mano/sunke/right/meshes/visual_palm.stl",
+          "sha256": "4ca04ad431fcd2fcafca8c1424912f8221881bb4ac33023098b13fb28dc8c565",
+          "size": 19284,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_thumb1.stl",
+          "sha256": "d708e06aea0b3715b2fc5ddf6c93f0d6c5be0628fdfcb4189f64c46ae731fcad",
+          "size": 1984,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_thumb2.stl",
+          "sha256": "4849f944aa0d5f9624e1a6e82c9fafb2ee6aeeb886e4d14b2ab6518bd47df1b9",
+          "size": 3234,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_thumb3.stl",
+          "sha256": "b158b162349bf4ee0ef846b3d7f7ee9586421a5984b7781c29a67f703f4969c9",
+          "size": 5584,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_index1.stl",
+          "sha256": "b93a209641f65ab7da79be9ffe6a6a5404e8e56f307d832cdbf8d5b233058e9b",
+          "size": 3634,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_index2.stl",
+          "sha256": "2d8898aa46bc898b80b219fcd42a6be046136020715cc10030e8351c223bbb86",
+          "size": 3234,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_index3.stl",
+          "sha256": "9b749b01fc4f50af16e5618517e18e01c3606da3655493edd4092ff66195f56b",
+          "size": 5534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_middle1.stl",
+          "sha256": "02d4a5386363c9b7bf42b7d0d22bb53a56bf74097831c7c5664ece1db92557bd",
+          "size": 3634,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_middle2.stl",
+          "sha256": "8ca05a85a423fc9040e0cce7db9d1841e35406cc23e6c573aa63211081f4fa2b",
+          "size": 2834,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_middle3.stl",
+          "sha256": "3e8f9a3424c48b4c72ad2595fac5113ad526357b40062dee28ee77bca0c47f7f",
+          "size": 5484,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_ring1.stl",
+          "sha256": "9dd83cdd411ead8fb7307b8266e14c5e99034f61783212753856e00e6b89340c",
+          "size": 3334,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_ring2.stl",
+          "sha256": "e295b30d7e72058c1c0dc8f09466de48a74cb18ce8114d80f2246cb2e6fcda51",
+          "size": 3484,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_ring3.stl",
+          "sha256": "9379efcdda59082b850637e2b20e71087fa619e34009fac0aa9630757a5e2987",
+          "size": 5534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_pinky1.stl",
+          "sha256": "976e826565610dc44cfe0de0c883e00974f1c1679b917a17a04b08146a5c1df7",
+          "size": 2434,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_pinky2.stl",
+          "sha256": "19628ff4011a230d296e07e9082359dbf599125db9b954138cf9e588d7da84c9",
+          "size": 3534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/visual_pinky3.stl",
+          "sha256": "a1f52d3e5e1ce4d00e33c41ebbdaed4fb6cae00211a13ddf256168e4638256b8",
+          "size": 5484,
+          "storage": "lfs"
+        },
+        {
           "path": "hand/mano/sunke/right/skin/mano_skin_mjcf.skn",
           "sha256": "4adfef1d2be5550bf269896ca13c7097f96c01f7d27ccda16cb8267becac3c21",
           "size": 45184,
@@ -363,7 +573,25 @@
         "hand/mano/sunke/right/skin/mano_skin_mjcf_fragment.xml",
         "hand/mano/sunke/right/skin/mano_skin_bind.npz"
       ],
-      "urdf": "hand/mano/sunke/right/urdf/mano_right_hand_floating.urdf"
+      "urdf": "hand/mano/sunke/right/urdf/mano_right_hand_floating.urdf",
+      "visual_files": [
+        "hand/mano/sunke/right/meshes/visual_palm.stl",
+        "hand/mano/sunke/right/meshes/visual_thumb1.stl",
+        "hand/mano/sunke/right/meshes/visual_thumb2.stl",
+        "hand/mano/sunke/right/meshes/visual_thumb3.stl",
+        "hand/mano/sunke/right/meshes/visual_index1.stl",
+        "hand/mano/sunke/right/meshes/visual_index2.stl",
+        "hand/mano/sunke/right/meshes/visual_index3.stl",
+        "hand/mano/sunke/right/meshes/visual_middle1.stl",
+        "hand/mano/sunke/right/meshes/visual_middle2.stl",
+        "hand/mano/sunke/right/meshes/visual_middle3.stl",
+        "hand/mano/sunke/right/meshes/visual_ring1.stl",
+        "hand/mano/sunke/right/meshes/visual_ring2.stl",
+        "hand/mano/sunke/right/meshes/visual_ring3.stl",
+        "hand/mano/sunke/right/meshes/visual_pinky1.stl",
+        "hand/mano/sunke/right/meshes/visual_pinky2.stl",
+        "hand/mano/sunke/right/meshes/visual_pinky3.stl"
+      ]
     }
   },
   "objects": {

@@ -18,9 +18,10 @@ fresh-checkout installation contract and no silent fallback.
   all collision pieces/scales from their declarations. `CAMERA1`/`CAMERA2`
   source directory case is normalized only at the adapter boundary.
 - `dexstream_manifest.json` pins required Git/LFS files by source commit,
-  SHA-256, and size. Its MANO file set includes the XML skin fragment, binary
-  `.skn`, and bind `.npz`, so skip-smudge setup does not rely on a machine's
-  unrelated LFS cache.
+  SHA-256, and size. Its MANO file set closes all 16 URDF visual meshes, all 16
+  collision meshes, the XML skin fragment, binary `.skn`, and bind `.npz`, so
+  skip-smudge setup does not rely on a machine's unrelated LFS cache. Optional
+  USD binaries are outside the ManoRL runtime closure.
 - Expected-contact aliases remain ManoRL-owned task metadata because the
   physical source does not provide them. Strict checkpoint signatures include
   repository, source commit, and manifest SHA; explicit weight transfer is
@@ -43,6 +44,9 @@ fresh-checkout installation contract and no silent fallback.
 - The specified source no longer contains `bottlewithcap` or `scissor`; the
   runtime fails explicitly for those historical names rather than substituting
   different geometry.
+- Generic legacy fixture metadata now uses the `mano_sunke` identity; its
+  historical 26D field layout is documented separately from the physical hand
+  source.
 - The primary worktree now has no old physical asset directories. Its only
   remaining dirty files are the user's pre-existing `test.sh` and unrelated
   untracked work.

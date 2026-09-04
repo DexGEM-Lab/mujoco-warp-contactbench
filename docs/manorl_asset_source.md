@@ -14,8 +14,9 @@ The root repository tracks the source as a Git submodule. Large meshes are Git
 LFS objects in that submodule; they must be materialized before MuJoCo loads a
 model. The project-owned
 `sim/manorl/task_assets/dexstream_manifest.json` records the exact source commit
-and the SHA-256/size of every file required by ManoRL, including the binary MANO
-skin (`.skn`), skin bind (`.npz`), and XML fragment.
+and the SHA-256/size of every file required by ManoRL, including all 16 URDF
+visual STLs per side and the binary MANO skin (`.skn`), skin bind (`.npz`), and
+XML fragment.
 
 ```bash
 git lfs install
@@ -80,7 +81,9 @@ The source URDF is authoritative for physical units and parameters:
 visual meshes are millimetre OBJ files with a `0.001` URDF scale, while CoACD
 collision OBJ files are metre files with scale `1`. All current bundles are
 single-link rigid bodies; multiple convex pieces do not create internal object
-joints.
+joints. ManoRL's manifest closes every URDF-referenced visual/collision file;
+source USD files are optional for other consumers and are outside the ManoRL
+runtime closure.
 
 ## Task metadata boundary
 
