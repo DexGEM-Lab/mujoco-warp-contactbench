@@ -52,12 +52,13 @@ in-process renderer for automated screenshots and clean exit status. This is a
 viewer shutdown interaction, not an asset/model failure.
 
 ## Current claim
-The DexStream asset migration, fresh-checkout closure, env=1 runtime check, visual
-acceptance, and an isolated Server1 deployment are complete and integrated on
-`dev`. The deployment uses the same root/source pins and a fully materialized
-298-file runtime closure without depending on Server1 GitHub credentials. New
-Server1 work uses `/home/jay/dexrobot/FromSSH/manoRL_mujoco_dexstream`; the old
-shared snapshot is intentionally retained as legacy while external jobs exist.
-The migration branches used for implementation and evidence are merged and can
-be removed without losing reachable commits; unrelated worktrees and active
-jobs must remain.
+The DexStream asset migration, fresh-checkout closure, env=1 runtime checks,
+local visual acceptance, and isolated Server1 and Server2 deployments are
+complete and integrated on `dev`. Both deployments use the same root/source
+pins and fully materialized 298-file runtime closures. Server1's deployment
+works without GitHub credentials through the offline materialized path; Server2
+completed a fresh authenticated Git/LFS checkout. New work uses the isolated
+DexStream deployment on each host; old shared snapshots remain explicitly
+legacy while external consumers exist. The migration branches used for
+implementation and evidence are merged and can be removed without losing
+reachable commits; unrelated worktrees and active jobs must remain.
