@@ -221,7 +221,9 @@ def trajectory_from_payload(payload: dict[str, Any], *, raw_id: int, source_name
         "trajectory_metadata": {
             "data_fps": int(round(fps)),
             "total_frames": total_frames,
-            "hand_names": np.asarray(["mano_hand_s02"], dtype=object),
+            # The generated fixture uses the legacy 26D layout, but its
+            # physical hand identity is the DexStream sunke bundle.
+            "hand_names": np.asarray(["mano_sunke"], dtype=object),
             "object_names": np.asarray(object_names, dtype=object),
             "mano_hand_shapes": np.zeros((1, 10), dtype=np.float32),
             "raw_data_info": {

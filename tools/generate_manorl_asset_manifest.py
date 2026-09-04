@@ -168,12 +168,13 @@ def _hand_manifest(asset_root: Path, side: str) -> dict[str, Any]:
             f"{side} MANO contract drifted: joints={len(joint_names)}, "
             f"collision meshes={len(collision_paths)}, visual meshes={len(visual_paths)}"
         )
-    # The rigid visual STLs are superseded by the MANO skin: ManoRL consumes
-    # the URDF, metadata, collision meshes, and every file named by the
-    # metadata skin bundle. In particular, the XML fragment references the
-    # binary .skn file; pinning only the fragment would leave a raw LFS pointer
-    # in a fresh skip-smudge checkout.
-    file_paths = [urdf_path, metadata_path, *collision_paths]
+    # ManoRL renders the continuous MANO skin, but the source URDF still owns
+    # 16 visual STL references and external consumers may load that URDF
+    # directly. Keep the full URDF visual closure in the manifest rather than
+    # leaving raw LFS pointers in a fresh skip-smudge checkout.
+    # The skin bundle is also complete: its XML fragment references the binary
+    # .skn file, and the bind .npz is part of the source hand contract.
+    file_paths = [urdf_path, metadata_path, *collision_paths, *visual_paths]
     skin_metadata = metadata.get("skin")
     skin_files = skin_metadata.get("files") if isinstance(skin_metadata, dict) else None
     if not isinstance(skin_files, list) or not skin_files:
@@ -202,6 +203,7 @@ def _hand_manifest(asset_root: Path, side: str) -> dict[str, Any]:
         "metadata": metadata_path,
         "skin": skin_path,
         "skin_files": skin_paths,
+        "visual_files": visual_paths,
         "joint_names": joint_names,
         "betas": metadata.get("betas"),
         "palm_collision_scale": metadata.get("palm_collision_scale"),
