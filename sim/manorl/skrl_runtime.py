@@ -19,6 +19,7 @@ from skrl.utils.spaces.torch import (
 )
 
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
+from sim.manorl.assets import asset_provenance
 from sim.manorl.device_runtime import DeviceTransitionBatch, jax_to_torch_cuda
 from sim.manorl.environment import PhaseTimings
 from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv
@@ -378,6 +379,7 @@ class ManoSkrlRuntime:
         controlled_sides = tuple(physical.hand_layout.controlled_sides)
         clock = physical.config.clock
         signature = {
+            **asset_provenance(),
             "requested_hand_side": physical.config.hand_side,
             "resolved_hand_side": (
                 "both" if len(controlled_sides) == 2 else controlled_sides[0]

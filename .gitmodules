@@ -1,11 +1,7 @@
-[submodule "assets/mano_hand_s02"]
-	path = assets/mano_hand_s02
-	url = git@192.168.10.116:ai/group-ai-public/group-sim-assets/mano_hand_s02.git
-	branch = main
-[submodule "assets/all_assets"]
-	path = assets/all_assets
-	url = git@192.168.10.116:jieqiangsun/all_assets.git
-	branch = main
 [submodule "lance_manager"]
 	path = 3rd_party/lance_manager
 	url = git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
+[submodule "assets/dexstream_digital_assets"]
+	path = assets/dexstream_digital_assets
+	url = git@github.com:DexGEM-Lab/dexstream_digital-assets.git
+	branch = main

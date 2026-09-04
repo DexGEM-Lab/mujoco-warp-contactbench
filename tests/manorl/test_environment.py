@@ -10,7 +10,7 @@ import pytest
 
 import sim.manorl.environment as environment_module
 from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID, check_termination
-from sim.manorl.assets import OBJECT_MESH, compile_model
+from sim.manorl.assets import compile_model, object_runtime
 from sim.manorl.contracts import JOINT_DOF, KEYPOINT_NAMES
 from sim.manorl.environment import (
     EnvironmentConfig,
@@ -488,8 +488,17 @@ def test_producer_keypoint_order_fingertips_and_static_template(trajectory) -> N
     np.testing.assert_array_equal(env.active_joint_mask[0], [True] * 10 + [False] * 12)
 
     trimesh = pytest.importorskip("trimesh")
-    source_mesh = trimesh.load(OBJECT_MESH, force="mesh")
-    source_mesh.apply_scale(0.001)
+    runtime = object_runtime("cube1")
+    collision_meshes = []
+    for path, scale in zip(
+        runtime.collision_mesh_paths,
+        runtime.collision_mesh_scales,
+        strict=True,
+    ):
+        mesh = trimesh.load(path, force="mesh")
+        mesh.apply_scale(scale)
+        collision_meshes.append(mesh)
+    source_mesh = trimesh.util.concatenate(collision_meshes)
     source_points, _ = trimesh.sample.sample_surface(source_mesh, 64, seed=42)
     lower, upper = source_points.min(axis=0), source_points.max(axis=0)
     expected_template = (source_points - (upper + lower) / 2.0) / np.maximum((upper - lower) / 2.0, 1e-6)

@@ -34,6 +34,7 @@ from sim.manorl.approach_prefix import (
     augment_trajectory_with_retreat_suffix,
     augmentation_stream_seed,
 )
+from sim.manorl.assets import asset_provenance
 from sim.manorl.checkpoint import checkpoint_runtime_metadata
 from sim.manorl.contracts import JOINT_DOF, simulation_clock
 from sim.manorl.environment import (
@@ -1322,6 +1323,7 @@ def _export_isolated_repeated_rollouts(
         "force_contract": FORCE_DIRECTION_CONTRACT,
         "reward_contract": REWARD_CONTRACT_ID,
         "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
+        "asset_provenance": asset_provenance(),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "output": str(published.resolve()),
         "complete": complete,
@@ -1802,6 +1804,7 @@ def export_checkpoint_rollouts(
         "force_contract": FORCE_DIRECTION_CONTRACT,
         "reward_contract": REWARD_CONTRACT_ID,
         "ppo_reward_contract": PPO_REWARD_CONTRACT_ID,
+        "asset_provenance": asset_provenance(),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "output": str(target_output.resolve()),
         "complete": complete,

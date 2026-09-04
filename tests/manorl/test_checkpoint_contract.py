@@ -228,6 +228,9 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
             self.loaded = path
 
     signature = {
+        "asset_source_repository": "git@github.com:DexGEM-Lab/dexstream_digital-assets.git",
+        "asset_source_commit": "f98da997f316c8a6b4bc2931cabed19e831ef163",
+        "asset_manifest_sha256": "a" * 64,
         "resolved_hand_side": "right",
         "available_hand_sides": ["right", "left"],
         "controlled_hand_sides": ["right"],
@@ -268,6 +271,22 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     agent.manorl_environment_signature["warp_ccd"]["naccdmax"] = 16
     load_skrl_checkpoint(agent, checkpoint)
     assert agent.loaded == str(checkpoint)
+
+    for field, value in (
+        ("asset_source_repository", "git@github.com:other/assets.git"),
+        ("asset_source_commit", "deadbeef" * 8),
+        ("asset_manifest_sha256", "b" * 64),
+    ):
+        mismatched_assets = copy.deepcopy(metadata)
+        mismatched_assets["runtime_config"]["environment"][field] = value
+        sidecar.write_text(json.dumps(mismatched_assets), encoding="utf-8")
+        agent.loaded = None
+        with pytest.raises(CheckpointFormatError, match=field):
+            load_skrl_checkpoint(agent, checkpoint)
+        assert agent.loaded is None
+        with pytest.raises(CheckpointFormatError, match=field):
+            load_skrl_checkpoint_for_inference(agent, checkpoint)
+        assert agent.loaded is None
 
     mismatched = copy.deepcopy(metadata)
     mismatched["runtime_config"]["environment"]["controlled_hand_sides"] = [
@@ -335,6 +354,9 @@ def test_native_checkpoint_validates_recorded_hand_signature(tmp_path) -> None:
     legacy = copy.deepcopy(metadata)
     legacy_environment = legacy["runtime_config"]["environment"]
     for field in (
+        "asset_source_repository",
+        "asset_source_commit",
+        "asset_manifest_sha256",
         "resolved_hand_side",
         "available_hand_sides",
         "controlled_hand_sides",

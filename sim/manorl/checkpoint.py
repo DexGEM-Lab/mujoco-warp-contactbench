@@ -23,7 +23,13 @@ if TYPE_CHECKING:
 
 CHECKPOINT_FORMAT = "manorl.skrl.ppo.v2"
 _REQUIRED_MODULES = frozenset({"policy", "value", "optimizer", "observation_preprocessor", "value_preprocessor"})
+# Physical asset identity is part of the strict environment contract. A policy
+# tensor can have the right shape while contacts/inertia are from a different
+# source; fail closed unless the caller chooses explicit weight transfer.
 _ENVIRONMENT_SIGNATURE_FIELDS = (
+    "asset_source_repository",
+    "asset_source_commit",
+    "asset_manifest_sha256",
     "resolved_hand_side",
     "available_hand_sides",
     "controlled_hand_sides",

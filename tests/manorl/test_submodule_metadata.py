@@ -4,28 +4,32 @@ import subprocess
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ALL_ASSETS_PATH = "assets/all_assets"
-ALL_ASSETS_URL = "git@192.168.10.116:jieqiangsun/all_assets.git"
-ALL_ASSETS_BRANCH = "main"
-ALL_ASSETS_COMMIT = "033b358b73c57e5f437f6582b6a9b0d4add7f9ee"
-MANO_ASSETS_PATH = "Assets/sim/mano_assets"
-MANO_ASSETS_COMMIT = "e25f2ef0c0c81f6ceaf6befd107f0f2744d41a85"
-MANO_HAND_PATH = "assets/mano_hand_s02"
-MANO_HAND_BRANCH = "main"
-MANO_HAND_COMMIT = "d98a9423e297f155d6dfaa7e4d563e54c7d67cbb"
+ASSET_PATH = "assets/dexstream_digital_assets"
+ASSET_URL = "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
+ASSET_BRANCH = "main"
+ASSET_COMMIT = "f98da997f316c8a6b4bc2931cabed19e831ef163"
 
 
-def test_all_assets_submodule_url_and_pin() -> None:
+def test_dexstream_is_the_only_physical_asset_submodule() -> None:
     modules = ConfigParser()
     modules.read(REPO_ROOT / ".gitmodules", encoding="utf-8")
 
-    section = 'submodule "assets/all_assets"'
-    assert modules[section]["path"] == ALL_ASSETS_PATH
-    assert modules[section]["url"] == ALL_ASSETS_URL
-    assert modules[section]["branch"] == ALL_ASSETS_BRANCH
+    sections = set(modules.sections())
+    assert sections == {
+        'submodule "assets/dexstream_digital_assets"',
+        'submodule "lance_manager"',
+    }
+    section = 'submodule "assets/dexstream_digital_assets"'
+    assert modules[section]["path"] == ASSET_PATH
+    assert modules[section]["url"] == ASSET_URL
+    assert modules[section]["branch"] == ASSET_BRANCH
+    assert 'submodule "assets/all_assets"' not in sections
+    assert 'submodule "assets/mano_hand_s02"' not in sections
 
+
+def test_dexstream_submodule_pin_and_required_manorl_paths() -> None:
     result = subprocess.run(
-        ["git", "ls-files", "--stage", "--", ALL_ASSETS_PATH],
+        ["git", "ls-files", "--stage", "--", ASSET_PATH],
         cwd=REPO_ROOT,
         check=True,
         text=True,
@@ -33,40 +37,36 @@ def test_all_assets_submodule_url_and_pin() -> None:
     )
     mode, commit, stage_and_path = result.stdout.strip().split(maxsplit=2)
     assert mode == "160000"
-    assert commit == ALL_ASSETS_COMMIT
-    assert stage_and_path == f"0\t{ALL_ASSETS_PATH}"
+    assert commit == ASSET_COMMIT
+    assert stage_and_path == f"0\t{ASSET_PATH}"
 
-
-def test_mano_hand_submodule_branch_and_pin() -> None:
-    modules = ConfigParser()
-    modules.read(REPO_ROOT / ".gitmodules", encoding="utf-8")
-
-    section = 'submodule "assets/mano_hand_s02"'
-    assert modules[section]["path"] == MANO_HAND_PATH
-    assert modules[section]["branch"] == MANO_HAND_BRANCH
-
+    source_root = REPO_ROOT / ASSET_PATH
     result = subprocess.run(
-        ["git", "ls-files", "--stage", "--", MANO_HAND_PATH],
+        ["git", "rev-parse", "HEAD"],
+        cwd=source_root,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert result.stdout.strip() == ASSET_COMMIT
+    for relative in (
+        "hand/mano/sunke/right/urdf/mano_right_hand_floating.urdf",
+        "hand/mano/sunke/left/urdf/mano_left_hand_floating.urdf",
+        "hand/mano/sunke/right/skin/mano_skin_mjcf_fragment.xml",
+        "objects/DexGEM/cube1/cube1.urdf",
+        "objects/DexGEM/banana/banana.urdf",
+    ):
+        assert (source_root / relative).is_file()
+
+
+def test_old_physical_asset_paths_are_not_tracked() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files"],
         cwd=REPO_ROOT,
         check=True,
         text=True,
         capture_output=True,
-    )
-    mode, commit, stage_and_path = result.stdout.strip().split(maxsplit=2)
-    assert mode == "160000"
-    assert commit == MANO_HAND_COMMIT
-    assert stage_and_path == f"0\t{MANO_HAND_PATH}"
-
-
-def test_nested_mano_assets_pin_contains_decomposed_runtime_assets() -> None:
-    result = subprocess.run(
-        ["git", "ls-files", "--stage", "--", MANO_ASSETS_PATH],
-        cwd=REPO_ROOT / ALL_ASSETS_PATH,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-    mode, commit, stage_and_path = result.stdout.strip().split(maxsplit=2)
-    assert mode == "160000"
-    assert commit == MANO_ASSETS_COMMIT
-    assert stage_and_path == f"0\t{MANO_ASSETS_PATH}"
+    ).stdout.splitlines()
+    assert not any(path.startswith("assets/all_assets") for path in tracked)
+    assert not any(path.startswith("assets/mano_hand_s02") for path in tracked)
+    assert not (REPO_ROOT / "sim/manorl/runtime_assets").exists()

@@ -21,8 +21,13 @@ from sim.benchmarks.ball_pit.common import (  # noqa: E402
 )
 
 SIM_DIR = Path(__file__).resolve().parent
-PRIMARY_HAND_ASSET = Path("../assets/mano_hand_s02/mjcf/mano_hand_s02_full_convex.xml")
-FALLBACK_HAND_ASSET = Path("../assets/mano_hand_s02/mjcf/mano_hand_s02.xml")
+# ContactBench's generic scene uses the same pinned MANO bundle as ManoRL.
+# There is deliberately no legacy-hand fallback: mixed physical provenance is
+# worse than an explicit missing-asset error.
+PRIMARY_HAND_ASSET = Path(
+    "../assets/dexstream_digital_assets/hand/mano/sunke/right/mjcf/"
+    "mano_right_hand_floating.xml"
+)
 
 HAND_LINK_NAMES = {
     "palm",
@@ -52,13 +57,13 @@ def import_mujoco() -> Any:
 
 
 def resolve_mano_asset() -> Path:
-    primary = (SIM_DIR / PRIMARY_HAND_ASSET).resolve()
-    if primary.exists():
-        return primary
-    fallback = (SIM_DIR / FALLBACK_HAND_ASSET).resolve()
-    if fallback.exists():
-        return fallback
-    return primary
+    path = (SIM_DIR / PRIMARY_HAND_ASSET).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"DexStream MANO scene asset is absent: {path}; initialize "
+            "assets/dexstream_digital_assets and its Git LFS objects"
+        )
+    return path
 
 
 def backend_relative_path(path: Path) -> str:
@@ -69,7 +74,12 @@ def build_live_scene_xml(output_path: Path) -> Path:
     source = resolve_mano_asset()
     xml = source.read_text(encoding="utf-8")
     asset_dir = source.parent
-    xml = xml.replace('file="../meshes/', f'file="{asset_dir.parent.as_posix()}/meshes/')
+    xml = xml.replace(
+        'file="../meshes/', f'file="{asset_dir.parent.as_posix()}/meshes/'
+    )
+    xml = xml.replace(
+        'file="../skin/', f'file="{asset_dir.parent.as_posix()}/skin/'
+    )
     if "<option" not in xml:
         xml = xml.replace("<compiler angle=\"radian\" />", "<compiler angle=\"radian\" />\n  <option timestep=\"0.002\" iterations=\"80\" solver=\"Newton\" />")
     output_path.write_text(xml, encoding="utf-8")
@@ -83,6 +93,9 @@ def _add_xml_before_worldbody_close(xml: str, block: str) -> str:
 def build_ball_pit_scene_xml(scene_path: Path, spec: BallPitSpec) -> Path:
     build_live_scene_xml(scene_path)
     xml = scene_path.read_text(encoding="utf-8")
+    # DexStream MANO collision geoms are disabled in the reference scene;
+    # the ball-pit scenario explicitly enables them for hand/ball contact.
+    xml = xml.replace('contype="0" conaffinity="0"', 'contype="1" conaffinity="1"')
     xml = xml.replace('contype="0" conaffinity="1"', 'contype="1" conaffinity="1"')
     if "<visual>" not in xml:
         xml = xml.replace(

@@ -1,0 +1,2924 @@
+{
+  "hand_operator": "sunke",
+  "hands": {
+    "left": {
+      "betas": [
+        -0.5543456194931979,
+        -0.04697868999074469,
+        0.03923798429205473,
+        0.028609764672950913,
+        -0.009392216532621437,
+        -0.03132237740333911,
+        0.042246481602760566,
+        -0.020915648548012127,
+        -0.035441110824437454,
+        -0.06106106437009233
+      ],
+      "files": [
+        {
+          "path": "hand/mano/sunke/left/urdf/mano_left_hand_floating.urdf",
+          "sha256": "ce7a5673a7e8cd8101fee3071b3b75fd0a2beb62fd6f0f2f81e5ce2cc6bb643c",
+          "size": 20701,
+          "storage": "git"
+        },
+        {
+          "path": "hand/mano/sunke/left/metadata.json",
+          "sha256": "85d44ca719be33bca584ec505a545fcd570875fb935ee4d65af7c13f3817acbc",
+          "size": 2223,
+          "storage": "git"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/palm.stl",
+          "sha256": "1e967ff742595663cb1caceaedac98402dd53c08d188037e630b75edc784dc05",
+          "size": 16934,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/thumb1.stl",
+          "sha256": "d1507c87502614dd47ca3708be96e297db307828e00d17d497d53eddc7cf77ce",
+          "size": 1134,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/thumb2.stl",
+          "sha256": "27bef5e461a6ede49f42f05aff74ccacf6663a59dcc1ceed4c1cf02be0c3145f",
+          "size": 2034,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/thumb3.stl",
+          "sha256": "18b43816361f0e2f4053a3783079f6771be50b1f26afdccb6e0888192022483b",
+          "size": 4884,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/index1.stl",
+          "sha256": "6b54e0ac5b1e4c471e61c631dbc723c96f7b53e51fd01b9947dfcb7ef716f064",
+          "size": 2334,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/index2.stl",
+          "sha256": "e939258b951cf410c70eeeabd72dbd99e8842bf0d4b8fb729a9b968d97af40be",
+          "size": 2434,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/index3.stl",
+          "sha256": "fc4aafcac3ab85643150d56f4a76d1cdb94c79b7abb3737e844610fc13d96f60",
+          "size": 4884,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/middle1.stl",
+          "sha256": "96ac3f645621ca250c238eb4e7ee275e83ef01b28b68c6d6be411c424216d069",
+          "size": 2534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/middle2.stl",
+          "sha256": "8498c30a8d63886ff4361532b4ea74c056c27d8b4ce3b41a2ea088fd5e62df0a",
+          "size": 2084,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/middle3.stl",
+          "sha256": "00c64db99f6f50c052650f399e835fbb136e7eb61390c96ca13e59a8bb64072a",
+          "size": 4684,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/ring1.stl",
+          "sha256": "0fbb3ab2a4c89494300fdb28d5e382ba9ac29166a75877e56e17f82ab5a44e5f",
+          "size": 2084,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/ring2.stl",
+          "sha256": "2ca7c76608534cbfa434b6af9d201bb2ae1d8d2be17e5493687fa6c7319cc556",
+          "size": 2834,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/ring3.stl",
+          "sha256": "1a81dd2bbc659654111f2f26a595ad86adafd3cdadcf33177498c86bbc80455b",
+          "size": 4884,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/pinky1.stl",
+          "sha256": "d0c02d82a593facd1a2b7220d98ac67091d3c23156781eacb7d16c741444b793",
+          "size": 1334,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/pinky2.stl",
+          "sha256": "b675a80d9603748cc66c4a5c1ee41a93d8fdfb91f4ce88ba8ae478693c5cfbaf",
+          "size": 2934,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/meshes/pinky3.stl",
+          "sha256": "0181dd9cc20f8e8c1ab7b438dd05f8ebc7f853861ca686544efad1c7e416a63b",
+          "size": 4684,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/left/skin/mano_skin_mjcf_fragment.xml",
+          "sha256": "c957cda48e1b18a8ec42d517582d4651b06010bd06cf68da559e307a8d88f45a",
+          "size": 89221,
+          "storage": "git"
+        }
+      ],
+      "joint_names": [
+        "ARTx",
+        "ARTy",
+        "ARTz",
+        "ARRx",
+        "ARRy",
+        "ARRz",
+        "j1_thumb_cmc_abd",
+        "j1_thumb_cmc_flex",
+        "j1_thumb_cmc_twist",
+        "j1_thumb_mcp_flex",
+        "j1_thumb_mcp_abd",
+        "j1_thumb_ip",
+        "j2_index_mcp_abd",
+        "j2_index_mcp_flex",
+        "j2_index_pip",
+        "j2_index_dip",
+        "j3_middle_mcp_abd",
+        "j3_middle_mcp_flex",
+        "j3_middle_pip",
+        "j3_middle_dip",
+        "j4_ring_mcp_abd",
+        "j4_ring_mcp_flex",
+        "j4_ring_pip",
+        "j4_ring_dip",
+        "j5_pinky_mcp_abd",
+        "j5_pinky_mcp_flex",
+        "j5_pinky_pip",
+        "j5_pinky_dip"
+      ],
+      "metadata": "hand/mano/sunke/left/metadata.json",
+      "palm_collision_scale": 1.0,
+      "root": "hand/mano/sunke/left",
+      "skin": "hand/mano/sunke/left/skin/mano_skin_mjcf_fragment.xml",
+      "urdf": "hand/mano/sunke/left/urdf/mano_left_hand_floating.urdf"
+    },
+    "right": {
+      "betas": [
+        -0.5543456194931979,
+        -0.04697868999074469,
+        0.03923798429205473,
+        0.028609764672950913,
+        -0.009392216532621437,
+        -0.03132237740333911,
+        0.042246481602760566,
+        -0.020915648548012127,
+        -0.035441110824437454,
+        -0.06106106437009233
+      ],
+      "files": [
+        {
+          "path": "hand/mano/sunke/right/urdf/mano_right_hand_floating.urdf",
+          "sha256": "ceeed0fcbd4a3db2f3b9455c461b4641ee8700b256daa705b30d26db52c33f46",
+          "size": 20712,
+          "storage": "git"
+        },
+        {
+          "path": "hand/mano/sunke/right/metadata.json",
+          "sha256": "22071328b12845cd193df46b8d28e2c36967d46ff70955ca3ae83f7d27615e09",
+          "size": 2225,
+          "storage": "git"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/palm.stl",
+          "sha256": "f3cbc18579420819b954749e681723013c71477f8e9a45968c71d47405d2e2dc",
+          "size": 16934,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/thumb1.stl",
+          "sha256": "2ca0a5f0ad15c6a8ed94fd7117fcec70d05070bcfdf408138b0257c1b5e4efa2",
+          "size": 1134,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/thumb2.stl",
+          "sha256": "1699ee13a5dcf107af146d2c9ed2ddca36c482e733451accd1f6505e99374bfd",
+          "size": 2034,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/thumb3.stl",
+          "sha256": "412c23b48899b0901176e71cc836dc0a4d4bc6ca07fc3bbfd99da0e7dd3ad25d",
+          "size": 4884,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/index1.stl",
+          "sha256": "76ceae76b79f6346ebe001b1211202ca2e31385cb84d543ab75973b163fa1f3e",
+          "size": 2334,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/index2.stl",
+          "sha256": "eab55672e2326522689cffd23c0028313d0bad62759f84fedb537ca3fa47b091",
+          "size": 2434,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/index3.stl",
+          "sha256": "f080fc5856351e961b21c1ad58773eae7a1f042d01060f72bd42f9ed69f39b8a",
+          "size": 4884,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/middle1.stl",
+          "sha256": "b065c8ad4e664f039ad8832fef97e27a0a384accda4a8f9b18cfb8d2c99d67a8",
+          "size": 2534,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/middle2.stl",
+          "sha256": "88972eb81edb49c52935d2e1a7e7139b097bcf2659564fa5ae3e09b269969be8",
+          "size": 2084,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/middle3.stl",
+          "sha256": "a6ee6cb0594edd9a71d8390a6c78360319e160479632da37537e10507e6657a3",
+          "size": 4684,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/ring1.stl",
+          "sha256": "bab71163a5ec34c080b9c6b11411fba72c572b85f907365155d4a3d9e166cf6f",
+          "size": 2084,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/ring2.stl",
+          "sha256": "376eedfc475d337499365890c06360da1cd1be273a6e83505294ce2164b11475",
+          "size": 2834,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/ring3.stl",
+          "sha256": "ad1953d1f143e63b426488d02df3de9e3142277884408caa77d348870f9398a4",
+          "size": 4884,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/pinky1.stl",
+          "sha256": "b9c83e466ea70da0f2ec4cd67261af0cb0ecdaccf68d33baac5609fb8a2bec5f",
+          "size": 1334,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/pinky2.stl",
+          "sha256": "189af0e57e897b7afcb811a2709eed127606b6bd6e0028d832947fbb79d38272",
+          "size": 2934,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/meshes/pinky3.stl",
+          "sha256": "e58dadc0797fa2c351b066a6911f0b524385fdd3fae545965fe9a243f6684eb2",
+          "size": 4684,
+          "storage": "lfs"
+        },
+        {
+          "path": "hand/mano/sunke/right/skin/mano_skin_mjcf_fragment.xml",
+          "sha256": "2a0c0bc425e7c4049793271c54cd269cd94e88a67fad6a170db0e129fbdcdffa",
+          "size": 88436,
+          "storage": "git"
+        }
+      ],
+      "joint_names": [
+        "ARTx",
+        "ARTy",
+        "ARTz",
+        "ARRx",
+        "ARRy",
+        "ARRz",
+        "j1_thumb_cmc_abd",
+        "j1_thumb_cmc_flex",
+        "j1_thumb_cmc_twist",
+        "j1_thumb_mcp_flex",
+        "j1_thumb_mcp_abd",
+        "j1_thumb_ip",
+        "j2_index_mcp_abd",
+        "j2_index_mcp_flex",
+        "j2_index_pip",
+        "j2_index_dip",
+        "j3_middle_mcp_abd",
+        "j3_middle_mcp_flex",
+        "j3_middle_pip",
+        "j3_middle_dip",
+        "j4_ring_mcp_abd",
+        "j4_ring_mcp_flex",
+        "j4_ring_pip",
+        "j4_ring_dip",
+        "j5_pinky_mcp_abd",
+        "j5_pinky_mcp_flex",
+        "j5_pinky_pip",
+        "j5_pinky_dip"
+      ],
+      "metadata": "hand/mano/sunke/right/metadata.json",
+      "palm_collision_scale": 1.0,
+      "root": "hand/mano/sunke/right",
+      "skin": "hand/mano/sunke/right/skin/mano_skin_mjcf_fragment.xml",
+      "urdf": "hand/mano/sunke/right/urdf/mano_right_hand_floating.urdf"
+    }
+  },
+  "objects": {
+    "banana": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/banana/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "591b0986314c67d3a88652d191e3d14f8fad79e7a71d1988ab15da6ed36f086f",
+          "size": 147446,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/banana/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0502a6bf086e113d8855db2f42704500770809cd0ec69e18dd2d3cffaa121d86",
+          "size": 9655,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/banana/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4c82f3578988f5fa760408872b1131d4130c6441d3e59b35eef86487fa343fdf",
+          "size": 102806,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "banana_link",
+      "rgba": "0.95 0.78 0.12 1",
+      "root": "objects/DexGEM/banana",
+      "source_name": "banana",
+      "urdf": {
+        "path": "objects/DexGEM/banana/banana.urdf",
+        "sha256": "53e179fd0438cdbdf5fecb9a167ab05e1db3039d65348e2ac2d5f7e0db8ed6b7",
+        "size": 1304,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/banana/banana.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "780b2c698c632c21a7e4be6bc3df61096321f41d2575ba62586eb67ff76eb275",
+        "size": 2128046,
+        "storage": "lfs"
+      }
+    },
+    "bottle": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "60692d75baf2ad9eeaf5227f1a2bd195e616d358c0e84105c1b09e75b4115d24",
+          "size": 372732,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "61e381c2dd7956d7aafd9bf5256187a293767801e4b4019a37edf6ec31925703",
+          "size": 17068,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8ba239c667d342100d76d8bc92fa11919e9489983b5db8b8ed02f00e55c46bc6",
+          "size": 27204,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "5ec4e6cf133de6314dade2db7592a0b1181b07a6c67e0532a6909d167474283a",
+          "size": 15572,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "3d7f024f78c5ed38cd23c7cf707722e9a107ea6693ea3e88f047ec39e5ed8b6f",
+          "size": 31439,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "157b258e680235bc5c4b8171852644a07e2f0790d0c1f52380bad3cfe6bb9fac",
+          "size": 26568,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "e0d185b45a6e7aac62b6757e8cbe432d33ff56724b138683eb99815d274abb0f",
+          "size": 23853,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "9facd73f0780ea7d4967fbcc3fdd272a67559ab847c1eb4fdf4ce6b50b65d891",
+          "size": 36367,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bottle/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0b8532b747e43989c45f2113a5545e5891cbb848baa67ffff259c69bb697d259",
+          "size": 28421,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "bottle_link",
+      "rgba": "0.1 0.55 0.72 1",
+      "root": "objects/DexGEM/bottle",
+      "source_name": "bottle",
+      "urdf": {
+        "path": "objects/DexGEM/bottle/bottle.urdf",
+        "sha256": "0a7996d28fa78d4168d4ba4a52555d9ac53433869fb5e525ec41e5fd5735df32",
+        "size": 2550,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/bottle/bottle.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "2b1ada988dfd8af21b3263436cac59c978b818f1efb50360371aa906420d7bc8",
+        "size": 8186168,
+        "storage": "lfs"
+      }
+    },
+    "bowl": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "ef04b819d4a80130a6065b1fb609a874a6ff4218d76a586483b03a6576d6c6a6",
+          "size": 59279,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "9262faf45a72c51fba561717fb2789a89d8c7d956d49e8db41ef842317fd1d4d",
+          "size": 5331,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8a895e9813eeac0c4e3bb7f07eb59ad3b5dde3d5398f6710734a1bb650e5d2db",
+          "size": 4811,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4d00e16c6029a260c70443e323e46ee8ebe215de74823cbc8d4e36514d5b6dd3",
+          "size": 16953,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "078bef0c2d4556c7cc2be61773c159ed7ad8eb90ae1f4f854f6c5b82d5f09f41",
+          "size": 10892,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "f78930d7a8ea39bec4883b950fd3f2cf432aa7786d0c140ac1f67d6464208b50",
+          "size": 9803,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "219078aaaea71e5afc0554028f6615abe8a1d50678f6da1b8c116813a06000ed",
+          "size": 26211,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "afa97415afd118858edc6b3c1307553ca2c6b34575a5c93916d5a55f69534102",
+          "size": 13940,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "61e19e66b10b74ecf830c19f408c0dcbd69d2afb7eafb2c18466008d8f147fb8",
+          "size": 15308,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_9.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b5b195c8d3aaf579048a82360997114014c6732aef207ce55764d9abc511d684",
+          "size": 8737,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_10.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "6a4ad069776eb070a69f45b7afe27e1c06a7ef6c60aa66b4474d275a0e8f88a3",
+          "size": 11983,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_11.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "7c79b52905dcf5f16a5b3358ea4ffc66cd7daa9ba5f4618ae947907c0637bef7",
+          "size": 13685,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_12.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "07c1bfc61e61d0c6cbc1fcf4b8989f4fa333aa9c3752adaec935325a8600043a",
+          "size": 18201,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_13.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "1d32cd8b6a0f2350d33edfd3d26bc8b7d975a4be466854e47ac8304dd91e1260",
+          "size": 8954,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_14.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "414d5e4a7ae72e664af38a22b53f56665ba3d195d74b2ff7f2a72ee8c26b5b18",
+          "size": 9192,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_15.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0def587f9990b3ca15bab4febcebda63ab599e7329b708afc4656534f6837d8d",
+          "size": 13948,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_16.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "97144f19daba3508f194eee95700e1ca98b486c92a0dd1889da81f8ff55a7ee3",
+          "size": 21654,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_17.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "c8c093402ac408cb29d3a670a14f762ebd26a011cf7947f263da0eb27facab4f",
+          "size": 9353,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_18.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "f1398960aa787d2c200a2c59f6f2b69bcccb1e5607aea35646abcdfb052aeee7",
+          "size": 15547,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_19.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "fa3e23323acd9a1469cfcc1993408f19c40135d12bbfe75a1cb1006f39035a25",
+          "size": 13967,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_20.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "eccdd96d73f45626185dea2a26bd2fd4a8bc38262e380b2b4cf593b9e48a077e",
+          "size": 20781,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_21.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8f9c0d273795bd207b67cba8728bfdbc40ee268455e55613ffa2ba5ff18f0a68",
+          "size": 14640,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_22.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "bca4fddeae45220da892a23c82d15dcd74d1c2b99aa4720fab1be48112412c69",
+          "size": 13901,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_23.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "e3893577658835b2fb94f4296ea7d2bf057ae01d59b46e7d94dec2b2f8a4feef",
+          "size": 6416,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/bowl/coacd/coacd_convex_piece_24.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "76deff3c9545219276155bef9d4f5a71da24ca637ae9378cda1c48b2ecf9163e",
+          "size": 16855,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "bowl_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/bowl",
+      "source_name": "bowl",
+      "urdf": {
+        "path": "objects/DexGEM/bowl/bowl.urdf",
+        "sha256": "1a93276d3f711e44c5e604ed076b0a0a60141f4d177da37f14a846f2f413ba11",
+        "size": 5900,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/bowl/bowl.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "ce6530f752b73a37dea69645d5700b926cf5acce6b7ccde1bea04c9fc711d779",
+        "size": 73917322,
+        "storage": "lfs"
+      }
+    },
+    "camera1": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "923a88f6a5fd1a13a41983ce632f3389295c307cf7e99d33eb6327ab4a2db9a8",
+          "size": 13266,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "be579f5984de695ecee2c83fe04dbc3ae2b06b3de7ac89b6ab1472783e7a16f4",
+          "size": 42377,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4b23bc5f9eef3f95d9adee5d1f7f7629edb362f323e19d4af900412c9a8e603c",
+          "size": 7674,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "22d3074ac6d8bf6a807ca46952ac3b3cea10c7067ea9ee0ac2e03ec669abd985",
+          "size": 2549,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "050cd8471a4aa00ec2d014635517b439deb3b544a5cc7f88269f3771a157db9c",
+          "size": 40011,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0689348015df065a1944ccdad2370d7819549fe0df6b09fee6173d677ec0c1d0",
+          "size": 7858,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "926b673835fa10faece14450ae1ccc82db729571c3fe6a3b5285497a0e5a6a68",
+          "size": 11963,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "28fa9f1ed132ab7a3c8dd1329dff55c936ea0f6a983de385ed7e4e46691d3697",
+          "size": 13301,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "a5f731b438e4c4eba40e49f3a8067db85874da5549445b2c3d5903430cb62e1e",
+          "size": 4379,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_9.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "62173ae36dbe6248177cf2871a08c8ca7c20e7f1d5859e789ae01dba484c20dd",
+          "size": 10783,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_10.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "cb8e497e0220d1fce71d3236103429586771d01a7cb68abd8e00cf9980356f2a",
+          "size": 23210,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_11.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4efb769def2d8bf5ba0104ed22a2a99caf95b0e078c41536c72e311810d22666",
+          "size": 4821,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_12.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "922a82e5d0ae279826eaaaa174e13f37edd0c24580fe429dcc3bf008410e4034",
+          "size": 3238,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_13.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "5e1a3f54bca00c362e5b13ef88e4129b46b5d95db793c5044b3364ccb097cb58",
+          "size": 8889,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_14.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "1ef27fd4fd941b35fd182e867a269b70c50f73b245bb3c264875619add355ef2",
+          "size": 39396,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA1/coacd/coacd_convex_piece_15.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "115162252e4ff079231a3467a514f501d53e26a0d5279801a891d180c65dab9f",
+          "size": 6600,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "CAMERA1_link",
+      "rgba": "0.2 0.22 0.25 1",
+      "root": "objects/DexGEM/CAMERA1",
+      "source_name": "CAMERA1",
+      "urdf": {
+        "path": "objects/DexGEM/CAMERA1/CAMERA1.urdf",
+        "sha256": "351c7a1605c907340deb9d89d525ef1e8c9e94e2c349f86a2c704569623bffdf",
+        "size": 4023,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/CAMERA1/CAMERA1.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "437d2a543e21390b75bf112a916378433d22d3a779e5c6c523bcd7018f8d93ad",
+        "size": 2742521,
+        "storage": "lfs"
+      }
+    },
+    "camera2": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "974ede6bad899264e26eae2b17ee6caeed26ff03b40190a39904fd248adb620d",
+          "size": 13372,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0c348c174b1da77d6101ef987d682056f858b07f988781a95e00ece6adb7b2a9",
+          "size": 7926,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "5fa6a099abc6e988dacfc1668d6eed0a31c2c304544b0ac56ff1006b854f2442",
+          "size": 2491,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0250ab176366313774c8ecc21a494bf447b68c76c371578be2e48533341da67e",
+          "size": 6811,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "c22414fca8d9b2a2796f6c0e208498749ec3ef6249f281fdb27f7213fa25c520",
+          "size": 23404,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "2955a16ec45be24d5795929153553e2af87169c4e61dea4258b83e471bcfdc99",
+          "size": 36532,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4fd405b9149fd7d355b5d9bd38b8c70db208ff36903b6762f4ac3ea2864b4e7f",
+          "size": 13714,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "12f5e7296c5e54a83b0645e375bd70b7e470ede4977d1ffc7e19eb6415bcd6cc",
+          "size": 5377,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8c3a576f9a0ad988abec9fcbaf66d48d55163fcbedcade83c8450aeb62a328c0",
+          "size": 17684,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_9.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8ab08d19a450947372e8a7ee5fc6cc4d125a13954f426fce828fb1f59ffcd72a",
+          "size": 25670,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_10.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "26249b7a261adcb2620ede40175c3ef83df7aec14ef67eb5d0da0006a4149973",
+          "size": 15015,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_11.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "62be5e21089f8ab895dc392bb5111c74206a4135f68cf7e6c7cd16bc2ba65811",
+          "size": 16616,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_12.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "3c4c05ddc2bd121bf5f6bda3c3136292949da553e14c8ee3345f264cb701b9b8",
+          "size": 11508,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_13.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "d04c8803981750da268040cf6e64fe3efcd1f90268a86ecbc8f2077fb6d62853",
+          "size": 4239,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_14.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "fd2c8f31120322ccd7f9d310328c0147b5520d4c1172b17de6f5efbc03409711",
+          "size": 2585,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/CAMERA2/coacd/coacd_convex_piece_15.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "48c7c9948939c38640a4a6cf83caa38142204345b12a021699d2652bff44fcc3",
+          "size": 4380,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "CAMERA2_link",
+      "rgba": "0.2 0.22 0.25 1",
+      "root": "objects/DexGEM/CAMERA2",
+      "source_name": "CAMERA2",
+      "urdf": {
+        "path": "objects/DexGEM/CAMERA2/CAMERA2.urdf",
+        "sha256": "851f9a7a07267e969c46b32041728867f270dd31d883074d82443e79b81ed2b0",
+        "size": 4023,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/CAMERA2/CAMERA2.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "20799ad7461e69c5d17d3df414ad83061b2728fee0074285e114c34b66bdbeaa",
+        "size": 2748083,
+        "storage": "lfs"
+      }
+    },
+    "cap": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "e38c01dcb35c05556c672edcb5f225c5635b954434c7daa1566b4f62bcea2d39",
+          "size": 147769,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "5eb44351dd6de0014cbb843a5bc2235f834367d015f7fa85e980dc36bf6ac9c3",
+          "size": 129753,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "acc6a7d81da70c61e3e892e7ab73342c81ae884baaf0068e11e514517307bf1d",
+          "size": 26058,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "a29dac18afe86e3d53142a10adae99e1a1f349141667b77fa3f6da1768501f06",
+          "size": 31266,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "ea470881375f3bbabd1b6599afd22e436f848c97200682115f2b79c1fdfff5f5",
+          "size": 34944,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "7650a14680c3df32b417645e6176885e993b64f640cba47cea50d955e2bb71fc",
+          "size": 33782,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "c57976a39973460bd66fa65e2f20ed2bb9f95f40d68dc097dac69bd5bb0acd82",
+          "size": 12211,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "92d6e618396c74d267a89007f8534e3a7531132045bb24272f42b72cec604267",
+          "size": 14427,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "3bce44372b271d55f81e881f1ebe2c70369b7e3b111f78db7b4821b69c75d072",
+          "size": 15442,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_9.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "1864ab59e1b65591f55b3c6effa1ded861499d6e5d0a7bc5da608d4f50749d0a",
+          "size": 14000,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_10.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "982a206d14fd6c4930e96749f69a35b1fb6efa0ebff571440a7c2e5521e3cebb",
+          "size": 12976,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_11.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "aa827a855ea257f5716ceb62ddf5575a30bcbded668817a3c1fb9a11ebaf0968",
+          "size": 12488,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_12.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0df3c04e65368fcb2f09af8d0b7d6a6e17b27b56de24ddb4b5e73416696cbeea",
+          "size": 12185,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_13.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "71bb209a7c25642372c004efd4f416840b2ebfbf1e9d62f23d614468907e5e89",
+          "size": 14471,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_14.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "9f46cf332a44bda9cd9f5362bb356ce02c7de6a06861f0e7cdfbe2f0ac281d9d",
+          "size": 13710,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/cap/coacd/coacd_convex_piece_15.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "29266b65414b357feb73ad892307755763a1fc8c443b6a5c30fb2ec5e84db3df",
+          "size": 13364,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cap_link",
+      "rgba": "0.35 0.35 0.38 1",
+      "root": "objects/DexGEM/cap",
+      "source_name": "cap",
+      "urdf": {
+        "path": "objects/DexGEM/cap/cap.urdf",
+        "sha256": "990ce92158d3a921225386fe3ec409763c4af831afb9981b889adb66a8d05a4d",
+        "size": 4010,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cap/cap.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "42fe3d848c2ca24f11f6457fcb8fa9f7c8237d2a575ce86b5cc47ee38e05bed8",
+        "size": 21529344,
+        "storage": "lfs"
+      }
+    },
+    "cube1": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cube1/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b2953fcf758852b7736957a2db85567bbee1decdde677a55e70b7acb464a6349",
+          "size": 425,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cube1_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cube1",
+      "source_name": "cube1",
+      "urdf": {
+        "path": "objects/DexGEM/cube1/cube1.urdf",
+        "sha256": "66f8ad545e48618b1df93de2c521b329dcdaaedb32c474aaddec64fe0f60f653",
+        "size": 882,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cube1/cube1.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "d0555f771fd5c64477df4c51e1ad6732a5fdacf9931a197b2095aaabcd466661",
+        "size": 1603,
+        "storage": "lfs"
+      }
+    },
+    "cube2": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cube2/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "d9787121790588a9c4fd87ba29148261a152a0117b96ca8d411e4651316e9ff1",
+          "size": 425,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cube2_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cube2",
+      "source_name": "cube2",
+      "urdf": {
+        "path": "objects/DexGEM/cube2/cube2.urdf",
+        "sha256": "e2079f68b36080859ac1f223ca2b6b4bbdc640438bbeb1dcebd0650784c3e2c5",
+        "size": 885,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cube2/cube2.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "b8a1a959e8bef4ac789227274d3bdc19503f7480da0b7b9060b0bb97fbf310cc",
+        "size": 1603,
+        "storage": "lfs"
+      }
+    },
+    "cuboid1": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cuboid1/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "90279946c7d8c23eb8935df03f92a61c3415e2fe28cf296f1f0afdb6dcb9ddc3",
+          "size": 425,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cuboid1_link",
+      "rgba": "0.85 0.45 0.1 1",
+      "root": "objects/DexGEM/cuboid1",
+      "source_name": "cuboid1",
+      "urdf": {
+        "path": "objects/DexGEM/cuboid1/cuboid1.urdf",
+        "sha256": "fa4d70eb05b17253ddde6743150121e6d85597916f561362765a37cd1caec907",
+        "size": 891,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cuboid1/cuboid1.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "e53fca48d44b505a15bcc864daaa7acc79136c8faa3803509d2bf0138ed72a11",
+        "size": 1587,
+        "storage": "lfs"
+      }
+    },
+    "cuboid2": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cuboid2/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "dfe6d95d83d5beb388b8faa1e053acb330062fe43cad75f6836943628e1f47bd",
+          "size": 425,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cuboid2_link",
+      "rgba": "0.55 0.35 0.85 1",
+      "root": "objects/DexGEM/cuboid2",
+      "source_name": "cuboid2",
+      "urdf": {
+        "path": "objects/DexGEM/cuboid2/cuboid2.urdf",
+        "sha256": "920625647568313dc4ad3db8cbd079a399069e4e5a17cd5a14b8f3e949b67433",
+        "size": 893,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cuboid2/cuboid2.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "5b75bee0db7efecac884671681933a82783d0812c4abf054409121fb73b0814d",
+        "size": 1587,
+        "storage": "lfs"
+      }
+    },
+    "cuboid3": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cuboid3/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "765dcf3c67dd2a72f059cddbf5b1c2f4b1573e42139acba57de00b2deb9be4fc",
+          "size": 425,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cuboid3_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cuboid3",
+      "source_name": "cuboid3",
+      "urdf": {
+        "path": "objects/DexGEM/cuboid3/cuboid3.urdf",
+        "sha256": "2c1e3499cfea8eb5a4d867669e3e975516863a078bb32925e27d1177d08bb482",
+        "size": 895,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cuboid3/cuboid3.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "545c99e3463738c3cd8411499b7dbefcfbd8252ca6e090aa4f17cd2f3fdea273",
+        "size": 1596,
+        "storage": "lfs"
+      }
+    },
+    "cylinder1": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cylinder1/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "319c24e1e899d50560d207da264dcaf525f0fb1b5b706abfe6ddae7df03d1c49",
+          "size": 13945,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cylinder1_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cylinder1",
+      "source_name": "cylinder1",
+      "urdf": {
+        "path": "objects/DexGEM/cylinder1/cylinder1.urdf",
+        "sha256": "44113ef3c5e5a9f13fd7361f84a73954e65930b6ee528a3eba8bf2ac6b603bf6",
+        "size": 902,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cylinder1/cylinder1.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "8acd405591b9dea13050a2fce74ce178dfacd03b5b4ee1f62cd54b4e087cd7f6",
+        "size": 82287,
+        "storage": "lfs"
+      }
+    },
+    "cylinder2": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cylinder2/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "d4be229b7928478f96b0bbed50f8a03be9ea52e79b7d2f365ba999b3b5642b5f",
+          "size": 12811,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cylinder2_link",
+      "rgba": "0.9 0.6 0.05 1",
+      "root": "objects/DexGEM/cylinder2",
+      "source_name": "cylinder2",
+      "urdf": {
+        "path": "objects/DexGEM/cylinder2/cylinder2.urdf",
+        "sha256": "6441c3d6dbf34c545614508938cd4aeb6e8ca1ae51625f8c3c3376a65ebc6fc4",
+        "size": 897,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cylinder2/cylinder2.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "8b249d36ab82efe7386e99ccb08675ab7a73b720f6820513d84eb4985a467c39",
+        "size": 54497,
+        "storage": "lfs"
+      }
+    },
+    "cylinder3": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cylinder3/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "c2d1ed8b56b1dc840ebef38e1ac9d659c441bbc4e1f1c38d25820383e64ef7d2",
+          "size": 13231,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cylinder3_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cylinder3",
+      "source_name": "cylinder3",
+      "urdf": {
+        "path": "objects/DexGEM/cylinder3/cylinder3.urdf",
+        "sha256": "7d879895f4f9aeb1e0dff0460b73c8c42ec0892605bd1d983fcc90bd268bfc4b",
+        "size": 901,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cylinder3/cylinder3.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "3b5b8ce945ae3f8d2fba1aaa4d091c6096bc6f5183f197cdf30299552a00cf08",
+        "size": 85926,
+        "storage": "lfs"
+      }
+    },
+    "cylinder4": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cylinder4/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "baf2ccda7393650b52eabf5ca6a9713634cecf3a05e99a9bc49d44ad6d900dd2",
+          "size": 8164,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cylinder4_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cylinder4",
+      "source_name": "cylinder4",
+      "urdf": {
+        "path": "objects/DexGEM/cylinder4/cylinder4.urdf",
+        "sha256": "5348531a28418bf9b79e06579f0358315a810d38e604a1da54b8efc17ca196bd",
+        "size": 904,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cylinder4/cylinder4.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "ec25bf9fd29a9465fc3968f5ddd70cd2942b3c9cf250a74e913f3aca508d02cd",
+        "size": 75232,
+        "storage": "lfs"
+      }
+    },
+    "cylinder5": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cylinder5/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b631e480c1be74da7df098e55df6d6434b37c1af1d2a33f6bffd12a0c092da28",
+          "size": 13582,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cylinder5_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cylinder5",
+      "source_name": "cylinder5",
+      "urdf": {
+        "path": "objects/DexGEM/cylinder5/cylinder5.urdf",
+        "sha256": "7d10c9949cd8ad0b10e1221af81bcdd4c1fa46fbca7cb295f3507fb84b460238",
+        "size": 904,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cylinder5/cylinder5.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "4bbb8ec85709a0dbba651c9cad2a5fb4b2b4deca6b1b11eab2efc78f45bacc22",
+        "size": 67918,
+        "storage": "lfs"
+      }
+    },
+    "cylinder6": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cylinder6/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "3661919fca2a007e17c77646db24d43e5f4cddee6f0dbeaf5e2dbecf949b827c",
+          "size": 13244,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cylinder6_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/cylinder6",
+      "source_name": "cylinder6",
+      "urdf": {
+        "path": "objects/DexGEM/cylinder6/cylinder6.urdf",
+        "sha256": "062ab55e8f65aa299431d56dd4be9e42db1523c8404820189917a5aaa53f3ad8",
+        "size": 902,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cylinder6/cylinder6.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "b7cb51c11d56b417c15505d22d6cfcba9bc1bcc711219cff07e9d3675dabd408",
+        "size": 72163,
+        "storage": "lfs"
+      }
+    },
+    "cylinder7": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/cylinder7/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "9f0a7e041f942bc40486abb3562d2b18793b2e3a8a37bbc6ec503627acd6ac5a",
+          "size": 8624,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "cylinder7_link",
+      "rgba": "0.75 0.35 0.12 1",
+      "root": "objects/DexGEM/cylinder7",
+      "source_name": "cylinder7",
+      "urdf": {
+        "path": "objects/DexGEM/cylinder7/cylinder7.urdf",
+        "sha256": "72654955c130fe9999a6eebfc64b232dab7650b055fb6dc84eb4177dcea36687",
+        "size": 903,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/cylinder7/cylinder7.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "7e7f978b860520cb6c84c814e588e99c95cbd215a6e388ac817037e4a07d8559",
+        "size": 37324,
+        "storage": "lfs"
+      }
+    },
+    "disposablecup": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "ee9b57f4231c14080ba0be226a66e260482e6c97935c5085b5bcfdad2bb480be",
+          "size": 21874,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8b9cb9f7b738bfb690ad0aa38bd2b63e76638ecf705951ad4cf0636f46a9406b",
+          "size": 4717,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "6363e652a7251c356c50754e34a9c6e9efcce192bb6b11cd0def91df61ba9abe",
+          "size": 4814,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "19a68f98bedd35cb84a9dd64d57cb29f76203c89e9f37e21a5083938372f45d2",
+          "size": 5762,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b45ddcf5d16a91b4368f7c7bab7a55511d68acfb3aab64e091df4aee8b2e09fc",
+          "size": 7167,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "052b581fadd2ef46ca48a41bd4cf42e021196e02c18f00e9a5c254a6e3bdd2c7",
+          "size": 6132,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b337ee7d6c8e6471aafca1d431c2d7e3edba2e53ad0805893b9dd3be79421ba2",
+          "size": 6423,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "e2dd31177852403d8c774adf300d7e2ec975984d8cbe3e0f20d79e8902bb19e6",
+          "size": 6898,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "85c3e7425587d82cc98187f1f382a419933c8b1e712b3aa929d4189d2b6c314c",
+          "size": 4813,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_9.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "827e5d1c586bb3d925615f42c40fe8765c8d217ffe7a62bf78f14ad7aa9d43a6",
+          "size": 4176,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_10.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "47739e81b79d56d5d8aed289446077da24e64e81d4f9f5c980d32d4f26008113",
+          "size": 4950,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_11.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4ab6432da659c138f6e0d78845203e8af79cf3bccb2646bc66b7068e587bbc80",
+          "size": 5759,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/disposablecup/coacd/coacd_convex_piece_12.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "027b78f6654db48957fcc31b6c69928d4ee4fcad2ea4b521cb59fd2972e7ae49",
+          "size": 4471,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "disposablecup_link",
+      "rgba": "0.85 0.88 0.92 1",
+      "root": "objects/DexGEM/disposablecup",
+      "source_name": "disposablecup",
+      "urdf": {
+        "path": "objects/DexGEM/disposablecup/disposablecup.urdf",
+        "sha256": "b53e9d4aafef94f952a7f8ea096ed4b4861aaa6c5195dca7b5f937ade3ed0d95",
+        "size": 3420,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/disposablecup/disposablecup.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "e253eee5aa6c58e0aa2c2ed8e1794f611f929428ff7ddea14fa368aac849156d",
+        "size": 363685,
+        "storage": "lfs"
+      }
+    },
+    "iphone": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/iphone/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "55cb103d4ad9d9e6fbf6ca3364bf2f1e7e4128256280db64af7c44178fb07c09",
+          "size": 804924,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "iphone_link",
+      "rgba": "0.08 0.08 0.09 1",
+      "root": "objects/DexGEM/iphone",
+      "source_name": "iphone",
+      "urdf": {
+        "path": "objects/DexGEM/iphone/iphone.urdf",
+        "sha256": "40da9519d5ae47117284930002289145d426edede51747ae78eafa59fe03752c",
+        "size": 888,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/iphone/iphone.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "6a6453d62bff6f99c858b1b1d448dbb2076d88893822c72b4623d60d4c763f7a",
+        "size": 26342448,
+        "storage": "lfs"
+      }
+    },
+    "largeclamp": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "9ec6149e28b57a891dd66e564bff66f3581a2aa4710b8c7d6b79056b8a0f43a4",
+          "size": 19937,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "77a875c32514c6ffd6b95d394747535fa40cab2624a5c1bbbce02ca2b46b6150",
+          "size": 39323,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "e2f2fcbe609c90b222f732357c4e3f9c89376c5c885b3253cfce238b503c1c87",
+          "size": 6601,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "28bfc282e94fcc956b28f9dbf4358beaea4c5e672c4aaedf6dfe65fcdf5a3147",
+          "size": 7412,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b26df3a5fcd2679ae7619f75a23d94b61d9ca7575a93739f6a766be230dfc3ed",
+          "size": 11902,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8ae6b47de3e7ddd3673634fa435c7d18db6efaf8eb24785474a5601d4f8cd4fc",
+          "size": 9721,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b53ca121a233892fe8a2d5b16e33f7de50642d9c777f353453b1a9cb24e0ad59",
+          "size": 12606,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "957e15c115414b59e36376d7538c2bfadab365c12ed6ded8a083e8510bed1d78",
+          "size": 6811,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8a55e9f1d21cea56ef54ead80069f848b813fe69efaaf8cfaef99c64b3270549",
+          "size": 16146,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_9.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "c346a0239533a22b9dc67cca2242dc5b6f85393fdaa755c48af74f4f2474de54",
+          "size": 7284,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_10.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4f122bc34e87a4104b653f91fb1ffea8b9f4b943f091199e2056b0f5eed50651",
+          "size": 3614,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_11.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "49387c1b78feca3c2bc1123ae56d188f600dc93fde33344872682857b23b231e",
+          "size": 6400,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_12.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "207bb0e31aa1e9f7a22478236ff5acba4482b9386d5aacb1eec3325a908e9979",
+          "size": 5278,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_13.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b9ab8985a69b0e9a3f472ad380a882adec587e7b56c16b4dd655fb1a668bcadb",
+          "size": 15684,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_14.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "f8ddadf6a7d47a6e0ab249a2962bb79bbcee4480fc52b0446e0cec412a28fe3e",
+          "size": 6034,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_15.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "6660bc81439ae2b5de99bc6c59219cb54d242a7c0899aa09e4b890fa3886329e",
+          "size": 21567,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_16.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "91c4f3b0210f8567618331dd2226bfeae2a5782d3f4d79c09cbb179a4084c4c7",
+          "size": 6032,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_17.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "174d09a8dc55ae8611dc1712dd74fd26b81236098ff71bc9abe0f3b0f16ba247",
+          "size": 4432,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_18.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "786f3e3a8548b448b2a09f1ec2c02661774bf2fd3732f1316e9dea77ef3e0c45",
+          "size": 9324,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_19.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "467ccff2c2f9b988ff84b7748e68abc5f19b5d7ff0228e9357b6d8eada9bfcad",
+          "size": 3161,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_20.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "eb453abc251488d27d3d7cb731c19cd85fce7517a3ed2db2fc4ba3316f9e52c3",
+          "size": 7932,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_21.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "29447a1a622d3b2da42f8f75e497087ec92776a0413e48831e338ae9b9f998c7",
+          "size": 5144,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_22.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "907a26347956c996d70de4d42c94d067c6f408b00694468dc427c3dc36a757df",
+          "size": 5106,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_23.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "5a2d44b22ea062eb01613c465354c90d4d25a78d2a6c7ade728445a5b3a560a0",
+          "size": 9886,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_24.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0c6b41d19556c0b973e5dce6615177b204ac5a4d6679aa601774cec3b38c8d19",
+          "size": 9847,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_25.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "e2123600da33e60b590c4e8f572cfe0897f08f91f63ea39d345f1e7cb4d2a5bf",
+          "size": 10466,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/largeclamp/coacd/coacd_convex_piece_26.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "5879d7ef5ddcdf084c8c5e93b94330d097f7c8faa0eb2fc05543f4e050853fa4",
+          "size": 11092,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "largeclamp_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/largeclamp",
+      "source_name": "largeclamp",
+      "urdf": {
+        "path": "objects/DexGEM/largeclamp/largeclamp.urdf",
+        "sha256": "e804e4f0c96b1871bb8563e8c12e860905851a6e28a2ef5ee8d51783a48f0649",
+        "size": 6348,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/largeclamp/largeclamp.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "56b73989b5246761dfd4fff9d910759eb549bd9eef0bcb0a36ebc0deae3cde91",
+        "size": 73192739,
+        "storage": "lfs"
+      }
+    },
+    "mayonnaisebottle": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/mayonnaisebottle/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "69b96645a118c2d791ad25cf1491bc34bf3ed3741aa576a02444ce90a6866926",
+          "size": 64326,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/mayonnaisebottle/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "d7250a4bc2686352cfae975cbb8f02dcde05e5575761202ae61d9889f5183632",
+          "size": 57221,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "mayonnaisebottle_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/mayonnaisebottle",
+      "source_name": "mayonnaisebottle",
+      "urdf": {
+        "path": "objects/DexGEM/mayonnaisebottle/mayonnaisebottle.urdf",
+        "sha256": "a625358ef00eba2142cb65d2bc736771d95f9d518c35bba09271f2759b920713",
+        "size": 1129,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/mayonnaisebottle/mayonnaisebottle.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "6dc949835185a2417e52408579f20a7f3fad254e61f20256d01143ab90f80393",
+        "size": 2138218,
+        "storage": "lfs"
+      }
+    },
+    "pitcherbase": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "bf1fdc9d9ab0dec02accaae79213d24f32434fe5471126c267aeabb95ee6696c",
+          "size": 4722,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "319795151c7f2603feebd140f021260d09f0d63f6cdb60e836d874a81a522b17",
+          "size": 17615,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "a4cb2fd0e0cddb630c0fd3d8e50fb0d13f30122519cbe6508d7d8897f8e257f0",
+          "size": 24457,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "2ae2b771128058f9e35b1d005161f79e395e51479fd4e6f5efb63a76b91c29dc",
+          "size": 7622,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "2eab5c86e86e3e4fe6488192e230daffdfa4781d667d68adc929f6962c3f7717",
+          "size": 27737,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_5.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4241c0c8e7be54f887d00b05a0bf7ba3f43ff2dc42cb6d7837819df5e178c803",
+          "size": 272906,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_6.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "0f98f3a61b78de19e8a93b79c48953ee963f22fb3b578fd274a7cbc7d2f19d69",
+          "size": 24551,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_7.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "182d66814bf59c0bb68e7efeccb14caa1d72ece2c5ce8a093e89cfde21f4e3cb",
+          "size": 30482,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_8.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "4bd18521cd03d61002faebba71f3e368c6dda17aa72b661e9dfedb1eed8f8bf8",
+          "size": 4236,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_9.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "3bf7a6000074d34c6ccc809b1b8914e398e10694b10bafc691fefc83b2432b40",
+          "size": 3521,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_10.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "30563f0c6f82b041c687c0296f245f28e0d380bf7e47d29cea7fd6dc4cb7be58",
+          "size": 15225,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_11.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "92f9ff78818e310a06f7d5fa6a7d3878c29083377db02e8eedebf33d14c0f970",
+          "size": 2032,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_12.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "869f5475baab8cd4529976ac90268c8b2e07d03dd601317de4591022b95611b4",
+          "size": 10649,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_13.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "8c3d7a5716c8f4b61be0dd1c73414a4a6907671ac411a2f5dad5df019ff81177",
+          "size": 3465,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_14.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "19e60a385cb6cc1736a4617824c482a46a8589fab9b91902ed988f3084178e50",
+          "size": 18231,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_15.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b63c11cb94b32f354f1db80e4acaea23ff578a57ea38f98c2cff863fd1bdce32",
+          "size": 17322,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_16.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "9e087dda8142936f9de90e854e5cdbe48911d92772c6ccc4c92761dd6608844b",
+          "size": 10138,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_17.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "c61af7570f44ae898a62b186f14c8cd6bdc0a96fbdb88cecdc12dd64a9e00abe",
+          "size": 4686,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/pitcherbase/coacd/coacd_convex_piece_18.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "af308908df596036b2cb14056b0cc96cb23d5a79ee32ff87440b47114b619cca",
+          "size": 4969,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "pitcherbase_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/pitcherbase",
+      "source_name": "pitcherbase",
+      "urdf": {
+        "path": "objects/DexGEM/pitcherbase/pitcherbase.urdf",
+        "sha256": "5b1a25bff76c8b00f0f4d2086d0754c756b5038e86a629685fd81f2e27752348",
+        "size": 4665,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/pitcherbase/pitcherbase.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "a138654eed419d3092ab4bd3381b0f255212bdaff4e983f79bda450b069f7be7",
+        "size": 74169906,
+        "storage": "lfs"
+      }
+    },
+    "powerdrill": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/powerdrill/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "9a42f3d51946256aa78fb6fab6436206106b58d2813b4ccc6ea72ae009431c75",
+          "size": 22114,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/powerdrill/coacd/coacd_convex_piece_1.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "f1785241a05cb0594befd41513794a5c8b42870dcf22a06c7cc927556b4f4667",
+          "size": 118917,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/powerdrill/coacd/coacd_convex_piece_2.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "00ef29942c164ac71aef35232a41d1aad061370f1d91b324ee9c611093a9f6bd",
+          "size": 106313,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/powerdrill/coacd/coacd_convex_piece_3.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b843afc108727e722f465404df4c95597693495dccbc71c2ebf3574d9a159b82",
+          "size": 26355,
+          "storage": "lfs"
+        },
+        {
+          "path": "objects/DexGEM/powerdrill/coacd/coacd_convex_piece_4.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "6c378e1add91c459274225d1e578d05035ef3c9a9ec3b9d32792114c48541fe4",
+          "size": 89273,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "powerdrill_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/powerdrill",
+      "source_name": "powerdrill",
+      "urdf": {
+        "path": "objects/DexGEM/powerdrill/powerdrill.urdf",
+        "sha256": "f6ece7795db10cf70b0a869628704881e3bf583a795381719a19c976e5278ad0",
+        "size": 1732,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/powerdrill/powerdrill.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "bb090686afeca90691b0b1e2c322569866f765518433fdafdb6d28c8b9d60f9f",
+        "size": 73862589,
+        "storage": "lfs"
+      }
+    },
+    "sphere1": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/sphere1/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "b35aded81abd69aed79c3ba3be19642d98583e4ae616675cf84fe6fba586caa2",
+          "size": 297907,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "sphere1_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/sphere1",
+      "source_name": "sphere1",
+      "urdf": {
+        "path": "objects/DexGEM/sphere1/sphere1.urdf",
+        "sha256": "73180005cfb3f55f91bb883dcf46dea52f9ddb95956e9e2442c32c0c7d548bf4",
+        "size": 892,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/sphere1/sphere1.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "511e1820e86639bd9f12304a57ba5f5423abdc1f408fc3f9d4b9d713afaebc60",
+        "size": 1196782,
+        "storage": "lfs"
+      }
+    },
+    "sphere2": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/sphere2/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "ab4d606445eaa4fd45f62d466b74ac56573afe8eaca02a5a55a9f2cb96c8ced9",
+          "size": 299576,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "sphere2_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/sphere2",
+      "source_name": "sphere2",
+      "urdf": {
+        "path": "objects/DexGEM/sphere2/sphere2.urdf",
+        "sha256": "2f22125c22213bbf76f903cc293271b60b8bba191ef7424e474c51349cab24f3",
+        "size": 894,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/sphere2/sphere2.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "723ad83b30f42033e6639e0e4a27258bd697e8e2c2de76c1372c81549fe10d91",
+        "size": 1182200,
+        "storage": "lfs"
+      }
+    },
+    "sphere3": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/sphere3/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "879c9e8f3e01453bd896f696cc398afadeb193f3d386199f61e4b45884de1b0c",
+          "size": 297992,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "sphere3_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/sphere3",
+      "source_name": "sphere3",
+      "urdf": {
+        "path": "objects/DexGEM/sphere3/sphere3.urdf",
+        "sha256": "fddee1a6293ab9899f6ead3a60a79d6f64eaf838a43fb63a2671cfbcef89c817",
+        "size": 892,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/sphere3/sphere3.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "3d8888e76e2b410ebe4900568882bcfa86b3b6f139d2f219b25d42cc0919d445",
+        "size": 1158396,
+        "storage": "lfs"
+      }
+    },
+    "sphere4": {
+      "collisions": [
+        {
+          "path": "objects/DexGEM/sphere4/coacd/coacd_convex_piece_0.obj",
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "sha256": "c6933b53684c56aa4fb8bdd3a0b31a86c743afa2eae8236ddc10b180ef41b8b5",
+          "size": 204842,
+          "storage": "lfs"
+        }
+      ],
+      "geometry_type": "box",
+      "link_name": "sphere4_link",
+      "rgba": "0.65 0.65 0.65 1",
+      "root": "objects/DexGEM/sphere4",
+      "source_name": "sphere4",
+      "urdf": {
+        "path": "objects/DexGEM/sphere4/sphere4.urdf",
+        "sha256": "73dd37cd02262697a16400f9d5c0e0b2b0d0e8cc33b897a6fb8d7512d7bdd57d",
+        "size": 891,
+        "storage": "git"
+      },
+      "visual": {
+        "path": "objects/DexGEM/sphere4/sphere4.obj",
+        "scale": [
+          0.001,
+          0.001,
+          0.001
+        ],
+        "sha256": "769156b5ca07c7de3286042f0af47ae4c829721b20b781b4219881c27efa2925",
+        "size": 831252,
+        "storage": "lfs"
+      }
+    }
+  },
+  "schema": "manorl.dexstream-assets.v1",
+  "source_commit": "f98da997f316c8a6b4bc2931cabed19e831ef163",
+  "source_repository": "git@github.com:DexGEM-Lab/dexstream_digital-assets.git",
+  "task_metadata": {
+    "grasp_mapping": {
+      "path": "sim/manorl/task_assets/object_grasps_simple.yaml",
+      "sha256": "8fc74cb6b52d1827b5495b57002e9f69257f85f5d6ab6981e3a3db6a8a4e68ea",
+      "size": 8118,
+      "storage": "project"
+    }
+  }
+}

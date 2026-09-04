@@ -2,67 +2,72 @@
 
 Standalone MJX-Warp sim-to-Lance export repo.
 
-This repo is intentionally decoupled from the larger `contactbench` workspace. The
-MANO hand asset, complete source asset collection, and `lance_manager` are git
-submodules. The repo contains MuJoCo scene builders, MJX-Warp contact extraction,
-direct Lance export, and Docker/runtime helpers.
+This repository has one authoritative physical asset source:
+[`dexstream_digital-assets`](https://github.com/DexGEM-Lab/dexstream_digital-assets).
+ManoRL resolves both the MANO hand and DexGEM object geometry directly from its
+pinned submodule checkout. Task-specific expected-contact mappings remain
+ManoRL metadata because they describe the observation/reward contract rather
+than physical geometry.
 
 ## Layout
 
 ```text
-assets/mano_hand_s02/        submodule: MANO MJCF/URDF/STL assets used by simulation
-assets/all_assets/           submodule: complete upstream Gym-version asset collection
-3rd_party/lance_manager/     submodule: generated_data Lance writer/schema stack
-sim/                         MJX-Warp simulation, scenarios, schema helpers, and export code
-sim/benchmarks/ball_pit/     deterministic ball-pit scenario and camera helpers
-sim/common/                  contact schema helpers and validators
-scripts/                     build, sim-to-Lance, smoke test, and env helper scripts
-outputs/                     generated outputs; ignored by git
-Dockerfile                   Debian + Miniforge + CUDA + uv runtime image
+assets/dexstream_digital_assets/  submodule: pinned DexStream hand + object assets
+sim/manorl/task_assets/           generated source manifest + ManoRL task mapping
+3rd_party/lance_manager/          submodule: generated_data Lance writer/schema stack
+sim/                              MJX-Warp simulation, scenarios, schema helpers, export code
+sim/benchmarks/ball_pit/           deterministic ball-pit scenario and camera helpers
+sim/common/                        contact schema helpers and validators
+scripts/                           build, asset setup, simulation, and environment helpers
+outputs/                           generated outputs; ignored by git
+Dockerfile                         Debian + Miniforge + CUDA + uv runtime image
 ```
 
-## Clone / Submodules
+## Clone / Assets
 
-After cloning this repo elsewhere, initialize submodules first:
+Initialize the one physical asset submodule and its Git LFS objects:
 
 ```bash
-git submodule update --init --recursive
+git lfs install
+GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --recursive
+scripts/setup_manorl_assets.sh
 ```
 
-Current submodules:
+The current pinned source is:
 
 ```text
-assets/mano_hand_s02 -> git@192.168.10.116:ai/group-ai-public/group-sim-assets/mano_hand_s02.git
-assets/all_assets -> git@192.168.10.116:jieqiangsun/all_assets.git @ 7228b5cfce8d9a072ed4bded7a489cf73d521b68 (fixed pin)
-assets/all_assets/Assets/sim/mano_assets -> git@192.168.10.116:ai/group-dexcanvas/mano_assets.git @ cde03ef94816b589f574ca6f358695005d3d1a3f (nested fixed pin)
-3rd_party/lance_manager -> git@192.168.10.116:ai/group-dexcanvas/lance_manager.git
+assets/dexstream_digital_assets -> git@github.com:DexGEM-Lab/dexstream_digital-assets.git
+  main @ f98da997f316c8a6b4bc2931cabed19e831ef163
 ```
 
-The `assets/mano_hand_s02` and `assets/all_assets` submodules track the
-upstream `main` branch for explicit remote updates. The commits shown above
-remain the root repository's gitlink pins; changing an upstream branch does
-not change this checkout until the updated gitlink is committed here. To
-intentionally advance a tracked asset, run for example:
+`sim/manorl/task_assets/dexstream_manifest.json` records the source commit and
+SHA-256/size of every MANO URDF, required collision mesh, skin fragment, and
+registered DexGEM object URDF/visual/collision file. Runtime validation rejects
+a missing file, an unmaterialized LFS pointer, a digest mismatch, or a checkout
+at a different source commit. Regenerate the manifest only when intentionally
+moving the submodule pin:
 
 ```bash
-git submodule update --remote assets/all_assets
-git add .gitmodules assets/all_assets
-git commit -m "Update all_assets submodule"
+python tools/generate_manorl_asset_manifest.py
+git add .gitmodules assets/dexstream_digital_assets \
+  sim/manorl/task_assets/dexstream_manifest.json
+git commit -m "Update DexStream asset pin"
 ```
 
-`assets/all_assets` is the authoritative source checkout for ManoRL object
-URDFs, CoACD collision pieces, grasp mappings, and visual meshes. Its nested
-`Assets/sim/mano_assets` pin supplies the object visual/source meshes. Curated
-files under `sim/manorl/runtime_assets/` remain compatibility inputs for the
-original hand/cube path. When a local checkout of `all_assets` already has the
-pinned objects, it can be used as a Git reference to avoid downloading the
-object database again:
+The selected ManoRL hand is `hand/mano/sunke/{right,left}`. It preserves the
+28-DoF `cmc3_mcp2_28dof` layout and z-up floating base used by the current
+policy contract. The source also ships other MANO subjects and DexHand models;
+those remain discoverable in the asset repository but are not silently used by
+ManoRL. Expected-contact keypoint aliases live in
+`sim/manorl/task_assets/object_grasps_simple.yaml` and are deliberately
+separate from the physical asset source.
 
-```bash
-git submodule update --init \
-  --reference /path/to/existing/all_assets \
-  assets/all_assets
-```
+The latest DexStream snapshot contains 28 same-name rigid DexGEM bundles,
+exposed by ManoRL under canonical lower-case names. Historical names removed
+from the source (for example `bottlewithcap` and `scissor`) fail explicitly;
+they are not mapped to a geometrically different object. The source's URDF is
+the authority for inertial values, visual scale, collision-piece paths and
+scales, while `objects/DexGEM/*/*.yaml` supplies collection metadata.
 
 ## Pi Task Worktrees
 
@@ -97,6 +102,9 @@ local accidental-workflow guard, not a security boundary.
 | Synthetic Lance production (approach prefix, offline retreat, save gate) | [`docs/manorl_synthesis_approach_prefix.md`](docs/manorl_synthesis_approach_prefix.md) |
 | Lance isolation runbook (Source → Compile → Run, package, publish) | [`docs/manorl_lance_isolation_runbook.md`](docs/manorl_lance_isolation_runbook.md) |
 | Phase 5A ABI inventory (observation/residual/reward/checkpoint) | [`docs/manorl_phase5_abi_inventory.md`](docs/manorl_phase5_abi_inventory.md) |
+| DexStream asset setup and integrity manifest | [`scripts/setup_manorl_assets.sh`](scripts/setup_manorl_assets.sh), [`tools/generate_manorl_asset_manifest.py`](tools/generate_manorl_asset_manifest.py) |
+| ManoRL physical asset source contract | [`docs/manorl_asset_source.md`](docs/manorl_asset_source.md) |
+| Portable prefix/retreat synthesis method | [`docs/manorl_synthesis_methodology_prompt.md`](docs/manorl_synthesis_methodology_prompt.md) |
 
 ## Local uv Environment
 
@@ -110,8 +118,10 @@ The local uv environment is useful for CPU checks and development. GPU execution
 ## ManoRL reference replay (local, no Docker)
 
 The ManoRL path under `sim/manorl/` reads settled trajectories without
-`lance_manager`, builds a MuJoCo model from curated source URDF/collision
-assets, and runs residual-off reference control. It implements observations,
+`lance_manager`, builds a MuJoCo model from pinned DexStream URDF/collision
+assets, and runs residual-off reference control. The generic ball-pit scene in
+`sim/scene.py` uses the same pinned `hand/mano/sunke/right` MJCF; it has no
+legacy-hand fallback. It implements observations,
 target rewards, native SKRL PPO training, and native checkpoint round trips.
 Only current native 28-DoF-per-hand MuJoCo checkpoints with their sidecars are
 accepted for training, resume, and visualization.
@@ -176,7 +186,13 @@ hand-contact magnitude curves with an `Object gravity` magnitude reference.
 To render a deterministic mean policy, keep its `.pt.json` sidecar beside the
 checkpoint. The sidecar records the checkpoint's versioned runtime and resolved
 hand/action layout; model key/shape compatibility and current reward, PPO, and
-environment contracts are checked when the checkpoint loads.
+environment contracts are checked when the checkpoint loads. New checkpoints
+also bind the DexStream repository, exact source commit, and SHA-256 of the
+ManoRL asset manifest. Strict resume and ordinary inference reject a checkpoint
+without matching asset provenance. Explicit warm-start/policy-transfer remains
+the intentional boundary for transferring learned weights across asset
+versions; it does not claim rollout equivalence because current hand scale,
+object inertia and CoACD geometry differ from the removed source.
 
 ```bash
 JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
@@ -230,8 +246,8 @@ middle-drag pans vertical, wheel zooms, `R` resets, `Esc` closes. The source
 counter schedule is preserved from
 `IsaacGymEnvs/isaacgymenvs/tasks/mano_hand.py::pre_physics_step`: 791 physics
 calls command slice indices `0, 0, 1, ..., 789`; slice index 791 is never
-consumed. The original curated hand/cube compatibility manifest retains its own
-source provenance and digests. A row containing explicit Warp CCD scratch settings
+consumed. The pinned DexStream manifest retains source provenance and digests; historical
+trajectory identifiers remain data metadata, not alternate asset sources. A row containing explicit Warp CCD scratch settings
 requires `--device gpu`; `--device cpu --allow-physics-override` is only an
 explicitly non-identical diagnostic. Direct Lance/PyArrow replay must not be
 run on the currently disqualified Server2 until its physical
