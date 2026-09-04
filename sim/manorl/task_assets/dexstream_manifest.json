@@ -124,10 +124,22 @@
           "storage": "lfs"
         },
         {
+          "path": "hand/mano/sunke/left/skin/mano_skin_mjcf.skn",
+          "sha256": "f6f553e4bd6a0ad3cf6778f7f3ca0dab4434e0b74bda684ddc702f0d5cd9d1de",
+          "size": 45184,
+          "storage": "lfs"
+        },
+        {
           "path": "hand/mano/sunke/left/skin/mano_skin_mjcf_fragment.xml",
           "sha256": "c957cda48e1b18a8ec42d517582d4651b06010bd06cf68da559e307a8d88f45a",
           "size": 89221,
           "storage": "git"
+        },
+        {
+          "path": "hand/mano/sunke/left/skin/mano_skin_bind.npz",
+          "sha256": "f3e2fa83550daee53831be081289e676353203b1933d4dc946b485b1ac003143",
+          "size": 100378,
+          "storage": "lfs"
         }
       ],
       "joint_names": [
@@ -164,6 +176,11 @@
       "palm_collision_scale": 1.0,
       "root": "hand/mano/sunke/left",
       "skin": "hand/mano/sunke/left/skin/mano_skin_mjcf_fragment.xml",
+      "skin_files": [
+        "hand/mano/sunke/left/skin/mano_skin_mjcf.skn",
+        "hand/mano/sunke/left/skin/mano_skin_mjcf_fragment.xml",
+        "hand/mano/sunke/left/skin/mano_skin_bind.npz"
+      ],
       "urdf": "hand/mano/sunke/left/urdf/mano_left_hand_floating.urdf"
     },
     "right": {
@@ -289,10 +306,22 @@
           "storage": "lfs"
         },
         {
+          "path": "hand/mano/sunke/right/skin/mano_skin_mjcf.skn",
+          "sha256": "4adfef1d2be5550bf269896ca13c7097f96c01f7d27ccda16cb8267becac3c21",
+          "size": 45184,
+          "storage": "lfs"
+        },
+        {
           "path": "hand/mano/sunke/right/skin/mano_skin_mjcf_fragment.xml",
           "sha256": "2a0c0bc425e7c4049793271c54cd269cd94e88a67fad6a170db0e129fbdcdffa",
           "size": 88436,
           "storage": "git"
+        },
+        {
+          "path": "hand/mano/sunke/right/skin/mano_skin_bind.npz",
+          "sha256": "1960a3c2eb11d1391b0d4f296790ac8ad169a49441664fedd0e491ccc5639174",
+          "size": 100378,
+          "storage": "lfs"
         }
       ],
       "joint_names": [
@@ -329,6 +358,11 @@
       "palm_collision_scale": 1.0,
       "root": "hand/mano/sunke/right",
       "skin": "hand/mano/sunke/right/skin/mano_skin_mjcf_fragment.xml",
+      "skin_files": [
+        "hand/mano/sunke/right/skin/mano_skin_mjcf.skn",
+        "hand/mano/sunke/right/skin/mano_skin_mjcf_fragment.xml",
+        "hand/mano/sunke/right/skin/mano_skin_bind.npz"
+      ],
       "urdf": "hand/mano/sunke/right/urdf/mano_right_hand_floating.urdf"
     }
   },

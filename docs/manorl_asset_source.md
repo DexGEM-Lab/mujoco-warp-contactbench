@@ -14,7 +14,8 @@ The root repository tracks the source as a Git submodule. Large meshes are Git
 LFS objects in that submodule; they must be materialized before MuJoCo loads a
 model. The project-owned
 `sim/manorl/task_assets/dexstream_manifest.json` records the exact source commit
-and the SHA-256/size of every file required by ManoRL.
+and the SHA-256/size of every file required by ManoRL, including the binary MANO
+skin (`.skn`), skin bind (`.npz`), and XML fragment.
 
 ```bash
 git lfs install
