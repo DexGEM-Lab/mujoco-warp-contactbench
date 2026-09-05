@@ -175,9 +175,32 @@ JAX_PLATFORMS=cpu python -m sim.manorl.view_environment \
 ```
 
 Use `--device gpu` on a CUDA JAX environment and `--no-loop` to stop after the
-single 791-call replay. Both runtime controls default to `true`: use
+single 791-call replay. For an arbitrary Lance dataset/object/action, use the
+stable one-environment meta-script instead of editing `test.sh` or writing a
+per-dataset launcher:
+
+```bash
+scripts/view_manorl_lance.sh \
+  --dataset /mnt/nas-222-project/mocap_v2/lance_datasets/human_p1_remake_v3/human_p1_daily_20260902_clean.lance \
+  --dataset-version 12 \
+  --object banana --gesture 18 \
+  --reference-fps 100 \
+  --pre-padding 180 --post-padding 180 \
+  --hand-side right --display :1 --loop
+```
+
+The meta-script always executes and renders exactly one environment. It checks
+that the Lance directory and X11 session exist, refuses to start below 4 GiB
+available RAM, reports GPU memory, disables JAX GPU allocation for its default
+CPU path, and bounds Lance decoding to 32 rows per batch. Change only the CLI
+selection for a new dataset or object; `--dry-run` prints the fully resolved
+command without opening a window. Run `scripts/view_manorl_lance.sh --help` for
+all clock, padding, hand, display, device, and playback options.
+
+Both runtime controls in the underlying Python viewer default to `true`: use
 `--use_residual false` for source-reference diagnostics and `--terminal false`
-for formal source-horizon termination only. When `--rerun-output` records the
+for formal source-horizon termination only. The meta-script chooses both of
+those reference-inspection settings by default. When `--rerun-output` records the
 same environment run, its charts open on the `step` timeline; select
 `simulation` in Rerun's time panel to chart against elapsed seconds. The
 `Collision geometry contact forces` tab records one continuous world-frame net
@@ -308,8 +331,11 @@ supplied through `CHECKPOINT` or `MANORL_CHECKPOINT`. `test.sh` has a fixed
 cube1/action-01, N20, no-checkpoint contract with residual actions disabled;
 its positional arguments are `physical_gpu`, `pre_padding`, and `post_padding`.
 `MANORL_PRE_PADDING` and `MANORL_POST_PADDING` provide equivalent environment
-overrides. Dataset, update count, W&B, device, and playback overrides remain
-available through `MANORL_*` environment variables documented in each script.
+overrides. `test.sh` retains that fixed regression contract; interactive checks
+against new Lance datasets should use `scripts/view_manorl_lance.sh` with
+explicit dataset/object/gesture CLI arguments. Dataset, update count, W&B,
+device, and playback overrides remain available through `MANORL_*` environment
+variables documented in each script.
 
 The trainer also accepts exact multi-object/action selection via
 `--pairs cube1:01,cube1:02,cube2:01` or `--all-pairs`. Mixed-object batches run
