@@ -1,11 +1,11 @@
 ## Objective
-Archive pre-DexStream ManoRL physical assets with an auditable, reversible compatibility boundary, then train the complete daily Lance catalog using the pinned DexStream assets, a Lance-free trajectory package, 100 Hz, pre-padding 180, and post-padding 180. Done means every valid trajectory is represented in the assignment, both Server1 and Server2 pass the same bounded training smoke, and the production run has durable checkpoints and W&B telemetry.
+Archive pre-DexStream ManoRL physical assets with an auditable, reversible compatibility boundary, then train the complete daily Lance catalog using the pinned DexStream assets, a Lance-free trajectory package, 100 Hz, pre-padding 180, and post-padding 180. Done means every valid trajectory is represented, Server1 N4096 and Server2 N8192 fresh production runs have durable checkpoints and W&B telemetry, and their learning behavior is compared under the same source/asset contract.
 
 ## Workbench
 1. Preserve and verify the legacy-asset archive manifest and compatibility symlinks.
 2. Preserve the compiled daily-v12 MTP and its source-equivalence evidence.
-3. Monitor the Server1 production run through scheduled checkpoints and completion/failure.
-4. Interpret training metrics by object/action rather than treating process survival as success.
+3. Monitor the Server1 N4096 and Server2 N8192 runs through scheduled checkpoints and completion/failure.
+4. Compare per-pair learning and wall-clock/sample efficiency rather than treating process survival as success.
 
 ## Context
 Repository: `/home/jay/dexrobot/FromSSH/manoRL_mujoco`.
@@ -20,9 +20,9 @@ The complete source catalog contains 696 right-hand trajectories, five objects, 
 
 Use a verified `manorl.trajectory_package.v1` package for every long-lived trainer. The trainer must not map Lance or PyArrow. Package digest, catalog digest, DexStream repository/commit, asset-manifest SHA, and padding/clock settings must appear in checkpoint sidecars.
 
-Balanced pair assignment needs 99 slots per pair to include the longest 99-trajectory pair, so production uses `14 * 99 = 1386` environments. A 696-environment balanced assignment is insufficient because it covers only 646 unique trajectories.
+Balanced pair assignment needs at least 99 slots per pair to include the longest 99-trajectory pair. A 696-environment balanced assignment is insufficient because it covers only 646 unique trajectories. N4096 and N8192 both cover all 696 trajectories and preserve the default 4096 minibatch; N1386 was stopped because its resolved minibatch of 32 made it approximately ten times slower.
 
-Run fresh training; do not strict-resume a checkpoint from the old physical assets. Require a five-update smoke on both Server1 and Server2 before production. Production uses Server1 GPU2, 5000 updates, checkpoint interval 25, W&B online, and a 72-hour timeout.
+Run fresh training; do not strict-resume a checkpoint from the old physical assets. Production runs are Server1 GPU2/N4096 and Server2 GPU0/N8192, each for 5000 updates with checkpoint interval 25 and W&B online. The stopped N1386 checkpoint is retained as negative performance evidence, not resumed.
 
 ## Constraints
 Local simulation tests use exactly one environment.
