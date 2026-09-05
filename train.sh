@@ -22,6 +22,8 @@ DATASET=${MANORL_DATASET_PATH:-/mnt/nas-222-project/mocap_v2/lance_datasets/huma
 DATASET_VERSION=${MANORL_DATASET_VERSION:-295}
 TRAJECTORY_PACKAGE=${MANORL_TRAJECTORY_PACKAGE:-}
 REFERENCE_FPS=${MANORL_REFERENCE_FPS:-120}
+PRE_PADDING=${MANORL_PRE_PADDING:-180}
+POST_PADDING=${MANORL_POST_PADDING:-250}
 UPDATES=${MANORL_UPDATES:-5000}
 CHECKPOINT_INTERVAL=${MANORL_CHECKPOINT_INTERVAL:-100}
 WARM_START_CHECKPOINT=${MANORL_WARM_START_CHECKPOINT:-}
@@ -65,6 +67,14 @@ if [[ ! "$GPU" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "$REFERENCE_FPS" != "100" && "$REFERENCE_FPS" != "120" ]]; then
   echo "MANORL_REFERENCE_FPS must be 100 or 120, got: $REFERENCE_FPS" >&2
+  exit 2
+fi
+if [[ ! "$PRE_PADDING" =~ ^[0-9]+$ ]]; then
+  echo "MANORL_PRE_PADDING must be a non-negative integer, got: $PRE_PADDING" >&2
+  exit 2
+fi
+if [[ ! "$POST_PADDING" =~ ^[0-9]+$ ]]; then
+  echo "MANORL_POST_PADDING must be a non-negative integer, got: $POST_PADDING" >&2
   exit 2
 fi
 if [[ -n "$WARM_START_CHECKPOINT" || -n "$WARM_START_PRIOR_UPDATES" ]]; then
@@ -161,8 +171,8 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "control_fps": $REFERENCE_FPS,
   "physics_fps": $((REFERENCE_FPS * 4)),
   "physics_substeps_per_control": 4,
-  "pre_padding": 180,
-  "post_padding": 250,
+  "pre_padding": $PRE_PADDING,
+  "post_padding": $POST_PADDING,
   "warm_start_checkpoint": $WARM_START_CHECKPOINT_JSON,
   "warm_start_prior_updates": $WARM_START_PRIOR_UPDATES_JSON,
   "hand_side": "$HAND_SIDE",
@@ -202,6 +212,8 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --dataset-version "$DATASET_VERSION" \
   "${TRAJECTORY_PACKAGE_ARGS[@]}" \
   --reference-fps "$REFERENCE_FPS" \
+  --pre-padding "$PRE_PADDING" \
+  --post-padding "$POST_PADDING" \
   "${CHECKPOINT_ARGS[@]}" \
   --hand-side "$HAND_SIDE" \
   "${SELECTION_ARGS[@]}" \
