@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -43,6 +44,74 @@ def test_generic_train_rejects_unsupported_reference_fps() -> None:
     )
     assert result.returncode == 2
     assert "MANORL_REFERENCE_FPS must be 100 or 120" in result.stderr
+
+
+def test_generic_train_rejects_invalid_padding(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.lance"
+    dataset.mkdir()
+    for name in ("MANORL_PRE_PADDING", "MANORL_POST_PADDING"):
+        result = subprocess.run(
+            [str(ROOT / "train.sh"), "banana", "1", "0"],
+            text=True,
+            capture_output=True,
+            env={
+                **os.environ,
+                "MANORL_DATASET_PATH": str(dataset),
+                "MANORL_PYTHON": "/bin/true",
+                name: "-1",
+            },
+        )
+        assert result.returncode == 2
+        assert f"{name} must be a non-negative integer" in result.stderr
+
+
+def test_generic_train_passes_padding_overrides(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "READY").write_text("digest\n", encoding="utf-8")
+    (package / "manifest.json").write_text(
+        json.dumps({"resolved_pairs": ["banana:18"]}), encoding="utf-8"
+    )
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+if sys.argv[1] == '-c':
+    print(json.dumps(sys.argv[-1]))
+elif sys.argv[1] == '-':
+    print('banana:18')
+else:
+    print('\\n'.join(sys.argv[1:]))
+""",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    output = tmp_path / "run"
+    result = subprocess.run(
+        [str(ROOT / "train.sh"), "banana", "1", "0"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "MANORL_PYTHON": str(fake_python),
+            "MANORL_TRAJECTORY_PACKAGE": str(package),
+            "MANORL_PRE_PADDING": "180",
+            "MANORL_POST_PADDING": "180",
+            "MANORL_UPDATES": "1",
+            "MANORL_CHECKPOINT_INTERVAL": "1",
+            "MANORL_WANDB": "false",
+            "MANORL_OUTPUT": str(output),
+            "MANORL_TIMEOUT": "1m",
+        },
+        check=True,
+    )
+    arguments = result.stdout.splitlines()
+    assert arguments[arguments.index("--pre-padding") + 1] == "180"
+    assert arguments[arguments.index("--post-padding") + 1] == "180"
+    manifest = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["pre_padding"] == 180
+    assert manifest["post_padding"] == 180
 
 
 def test_generic_inference_requires_checkpoint() -> None:
