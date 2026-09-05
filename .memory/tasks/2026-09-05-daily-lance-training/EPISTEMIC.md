@@ -23,7 +23,7 @@ Pre-DexStream Server1 assets are archived, not deleted. Same-filesystem rename p
 A 696-world run does not satisfy “all trajectories”; balanced pair scheduling demonstrably covers only 646 unique trajectories. Direct Lance training is unnecessary and violates the production isolation contract. Strict resume from old-asset checkpoints would bind the wrong physical version.
 
 ## Current claim
-The daily-v12 data, DexStream assets, MTP, cross-server runtime, and all-trajectory assignment are ready. A fresh 5000-update production run is active on Server1 GPU2. Completion and learning quality remain empirical outcomes; process survival and smoke parity establish launch validity, not final policy quality.
+The daily-v12 data, DexStream assets, MTP, cross-server runtime, and all-trajectory assignment are ready. A fresh 5000-update production run is active on Server1 GPU2 and has crossed checkpoints 25, 50, and 75 without a runtime/resource alert. Completion and learning quality remain empirical outcomes; stable execution proves launch validity, not policy competence. Success remains zero at update 78.
 
 ## Most informative next observation
-The first update-25 checkpoint and per-pair reset/reward/contact metrics will show whether the production run remains numerically healthy beyond the five-update gate and whether any pair systematically fails under the new physical assets.
+Per-pair reward/contact/success trends through updates 250–500 will distinguish ordinary fresh-policy exploration from a systematic task or reward mismatch. A nonzero success rate, rather than continued process health alone, is the next evidence that learning is working.
