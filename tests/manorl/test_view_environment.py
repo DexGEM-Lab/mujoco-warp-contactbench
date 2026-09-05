@@ -1135,7 +1135,7 @@ def test_padding_resolution_defaults_overrides_and_preserves_checkpoint() -> Non
         )
 
 
-def test_dataset_viewer_applies_explicit_padding(
+def test_dataset_viewer_applies_explicit_padding_and_reference_clock(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import sim.manorl.view_environment as viewer
@@ -1175,15 +1175,20 @@ def test_dataset_viewer_applies_explicit_padding(
         checkpoint=None,
         dataset_path=tmp_path / "dataset.lance",
         dataset_version=978,
+        reference_fps=100,
         pre_padding=73,
         post_padding=91,
         hand_side="right",
     )
 
     selection = created["selection"]
+    assert selection.reference_fps == 100
+    assert selection.control_fps == 100
     assert selection.pre_padding == 73
     assert selection.post_padding == 91
     config = created["config"]
+    assert config.reference_fps == 100
+    assert config.control_fps == 100
     assert config.compatibility.movement_pre_padding == 73
     assert config.post_padding == 91
 
