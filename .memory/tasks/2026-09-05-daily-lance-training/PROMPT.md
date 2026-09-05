@@ -1,10 +1,10 @@
 ## Objective
-Archive pre-DexStream ManoRL physical assets with an auditable, reversible compatibility boundary, then train the complete daily Lance catalog using the pinned DexStream assets, a Lance-free trajectory package, 100 Hz, pre-padding 180, and post-padding 180. Done means every valid trajectory is represented, Server1 N4096 and Server2 N8192 fresh production runs have durable checkpoints and W&B telemetry, and their learning behavior is compared under the same source/asset contract.
+Archive pre-DexStream ManoRL physical assets with an auditable, reversible compatibility boundary, then train the complete daily Lance catalog using the pinned DexStream assets, a Lance-free trajectory package, 100 Hz, pre-padding 180, and post-padding 180. Done means every valid trajectory is represented, reliable-host N4096 and N8192 fresh production runs have durable checkpoints and W&B telemetry, and their learning behavior is compared under the same source/asset contract.
 
 ## Workbench
 1. Preserve and verify the legacy-asset archive manifest and compatibility symlinks.
 2. Preserve the compiled daily-v12 MTP and its source-equivalence evidence.
-3. Monitor the Server1 N4096 and Server2 N8192 runs through scheduled checkpoints and completion/failure.
+3. Monitor Server1 N4096 through completion, then let its fail-closed queue start Server1 N8192 on the released GPU2.
 4. Compare per-pair learning and wall-clock/sample efficiency rather than treating process survival as success.
 
 ## Context
@@ -22,7 +22,7 @@ Use a verified `manorl.trajectory_package.v1` package for every long-lived train
 
 Balanced pair assignment needs at least 99 slots per pair to include the longest 99-trajectory pair. A 696-environment balanced assignment is insufficient because it covers only 646 unique trajectories. N4096 and N8192 both cover all 696 trajectories and preserve the default 4096 minibatch; N1386 was stopped because its resolved minibatch of 32 made it approximately ten times slower.
 
-Run fresh training; do not strict-resume a checkpoint from the old physical assets. Production runs are Server1 GPU2/N4096 and Server2 GPU0/N8192, each for 5000 updates with checkpoint interval 25 and W&B online. The stopped N1386 checkpoint is retained as negative performance evidence, not resumed.
+Run fresh training; do not strict-resume a checkpoint from the old physical assets. Server1 GPU2/N4096 runs first for 5000 updates; a fail-closed queue starts fresh Server1 GPU2/N8192 only after N4096 exits 0 and GPU2 has more than 20 GiB free. Both use checkpoint interval 25 and W&B online. The stopped N1386 checkpoint and the Server2 N8192 checkpoint-25 crash are retained as negative evidence, not resumed. Server2 must not run further production until its host-level instability is repaired.
 
 ## Constraints
 Local simulation tests use exactly one environment.
