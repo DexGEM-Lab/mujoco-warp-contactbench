@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -17,6 +18,7 @@ def test_generic_train_and_inference_shell_syntax() -> None:
             str(ROOT / "inference.sh"),
             str(ROOT / "test.sh"),
             str(ROOT / "synthesize.sh"),
+            str(ROOT / "scripts" / "view_manorl_lance.sh"),
         ],
         check=True,
     )
@@ -150,6 +152,87 @@ def test_reference_test_padding_defaults_match_training_contract(tmp_path: Path)
     arguments = result.stdout.splitlines()
     assert arguments[arguments.index("--pre-padding") + 1] == "180"
     assert arguments[arguments.index("--post-padding") + 1] == "250"
+
+
+def test_lance_viewer_meta_script_builds_one_env_command(tmp_path: Path) -> None:
+    dataset = tmp_path / "daily.lance"
+    dataset.mkdir()
+    script = ROOT / "scripts" / "view_manorl_lance.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            "--dry-run",
+            "--dataset",
+            str(dataset),
+            "--dataset-version",
+            "12",
+            "--object",
+            "banana",
+            "--gesture",
+            "18",
+            "--reference-fps",
+            "100",
+            "--pre-padding",
+            "180",
+            "--post-padding",
+            "180",
+            "--hand-side",
+            "right",
+            "--display",
+            ":1",
+            "--python",
+            "/bin/true",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    command_line = next(
+        line.removeprefix("command: ")
+        for line in result.stdout.splitlines()
+        if line.startswith("command: ")
+    )
+    arguments = shlex.split(command_line)
+    assert arguments[:4] == [
+        "/bin/true",
+        "-m",
+        "sim.manorl.view_environment",
+        "--device",
+    ]
+    assert arguments[arguments.index("--dataset-path") + 1] == str(dataset)
+    assert arguments[arguments.index("--dataset-version") + 1] == "12"
+    assert arguments[arguments.index("--object") + 1] == "banana"
+    assert arguments[arguments.index("--gesture") + 1] == "18"
+    assert arguments[arguments.index("--reference-fps") + 1] == "100"
+    assert arguments[arguments.index("--pre-padding") + 1] == "180"
+    assert arguments[arguments.index("--post-padding") + 1] == "180"
+    assert arguments[arguments.index("--num-envs") + 1] == "1"
+    assert arguments[arguments.index("--render-env") + 1] == "0"
+    assert "--loop" in arguments
+    assert "JAX_PLATFORMS=cpu" in result.stdout
+    assert "CUDA_VISIBLE_DEVICES=''" in result.stdout
+
+
+def test_lance_viewer_meta_script_rejects_environment_count_override(tmp_path: Path) -> None:
+    dataset = tmp_path / "daily.lance"
+    dataset.mkdir()
+    result = subprocess.run(
+        [
+            str(ROOT / "scripts" / "view_manorl_lance.sh"),
+            "--dataset",
+            str(dataset),
+            "--object",
+            "banana",
+            "--gesture",
+            "18",
+            "--num-envs",
+            "2",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 2
+    assert "unknown argument: --num-envs" in result.stderr
 
 
 def test_synthesis_rejects_negative_xy_offset(tmp_path: Path) -> None:
