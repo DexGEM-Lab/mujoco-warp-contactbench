@@ -1020,7 +1020,12 @@ def view_environment(
         has_checkpoint=checkpoint is not None,
     )
     resolved_control_fps = checkpoint_options.control_fps
-    if not uses_dataset_selection and reference_fps is None and checkpoint is None:
+    if checkpoint is None and uses_dataset_selection:
+        # Dataset-only viewing has no checkpoint clock to preserve. Keep the
+        # public control clock aligned with an explicit 100/120 Hz reference
+        # selection instead of retaining the default 120 Hz checkpoint shell.
+        resolved_control_fps = resolved_reference_fps
+    elif not uses_dataset_selection and reference_fps is None and checkpoint is None:
         resolved_reference_fps = None
         resolved_control_fps = 200
     if resolved_reference_fps is not None and not uses_dataset_selection:
