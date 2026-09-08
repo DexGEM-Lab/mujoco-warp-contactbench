@@ -1,0 +1,101 @@
+"""M3 formal PPO adapter for the v2 cube2 autonomy environment.
+
+The physical backend remains the v2 MJX-Warp producer/clock. This module adds
+only a Gymnasium boundary and canonical skrl PPO runtime; it does not duplicate
+physics or implement a return estimator.
+"""
+from __future__ import annotations
+from dataclasses import dataclass
+import hashlib, json, random
+from pathlib import Path
+from typing import Any
+import gymnasium as gym
+import numpy as np
+import torch
+from torch import nn
+from skrl.agents.torch.ppo.ppo import compute_gae
+from skrl.envs.wrappers.torch.gymnasium_envs import GymnasiumWrapper
+from skrl.memories.torch import RandomMemory
+from skrl.utils.spaces.torch import tensorize_space, flatten_tensorized_space
+from gymnasium.vector.utils import batch_space
+from sim.manorl.autonomy import Cube2AutonomousMJX
+from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, ACTION_DIM, OBSERVATION_CONTRACT_ID, OBSERVATION_DIM, REWARD_CONTRACT_ID
+from sim.manorl.rl_games_ppo import RlGamesPPO
+from sim.manorl.trajectory_package import TrajectoryCatalog, load_trajectory_package
+
+RESERVED_TRAIN_IDENTITIES = ("cube2_02_2833", "cube2_02_2835", "cube2_02_2837")
+SPLIT_CONTRACT_ID = "manorl.autonomy.identity_split.v1"
+TRAINING_CONTRACT_ID = "manorl.autonomy.training.v1"
+
+def identity_split(catalog: TrajectoryCatalog, *, seed: int = 0) -> dict[str, Any]:
+    identities = tuple(t.identity.identity for t in catalog.trajectories)
+    missing = [x for x in RESERVED_TRAIN_IDENTITIES if x not in identities]
+    if missing: raise ValueError(f"reserved TRAIN identities absent from package: {missing}")
+    reserved = [identities.index(x) for x in RESERVED_TRAIN_IDENTITIES]
+    remaining = [i for i in range(len(identities)) if i not in reserved]
+    if len(identities) != 50 or len(remaining) != 47: raise ValueError("M3 split requires exactly 50 package identities")
+    perm = np.random.default_rng(seed).permutation(remaining).tolist()
+    train = reserved + perm[:37]; val, test = perm[37:42], perm[42:47]
+    payload = {"contract": SPLIT_CONTRACT_ID, "seed": int(seed), "reserved_train": list(RESERVED_TRAIN_IDENTITIES), "train_indices": train, "validation_indices": val, "test_indices": test, "train_identities": [identities[i] for i in train], "validation_identities": [identities[i] for i in val], "test_identities": [identities[i] for i in test]}
+    payload["digest"] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return payload
+
+def canonical_gae(rewards, terminated, truncated, values, last_values, *, discount_factor=.99, lambda_coefficient=.95, time_limit_bootstrap=True):
+    """Thin named boundary to skrl's done/bootstrap implementation."""
+    return compute_gae(rewards=rewards, terminated=terminated, truncated=truncated, values=values, last_values=last_values, discount_factor=discount_factor, lambda_coefficient=lambda_coefficient, time_limit_bootstrap=time_limit_bootstrap)
+
+class AutonomyVectorEnv(gym.vector.VectorEnv):
+    """One-world vector boundary; no Python list of independent environments."""
+    metadata = {"autoreset_mode": gym.vector.AutoresetMode.NEXT_STEP}
+    def __init__(self, trajectory, *, device="cpu", seed=0, contact_conditioned=True):
+        self.environment = Cube2AutonomousMJX(trajectory, device=device, seed=seed, contact_conditioned=contact_conditioned)
+        self.trajectory = trajectory; self.contact_conditioned = bool(contact_conditioned); self.num_envs = 1
+        self.single_observation_space = gym.spaces.Box(-5., 5., shape=(OBSERVATION_DIM,), dtype=np.float32)
+        self.single_action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=np.float32)
+        self.observation_space = batch_space(self.single_observation_space, self.num_envs)
+        self.action_space = batch_space(self.single_action_space, self.num_envs)
+        self._pending = False
+    @property
+    def device(self): return "cpu"
+    def reset(self, *, seed=None, options=None):
+        if options: raise ValueError("M3 adapter has no indexed reset for N=1")
+        obs=self.environment.reset(); self._pending=False
+        return obs[None,:], {"identity": self.trajectory.identity.identity, "seed": seed}
+    def step(self, actions):
+        a=np.asarray(actions,dtype=float)
+        if a.shape != (1,ACTION_DIM): raise ValueError("actions must have shape (1,28)")
+        if self._pending: self.environment.reset(); self._pending=False
+        result=self.environment.step(np.clip(a[0], -1., 1.)); phase=result.info["failure_phase"]
+        terminated=np.asarray([result.done and phase not in {"horizon_reached","task_success"}],dtype=bool)
+        truncated=np.asarray([result.done and phase == "horizon_reached"],dtype=bool)
+        self._pending=bool(result.done)
+        info={k: v for k,v in result.info.items() if isinstance(v,(str,int,float,bool,np.ndarray,list,dict))}; info["terms"]=result.terms; info["success"]=bool(result.info["task_success"])
+        return result.observation[None,:], np.asarray([result.reward],dtype=np.float32), terminated, truncated, info
+    def close(self): return None
+    def render(self): return None
+
+from skrl.models.torch import Model
+from skrl.models.torch.gaussian import GaussianMixin
+from skrl.models.torch.deterministic import DeterministicMixin
+class AutonomyActorCritic(GaussianMixin, DeterministicMixin, Model):
+    """Small Gaussian actor/value model compatible with canonical skrl PPO."""
+    def __init__(self, observation_space, action_space, device="cpu"):
+        Model.__init__(self, observation_space=observation_space, state_space=None, action_space=action_space, device=device)
+        GaussianMixin.__init__(self, clip_actions=False, clip_mean_actions=False, clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum", role="policy")
+        DeterministicMixin.__init__(self, clip_actions=False, role="value")
+        self.net=nn.Sequential(nn.Linear(OBSERVATION_DIM,128),nn.Tanh(),nn.Linear(128,128),nn.Tanh()).to(device)
+        self.mean=nn.Linear(128,ACTION_DIM).to(device); self.value=nn.Linear(128,1).to(device); self.log_std=nn.Parameter(torch.full((ACTION_DIM,),-1.,device=device))
+    def compute(self, inputs, role=""):
+        h=self.net(inputs["observations"])
+        if role=="policy": return self.mean(h), {"log_std":self.log_std.expand_as(self.mean(h))}
+        if role=="value": return self.value(h), {}
+        raise ValueError("role must be policy or value")
+
+def build_runtime(environment, *, rollouts=2, learning_epochs=1, device="cpu"):
+    """Construct canonical RlGamesPPO with done-aware skrl GAE."""
+    wrapper=GymnasiumWrapper(environment); memory=RandomMemory(memory_size=rollouts,num_envs=environment.num_envs,device=device); model=AutonomyActorCritic(wrapper.observation_space,wrapper.action_space,device=device)
+    cfg={"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":1,"discount_factor":.99,"gae_lambda":.95,"learning_rate":3e-4,"ratio_clip":.2,"value_clip":.2,"entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":0,"time_limit_bootstrap":True,"experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
+    agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,observation_space=wrapper.observation_space,state_space=None,action_space=wrapper.action_space,device=device,cfg=cfg); agent.init(); return wrapper,model,agent
+
+def seed_everything(seed:int):
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
