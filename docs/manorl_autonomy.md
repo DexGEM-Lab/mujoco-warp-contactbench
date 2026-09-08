@@ -1,54 +1,83 @@
-# ManoRL autonomous cube2 milestone
+# ManoRL autonomous cube2 M2 diagnostic
 
-This path is a separate `manorl.autonomy.v1` contract. The existing residual
-route and its checkpoints are unchanged.
+This route is a separate `manorl.autonomy.v2` contract. The legacy residual
+route and checkpoints remain unchanged. M2 is a physical diagnostic milestone;
+the PPO command is explicitly smoke-only until the canonical GAE/PPO adapter is
+connected.
 
-## Run
+## Physical clock and alignment
 
-The first physics check uses one environment and the content-addressed MTP
-package:
+The package reference/control clock is 120 Hz. `simulation_clock(120)` supplies
+four 1/480-second MJX-Warp substeps per control transition, and `compile_model`
+is called with that physics timestep. The route reads `object_pos_raw` and the
+initial quaternion, rotates the pinned collision vertices, and computes one
+support translation to `FLOOR_TOP_Z`. That same translation is applied once to
+all reference hand XYZ and object positions, including reset. Raw package arrays
+are never rewritten; source-relative geometry is consequently invariant.
+
+## Contacts and reference intent
+
+Reference hand q is forward-kinematics evaluated for every trajectory frame in
+the compiled model. Reference surface proximity, nearest collision-mesh anchors,
+and distance confidence are computed independently from the measured state.
+Measured and reference states use `mj_geomDistance` between every hand segment
+collision geom and every object collision geom; the nearest signed-distance
+witness endpoint is retained in object-local coordinates with a declared
+penetration/distance confidence. Solved hand-object forces, per-keypoint
+hand-object forces, supporting net force and contact count come from the
+canonical `MjxWarpPhysicalProducer`; table contacts are not used as hand-object
+force. The direction-labeled net force is diagnostic telemetry, not a reward.
+Geometry distance is an intent/slip proxy, never a measured force.
+
+## Control and reward
+
+All 28 DOFs are actor-owned from step zero. The actor emits normalized actions;
+`rate_limited_command` integrates the measured previous command in actuator units
+per second using the actual 1/120-second control period, physical limits, and a
+reference-independent tracking-error envelope around measured q. Load-induced
+servo error is retained; references are not added after actor output.
+
+Reward terms are additive before movement: object path, hand-object relationship,
+reference contact/anchor correspondence, measured hand-object contact, finger
+configuration, object orientation, velocity tracking, and release. There is no
+force-magnitude bonus for impacts. Stability is represented only by a
+measured-contact relative-motion slip proxy, so arbitrary stasis does not receive
+a stability bonus. Release starts
+from demonstrated intent proximity falling after the final contact-intent frame.
+Episodes terminate on trajectory completion, a dropped object, or large path
+divergence and report the failure phase.
+
+## Diagnostic commands
+
+Use the content-addressed package (the path below is an example local checkout):
 
 ```bash
 PYTHONPATH=. /home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python \
-  tools/train_manorl_autonomy.py train \
-  --package /home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180 \
-  --device cpu --updates 1 --horizon 32 --epochs 2 \
-  --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_autonomy.pt
+  tools/train_manorl_autonomy.py diagnostic --actor zero \
+  --package /path/to/cube2_02_v295_f120_pre180_post180 \
+  --trace outputs/manorl/contact_conditioned_autonomy/zero_hold_v2.json
 
 PYTHONPATH=. /home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python \
-  tools/train_manorl_autonomy.py evaluate \
-  --package /home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180 \
-  --device cpu --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_autonomy.pt \
-  --trace outputs/manorl/contact_conditioned_autonomy/cube2_02_eval_trace.json
+  tools/train_manorl_autonomy.py diagnostic --actor reference-pursuit \
+  --package /path/to/cube2_02_v295_f120_pre180_post180 \
+  --trace outputs/manorl/contact_conditioned_autonomy/reference_pursuit_v2.json
+
+PYTHONPATH=. /home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python \
+  tools/train_manorl_autonomy.py package-summary \
+  --package /path/to/cube2_02_v295_f120_pre180_post180 \
+  --output outputs/manorl/contact_conditioned_autonomy/cube2_02_summary_v2.json
 ```
 
-`--near-contact` is an explicitly labeled training/diagnostic reset. Final
-evaluation starts from the first package frame and does not use it.
+Both diagnostics start from the first package frame. The reference-pursuit
+actor is explicitly labeled and consumes q_ref before emitting its action; no
+reference is present in the command map after that output. Traces contain full
+state/target, command, solved force, supporting force, anchors, per-term reward,
+path/lift errors and failure phase. The package summary is deterministic for all
+50 identities and records raw object extents for future deployment selection.
 
-## Contracts
-
-* `autonomy_contracts.py` defines versioned action, observation, reward and
-  checkpoint identifiers. All 28 DOFs are actor-owned from the first step.
-* The actor action is a normalized 28-vector. `rate_limited_command` integrates
-  the measured previous command, clips to physical joint limits, and bounds the
-  per-step rate. Reference tensors are absent from this function, preventing
-  hidden reference playback, additive targets, finger masks, and wind-up.
-* Observations include measured q/qdot, object velocity, current/next/future
-  reference q and object motion, hand-object relations, previous command,
-  action identity, object dimensions, keypoint geometry, and per-keypoint
-  nearest collision-mesh surface anchor/proximity/confidence. Surface features
-  are geometric intent; they are not force labels.
-* `object_pos_raw` remains available in the MTP. The autonomous route consumes
-  the package's declared aligned `object_pos` and applies one shared support
-  translation to hand/object reference relations without rewriting source
-  arrays.
-* Reward terms are additive and active before object movement: object motion,
-  reference hand-object relation, surface proximity/contact, stability and
-  release, with action smoothness and phase shaping. There is no binary
-  `object_move.start` gate.
-* The package is cube2:02, dataset version 295, 50 decoded identities, 120 Hz
-  reference/control and 480 Hz physics metadata. Checkpoints record the package
-  digest and manifest SHA-256 (`e826de23d4586611001230d340eaf0c68752b09988eed7928bf8884f056d8706`).
-
-This milestone demonstrates runnable contracts and one-world physical stepping;
-it does not claim learned full-start grasp/lift/transport/place competence.
+The former standalone PPO smoke command has been removed because it lacked
+GAE/bootstrap and was not a valid training interface. The diagnostic CLI is the
+only executable in M2. The next milestone must connect the canonical GAE/PPO
+implementation and formal identity splits before any training. Old v1
+checkpoints are incompatible with the v2 contract IDs. This milestone provides
+runnable physical evidence, not learned competence.

@@ -1,33 +1,21 @@
 # Current model
 
-## Objective and central mechanism
-The user has accurate geometric human demonstrations and wants an autonomous policy that realizes their contact structure and object motion under simulation physics. Demonstrated joint states need not equal the loaded actuator commands that sustain them. Preserve strong hand-object state/contact imitation while allowing the policy to choose all actual commands.
+## Objective
+Accurate demonstrations specify hand/object geometry and contact intent but not physically valid actuator commands. The autonomous actor must own all 28 commands and learn physical grasp/lift/transport/place/release under the pinned simulator.
 
-## Supported observations
-- Reference addition, a very small non-accumulating wrist-angle correction, finger masks, and reference-only warm-up constrain current control authority.
-- Current contact intent is a static object/action segment mask; force aggregation and global point pooling do not expose the demonstrated contact surface correspondence.
-- Contact rewards begin with object movement, although grip must usually be established before lifting. Translation reward is gated by expected-segment contact during that interval.
-- Independent object support-plane alignment alters original hand-object geometry: 214/696 daily-v12 trajectories shift object Z by over 3 mm, maximum 10.391 mm. It is not yet established that this explains a material fraction of failures.
-- The local daily-v12 package lacks cube2; a different pinned source selection is required.
-Provenance: OPS.md, direct-evidence entry.
+## Supported mechanism
+M1's standalone path was corrected in M2 rather than treated as competence. `simulation_clock(120)` and `compile_model(... physics_timestep=1/480)` enforce 120 Hz control and four 480 Hz physics substeps. Raw object pose plus initial quaternion and actual collision vertices define one support translation; that translation is applied to every reference hand XYZ/object frame and reset while source arrays remain immutable. Reference FK is evaluated per frame.
 
-## Live causal hypotheses
-1. Better contact-region/segment intent plus true control authority lets the policy learn the pressure and coordination needed to realize high-quality demonstrated grasps.
-2. Some failures arise from import/asset alignment before policy learning; matching source-relative geometry may change learnability independently of model design.
-3. Learning fails if a full autonomous action space is introduced without an effective initialization distribution and dense physical/contact objectives.
+Reference and measured contact intent now use `mj_geomDistance` over actual hand-segment and object collision geoms. The nearest signed-distance witness endpoint is transformed to object-local coordinates and receives distance/penetration confidence. Solved hand-object forces come from `MjxWarpPhysicalProducer.hand_object_force_on_object_world_N`; table contacts cannot masquerade as hand-object force. Object-local relative keypoint motion is an explicitly named slip proxy masked by measured hand-object force.
 
-## Commitments
-Build an actual cube2 autonomous-control training/evaluation path, retain a frozen residual baseline, preserve original-identity splits, and judge success together with object/contact fidelity. Contacts inferred from geometry remain intent with confidence, never invented force labels. Use initial near-contact tasks to expose support dynamics, then require full-start autonomous evaluation.
-A single fixed object is sufficient for initial control/contact validation but insufficient for unseen-shape claims.
+The action map has explicit physical rates (.5 m/s wrist XYZ, 2 rad/s wrist rotation, 4 rad/s fingers) and measured-state envelopes (.02 m/.25 rad/.35 rad). The envelope bounds integrated target windup around measured state without clamping to a reference, preserving load-induced servo error. The reference-pursuit diagnostic actor computes a bounded next-command action; the command map sees only that output and measured state.
 
-## Accepted implementation boundary
-A separate versioned autonomous path must own all 28 DOFs from the first step and expose actual/reference contact relationships, velocities, future demonstration conditions and command history. Use a rate-bounded, reference-independent servo map, shared hand/object support alignment and additive dense physical objectives. Preserve demonstration timing initially. Reuse the existing producer/PD/PPO where practical, with legacy residual behavior unchanged. Independent audit supports this boundary; it does not establish policy competence (OPS.md, initial audit entry).
+Reward compares object path and orientation, reference hand/object relation, demonstrated contact proximity/anchors, measured hand-object contact, finger configuration, velocity and masked slip. Net supporting force is trace-only; impact magnitude is not rewarded. Release is inferred from the demonstrated proximity window. Drop/path-divergence termination is distinct from horizon completion.
 
-## Operational evidence and remaining questions
-Server1 GPU2 is the only currently unoccupied main-workload card in the collected snapshot; the others have foreign jobs. Its Unison watcher disconnected, so preflight must be repaired before remote project launches. The first inventory operator failed its turn budget after collecting useful facts; one bounded corrective resume targets the known correct deployment/interpreter only. No repeated broad inventory is warranted.
-A local compiler run for pinned guangguan cube2:02 should establish actual source identities, clocks and package data before geometry/learning tests. New algorithm implementation and training remain outstanding. Continue unattended toward results, not merely setup completion.
+## Evidence
+Prior negative traces showed zero hold could earn high reward while target cube lift was 19.4 cm, actual hand-on-object force exactly zero, and contact_count 35/per-hand geometry force represented table contacts. Prior pursuit diverged at 233 after large XY displacement; mean reference proximity max 0.0744 made the old release threshold unreachable.
 
-## Milestone-1 evidence update
-The ready MTP package is executable through the new path. `load_assigned_trajectory_package` resolves cube2:02 identity `cube2_02_2833` from version 295 and preserves package digest/manifest provenance. The first physics smoke compiled the pinned cube2 asset and selected MJX-Warp; reset returned a finite 359-D observation and one zero-action step returned a finite dense reward (2.4008) and 28-D command. Focused contract tests pass. This establishes runnable physical plumbing, not learned task competence.
+After correction, six semantic tests pass. Same identity `cube2_02_2833` full-start diagnostics (538 frames) complete for zero and bounded reference pursuit. Corrected zero still has zero hand-object force and no lift despite 35 contacts; corrected pursuit has hand-object force up to 2.07 N over 84 frames and slip proxy up to 0.281 m/s but no lift competence. Both traces record source package, contract IDs, clock and config hash. Full package summary loads all 50 identities.
 
-The autonomous command map accepts measured previous command, policy action, physical limits and rate only; reference perturbation cannot alter its output. Surface anchors are nearest points on the real collision mesh with distance-derived confidence. Remaining uncertainty is whether the compact PPO network and reward weighting can learn full-start grasp/lift/transport/place; no claim is made until rollout traces provide physical success and per-identity fidelity.
+## Boundary and next question
+M2 establishes a discriminating runnable diagnostic, not learned competence. The next training interface must reuse canonical GAE/PPO with identity splits and evaluate full-start episodes; no standalone PPO smoke remains. The next causal question is whether a canonical policy can convert demonstrated collision witnesses and measured hand-object wrench into sustained support and target lift without table-contact leakage.

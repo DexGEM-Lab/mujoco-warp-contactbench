@@ -1,69 +1,48 @@
-"""Explicit contracts for the autonomous cube2 control path.
-
-This module is deliberately separate from the residual ManoRL ABI.  The
-residual environment and its checkpoints keep their historical semantics;
-autonomous checkpoints carry these identifiers and fail closed on mismatch.
-"""
+"""Versioned contracts for the physical autonomous cube2 diagnostic path."""
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Final
-
 import numpy as np
 from numpy.typing import NDArray
 
-AUTONOMY_VERSION: Final = "manorl.autonomy.v1"
-OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v1"
-ACTION_CONTRACT_ID: Final = "manorl.autonomy.action.v1"
-REWARD_CONTRACT_ID: Final = "manorl.autonomy.reward.v1"
-CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v1"
-
-# Fields are serialized in this order.  Keeping the names next to the slices
-# makes accidental reference/action coupling visible during review.
+AUTONOMY_VERSION: Final = "manorl.autonomy.v2"
+OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v2"
+ACTION_CONTRACT_ID: Final = "manorl.autonomy.action.v2"
+REWARD_CONTRACT_ID: Final = "manorl.autonomy.reward.v2"
+CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v2"
 OBSERVATION_FIELDS: Final[tuple[tuple[str, int], ...]] = (
-    ("measured_qpos_normalized", 28),
-    ("measured_qvel", 28),
-    ("object_position", 3),
-    ("object_linear_velocity", 3),
-    ("hand_object_relative", 3),
-    ("reference_q_current", 28),
-    ("reference_q_next", 28),
-    ("reference_q_velocity", 28),
-    ("reference_object_relative", 3),
-    ("reference_object_future_delta", 3),
-    ("previous_command_normalized", 28),
-    ("action_identity_one_hot", 50),
-    ("object_geometry", 12),
-    ("measured_keypoint_relative", 48),
-    ("surface_proximity", 16),
-    ("surface_anchor_local", 48),
-    ("contact_phase_confidence", 2),
+    ("measured_qpos_normalized", 28), ("measured_qvel", 28),
+    ("object_position", 3), ("object_linear_velocity", 3),
+    ("hand_object_relative", 3), ("reference_q_current", 28),
+    ("reference_q_next", 28), ("reference_q_velocity", 28),
+    ("reference_object_relative", 3), ("reference_object_future_delta", 3),
+    ("previous_command_normalized", 28), ("action_identity_one_hot", 50),
+    ("object_geometry", 12), ("measured_keypoint_relative", 48),
+    ("surface_proximity", 16), ("surface_anchor_local", 48),
+    ("contact_phase_confidence", 2), ("reference_surface_proximity", 16),
+    ("reference_surface_anchor_local", 48), ("reference_contact_confidence", 16),
+    ("measured_hand_object_force", 48), ("supporting_object_net_force", 3),
+    ("relative_contact_motion", 48),
 )
 OBSERVATION_DIM: Final[int] = sum(width for _, width in OBSERVATION_FIELDS)
 ACTION_DIM: Final[int] = 28
 
-
 @dataclass(frozen=True)
 class AutonomousActionContract:
-    """Reference-independent action semantics."""
-
     version: str = ACTION_CONTRACT_ID
     dof: int = ACTION_DIM
     normalized_range: tuple[float, float] = (-1.0, 1.0)
     command_mode: str = "rate_limited_measured_state"
+    rate_units: str = "actuator_units_per_second"
     all_dofs_policy_owned_from_step0: bool = True
     reference_enters_command_map: bool = False
-
     def __post_init__(self) -> None:
         if self.version != ACTION_CONTRACT_ID or self.dof != ACTION_DIM:
             raise ValueError("unsupported autonomous action contract")
-        if self.command_mode != "rate_limited_measured_state":
-            raise ValueError("autonomous actions must use the measured-state rate map")
-        if not self.all_dofs_policy_owned_from_step0:
-            raise ValueError("all 28 DOFs must be policy-owned from step zero")
-        if self.reference_enters_command_map:
-            raise ValueError("reference data cannot enter the autonomous command map")
-
+        if self.command_mode != "rate_limited_measured_state" or self.rate_units != "actuator_units_per_second":
+            raise ValueError("autonomous actions require measured-state per-second rate semantics")
+        if not self.all_dofs_policy_owned_from_step0 or self.reference_enters_command_map:
+            raise ValueError("all DOFs must be policy-owned and references excluded from command map")
 
 @dataclass(frozen=True)
 class AutonomousObservationContract:
@@ -71,83 +50,57 @@ class AutonomousObservationContract:
     dimension: int = OBSERVATION_DIM
     fields: tuple[tuple[str, int], ...] = OBSERVATION_FIELDS
     includes_surface_intent: bool = True
+    includes_reference_surface_intent: bool = True
     includes_actual_velocity: bool = True
     includes_previous_command: bool = True
     includes_action_identity: bool = True
-
+    includes_contact_wrench: bool = True
     def __post_init__(self) -> None:
-        if self.version != OBSERVATION_CONTRACT_ID:
-            raise ValueError("unsupported autonomous observation contract")
-        if self.dimension != sum(width for _, width in self.fields):
-            raise ValueError("autonomous observation dimension does not match fields")
-        if self.dimension != OBSERVATION_DIM:
-            raise ValueError("autonomous observation dimension drifted")
-        if not (self.includes_surface_intent and self.includes_actual_velocity):
-            raise ValueError("surface intent and actual velocity are mandatory")
-        if not (self.includes_previous_command and self.includes_action_identity):
-            raise ValueError("command history and action identity are mandatory")
-
+        if self.version != OBSERVATION_CONTRACT_ID or self.dimension != OBSERVATION_DIM or self.dimension != sum(w for _, w in self.fields):
+            raise ValueError("autonomous observation contract drifted")
+        if not all((self.includes_surface_intent, self.includes_reference_surface_intent, self.includes_actual_velocity, self.includes_previous_command, self.includes_action_identity, self.includes_contact_wrench)):
+            raise ValueError("surface intent, references, velocity, command, identity and force fields are mandatory")
 
 @dataclass(frozen=True)
 class AutonomousRewardContract:
     version: str = REWARD_CONTRACT_ID
-    dense_terms: tuple[str, ...] = (
-        "object_motion",
-        "reference_hand_object_relationship",
-        "surface_proximity_contact",
-        "stability",
-        "release",
-    )
+    dense_terms: tuple[str, ...] = ("object_motion", "reference_hand_object_relationship", "contact_anchor_correspondence", "measured_contact", "slip_proxy", "release", "action_smoothness", "finger_configuration", "object_orientation")
     pre_grasp_dense: bool = True
     object_move_gate: bool = False
-
+    stability_is_slip_relative: bool = True
     def __post_init__(self) -> None:
-        if self.version != REWARD_CONTRACT_ID or not self.pre_grasp_dense:
-            raise ValueError("autonomous reward contract requires dense pre-grasp terms")
-        if self.object_move_gate:
-            raise ValueError("autonomous translation reward cannot be object_move gated")
-
+        if self.version != REWARD_CONTRACT_ID or not self.pre_grasp_dense or self.object_move_gate or not self.stability_is_slip_relative:
+            raise ValueError("autonomous reward must be additive, pre-grasp dense and slip-relative")
 
 ACTION_CONTRACT = AutonomousActionContract()
 OBSERVATION_CONTRACT = AutonomousObservationContract()
 REWARD_CONTRACT = AutonomousRewardContract()
 
+def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1.0 / 120.0, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
+    """Reference-independent rate map in actuator-units/second.
 
-def rate_limited_command(
-    previous_command: NDArray[np.floating],
-    action: NDArray[np.floating],
-    lower: NDArray[np.floating],
-    upper: NDArray[np.floating],
-    rate: NDArray[np.floating],
-) -> NDArray[np.float64]:
-    """Map normalized policy action to a bounded servo target.
-
-    The only state entering this map is the measured previous command and
-    physical actuator limits.  Reference tensors are intentionally absent from
-    the signature, making the no-hidden-reference invariant mechanically
-    testable.
+    ``max_tracking_error`` is a physical servo envelope around measured qpos,
+    not a reference-relative clamp; load-induced tracking error therefore stays
+    visible to the controller while integrated target wind-up is bounded.
     """
-
-    previous = np.asarray(previous_command, dtype=np.float64)
-    normalized = np.asarray(action, dtype=np.float64)
-    lo = np.asarray(lower, dtype=np.float64)
-    hi = np.asarray(upper, dtype=np.float64)
-    delta_limit = np.asarray(rate, dtype=np.float64)
-    if any(value.shape != (ACTION_DIM,) for value in (previous, normalized, lo, hi, delta_limit)):
+    previous, normalized, lo, hi, rate = map(lambda x: np.asarray(x, dtype=np.float64), (previous_command, action, lower, upper, rate_per_second))
+    if any(x.shape != (ACTION_DIM,) for x in (previous, normalized, lo, hi, rate)):
         raise ValueError("autonomous command vectors must all have shape (28,)")
-    if not all(np.all(np.isfinite(value)) for value in (previous, normalized, lo, hi, delta_limit)):
-        raise ValueError("autonomous command vectors must be finite")
-    if np.any(hi <= lo) or np.any(delta_limit <= 0.0):
-        raise ValueError("physical command limits/rates must be ordered and positive")
-    if np.any(normalized < -1.0) or np.any(normalized > 1.0):
-        raise ValueError("policy action must be normalized to [-1, 1]")
-    return np.clip(previous + normalized * delta_limit, lo, hi)
-
+    if not all(np.all(np.isfinite(x)) for x in (previous, normalized, lo, hi, rate)) or control_timestep <= 0 or not np.isfinite(control_timestep):
+        raise ValueError("autonomous command vectors and timestep must be finite")
+    if np.any(hi <= lo) or np.any(rate <= 0) or np.any(normalized < -1) or np.any(normalized > 1):
+        raise ValueError("physical limits/rates must be ordered and action normalized")
+    command = previous + normalized * rate * float(control_timestep)
+    if measured_qpos is not None:
+        measured = np.asarray(measured_qpos, dtype=np.float64)
+        bound = np.asarray(max_tracking_error if max_tracking_error is not None else np.maximum(.25 * (hi - lo), rate * control_timestep * 4.0), dtype=np.float64)
+        if measured.shape != (ACTION_DIM,) or bound.shape != (ACTION_DIM,) or not np.all(np.isfinite(measured)) or np.any(bound <= 0):
+            raise ValueError("measured state and tracking envelope must be finite (28,)")
+        command = np.clip(command, measured - bound, measured + bound)
+    return np.clip(command, lo, hi)
 
 def observation_slices() -> dict[str, slice]:
-    start = 0
-    result: dict[str, slice] = {}
+    start, result = 0, {}
     for name, width in OBSERVATION_FIELDS:
-        result[name] = slice(start, start + width)
-        start += width
+        result[name] = slice(start, start + width); start += width
     return result
