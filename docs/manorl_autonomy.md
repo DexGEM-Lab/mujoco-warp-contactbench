@@ -44,8 +44,10 @@ force-magnitude bonus for impacts. Stability is represented only by a
 measured-contact relative-motion slip proxy, so arbitrary stasis does not receive
 a stability bonus. Release starts
 from demonstrated intent proximity falling after the final contact-intent frame.
-Episodes terminate on trajectory completion, a dropped object, or large path
-divergence and report the failure phase.
+Episodes terminate on trajectory horizon, a dropped object, or large path
+divergence. Terminal telemetry distinguishes `task_success` (peak demonstrated
+lift plus final path accuracy) from `horizon_reached`; no horizon is called a
+successful grasp.
 
 ## Diagnostic commands
 

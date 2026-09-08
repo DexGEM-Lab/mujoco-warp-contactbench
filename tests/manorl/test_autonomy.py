@@ -1,7 +1,7 @@
 from __future__ import annotations
 import numpy as np
 from types import SimpleNamespace
-from sim.manorl.autonomy import align_reference_trajectory, dense_autonomous_reward, shared_support_alignment, surface_intent
+from sim.manorl.autonomy import align_reference_trajectory, dense_autonomous_reward, shared_support_alignment, surface_intent, terminal_status
 from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, OBSERVATION_CONTRACT, rate_limited_command
 from sim.manorl.contracts import FLOOR_TOP_Z, simulation_clock
 
@@ -35,6 +35,11 @@ def test_alignment_preserves_source_relative_geometry_and_arrays():
     q=np.zeros((2,28)); q[:,2]=.2; raw=np.array([[0.,0.,.1],[0.,0.,.11]]); quat=np.tile([0.,0.,0.,1.],(2,1)); traj=SimpleNamespace(q_ref=q,object_pos_raw=raw,object_quat_xyzw=quat)
     q_aligned,obj_aligned,shift=align_reference_trajectory(traj,np.array([[0.,0.,-.05],[0.,0.,.05]]))
     np.testing.assert_array_equal(q[:, :3], np.array([[0.,0.,.2],[0.,0.,.2]])); np.testing.assert_array_equal(raw,np.array([[0.,0.,.1],[0.,0.,.11]])); np.testing.assert_allclose(q_aligned[:,2]-obj_aligned[:,2], q[:,2]-raw[:,2])
+
+def test_terminal_status_separates_horizon_from_success():
+    assert terminal_status(10, 10, dropped=False, diverged=False, actual_peak_lift=.20, target_peak_lift=.20, path_error=.01) == (True, True, "task_success")
+    assert terminal_status(10, 10, dropped=False, diverged=False, actual_peak_lift=0., target_peak_lift=.20, path_error=.01) == (True, False, "horizon_reached")
+    assert terminal_status(3, 10, dropped=True, diverged=False, actual_peak_lift=0., target_peak_lift=.20, path_error=.5) == (True, False, "drop")
 
 def test_observation_contract_contains_reference_intent_and_forces():
     assert OBSERVATION_DIM == OBSERVATION_CONTRACT.dimension
