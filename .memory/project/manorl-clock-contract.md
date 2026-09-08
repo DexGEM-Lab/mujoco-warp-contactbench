@@ -27,3 +27,13 @@ Canonical usage and rationale: `README.md` → “ManoRL PPO Training” and
 `sim/manorl/contracts.py`, `sim/manorl/trajectory.py`,
 `sim/manorl/view_environment.py`, `sim/manorl/lance_v2.py`, and environment
 ABI v7 in `sim/manorl/abi.py`.
+
+## Autonomy first-learner boundary
+The contact-conditioned autonomy M3 learner currently uses an ordinary single
+Gymnasium environment for honest N=1 CPU/GPU validation over the canonical
+MJX-Warp clock/contact producer. It uses skrl `RlGamesPPO` and canonical GAE with
+explicit finite-horizon termination; terminal observations are recorded before
+an explicit reset. This first learner is intentionally not a vectorization or
+generalization claim. Final autonomy acceptance requires a frozen checkpoint to
+consume a new held-out reference without per-reference retraining, manual masks,
+or special reward; max lift plus endpoint pose is insufficient.

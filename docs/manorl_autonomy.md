@@ -81,9 +81,13 @@ The former standalone PPO smoke command has been removed because it lacked
 GAE/bootstrap and was not a valid training interface. The diagnostic CLI is the
 only executable in M2. ## M3 first formal learner
 
-The first learner uses `RlGamesPPO` and skrl's done-aware GAE/bootstrap through a
-single N=1 Gymnasium boundary over the v2 MJX-Warp environment. This is an
-honest first-learner fallback, not a vectorization claim. The deterministic
+The first learner uses `RlGamesPPO` and skrl's done-aware GAE/bootstrap through an
+ordinary single N=1 Gymnasium boundary over the v2 MJX-Warp environment. The
+adapter reports the requested CPU/GPU device so wrapper, model and memory tensors
+match. Terminal observations are recorded before an explicit reset; finite task
+horizons are terminated, while rollout cuts before the horizon bootstrap through
+canonical last values. This is an honest first-learner boundary, not a
+vectorization claim. The deterministic
 50-identity split is 40/5/5; `cube2_02_2833`, `cube2_02_2835`, and
 `cube2_02_2837` are fixed in TRAIN because they were inspected during design.
 The remaining 47 identities are seeded into 37 TRAIN, 5 validation, and 5 test.

@@ -66,3 +66,9 @@ Stage explicit files, inspect staged diffs, and commit coherent atomic checkpoin
 Escalate incompatible source conventions, invalid physical contact labels, or unapproved semantic changes; preserve the evidence rather than substituting a fallback.
 
 Execution-policy refinement (2026-09-08): operator/executor runs for this task use at least 20 turns or an explicitly scoped checkpoint contract; the default 6+1 bounded recipe is not appropriate for this T3 continuation.
+
+## M3 near-term versus final acceptance (2026-09-08)
+
+Near-term milestone is the shortest runnable formal PPO/GAE learner on one or a few representative cube2:02 references. N=1 is an honest first learner when batching blocks; preserve real 28-DOF actor control, canonical clock/contact/PPO, immutable source, and W&B provenance. The inspected identities cube2_02_2833, cube2_02_2835, and cube2_02_2837 remain TRAIN; multi-reference rotation, held-out learned evaluation, vectorized throughput, BC and ablations follow after the first learned rollout.
+
+Final acceptance is stronger: one frozen neural checkpoint must accept a new held-out hand-object reference from full start without per-reference retraining/fine-tuning, manual contact masks, or special reward. New action, geometry and multi-object generalization are separate later evaluations. Max lift plus endpoint pose is not full-task success; report sustained airborne genuine hand-object contact, matched path, slip and release diagnostics.
