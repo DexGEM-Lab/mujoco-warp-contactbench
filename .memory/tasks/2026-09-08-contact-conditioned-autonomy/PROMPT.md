@@ -1,0 +1,68 @@
+## Objective
+Build and empirically validate a demonstration-conditioned autonomous ManoRL policy. Human demonstrations are geometrically accurate but not physically consistent under the simulator. Exploit their hand/object motion, contact locations, contacting finger segments, and action identity strongly, while all executed hand controls come from the policy rather than an additive reference action. First establish cube2 physics/control competence, then full-trajectory and multi-action behavior. Completion requires actual simulated grasp/lift/transport/place/release evidence, reference/contact fidelity, held-out demonstration evaluation, and independent review—not only implementation or passing tests.
+
+## Workbench
+1. Implement the accepted first vertical slice: separate versioned autonomous control, reference/contact-aware observations, dense physical task reward, runnable PPO and real MJX-Warp evaluation. Retain demonstration timing for this first slice.
+2. Prepare a pinned cube2:02 source/package and isolated Server1 deployment; the initial snapshot found GPU2 available and a disconnected Server1 Unison watcher.
+3. Continue unattended toward actual empirical results; pause for user input only for a genuine unresolved user decision or an irreversible high-risk action.
+4. Review its physical semantics and contracts, deploy an immutable candidate, and run bounded multi-GPU discriminating settings.
+5. Inspect actual failures and iterate; report at runnable-code, first-results, and mechanism-changing milestones.
+
+## Context
+Product: ManoRL. Feature: `feat/contact-conditioned-autonomy`, parent integration: `dev`, base: `c38f787`.
+Task memory: `.memory/tasks/2026-09-08-contact-conditioned-autonomy/` in this feature worktree.
+The user explicitly permits major algorithm refactoring, a new branch, server deployment, multiple GPUs/settings, timely reports, and independent review. Explicit subagent authorization was granted for this task; children may not delegate recursively. The user subsequently requested unattended continuation: keep executing/delegating until the objective is achieved or a genuine user decision/irreversible high-risk step requires input. Receiving a child result, finishing setup, or completing a code-only milestone is not final completion.
+Primary integration tree contains unrelated tracked/untracked changes and must remain untouched by implementation. Local machine paths, host routes, resource snapshots, and run artifacts belong in ignored `.memory/local/` or `outputs/`; never commit credentials or machine-specific deployment state.
+Authoritative host routing and W&B/source-sync preflight policy are in the primary worktree's `.memory/local/servers.md` and `.memory/local/training-wandb-policy.md`.
+The current daily-v12 package has 696 trajectories / 14 pairs but no cube2. The guangguan Lance location exists and historical cube2:02 data/rollouts exist; pin and verify the actual dataset before experiments. Do not assume old-asset checkpoints are physics-equivalent to the pinned DexStream assets.
+
+## Task specifications
+### Scientific formulation
+- Preserve accurate demonstration hand-object geometry and motion/contact intent. Learn the actuator commands and contact loads needed to realize them under simulated dynamics.
+- A demonstration state is not necessarily its required position-servo command under load. Strong state/contact imitation is compatible with autonomous control; hard-wired `q_ref + residual` execution is not.
+- References may enter observations, training supervision, rewards, and explicit task initialization. They must not enter the active control-map after the actor output, through warm-up reference playback, forced inactive-finger behavior, or hidden target-following fallbacks.
+- The object remains physically simulated; no target-pose overwrite, attachment, or nonphysical support may create task success.
+- Contact intent should distinguish finger/hand surface region, object surface region, phase and confidence. Static object/action contact aliases are useful priors, not complete contact labels or joint-disable commands. Inferred contacts are not measured forces.
+- Policy inputs should connect actual and reference hand/object relationships, velocities and control history, present/future demonstration conditions, action identity, and global/local object geometry. Preserve metric scale, gravity/table context, and known relevant physical asset properties.
+- Reward physical object motion and sustained contact/low slip while retaining demonstration grasp and trajectory fidelity. Avoid gating all translation learning behind a binary contact threshold. Use contact-stage information rather than only `object_move` timestamps. Begin with demonstration timing; justify any bounded phase freedom through evidence.
+
+### Initial evidence and live uncertainty
+- Existing control in `sim/manorl/abi.py` adds reference targets, constrains wrist XYZ offsets, applies non-accumulating default wrist-angle corrections of 0.00025 rad/axis, and masks finger actions by expected contact.
+- Existing observation/model use global 64-point PointNet pooling, action-type one-hot, static expected contacts, and aggregated per-segment forces; source hand future/contact regions and velocities are not fully represented.
+- Existing contact reward counts expected segment force norms above 0.2 N within the object movement window; this does not establish correct surface location or sufficient supporting wrench.
+- Source decode in `sim/manorl/trajectory.py` independently shifts object Z to its initial support plane. A read-only daily-v12 package measurement found 214/696 absolute shifts >3 mm and a maximum 10.391250776 mm, without corresponding hand-reference translation. This is confirmed geometry alteration, not a proven dominant cause of failures. Investigate/declare alignment before reusing derived contact labels; preserve the legacy baseline unchanged.
+
+### Accepted first implementation boundary
+- Retain legacy residual behavior and checkpoints without changing their existing contract constants. Introduce a separate autonomous route and explicit contracts. Reuse the physical producer, asset/clock/package components and PPO where practical; do not copy the entire legacy environment merely to change control.
+- All 28 DOFs are policy-owned from the first physics step. Use a reference-independent, rate-bounded servo-command mapping with observed previous command and measured state; guard command wind-up using physical limits rather than a reference-relative offset cap.
+- Provide current/multi-horizon human and object references, actual velocities, previous command, and demonstrated per-segment surface proximity/anchor intent. Include a minimal spatially explicit contact/geometry encoder; a larger geometry model is an ablation, not a prerequisite for first physics learning.
+- Apply declared support alignment consistently to hand and object in the autonomous input path; leave original arrays/baseline unchanged. Derive contact intent only after validating source-to-simulation geometry. Do not inherit the silent missing-asset alignment fallback.
+- Use additive object motion, reference hand-object relationship, proximity/contact and stability/release objectives. Preserve the source clock and fixed progression initially. Full-start evaluation is mandatory; near-contact initialization is an explicit training/diagnostic option.
+- Review recommendation to match wall clock is not accepted as the causal budget: match environment transitions and report wall clock separately. A strong residual baseline does not change the autonomy objective into a contact-only objective.
+
+### Delivery and experiment acceptance
+- First vertical slice must be runnable on real MJX-Warp, with explicit autonomous action, observation, reward, clock, data, asset, and checkpoint contracts. Keep the existing residual path available as a frozen comparator.
+- A fixed physical state and fixed policy action must produce identical commands regardless of reference changes. Network outputs may respond to reference changes; the control map must not add them.
+- Extract and inspect actual demonstration-conditioned surface/contact features on cube2 before calling them correct. Validate geometry/coordinate transforms against examples, not only tensor dimensions.
+- Use original-identity train/validation/test splits, shared by all settings; source siblings/augmentations must not leak across splits. Test demonstrations remain known conditioning inputs but are not training examples.
+- Match environment transitions, data splits and evaluation scenarios across comparisons. Record wall-clock efficiency separately. Begin with a small set of mechanistically different settings; use seed replication after a useful signal rather than a blind hyperparameter grid.
+- Near-contact initialization and short physical subskills may accelerate learning, but final acceptance must use full-start autonomous episodes. Never report subskill success as full-task competence.
+- Report per-identity/pair success with explicit denominator, object path/pose error, contact-location/segment fidelity, slip and failure phase, plus representative real rollout artifacts.
+- Single fixed-object results do not establish unseen-shape generalization. Later test held-out geometry/size before making that claim.
+
+## Constraints
+Follow `.memory/project/pi-orchestration.md` and GitGuard; no direct commits on protected integration branches.
+Only the assigned executor writes feature source; read-only reviewers and operators do not modify it.
+Preserve all unrelated working-tree changes and historical source/checkpoint/data artifacts.
+Use separate versioned new contracts rather than silently reinterpreting old checkpoints or packages.
+Use Source → Compile → Run; long-lived trainers must not import Lance/PyArrow.
+Local physics tests use exactly one environment; server scale tests are separately assigned.
+Check Unison/preflight policy before any remote project launch; feature deployments must be isolated from mutable integration sync and verified against the exact feature commit.
+Use W&B for new training unless the user explicitly opts out.
+Never displace another user's GPU job, hold process, or tmux session.
+Do not run Server2 production until its native host/VM crash issue is explicitly cleared.
+Run persistent commands in inspectable tmux/background processes, record identifiers, verify startup, and return; no LLM sleep/poll loops.
+Stage explicit files, inspect staged diffs, and commit coherent atomic checkpoints in the feature worktree.
+Escalate incompatible source conventions, invalid physical contact labels, or unapproved semantic changes; preserve the evidence rather than substituting a fallback.
+
+Execution-policy refinement (2026-09-08): operator/executor runs for this task use at least 20 turns or an explicitly scoped checkpoint contract; the default 6+1 bounded recipe is not appropriate for this T3 continuation.
