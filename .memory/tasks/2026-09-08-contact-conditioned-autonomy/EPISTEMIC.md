@@ -12,6 +12,12 @@ The action map has explicit physical rates (.5 m/s wrist XYZ, 2 rad/s wrist rota
 
 Reward compares object path and orientation, reference hand/object relation, demonstrated contact proximity/anchors, measured hand-object contact, finger configuration, velocity and masked slip. Net supporting force is trace-only; impact magnitude is not rewarded. Release is inferred from the demonstrated proximity window. Drop/path-divergence termination is distinct from horizon completion.
 
+## Telemetry/publication boundary
+
+Future formal PPO updates use `sim.manorl.autonomy_telemetry.TelemetryAccumulator` to reduce physical `info` fields and reward terms once per update, while `latest_ppo_metrics` reads only native `RlGamesPPO.tracking_data`. Existing aliases are retained; unavailable statistics (currently clip fraction) are omitted. W&B history is keyed by environment transitions, with canonical entity/project defaults and explicit overrides. `tools/publish_manorl_autonomy_evaluation.py` consumes a saved trace plus matching checkpoint, rejects format mismatches, computes actual-state metrics with denominators, and appends evaluation JSON/MP4 only to a verified FINISHED run. Max-lift/endpose remains diagnostic.
+
+The completed 538-step learned first-run trace is stronger failure evidence than the earlier four-step smoke: hand-object force-positive frames = 0, peak lift = 0 cm against target 19.379 cm, path RMSE = 0.068146 m, wrist-reference RMSE = 0.1047 m, final phase horizon reached, success false. No historical PPO losses can be reconstructed.
+
 ## Evidence
 Prior negative traces showed zero hold could earn high reward while target cube lift was 19.4 cm, actual hand-on-object force exactly zero, and contact_count 35/per-hand geometry force represented table contacts. Prior pursuit diverged at 233 after large XY displacement; mean reference proximity max 0.0744 made the old release threshold unreachable.
 
