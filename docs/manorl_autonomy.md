@@ -79,7 +79,38 @@ path/lift errors and failure phase. The package summary is deterministic for all
 
 The former standalone PPO smoke command has been removed because it lacked
 GAE/bootstrap and was not a valid training interface. The diagnostic CLI is the
-only executable in M2. The next milestone must connect the canonical GAE/PPO
-implementation and formal identity splits before any training. Old v1
-checkpoints are incompatible with the v2 contract IDs. This milestone provides
-runnable physical evidence, not learned competence.
+only executable in M2. ## M3 first formal learner
+
+The first learner uses `RlGamesPPO` and skrl's done-aware GAE/bootstrap through a
+single N=1 Gymnasium boundary over the v2 MJX-Warp environment. This is an
+honest first-learner fallback, not a vectorization claim. The deterministic
+50-identity split is 40/5/5; `cube2_02_2833`, `cube2_02_2835`, and
+`cube2_02_2837` are fixed in TRAIN because they were inspected during design.
+The remaining 47 identities are seeded into 37 TRAIN, 5 validation, and 5 test.
+The split digest is persisted in checkpoints and evaluation rejects package or
+split mismatches.
+
+```bash
+WANDB_MODE=offline PYTHONPATH=. python tools/train_manorl_autonomy.py formaltrain \
+  --wandb --updates 1 --rollouts 2 --total-transitions 2 \
+  --identity-index 0 --checkpoint outputs/manorl/contact_conditioned_autonomy/m3_formalppo.pt
+
+PYTHONPATH=. python tools/train_manorl_autonomy.py evaluate \
+  --checkpoint outputs/manorl/contact_conditioned_autonomy/m3_formalppo.pt \
+  --identity-index 0 --allow-train-eval --steps 4
+```
+
+The setting switch is `--setting contact-conditioned|state-only`; both retain
+actual producer contact telemetry, while state-only removes reference contact
+conditioning from its reward/observation path. W&B is enabled by default and
+uses the local `WANDB_PROJECT`/`WANDB_ENTITY` policy; offline mode is explicit
+for local smoke. The former handwritten PPO smoke is gone. The first learner
+checkpoint stores model, optimizer, RNG, normalizer, source/package, split,
+contract, seed and configuration provenance. Learned rollout metrics remain
+physical diagnostics: peak/sustained airborne contact, path error, slip, release
+and per-identity traces are required before any competence claim. A maximum lift
+plus endpoint pose is not sufficient.
+
+Old v1 checkpoints are incompatible with the v2 contract IDs. This milestone
+provides a runnable formal learner and one-update evidence, not learned full-task
+competence.

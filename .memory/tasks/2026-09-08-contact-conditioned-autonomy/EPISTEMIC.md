@@ -19,3 +19,6 @@ After correction, six semantic tests pass. Same identity `cube2_02_2833` full-st
 
 ## Boundary and next question
 M2 establishes a discriminating runnable diagnostic, not learned competence. The next training interface must reuse canonical GAE/PPO with identity splits and evaluate full-start episodes; no standalone PPO smoke remains. The next causal question is whether a canonical policy can convert demonstrated collision witnesses and measured hand-object wrench into sustained support and target lift without table-contact leakage.
+
+## M3 first learner
+The shortest valid learning path now exists: one N=1 Gymnasium boundary over the v2 physical MJX-Warp environment feeds canonical `RlGamesPPO` and skrl GAE/bootstrap. A deterministic 40/5/5 identity split fixes the three inspected cube2 identities in TRAIN and persists a digest. The first two-transition update and checkpoint/load deterministic rollout succeeded on `cube2_02_2833`, but learned competence is absent: four-step rollout has zero peak lift and `task_success=false`. W&B is enabled by default; local smoke used explicit offline mode. Multi-reference, held-out learned rollout, and batched throughput remain later milestones.

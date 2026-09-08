@@ -1,7 +1,8 @@
 from __future__ import annotations
 from types import SimpleNamespace
 import torch
-from sim.manorl.autonomy_training import RESERVED_TRAIN_IDENTITIES, canonical_gae, identity_split
+import gymnasium as gym
+from sim.manorl.autonomy_training import ACTION_DIM, OBSERVATION_DIM, AutonomyActorCritic, RESERVED_TRAIN_IDENTITIES, canonical_gae, identity_split
 
 def fake_catalog():
     ids=[f"cube2_02_{2833+i}" for i in range(50)]
@@ -28,6 +29,11 @@ def test_canonical_gae_bootstraps_time_limit_but_not_true_termination():
     assert torch.isfinite(returns).all() and torch.isfinite(advantages).all()
     assert returns.shape == rewards.shape
     assert returns[0,0,0] > 1.0  # truncated transition receives bootstrap value
+
+def test_actor_provenance_is_all28_and_deterministic_in_eval_mode():
+    model=AutonomyActorCritic(gym.spaces.Box(-5.,5.,shape=(OBSERVATION_DIM,),dtype=float),gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=float),device="cpu")
+    model.eval(); x={"observations":torch.zeros((1,OBSERVATION_DIM))}; first=model.compute(x,role="policy")[0]; second=model.compute(x,role="policy")[0]
+    assert first.shape == (1,ACTION_DIM) and torch.equal(first,second)
 
 def test_split_rejects_wrong_catalog_size():
     catalog=SimpleNamespace(trajectories=tuple(fake_catalog().trajectories[:49]))
