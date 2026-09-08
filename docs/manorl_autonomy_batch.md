@@ -10,7 +10,12 @@ The active command map is the v2 measured-state rate map: actor actions are
 28-dimensional and all DOFs are policy-owned from the first step. Reference
 arrays never enter command generation. CUDA policy boundaries use the existing
 same-ordinal Torch/JAX DLPack helpers; only compact done/validity telemetry is
-intended for host bookkeeping.
+intended for host bookkeeping. `step` is one init-cached JAX transition graph:
+its reset branch, measured-state command, four physics substeps, physical and
+contact extraction, observation, reward, termination, and counters execute as
+one dispatch. After a terminal row, call `prepare_action()` before asking the
+actor for its next action; this returns the reset observation while preserving
+the terminal observation returned by the preceding `step`.
 
 `reference_witness_tables` is the one-time native-MuJoCo operation. It stores
 both endpoint witnesses in hand-segment-body and object-body local frames,
@@ -25,6 +30,14 @@ Use the operator benchmark after the immutable package is available:
 python tools/benchmark_manorl_autonomy_batch.py \
   --package outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180 \
   --identity cube2_02_2833 --device gpu --num-envs 64 --steps 256
+```
+
+For large batches, the existing Warp scratch workspaces can be reused without
+changing capacities or solver/CCD settings. Enable them explicitly with the
+same configured contacts-per-world value used by the baseline, for example:
+
+```bash
+... --persistent-ccd-workspace --ccd-contacts-per-world 128
 ```
 
 The command reports compile/warmup time, steady environment transitions/sec,

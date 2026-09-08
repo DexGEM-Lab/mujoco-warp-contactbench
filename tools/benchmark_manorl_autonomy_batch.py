@@ -28,6 +28,8 @@ def main() -> None:
     parser.add_argument("--warmup-steps", type=int, default=16)
     parser.add_argument("--measurement-steps", "--steps", dest="measurement_steps", type=int, default=256)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="gpu")
+    parser.add_argument("--persistent-ccd-workspace", action="store_true", help="reuse the existing Warp CCD and solver workspaces")
+    parser.add_argument("--ccd-contacts-per-world", type=int, default=None)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.measurement_steps < 1 or args.warmup_steps < 0 or args.num_envs < 1:
@@ -36,7 +38,7 @@ def main() -> None:
     trajectory = next((item for item in catalog.trajectories if item.identity.identity == args.identity), None)
     if trajectory is None: parser.error(f"identity absent from package: {args.identity}")
     construct_start = time.perf_counter()
-    runtime = BatchedAutonomyRuntime(trajectory, num_envs=args.num_envs, device=args.device)
+    runtime = BatchedAutonomyRuntime(trajectory, num_envs=args.num_envs, device=args.device, persistent_ccd_workspace=args.persistent_ccd_workspace, ccd_contacts_per_world=args.ccd_contacts_per_world)
     construct_seconds = time.perf_counter() - construct_start
     jp, device = runtime.jp, runtime.device
     actions = jp.zeros((args.num_envs, 28), dtype=jp.float32)
@@ -50,9 +52,11 @@ def main() -> None:
     def physics_step():
         nonlocal runtime
         runtime.data = runtime.data.replace(ctrl=actions)
-        for _ in range(4): runtime.data = runtime.step_fn(runtime.data)
+        for _ in range(4): runtime.data = runtime.physics_step_fn(runtime.data)
     def environment_step(with_policy: bool):
         nonlocal actions
+        if bool(np.asarray(runtime.pending_reset).any()):
+            runtime.prepare_action()
         if with_policy:
             import torch
             with torch.no_grad():

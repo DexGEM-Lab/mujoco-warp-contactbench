@@ -161,6 +161,16 @@ class DeviceWitnessFeatures(NamedTuple):
     object_endpoint_local: Any
 
 
+class AutonomyTransitionState(NamedTuple):
+    """Complete device-resident state consumed by one fused transition."""
+    data: Any
+    indices: Any
+    pending_reset: Any
+    previous_command: Any
+    max_object_z: Any
+    last_relative_motion: Any
+
+
 def transform_fixed_witnesses(physical: Any, hand_endpoint_local: Any, object_endpoint_local: Any, signed_distance: Any, confidence: Any) -> DeviceWitnessFeatures:
     """Transform selected offline endpoints with actual body/object poses."""
     import jax.numpy as jp
@@ -273,13 +283,21 @@ def build_device_autonomy_observation(*, physical: Any, contact: Any, witness: D
 
 class BatchedAutonomyRuntime:
     """Homogeneous cube2 MJX-Warp batch with device-only transition state."""
-    def __init__(self, trajectory: ReferenceTrajectory, *, num_envs: int = 1, device: str = "gpu", seed: int = 0):
+    def __init__(self, trajectory: ReferenceTrajectory, *, num_envs: int = 1, device: str = "gpu", seed: int = 0, persistent_ccd_workspace: bool = False, ccd_contacts_per_world: int | None = None):
         if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
             raise ValueError("num_envs must be a positive integer")
         if trajectory.identity.identity.split("_")[0] != "cube2" or trajectory.dof_dim != 28:
             raise ValueError("batched autonomy currently requires homogeneous cube2 28-DoF references")
         if device not in {"cpu", "gpu"}:
             raise ValueError("device must be cpu or gpu")
+        if not isinstance(persistent_ccd_workspace, bool):
+            raise TypeError("persistent_ccd_workspace must be bool")
+        if persistent_ccd_workspace and device != "gpu":
+            raise ValueError("persistent_ccd_workspace requires device='gpu'")
+        if ccd_contacts_per_world is not None and (not isinstance(ccd_contacts_per_world, int) or isinstance(ccd_contacts_per_world, bool) or ccd_contacts_per_world < 1):
+            raise ValueError("ccd_contacts_per_world must be a positive integer")
+        if persistent_ccd_workspace and ccd_contacts_per_world is None:
+            raise ValueError("persistent_ccd_workspace requires ccd_contacts_per_world")
         import jax
         import jax.numpy as jp
         from mujoco import mjx
@@ -317,19 +335,40 @@ class BatchedAutonomyRuntime:
         data = self.mujoco.MjData(self.model); self._reset_host(data)
         capacity = recommended_warp_contact_capacity(num_envs, ("right",))
         from sim.manorl.mjx_sim import CONSTRAINT_CAPACITY
-        single = mjx.put_data(self.model, data, device=self.device, impl="warp", naconmax=capacity, njmax=CONSTRAINT_CAPACITY)
+        if persistent_ccd_workspace:
+            ccd_capacity = int(ccd_contacts_per_world) * num_envs
+            single = mjx.make_data(self.model, device=self.device, impl="warp", naconmax=capacity, naccdmax=ccd_capacity, njmax=CONSTRAINT_CAPACITY)
+        else:
+            single = mjx.put_data(self.model, data, device=self.device, impl="warp", naconmax=capacity, njmax=CONSTRAINT_CAPACITY)
         self.data = jax.vmap(lambda _: single)(jp.arange(num_envs))
-        masked_reset = _build_masked_reset_data_fn(jax=jax, jp=jp, reset_qpos=jp.broadcast_to(self.data.qpos, self.data.qpos.shape), reset_ctrl=jp.broadcast_to(self.data.ctrl, self.data.ctrl.shape))
-        # Recompute derived poses on-device after indexed reset; terminal rows
-        # therefore cannot leak stale x-position/quaternion features.
-        self._reset_fn = jax.jit(lambda value, mask: mjx.forward(self.mjx_model, masked_reset(value, mask)))
-        self.step_fn = jax.jit(lambda value: jax.vmap(lambda world: mjx.step(self.mjx_model, world))(value))
+        self.persistent_ccd_workspace = None
+        self.persistent_solver_workspace = None
+        if persistent_ccd_workspace:
+            from sim.manorl.mjx_warp_workspace import install_persistent_ccd_workspace, install_persistent_solver_workspace, warp_device_ordinal
+            impl = self.mjx_model._impl
+            ordinal = warp_device_ordinal(self.device)
+            self.persistent_ccd_workspace = install_persistent_ccd_workspace(device_ordinal=ordinal, naccdmax=ccd_capacity, epa_iterations=int(self.model.opt.ccd_iterations), nmaxpolygon=int(impl.nmaxpolygon), nmaxmeshdeg=int(impl.nmaxmeshdeg))
+            self.persistent_solver_workspace = install_persistent_solver_workspace(device_ordinal=ordinal, nworld=num_envs, nv=int(self.model.nv), nv_pad=int(impl.nv_pad), njmax=int(self.data._impl.njmax), solver_type=int(self.model.opt.solver))
+        self._masked_reset = _build_masked_reset_data_fn(
+            jax=jax, jp=jp, reset_qpos=jp.broadcast_to(self.data.qpos, self.data.qpos.shape),
+            reset_ctrl=jp.broadcast_to(self.data.ctrl, self.data.ctrl.shape),
+        )
         self.indices = jp.zeros((num_envs,), dtype=jp.int32)
         self.pending_reset = jp.zeros((num_envs,), dtype=bool)
         self.last_relative_motion = jp.zeros((num_envs, 16, 3), dtype=jp.float32)
         self.max_object_z = jp.full((num_envs,), float(self.aligned_object_pos[0, 2]), dtype=jp.float32)
         self.previous_command = jp.asarray(np.broadcast_to(self._reset_q, (num_envs, 28)), dtype=jp.float32)
-        self._observe()
+        self._state = AutonomyTransitionState(
+            self.data, self.indices, self.pending_reset, self.previous_command,
+            self.max_object_z, self.last_relative_motion,
+        )
+        # This is the only transition entry point.  It is created once at init;
+        # no per-step lambdas, lax.cond closures, or substep dispatches occur.
+        self._transition_fn = jax.jit(self._fused_transition_impl)
+        # Kept only for the benchmark's pure-physics comparator; environment
+        # sampling never calls this entry point.
+        self.physics_step_fn = jax.jit(lambda value: jax.vmap(lambda world: mjx.step(self.mjx_model, world))(value))
+        self._apply_transition(self._transition_fn(self._state, jp.zeros((num_envs, 28), dtype=jp.float32), False))
 
     def _tile(self, value: NDArray[np.floating]) -> Any:
         return self.jax.device_put(np.broadcast_to(np.asarray(value), (self.num_envs, *value.shape)), self.device)
@@ -341,82 +380,113 @@ class BatchedAutonomyRuntime:
         data.qpos[self.producer.object_qpos_address + 3:self.producer.object_qpos_address + 7] = self.trajectory.object_quat_xyzw[0][[3, 0, 1, 2]]
         data.qvel[:] = 0; data.ctrl[:28] = self._reset_q; self.mujoco.mj_forward(self.model, data)
 
-    def _observe(self) -> Any:
-        jp = self.jp
-        physical = extract_mjx_physical_features(qpos=self.data.qpos, qvel=self.data.qvel, xpos=self.data.xpos, xquat=self.data.xquat, hand_qpos_start=0, hand_dof=28, object_body_id=self.producer.object_body_id, object_qvel_address=self.producer.object_qvel_address, keypoint_body_ids=tuple(self.producer.keypoint_body_ids), fingertip_keypoint_ids=tuple(KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES), fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS)
-        contact = self.producer.device_contact_reduction(self.data)
-        index = self.jp.minimum(self.indices, self.length - 1)
+    def _physical(self, data: Any) -> Any:
+        return extract_mjx_physical_features(
+            qpos=data.qpos, qvel=data.qvel, xpos=data.xpos, xquat=data.xquat,
+            hand_qpos_start=0, hand_dof=28, object_body_id=self.producer.object_body_id,
+            object_qvel_address=self.producer.object_qvel_address,
+            keypoint_body_ids=tuple(self.producer.keypoint_body_ids),
+            fingertip_keypoint_ids=tuple(KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES),
+            fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS,
+        )
+
+    def _observation(self, data: Any, indices: Any, previous: Any, relative_motion: Any) -> tuple[Any, Any, Any, Any]:
+        physical = self._physical(data)
+        contact = self.producer.device_contact_reduction(data)
+        index = self.jp.minimum(indices, self.length - 1)
         witness = transform_fixed_witnesses(physical, self.reference_h[index], self.reference_o[index], self.reference_d[index], self.reference_c[index])
-        self.last_physical, self.last_contact, self.last_witness = physical, contact, witness
-        self.observation = build_device_autonomy_observation(
+        observation = self._build_observation(data, indices, previous, relative_motion, physical, contact, witness)
+        return physical, contact, witness, observation
+
+    def _build_observation(self, data: Any, indices: Any, previous: Any, relative_motion: Any, physical: Any, contact: Any, witness: Any) -> Any:
+        index = self.jp.minimum(indices, self.length - 1)
+        return build_device_autonomy_observation(
             physical=physical, contact=contact, witness=witness,
             reference_q=self.reference_q, reference_object=self.reference_obj,
             reference_hand_object_relative=self.reference_hand[index] - self.reference_obj[index],
-            measured_qvel=self.data.qvel[:, :28], relative_contact_motion=getattr(self, "last_relative_motion", None),
-            previous_command=self.previous_command,
-            action_ids=jp.full((self.num_envs,), int(self.trajectory.identity.identity.split("_")[1]), dtype=jp.int32),
-            index=self.indices, lower=jp.asarray(self.lower), upper=jp.asarray(self.upper),
+            measured_qvel=data.qvel[:, :28], relative_contact_motion=relative_motion,
+            previous_command=previous,
+            action_ids=self.jp.full((self.num_envs,), int(self.trajectory.identity.identity.split("_")[1]), dtype=self.jp.int32),
+            index=indices, lower=self.jp.asarray(self.lower), upper=self.jp.asarray(self.upper),
         )
-        return self.observation
 
-    def _apply_reset_mask(self, mask: Any) -> None:
-        mask = self.jp.asarray(mask, dtype=bool)
-        if mask.shape != (self.num_envs,): raise ValueError("reset mask must be (num_envs,)")
-        # Device conditional avoids full mjx.forward when no row completed.
-        self.data = self.jax.lax.cond(self.jp.any(mask), lambda value: self._reset_fn(value, mask), lambda value: value, self.data)
-        self.indices = self.jp.where(mask, 0, self.indices)
-        self.previous_command = self.jp.where(mask[:, None], self.jp.asarray(self._reset_q)[None], self.previous_command)
-        self.max_object_z = self.jp.where(mask, float(self.aligned_object_pos[0, 2]), self.max_object_z)
-        self.last_relative_motion = self.jp.where(mask[:, None, None], 0., self.last_relative_motion)
-        self.pending_reset = self.jp.where(mask, False, self.pending_reset)
+    def _fused_transition_impl(self, state: AutonomyTransitionState, actions: Any, execute: Any) -> tuple[Any, ...]:
+        """One cached graph for reset, control, four physics steps and outputs."""
+        jp, jax = self.jp, self.jax
+        reset = state.pending_reset
+        data = jax.lax.cond(jp.any(reset), lambda value: self.mjx.forward(self.mjx_model, self._masked_reset(value, reset)), lambda value: value, state.data)
+        indices = jp.where(reset, 0, state.indices)
+        previous = jp.where(reset[:, None], jp.asarray(self._reset_q)[None], state.previous_command)
+        max_z = jp.where(reset, float(self.aligned_object_pos[0, 2]), state.max_object_z)
+        relative_motion = jp.where(reset[:, None, None], 0., state.last_relative_motion)
+
+        def observe_only(values: tuple[Any, ...]) -> tuple[Any, ...]:
+            data, indices, previous, max_z, relative_motion = values
+            physical, contact, witness, observation = self._observation(data, indices, previous, relative_motion)
+            valid = physical.valid & contact.valid
+            return (data, indices, jp.zeros_like(reset), previous, max_z, relative_motion, observation, jp.zeros((self.num_envs,), dtype=jp.float32), jp.zeros_like(reset), jp.zeros((self.num_envs,), dtype=jp.int32), valid, previous, physical, contact, witness)
+
+        def advance(values: tuple[Any, ...]) -> tuple[Any, ...]:
+            data, indices, previous, max_z, _ = values
+            physical_before = self._physical(data)
+            command = rate_limited_command_batch(previous, actions, jp.asarray(self.lower), jp.asarray(self.upper), jp.asarray(self.rate), physical_before.mano_dof_pos, jp.asarray(self.envelope))
+            data = data.replace(ctrl=command)
+            for _ in range(4):
+                data = jax.vmap(lambda world: self.mjx.step(self.mjx_model, world))(data)
+            physical_before_key = physical_before.hand_keypoint_positions
+            physical_before_object = physical_before.object_position
+            next_indices = indices + 1
+            physical = self._physical(data)
+            contact = self.producer.device_contact_reduction(data)
+            index = jp.minimum(next_indices, self.length - 1)
+            witness = transform_fixed_witnesses(physical, self.reference_h[index], self.reference_o[index], self.reference_d[index], self.reference_c[index])
+            motion = (physical.hand_keypoint_positions - physical_before_key - (physical.object_position - physical_before_object)[:, None]) / self.clock.control_timestep
+            motion = motion * (jp.linalg.norm(contact.hand_object_forces, axis=-1) > .02)[..., None]
+            observation = self._build_observation(data, next_indices, command, motion, physical, contact, witness)
+            index = jp.minimum(next_indices, self.length - 1)
+            target = self.reference_obj[index]
+            relative = physical.hand_keypoint_positions[:, 0] - physical.object_position
+            ref_current = self.reference_q[index]
+            reference_relative = self.reference_hand[index] - target
+            ref_next = self.reference_obj[jp.minimum(index + 1, self.length - 1)]
+            reward = compute_device_autonomy_reward_v3(object_position=physical.object_position, target_object_position=target, object_velocity=physical.object_linear_velocity, hand_object_relative=relative, reference_hand_object_relative=reference_relative, witness=witness, reference_confidence=self.reference_proximity[index], hand_object_force=contact.hand_object_forces, relative_contact_motion=motion, action=actions, release_active=next_indices >= self.release_start, measured_q=physical.mano_dof_pos, reference_q=ref_current, object_quaternion=physical.object_orientation_xyzw, reference_object_quaternion=self.reference_quat[index], target_velocity=(ref_next - target) * 120.)
+            max_z = jp.maximum(max_z, physical.object_position[:, 2])
+            horizon = next_indices >= self.length - 1
+            dropped = physical.object_position[:, 2] < FLOOR_TOP_Z - .03
+            diverged = (next_indices > 0) & (jp.linalg.norm(physical.object_position - target, axis=1) > .30)
+            done = horizon | dropped | diverged
+            reason = jp.where(dropped, 2, jp.where(diverged, 3, jp.where(horizon, 1, 0))).astype(jp.int32)
+            valid = physical.valid & contact.valid & reward.valid
+            return (data, next_indices, done, command, max_z, motion, observation, reward.total.astype(jp.float32), done, reason, valid, command, physical, contact, witness)
+
+        return jax.lax.cond(execute, advance, observe_only, (data, indices, previous, max_z, relative_motion))
+
+    def _apply_transition(self, result: tuple[Any, ...]) -> None:
+        (self.data, self.indices, self.pending_reset, self.previous_command, self.max_object_z, self.last_relative_motion, self.observation, reward, done, reason, valid, command, self.last_physical, self.last_contact, self.last_witness) = result
+        self.last_reward, self.last_done, self.last_valid, self.last_reason, self.last_command = reward, done, valid, reason, command
 
     def reset(self, mask: Any | None = None) -> Any:
         if mask is None: mask = self.jp.ones((self.num_envs,), dtype=bool)
-        self._apply_reset_mask(mask)
-        return self._observe()
+        mask = self.jp.asarray(mask, dtype=bool)
+        if mask.shape != (self.num_envs,): raise ValueError("reset mask must be (num_envs,)")
+        self.pending_reset = mask
+        self._state = AutonomyTransitionState(self.data, self.indices, self.pending_reset, self.previous_command, self.max_object_z, self.last_relative_motion)
+        self._apply_transition(self._transition_fn(self._state, self.jp.zeros((self.num_envs, 28), dtype=self.jp.float32), False))
+        return self.observation
 
-    def _refresh_physical_contact(self) -> None:
-        self.last_physical = extract_mjx_physical_features(qpos=self.data.qpos, qvel=self.data.qvel, xpos=self.data.xpos, xquat=self.data.xquat, hand_qpos_start=0, hand_dof=28, object_body_id=self.producer.object_body_id, object_qvel_address=self.producer.object_qvel_address, keypoint_body_ids=tuple(self.producer.keypoint_body_ids), fingertip_keypoint_ids=tuple(KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES), fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS)
-        self.last_contact = self.producer.device_contact_reduction(self.data)
+    def prepare_action(self) -> Any:
+        """Reset completed rows and return the observation for the next action."""
+        self._state = AutonomyTransitionState(self.data, self.indices, self.pending_reset, self.previous_command, self.max_object_z, self.last_relative_motion)
+        self._apply_transition(self._transition_fn(self._state, self.jp.zeros((self.num_envs, 28), dtype=self.jp.float32), False))
+        return self.observation
 
     def step(self, actions: Any) -> tuple[Any, Any, Any, dict[str, Any]]:
-        import jax.numpy as jp
-        self._apply_reset_mask(self.pending_reset)
-        self._refresh_physical_contact()
-        actions = jp.asarray(actions)
+        actions = self.jp.asarray(actions)
         if actions.shape != (self.num_envs, 28): raise ValueError("batched actions must be (num_envs, 28)")
-        physical_before = self.last_physical
-        key_before = physical_before.hand_keypoint_positions
-        object_before = physical_before.object_position
-        command = rate_limited_command_batch(self.previous_command, actions, jp.asarray(self.lower), jp.asarray(self.upper), jp.asarray(self.rate), physical_before.mano_dof_pos, jp.asarray(self.envelope))
-        self.data = self.data.replace(ctrl=command)
-        for _ in range(4): self.data = self.step_fn(self.data)
-        self.previous_command = command
-        self.indices = self.indices + 1
-        self._refresh_physical_contact()
-        relative_motion = (self.last_physical.hand_keypoint_positions - key_before - (self.last_physical.object_position - object_before)[:, None]) / self.clock.control_timestep
-        force_now = self.last_contact.hand_object_forces
-        relative_motion = relative_motion * (jp.linalg.norm(force_now, axis=-1) > .02)[..., None]
-        self.last_relative_motion = relative_motion
-        self._observe()
-        index = jp.minimum(self.indices, self.length - 1)
-        target = self.reference_obj[index]
-        force = self.last_contact.hand_object_forces
-        relative = self.last_physical.hand_keypoint_positions[:, 0] - self.last_physical.object_position
-        ref_current = self.reference_q[index]
-        reference_relative = self.reference_hand[index] - target
-        ref_next = self.reference_obj[self.jp.minimum(index + 1, self.length - 1)]
-        target_velocity = (ref_next - target) * 120.
-        reward = compute_device_autonomy_reward_v3(object_position=self.last_physical.object_position, target_object_position=target, object_velocity=self.last_physical.object_linear_velocity, hand_object_relative=relative, reference_hand_object_relative=reference_relative, witness=self.last_witness, reference_confidence=self.reference_proximity[index], hand_object_force=force, relative_contact_motion=relative_motion, action=actions, release_active=self.indices >= self.release_start, measured_q=self.last_physical.mano_dof_pos, reference_q=ref_current, object_quaternion=self.last_physical.object_orientation_xyzw, reference_object_quaternion=self.reference_quat[index], target_velocity=target_velocity)
-        self.max_object_z = jp.maximum(self.max_object_z, self.last_physical.object_position[:, 2])
-        horizon = self.indices >= self.length - 1
-        dropped = self.last_physical.object_position[:, 2] < FLOOR_TOP_Z - .03
-        diverged = (self.indices > 0) & (jp.linalg.norm(self.last_physical.object_position - target, axis=1) > .30)
-        done = horizon | dropped | diverged
-        self.pending_reset = done
-        reason = jp.where(dropped, 2, jp.where(diverged, 3, jp.where(horizon, 1, 0))).astype(jp.int32)
-        valid = self.last_physical.valid & self.last_contact.valid & reward.valid
-        return self.observation, reward.total.astype(jp.float32), done, {"valid": valid, "reason_code": reason, "command": command, "contract": AUTONOMY_V3_VERSION}
+        if bool(np.asarray(self.pending_reset).any()): raise RuntimeError("terminal transition requires prepare_action() before the next action")
+        self._state = AutonomyTransitionState(self.data, self.indices, self.pending_reset, self.previous_command, self.max_object_z, self.last_relative_motion)
+        self._apply_transition(self._transition_fn(self._state, actions, True))
+        return self.observation, self.last_reward, self.last_done, {"valid": self.last_valid, "reason_code": self.last_reason, "command": self.last_command, "contract": AUTONOMY_V3_VERSION}
 
 
-__all__ = ["ReferenceWitnessTables", "reference_witness_tables", "DeviceWitnessFeatures", "transform_fixed_witnesses", "DeviceAutonomyReward", "compute_device_autonomy_reward_v3", "rate_limited_command_batch", "BatchedAutonomyRuntime", "V3_OBSERVATION_DIM"]
+__all__ = ["ReferenceWitnessTables", "reference_witness_tables", "DeviceWitnessFeatures", "AutonomyTransitionState", "transform_fixed_witnesses", "DeviceAutonomyReward", "compute_device_autonomy_reward_v3", "rate_limited_command_batch", "BatchedAutonomyRuntime", "V3_OBSERVATION_DIM"]

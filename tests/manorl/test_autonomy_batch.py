@@ -5,6 +5,7 @@ import pytest
 
 from sim.manorl.autonomy_batch import (
     V3_OBSERVATION_DIM,
+    AutonomyTransitionState,
     DeviceWitnessFeatures,
     build_device_autonomy_observation,
     compute_device_autonomy_reward_v3,
@@ -28,6 +29,15 @@ def _physical(batch: int = 2):
         "object_linear_velocity": jp.zeros((batch, 3), dtype=jp.float32),
         "valid": jp.ones((batch,), dtype=bool),
     })()
+
+
+def test_fused_transition_state_is_explicit_jax_pytree():
+    jax = pytest.importorskip("jax")
+    jp = jax.numpy
+    state = AutonomyTransitionState(jp.zeros((1, 2)), jp.zeros((1,), dtype=jp.int32), jp.zeros((1,), dtype=bool), jp.zeros((1, 28)), jp.zeros((1,)), jp.zeros((1, 16, 3)))
+    leaves, treedef = jax.tree_util.tree_flatten(state)
+    assert len(leaves) == 6
+    assert jax.tree_util.tree_unflatten(treedef, leaves).indices.shape == (1,)
 
 
 def test_contact_capacity_scales_global_only_and_constraints_stay_per_world():
