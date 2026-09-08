@@ -12,6 +12,8 @@ from sim.manorl.autonomy_batch import (
     transform_fixed_witnesses,
 )
 from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, rate_limited_command, validate_v3_checkpoint_metadata, CHECKPOINT_V3_FORMAT, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
+from sim.manorl.environment import recommended_warp_contact_capacity
+from sim.manorl.mjx_sim import CONSTRAINT_CAPACITY
 
 
 def _physical(batch: int = 2):
@@ -26,6 +28,11 @@ def _physical(batch: int = 2):
         "object_linear_velocity": jp.zeros((batch, 3), dtype=jp.float32),
         "valid": jp.ones((batch,), dtype=bool),
     })()
+
+
+def test_contact_capacity_scales_global_only_and_constraints_stay_per_world():
+    assert recommended_warp_contact_capacity(8192, ("right",)) > recommended_warp_contact_capacity(64, ("right",))
+    assert CONSTRAINT_CAPACITY == 512
 
 
 def test_batch_rate_map_matches_scalar_v2_for_each_row():

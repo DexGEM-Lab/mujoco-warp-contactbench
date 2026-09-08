@@ -45,6 +45,7 @@ class ReferenceWitnessTables:
     hand_geom_id: NDArray[np.int32]                 # (16,)
     object_geom_id: NDArray[np.int32]               # (T, 16)
     hand_body_id: NDArray[np.int32]                 # (16,)
+    reference_hand_position: NDArray[np.float64]    # (T, 3), source FK palm
     object_body_id: int
     support_shift: NDArray[np.float64]
     contract_id: str = WITNESS_TABLE_CONTRACT_ID
@@ -57,8 +58,8 @@ class ReferenceWitnessTables:
             raise ValueError("witness endpoints must be (frames, 16, 3)")
         if self.confidence.shape != (t, 16) or self.object_geom_id.shape != (t, 16):
             raise ValueError("witness distance metadata must be (frames, 16)")
-        if self.hand_geom_id.shape != (16,) or self.hand_body_id.shape != (16,):
-            raise ValueError("source-order hand metadata must be (16,)")
+        if self.hand_geom_id.shape != (16,) or self.hand_body_id.shape != (16,) or self.reference_hand_position.shape != (t, 3):
+            raise ValueError("source-order hand metadata must be (16,) and FK positions (frames,3)")
         if self.support_shift.shape != (3,) or not np.all(np.isfinite(self.support_shift)):
             raise ValueError("support shift must be finite and 3-wide")
         for value in (self.hand_endpoint_local, self.object_endpoint_local, self.signed_distance, self.confidence):
@@ -71,7 +72,7 @@ class ReferenceWitnessTables:
         digest = hashlib.sha256()
         for value in (self.hand_endpoint_local, self.object_endpoint_local, self.signed_distance,
                       self.confidence, self.hand_geom_id, self.object_geom_id, self.hand_body_id,
-                      np.asarray([self.object_body_id]), self.support_shift):
+                      self.reference_hand_position, np.asarray([self.object_body_id]), self.support_shift):
             digest.update(np.ascontiguousarray(value).tobytes())
         return digest.hexdigest()
 
@@ -92,6 +93,7 @@ def reference_witness_tables(
     object_geoms = tuple(sorted(producer.object_geom_ids))
     hand_local = np.zeros((len(aligned_q), 16, 3), dtype=np.float64)
     object_local = np.zeros_like(hand_local)
+    reference_hand_position = np.zeros((len(aligned_q), 3), dtype=np.float64)
     signed = np.zeros((len(aligned_q), 16), dtype=np.float64)
     object_ids = np.zeros((len(aligned_q), 16), dtype=np.int32)
     for frame, (q, obj, quat) in enumerate(zip(aligned_q, aligned_obj, trajectory.object_quat_xyzw, strict=True)):
@@ -101,6 +103,7 @@ def reference_witness_tables(
         data.qpos[producer.object_qpos_address:producer.object_qpos_address + 3] = obj
         data.qpos[producer.object_qpos_address + 3:producer.object_qpos_address + 7] = quat[[3, 0, 1, 2]]
         mujoco.mj_forward(model, data)
+        reference_hand_position[frame] = data.xpos[hand_bodies[0]]
         for segment, hand_geom in enumerate(hand_geoms):
             best_distance = np.inf
             best_fromto = np.zeros(6, dtype=np.float64)
@@ -116,15 +119,17 @@ def reference_witness_tables(
             object_local[frame, segment] = object_rotation.T @ (best_fromto[3:] - data.xpos[object_body])
             signed[frame, segment] = best_distance
             object_ids[frame, segment] = best_object
-    confidence = np.exp(-np.abs(signed) / 0.01)
+    # Preserve M2 confidence/proximity numerics. The fixed-witness geometry
+    # port changes only actual correspondence evaluation, not source intent.
+    confidence = np.where(signed <= 0.0, np.clip(-signed / 0.002, 0.0, 1.0), np.exp(-signed / 0.005))
     result = ReferenceWitnessTables(
         hand_local, object_local, signed, confidence, hand_geoms, object_ids,
-        hand_bodies, int(object_body), np.asarray(shift, dtype=np.float64)
+        hand_bodies, reference_hand_position, int(object_body), np.asarray(shift, dtype=np.float64)
     )
     object.__setattr__(result, "digest", result.payload_digest())
     for value in (result.hand_endpoint_local, result.object_endpoint_local, result.signed_distance,
                   result.confidence, result.hand_geom_id, result.object_geom_id, result.hand_body_id,
-                  result.support_shift):
+                  result.reference_hand_position, result.support_shift):
         value.setflags(write=False)
     return result
 
@@ -217,7 +222,7 @@ def masked_row_reset(data: Any, reset_mask: Any, reset_fn: Any) -> Any:
     return reset_fn(data, reset_mask)
 
 
-def build_device_autonomy_observation(*, physical: Any, contact: Any, witness: DeviceWitnessFeatures, reference_q: Any, reference_object: Any, previous_command: Any, action_ids: Any, index: Any, lower: Any, upper: Any, object_geometry: Any | None = None) -> Any:
+def build_device_autonomy_observation(*, physical: Any, contact: Any, witness: DeviceWitnessFeatures, reference_q: Any, reference_object: Any, previous_command: Any, action_ids: Any, index: Any, lower: Any, upper: Any, reference_hand_object_relative: Any | None = None, measured_qvel: Any | None = None, relative_contact_motion: Any | None = None, object_geometry: Any | None = None) -> Any:
     """Build the existing 538-wide v2 layout from device fields.
 
     The layout is unchanged for direct-port comparability. ``surface_proximity``
@@ -227,24 +232,30 @@ def build_device_autonomy_observation(*, physical: Any, contact: Any, witness: D
     import jax.numpy as jp
     from sim.manorl.autonomy_contracts import observation_slices
     b = physical.mano_dof_pos.shape[0]
-    if reference_q.shape != (b, reference_q.shape[1], 28) or previous_command.shape != (b, 28):
+    if reference_q.ndim not in (2, 3) or previous_command.shape != (b, 28):
         raise ValueError("device autonomy observation has inconsistent batch shapes")
+    unique = reference_q.ndim == 2
+    horizon = reference_q.shape[0] if unique else reference_q.shape[1]
+    world = jp.arange(b); i = jp.minimum(index, horizon - 1)
+    def gather(table: Any, offset: int = 0) -> Any:
+        return table[jp.minimum(i + offset, horizon - 1)] if unique else table[world, jp.minimum(i + offset, horizon - 1)]
+    current_q, next_q = gather(reference_q), gather(reference_q, 1)
     s = observation_slices(); out = jp.zeros((b, V3_OBSERVATION_DIM), dtype=jp.float32)
     lower, upper = jp.asarray(lower), jp.asarray(upper)
     out = out.at[:, s["measured_qpos_normalized"]].set(2 * (physical.mano_dof_pos - lower[None]) / jp.maximum(upper[None] - lower[None], 1e-6) - 1)
     # MJX qvel is not needed for the direct port's control map; velocity fields
     # remain actual device physics values where available.
-    out = out.at[:, s["measured_qvel"]].set(jp.zeros((b, 28), dtype=out.dtype))
+    out = out.at[:, s["measured_qvel"]].set(jp.zeros((b, 28), dtype=out.dtype) if measured_qvel is None else measured_qvel)
     out = out.at[:, s["object_position"]].set(physical.object_position)
     out = out.at[:, s["object_linear_velocity"]].set(physical.object_linear_velocity)
     out = out.at[:, s["hand_object_relative"]].set(physical.hand_keypoint_positions[:, 0] - physical.object_position)
-    i = jp.minimum(index, reference_q.shape[1] - 1); world = jp.arange(b)
-    out = out.at[:, s["reference_q_current"]].set(reference_q[world, i])
-    out = out.at[:, s["reference_q_next"]].set(reference_q[world, jp.minimum(i + 1, reference_q.shape[1] - 1)])
-    out = out.at[:, s["reference_q_velocity"]].set((reference_q[world, jp.minimum(i + 1, reference_q.shape[1] - 1)] - reference_q[world, i]) * 120.)
-    out = out.at[:, s["reference_object_relative"]].set(reference_q[world, i, :3] - reference_object[world, i])
-    out = out.at[:, s["reference_object_future_delta"]].set(reference_object[world, jp.minimum(i + 5, reference_q.shape[1] - 1)] - reference_object[world, i])
-    out = out.at[:, s["previous_command_normalized"]].set(jp.tanh(previous_command))
+    current_object = gather(reference_object); next_object = gather(reference_object, 1); future_object = gather(reference_object, 5)
+    out = out.at[:, s["reference_q_current"]].set(current_q)
+    out = out.at[:, s["reference_q_next"]].set(next_q)
+    out = out.at[:, s["reference_q_velocity"]].set((next_q - current_q) * 120.)
+    out = out.at[:, s["reference_object_relative"]].set(current_q[:, :3] - current_object if reference_hand_object_relative is None else reference_hand_object_relative)
+    out = out.at[:, s["reference_object_future_delta"]].set(future_object - current_object)
+    out = out.at[:, s["previous_command_normalized"]].set(2 * (previous_command - lower[None]) / jp.maximum(upper[None] - lower[None], 1e-6) - 1)
     out = out.at[:, s["action_identity_one_hot"]].set(jp.eye(50, dtype=out.dtype)[jp.clip(jp.asarray(action_ids, dtype=jp.int32) - 1, 0, 49)])
     out = out.at[:, s["object_geometry"]].set(jp.broadcast_to(jp.asarray(object_geometry if object_geometry is not None else [.05, .05, .05, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=out.dtype), (b, 12)))
     out = out.at[:, s["measured_keypoint_relative"]].set((physical.hand_keypoint_positions - physical.object_position[:, None]).reshape(b, -1))
@@ -256,7 +267,7 @@ def build_device_autonomy_observation(*, physical: Any, contact: Any, witness: D
     out = out.at[:, s["reference_contact_confidence"]].set(witness.confidence)
     out = out.at[:, s["measured_hand_object_force"]].set(contact.hand_object_forces.reshape(b, -1))
     out = out.at[:, s["supporting_object_net_force"]].set(jp.sum(contact.hand_object_forces, axis=1))
-    out = out.at[:, s["relative_contact_motion"]].set(jp.zeros((b, 48), dtype=out.dtype))
+    out = out.at[:, s["relative_contact_motion"]].set(jp.zeros((b, 48), dtype=out.dtype) if relative_contact_motion is None else relative_contact_motion.reshape(b, -1))
     return jp.clip(out, -5., 5.)
 
 
@@ -285,20 +296,28 @@ class BatchedAutonomyRuntime:
         self.witness = reference_witness_tables(trajectory)
         self.aligned_q_ref, self.aligned_object_pos, self.support_shift = align_reference_trajectory(trajectory, np.asarray(object_collision_vertices("cube2")))
         self.length = len(self.aligned_q_ref)
-        self.reference_q = self._tile(self.aligned_q_ref)
-        self.reference_obj = self._tile(self.aligned_object_pos)
-        self.reference_quat = self._tile(np.asarray(trajectory.object_quat_xyzw, dtype=np.float32))
-        self.reference_h = self._tile(self.witness.hand_endpoint_local)
-        self.reference_o = self._tile(self.witness.object_endpoint_local)
-        self.reference_d = self._tile(self.witness.signed_distance)
-        self.reference_c = self._tile(self.witness.confidence)
+        # Keep one T-frame table on device. Per-row indices gather active
+        # entries; broadcasting all histories to B would be O(B*T) storage.
+        self.reference_q = self.jax.device_put(np.asarray(self.aligned_q_ref, dtype=np.float32), self.device)
+        self.reference_obj = self.jax.device_put(np.asarray(self.aligned_object_pos, dtype=np.float32), self.device)
+        self.reference_quat = self.jax.device_put(np.asarray(trajectory.object_quat_xyzw, dtype=np.float32), self.device)
+        self.reference_hand = self.jax.device_put(np.asarray(self.witness.reference_hand_position, dtype=np.float32), self.device)
+        self.reference_h = self.jax.device_put(np.asarray(self.witness.hand_endpoint_local, dtype=np.float32), self.device)
+        self.reference_o = self.jax.device_put(np.asarray(self.witness.object_endpoint_local, dtype=np.float32), self.device)
+        self.reference_d = self.jax.device_put(np.asarray(self.witness.signed_distance, dtype=np.float32), self.device)
+        self.reference_c = self.jax.device_put(np.asarray(self.witness.confidence, dtype=np.float32), self.device)
+        self.reference_proximity = self.jax.device_put(np.exp(-np.maximum(self.witness.signed_distance, 0.) / .01).astype(np.float32), self.device)
+        ref_mean = np.mean(np.exp(-np.maximum(self.witness.signed_distance, 0.) / .01), axis=1)
+        contact_frames = np.flatnonzero(ref_mean > .35)
+        self.release_start = int(contact_frames[-1] + 1) if len(contact_frames) else self.length
         self.lower = np.asarray(self.model.jnt_range[:28, 0], dtype=np.float32)
         self.upper = np.asarray(self.model.jnt_range[:28, 1], dtype=np.float32)
         self.rate = np.r_[np.full(6, [0.5, 0.5, 0.5, 2., 2., 2.]), np.full(22, 4.)].astype(np.float32)
         self.envelope = np.r_[np.full(6, [0.02, 0.02, 0.02, .25, .25, .25]), np.full(22, .35)].astype(np.float32)
         data = self.mujoco.MjData(self.model); self._reset_host(data)
         capacity = recommended_warp_contact_capacity(num_envs, ("right",))
-        single = mjx.put_data(self.model, data, device=self.device, impl="warp", naconmax=capacity, njmax=max(512, capacity * 2))
+        from sim.manorl.mjx_sim import CONSTRAINT_CAPACITY
+        single = mjx.put_data(self.model, data, device=self.device, impl="warp", naconmax=capacity, njmax=CONSTRAINT_CAPACITY)
         self.data = jax.vmap(lambda _: single)(jp.arange(num_envs))
         masked_reset = _build_masked_reset_data_fn(jax=jax, jp=jp, reset_qpos=jp.broadcast_to(self.data.qpos, self.data.qpos.shape), reset_ctrl=jp.broadcast_to(self.data.ctrl, self.data.ctrl.shape))
         # Recompute derived poses on-device after indexed reset; terminal rows
@@ -307,6 +326,8 @@ class BatchedAutonomyRuntime:
         self.step_fn = jax.jit(lambda value: jax.vmap(lambda world: mjx.step(self.mjx_model, world))(value))
         self.indices = jp.zeros((num_envs,), dtype=jp.int32)
         self.pending_reset = jp.zeros((num_envs,), dtype=bool)
+        self.last_relative_motion = jp.zeros((num_envs, 16, 3), dtype=jp.float32)
+        self.max_object_z = jp.full((num_envs,), float(self.aligned_object_pos[0, 2]), dtype=jp.float32)
         self.previous_command = jp.asarray(np.broadcast_to(self._reset_q, (num_envs, 28)), dtype=jp.float32)
         self._observe()
 
@@ -324,55 +345,78 @@ class BatchedAutonomyRuntime:
         jp = self.jp
         physical = extract_mjx_physical_features(qpos=self.data.qpos, qvel=self.data.qvel, xpos=self.data.xpos, xquat=self.data.xquat, hand_qpos_start=0, hand_dof=28, object_body_id=self.producer.object_body_id, object_qvel_address=self.producer.object_qvel_address, keypoint_body_ids=tuple(self.producer.keypoint_body_ids), fingertip_keypoint_ids=tuple(KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES), fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS)
         contact = self.producer.device_contact_reduction(self.data)
-        world = self.jp.arange(self.num_envs); index = self.jp.minimum(self.indices, self.length - 1)
-        witness = transform_fixed_witnesses(physical, self.reference_h[world, index], self.reference_o[world, index], self.reference_d[world, index], self.reference_c[world, index])
+        index = self.jp.minimum(self.indices, self.length - 1)
+        witness = transform_fixed_witnesses(physical, self.reference_h[index], self.reference_o[index], self.reference_d[index], self.reference_c[index])
         self.last_physical, self.last_contact, self.last_witness = physical, contact, witness
         self.observation = build_device_autonomy_observation(
             physical=physical, contact=contact, witness=witness,
             reference_q=self.reference_q, reference_object=self.reference_obj,
+            reference_hand_object_relative=self.reference_hand[index] - self.reference_obj[index],
+            measured_qvel=self.data.qvel[:, :28], relative_contact_motion=getattr(self, "last_relative_motion", None),
             previous_command=self.previous_command,
             action_ids=jp.full((self.num_envs,), int(self.trajectory.identity.identity.split("_")[1]), dtype=jp.int32),
             index=self.indices, lower=jp.asarray(self.lower), upper=jp.asarray(self.upper),
         )
         return self.observation
 
-    def reset(self, mask: Any | None = None) -> Any:
-        if mask is None: mask = self.jp.ones((self.num_envs,), dtype=bool)
+    def _apply_reset_mask(self, mask: Any) -> None:
         mask = self.jp.asarray(mask, dtype=bool)
         if mask.shape != (self.num_envs,): raise ValueError("reset mask must be (num_envs,)")
-        self.data = masked_row_reset(self.data, mask, self._reset_fn)
+        # Device conditional avoids full mjx.forward when no row completed.
+        self.data = self.jax.lax.cond(self.jp.any(mask), lambda value: self._reset_fn(value, mask), lambda value: value, self.data)
         self.indices = self.jp.where(mask, 0, self.indices)
         self.previous_command = self.jp.where(mask[:, None], self.jp.asarray(self._reset_q)[None], self.previous_command)
+        self.max_object_z = self.jp.where(mask, float(self.aligned_object_pos[0, 2]), self.max_object_z)
+        self.last_relative_motion = self.jp.where(mask[:, None, None], 0., self.last_relative_motion)
         self.pending_reset = self.jp.where(mask, False, self.pending_reset)
+
+    def reset(self, mask: Any | None = None) -> Any:
+        if mask is None: mask = self.jp.ones((self.num_envs,), dtype=bool)
+        self._apply_reset_mask(mask)
         return self._observe()
+
+    def _refresh_physical_contact(self) -> None:
+        self.last_physical = extract_mjx_physical_features(qpos=self.data.qpos, qvel=self.data.qvel, xpos=self.data.xpos, xquat=self.data.xquat, hand_qpos_start=0, hand_dof=28, object_body_id=self.producer.object_body_id, object_qvel_address=self.producer.object_qvel_address, keypoint_body_ids=tuple(self.producer.keypoint_body_ids), fingertip_keypoint_ids=tuple(KEYPOINT_NAMES.index(name) for name in _FINGERTIP_NAMES), fingertip_local_offsets=_FINGERTIP_LOCAL_OFFSETS)
+        self.last_contact = self.producer.device_contact_reduction(self.data)
 
     def step(self, actions: Any) -> tuple[Any, Any, Any, dict[str, Any]]:
         import jax.numpy as jp
-        # Apply pending resets unconditionally with a row mask. This preserves
-        # reset independence and avoids a host bool(any(done)) hot-path branch.
-        self.reset(self.pending_reset)
+        self._apply_reset_mask(self.pending_reset)
+        self._refresh_physical_contact()
         actions = jp.asarray(actions)
         if actions.shape != (self.num_envs, 28): raise ValueError("batched actions must be (num_envs, 28)")
         physical_before = self.last_physical
+        key_before = physical_before.hand_keypoint_positions
+        object_before = physical_before.object_position
         command = rate_limited_command_batch(self.previous_command, actions, jp.asarray(self.lower), jp.asarray(self.upper), jp.asarray(self.rate), physical_before.mano_dof_pos, jp.asarray(self.envelope))
         self.data = self.data.replace(ctrl=command)
         for _ in range(4): self.data = self.step_fn(self.data)
         self.previous_command = command
         self.indices = self.indices + 1
+        self._refresh_physical_contact()
+        relative_motion = (self.last_physical.hand_keypoint_positions - key_before - (self.last_physical.object_position - object_before)[:, None]) / self.clock.control_timestep
+        force_now = self.last_contact.hand_object_forces
+        relative_motion = relative_motion * (jp.linalg.norm(force_now, axis=-1) > .02)[..., None]
+        self.last_relative_motion = relative_motion
         self._observe()
-        world = jp.arange(self.num_envs); index = jp.minimum(self.indices, self.length - 1)
-        target = self.reference_obj[world, index]
+        index = jp.minimum(self.indices, self.length - 1)
+        target = self.reference_obj[index]
         force = self.last_contact.hand_object_forces
         relative = self.last_physical.hand_keypoint_positions[:, 0] - self.last_physical.object_position
-        ref_current = self.reference_q[world, index]
-        reference_relative = ref_current[:, :3] - target
-        ref_next = self.reference_obj[world, self.jp.minimum(index + 1, self.length - 1)]
+        ref_current = self.reference_q[index]
+        reference_relative = self.reference_hand[index] - target
+        ref_next = self.reference_obj[self.jp.minimum(index + 1, self.length - 1)]
         target_velocity = (ref_next - target) * 120.
-        reward = compute_device_autonomy_reward_v3(object_position=self.last_physical.object_position, target_object_position=target, object_velocity=self.last_physical.object_linear_velocity, hand_object_relative=relative, reference_hand_object_relative=reference_relative, witness=self.last_witness, reference_confidence=self.reference_c[world, index], hand_object_force=force, relative_contact_motion=jp.zeros_like(force), action=actions, release_active=self.indices >= self.length, measured_q=self.last_physical.mano_dof_pos, reference_q=ref_current, object_quaternion=self.last_physical.object_orientation_xyzw, reference_object_quaternion=self.reference_quat[world, index], target_velocity=target_velocity)
-        done = self.indices >= self.length
+        reward = compute_device_autonomy_reward_v3(object_position=self.last_physical.object_position, target_object_position=target, object_velocity=self.last_physical.object_linear_velocity, hand_object_relative=relative, reference_hand_object_relative=reference_relative, witness=self.last_witness, reference_confidence=self.reference_proximity[index], hand_object_force=force, relative_contact_motion=relative_motion, action=actions, release_active=self.indices >= self.release_start, measured_q=self.last_physical.mano_dof_pos, reference_q=ref_current, object_quaternion=self.last_physical.object_orientation_xyzw, reference_object_quaternion=self.reference_quat[index], target_velocity=target_velocity)
+        self.max_object_z = jp.maximum(self.max_object_z, self.last_physical.object_position[:, 2])
+        horizon = self.indices >= self.length - 1
+        dropped = self.last_physical.object_position[:, 2] < FLOOR_TOP_Z - .03
+        diverged = (self.indices > 0) & (jp.linalg.norm(self.last_physical.object_position - target, axis=1) > .30)
+        done = horizon | dropped | diverged
         self.pending_reset = done
+        reason = jp.where(dropped, 2, jp.where(diverged, 3, jp.where(horizon, 1, 0))).astype(jp.int32)
         valid = self.last_physical.valid & self.last_contact.valid & reward.valid
-        return self.observation, reward.total.astype(jp.float32), done, {"valid": valid, "reason_code": jp.where(done, 1, 0), "command": command, "contract": AUTONOMY_V3_VERSION}
+        return self.observation, reward.total.astype(jp.float32), done, {"valid": valid, "reason_code": reason, "command": command, "contract": AUTONOMY_V3_VERSION}
 
 
 __all__ = ["ReferenceWitnessTables", "reference_witness_tables", "DeviceWitnessFeatures", "transform_fixed_witnesses", "DeviceAutonomyReward", "compute_device_autonomy_reward_v3", "rate_limited_command_batch", "BatchedAutonomyRuntime", "V3_OBSERVATION_DIM"]
