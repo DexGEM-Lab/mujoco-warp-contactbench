@@ -296,8 +296,6 @@ class BatchedAutonomyRuntime:
             raise ValueError("persistent_ccd_workspace requires device='gpu'")
         if ccd_contacts_per_world is not None and (not isinstance(ccd_contacts_per_world, int) or isinstance(ccd_contacts_per_world, bool) or ccd_contacts_per_world < 1):
             raise ValueError("ccd_contacts_per_world must be a positive integer")
-        if persistent_ccd_workspace and ccd_contacts_per_world is None:
-            raise ValueError("persistent_ccd_workspace requires ccd_contacts_per_world")
         import jax
         import jax.numpy as jp
         from mujoco import mjx
@@ -336,10 +334,19 @@ class BatchedAutonomyRuntime:
         capacity = recommended_warp_contact_capacity(num_envs, ("right",))
         from sim.manorl.mjx_sim import CONSTRAINT_CAPACITY
         if persistent_ccd_workspace:
-            ccd_capacity = int(ccd_contacts_per_world) * num_envs
-            single = mjx.make_data(self.model, device=self.device, impl="warp", naconmax=capacity, naccdmax=ccd_capacity, njmax=CONSTRAINT_CAPACITY)
+            make_kwargs = dict(device=self.device, impl="warp", naconmax=capacity, njmax=CONSTRAINT_CAPACITY)
+            if ccd_contacts_per_world is not None:
+                make_kwargs["naccdmax"] = int(ccd_contacts_per_world) * num_envs
+            single = mjx.make_data(self.model, **make_kwargs)
+            # make_data starts with default qpos/ctrl; install the native
+            # aligned state before any forward or workspace installation.
+            single = single.replace(
+                qpos=jp.asarray(data.qpos), qvel=jp.asarray(data.qvel), ctrl=jp.asarray(data.ctrl),
+            )
+            ccd_capacity = int(getattr(single._impl, "naccdmax"))
         else:
             single = mjx.put_data(self.model, data, device=self.device, impl="warp", naconmax=capacity, njmax=CONSTRAINT_CAPACITY)
+            ccd_capacity = None
         self.data = jax.vmap(lambda _: single)(jp.arange(num_envs))
         self.persistent_ccd_workspace = None
         self.persistent_solver_workspace = None
@@ -354,7 +361,9 @@ class BatchedAutonomyRuntime:
             reset_ctrl=jp.broadcast_to(self.data.ctrl, self.data.ctrl.shape),
         )
         self.indices = jp.zeros((num_envs,), dtype=jp.int32)
-        self.pending_reset = jp.zeros((num_envs,), dtype=bool)
+        # Force one device forward through the exact reset buffers at startup;
+        # this makes x-position/quaternion features valid for both data paths.
+        self.pending_reset = jp.ones((num_envs,), dtype=bool)
         self.last_relative_motion = jp.zeros((num_envs, 16, 3), dtype=jp.float32)
         self.max_object_z = jp.full((num_envs,), float(self.aligned_object_pos[0, 2]), dtype=jp.float32)
         self.previous_command = jp.asarray(np.broadcast_to(self._reset_q, (num_envs, 28)), dtype=jp.float32)
@@ -483,7 +492,6 @@ class BatchedAutonomyRuntime:
     def step(self, actions: Any) -> tuple[Any, Any, Any, dict[str, Any]]:
         actions = self.jp.asarray(actions)
         if actions.shape != (self.num_envs, 28): raise ValueError("batched actions must be (num_envs, 28)")
-        if bool(np.asarray(self.pending_reset).any()): raise RuntimeError("terminal transition requires prepare_action() before the next action")
         self._state = AutonomyTransitionState(self.data, self.indices, self.pending_reset, self.previous_command, self.max_object_z, self.last_relative_motion)
         self._apply_transition(self._transition_fn(self._state, actions, True))
         return self.observation, self.last_reward, self.last_done, {"valid": self.last_valid, "reason_code": self.last_reason, "command": self.last_command, "contract": AUTONOMY_V3_VERSION}
