@@ -10,6 +10,14 @@ OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v2"
 ACTION_CONTRACT_ID: Final = "manorl.autonomy.action.v2"
 REWARD_CONTRACT_ID: Final = "manorl.autonomy.reward.v2"
 CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v2"
+# v3 is a separate ABI: fixed offline collision witnesses are part of the
+# observation/reward contract and cannot be loaded with a v2 normalizer.
+AUTONOMY_V3_VERSION: Final = "manorl.autonomy.v3"
+OBSERVATION_V3_CONTRACT_ID: Final = "manorl.autonomy.observation.v3"
+ACTION_V3_CONTRACT_ID: Final = ACTION_CONTRACT_ID  # bit-equivalent measured-state map
+REWARD_V3_CONTRACT_ID: Final = "manorl.autonomy.reward.v3"
+CHECKPOINT_V3_FORMAT: Final = "manorl.autonomy.ppo.v3"
+WITNESS_TABLE_CONTRACT_ID: Final = "manorl.autonomy.reference_witness.v1"
 OBSERVATION_FIELDS: Final[tuple[tuple[str, int], ...]] = (
     ("measured_qpos_normalized", 28), ("measured_qvel", 28),
     ("object_position", 3), ("object_linear_velocity", 3),
@@ -75,6 +83,16 @@ class AutonomousRewardContract:
 ACTION_CONTRACT = AutonomousActionContract()
 OBSERVATION_CONTRACT = AutonomousObservationContract()
 REWARD_CONTRACT = AutonomousRewardContract()
+
+
+def validate_v3_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    """Reject a v2 normalizer/checkpoint at the v3 policy boundary."""
+    if metadata.get("checkpoint_format") == CHECKPOINT_FORMAT or metadata.get("observation_contract") == OBSERVATION_CONTRACT_ID:
+        raise ValueError("v2 autonomy checkpoint/normalizer requires explicit migration before v3 loading")
+    required = {"checkpoint_format": CHECKPOINT_V3_FORMAT, "observation_contract": OBSERVATION_V3_CONTRACT_ID, "reward_contract": REWARD_V3_CONTRACT_ID}
+    for name, expected in required.items():
+        if metadata.get(name) != expected:
+            raise ValueError(f"v3 checkpoint metadata {name} must be {expected!r}")
 
 def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1.0 / 120.0, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
     """Reference-independent rate map in actuator-units/second.
