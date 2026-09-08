@@ -17,7 +17,6 @@ from skrl.agents.torch.ppo.ppo import compute_gae
 from skrl.envs.wrappers.torch.gymnasium_envs import GymnasiumWrapper
 from skrl.memories.torch import RandomMemory
 from skrl.utils.spaces.torch import tensorize_space, flatten_tensorized_space
-from gymnasium.vector.utils import batch_space
 from sim.manorl.autonomy import Cube2AutonomousMJX
 from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, ACTION_DIM, OBSERVATION_CONTRACT_ID, OBSERVATION_DIM, REWARD_CONTRACT_ID
 from sim.manorl.rl_games_ppo import RlGamesPPO
@@ -44,33 +43,31 @@ def canonical_gae(rewards, terminated, truncated, values, last_values, *, discou
     """Thin named boundary to skrl's done/bootstrap implementation."""
     return compute_gae(rewards=rewards, terminated=terminated, truncated=truncated, values=values, last_values=last_values, discount_factor=discount_factor, lambda_coefficient=lambda_coefficient, time_limit_bootstrap=time_limit_bootstrap)
 
-class AutonomyVectorEnv(gym.vector.VectorEnv):
-    """One-world vector boundary; no Python list of independent environments."""
-    metadata = {"autoreset_mode": gym.vector.AutoresetMode.NEXT_STEP}
+class AutonomyVectorEnv(gym.Env):
+    """Honest N=1 Gymnasium environment with explicit terminal resets."""
+    metadata = {"render_modes": []}
     def __init__(self, trajectory, *, device="cpu", seed=0, contact_conditioned=True):
         self.environment = Cube2AutonomousMJX(trajectory, device=device, seed=seed, contact_conditioned=contact_conditioned)
-        self.trajectory = trajectory; self.contact_conditioned = bool(contact_conditioned); self.num_envs = 1
-        self.single_observation_space = gym.spaces.Box(-5., 5., shape=(OBSERVATION_DIM,), dtype=np.float32)
-        self.single_action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=np.float32)
-        self.observation_space = batch_space(self.single_observation_space, self.num_envs)
-        self.action_space = batch_space(self.single_action_space, self.num_envs)
+        self.trajectory = trajectory; self.contact_conditioned = bool(contact_conditioned); self.num_envs = 1; self._device = "cuda" if device == "gpu" else "cpu"
+        self.observation_space = gym.spaces.Box(-5., 5., shape=(OBSERVATION_DIM,), dtype=np.float32)
+        self.action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=np.float32)
         self._pending = False
     @property
-    def device(self): return "cpu"
+    def device(self): return self._device
     def reset(self, *, seed=None, options=None):
         if options: raise ValueError("M3 adapter has no indexed reset for N=1")
         obs=self.environment.reset(); self._pending=False
-        return obs[None,:], {"identity": self.trajectory.identity.identity, "seed": seed}
+        return obs, {"identity": self.trajectory.identity.identity, "seed": seed}
     def step(self, actions):
         a=np.asarray(actions,dtype=float)
-        if a.shape != (1,ACTION_DIM): raise ValueError("actions must have shape (1,28)")
-        if self._pending: self.environment.reset(); self._pending=False
-        result=self.environment.step(np.clip(a[0], -1., 1.)); phase=result.info["failure_phase"]
-        terminated=np.asarray([result.done and phase not in {"horizon_reached","task_success"}],dtype=bool)
-        truncated=np.asarray([result.done and phase == "horizon_reached"],dtype=bool)
+        if a.shape != (ACTION_DIM,): raise ValueError("actions must have shape (28,)")
+        if self._pending: raise RuntimeError("terminal transition requires explicit reset before the next action")
+        result=self.environment.step(np.clip(a, -1., 1.)); phase=result.info["failure_phase"]
+        terminated=bool(result.done)
+        truncated=False
         self._pending=bool(result.done)
         info={k: v for k,v in result.info.items() if isinstance(v,(str,int,float,bool,np.ndarray,list,dict))}; info["terms"]=result.terms; info["success"]=bool(result.info["task_success"])
-        return result.observation[None,:], np.asarray([result.reward],dtype=np.float32), terminated, truncated, info
+        return result.observation, np.float32(result.reward), terminated, truncated, info
     def close(self): return None
     def render(self): return None
 

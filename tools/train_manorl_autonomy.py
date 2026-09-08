@@ -33,12 +33,14 @@ def formaltrain(args):
     metadata={"training_contract":TRAINING_CONTRACT_ID,"setting":args.setting,"identity":catalog.trajectories[idx].identity.identity,"identity_index":idx,"split":split,"contracts":{"action":ACTION_CONTRACT_ID,"observation":OBSERVATION_CONTRACT_ID,"reward":REWARD_CONTRACT_ID},"package_digest":catalog.package_digest,"manifest_sha256":catalog.manifest_sha256,"seed":args.seed,"split_seed":args.split_seed,"num_envs":1,"rollouts":args.rollouts,"total_transitions":args.updates*args.rollouts}; run=_wandb_start(args,metadata)
     observations,_=wrapper.reset(); rows=[]
     for update in range(args.updates):
-        pending=torch.zeros((1,1),dtype=torch.bool); rewards=[]; terminations=[]; truncations=[]
+        if update > 0: observations,_=wrapper.reset()
+        rewards=[]; terminations=[]; truncations=[]
         for timestep in range(args.rollouts):
             with torch.no_grad(): actions,_=agent.act(observations,None,timestep=timestep,timesteps=args.rollouts)
             next_obs,reward,terminated,truncated,infos=wrapper.step(actions); rt=torch.as_tensor(reward); td=torch.as_tensor(terminated); tr=torch.as_tensor(truncated)
             agent.record_transition(observations=observations,states=None,actions=actions,rewards=rt,next_observations=next_obs,next_states=None,terminated=td,truncated=tr,infos=infos,timestep=timestep,timesteps=args.rollouts); agent.post_interaction(timestep=timestep+1,timesteps=args.rollouts)
             rewards.append(float(rt.mean())); terminations.append(bool(td.any())); truncations.append(bool(tr.any())); observations=next_obs
+            if bool((td | tr).any()) and timestep + 1 < args.rollouts: observations,_=wrapper.reset()
         row={"update":update,"reward_mean":float(np.mean(rewards)),"terminated":sum(terminations),"truncated":sum(truncations),"transitions":(update+1)*args.rollouts}; rows.append(row); print(json.dumps(row),flush=True); run and run.log(row)
     out=Path(args.checkpoint); out.parent.mkdir(parents=True,exist_ok=True); payload={"format":"manorl.autonomy.formalppo.v1","training_contract":TRAINING_CONTRACT_ID,"contracts":{"action":ACTION_CONTRACT_ID,"observation":OBSERVATION_CONTRACT_ID,"reward":REWARD_CONTRACT_ID},"package":{"digest":catalog.package_digest,"manifest_sha256":catalog.manifest_sha256,"catalog_digest":catalog.catalog_digest},"split":split,"identity_index":idx,"identity":catalog.trajectories[idx].identity.identity,"setting":args.setting,"seed":args.seed,"config":vars(args),"model":model.state_dict(),"optimizer":agent.optimizer.state_dict(),"normalizer":agent._observation_preprocessor.state_dict() if hasattr(agent._observation_preprocessor,"state_dict") else None,"torch_rng":torch.get_rng_state(),"numpy_rng":np.random.get_state(),"python_rng":__import__("random").getstate(),"rows":rows}; torch.save(payload,out); out.with_suffix(".json").write_text(json.dumps({k:v for k,v in payload.items() if k not in {"model","optimizer","normalizer","torch_rng","numpy_rng"}},default=str,indent=2)+"\n"); print(json.dumps({"checkpoint":str(out),"run_id":None if run is None else run.id,"run_url":None if run is None else run.url})); run and run.finish(); return 0
 
@@ -48,7 +50,9 @@ def evaluate(args):
     if payload["package"]["digest"] != catalog.package_digest or payload["split"]["digest"] != split["digest"]: raise ValueError("checkpoint package or split provenance mismatch")
     idx=args.identity_index
     if idx not in split["validation_indices"]+split["test_indices"] and not args.allow_train_eval: raise ValueError("evaluation identity must be VAL/TEST; pass --allow-train-eval for training identity")
-    env=_env(args,catalog,idx); wrapper,model,agent=build_runtime(env,rollouts=2,learning_epochs=1,device="cpu"); model.load_state_dict(payload["model"]); model.eval(); obs,_=wrapper.reset(); trace=[]; total=0.
+    eval_args=argparse.Namespace(**vars(args)); eval_args.setting=payload.get("setting",args.setting); env=_env(eval_args,catalog,idx); runtime_device="cuda" if args.device=="gpu" else "cpu"; wrapper,model,agent=build_runtime(env,rollouts=2,learning_epochs=1,device=runtime_device); model.load_state_dict(payload["model"])
+    if payload.get("normalizer") is not None and hasattr(agent._observation_preprocessor,"load_state_dict"): agent._observation_preprocessor.load_state_dict(payload["normalizer"])
+    model.eval(); obs,_=wrapper.reset(); trace=[]; total=0.
     for _ in range(args.steps):
         with torch.no_grad(): inputs={"observations":agent._observation_preprocessor(obs),"states":None}; mean,_=model.compute(inputs,role="policy"); action=torch.clamp(mean,-1.,1.)
         obs,reward,terminated,truncated,info=wrapper.step(action); total+=float(reward.mean()); trace.append({"reward":float(reward.mean()),"terminated":bool(terminated.any()),"truncated":bool(truncated.any()),"info":_jsonable(info)})

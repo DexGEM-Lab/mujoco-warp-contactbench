@@ -40,3 +40,21 @@ def test_split_rejects_wrong_catalog_size():
     try: identity_split(catalog,seed=0)
     except ValueError as exc: assert "50" in str(exc)
     else: raise AssertionError("split accepted a non-50 catalog")
+
+def test_ordinary_adapter_requires_explicit_reset_and_marks_horizon_terminated():
+    import numpy as np
+    from sim.manorl.autonomy import AutonomousStep
+    from sim.manorl.autonomy_training import AutonomyVectorEnv
+    class Fake:
+        def __init__(self): self.resets=0; self.steps=0
+        def reset(self): self.resets+=1; return np.zeros(OBSERVATION_DIM,dtype=np.float32)
+        def step(self, action):
+            assert action.shape == (ACTION_DIM,); self.steps+=1
+            phase="horizon_reached" if self.steps == 1 else "drop"
+            return AutonomousStep(np.zeros(OBSERVATION_DIM,dtype=np.float32), 1., {}, True, {"failure_phase":phase,"task_success":False})
+    env=object.__new__(AutonomyVectorEnv); env.environment=Fake(); env.trajectory=SimpleNamespace(identity=SimpleNamespace(identity="cube2_02_2833")); env.contact_conditioned=True; env.num_envs=1; env._device="cpu"; env.observation_space=gym.spaces.Box(-5.,5.,shape=(OBSERVATION_DIM,),dtype=np.float32); env.action_space=gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=np.float32); env._pending=False
+    env.reset(); _,_,terminated,truncated,_=env.step(np.zeros(ACTION_DIM)); assert terminated is True and truncated is False
+    try: env.step(np.zeros(ACTION_DIM))
+    except RuntimeError: pass
+    else: raise AssertionError("terminal action was accepted without reset")
+    env.reset(); _,_,terminated,truncated,_=env.step(np.zeros(ACTION_DIM)); assert terminated is True and truncated is False and env.environment.resets == 2
