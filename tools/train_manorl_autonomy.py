@@ -18,6 +18,14 @@ def _jsonable(value):
     if isinstance(value, (list, tuple)): return [_jsonable(v) for v in value]
     return value
 def _env(args,catalog,identity_index): return AutonomyVectorEnv(catalog.trajectories[identity_index],device=args.device,seed=args.seed,contact_conditioned=args.setting=="contact-conditioned")
+def formal_rollout_schedule(*, horizon, rollouts, updates):
+    """Reference schedule for explicit reset-after-terminal loop tests."""
+    phase=0; records=[]; reset_count=1
+    for _ in range(updates):
+        for _ in range(rollouts):
+            phase += 1; terminal = phase >= horizon; records.append((phase, terminal))
+            if terminal: phase=0; reset_count += 1
+    return records, reset_count
 def _wandb_start(args, metadata):
     if not args.wandb: return None
     import wandb
@@ -33,16 +41,15 @@ def formaltrain(args):
     metadata={"training_contract":TRAINING_CONTRACT_ID,"setting":args.setting,"identity":catalog.trajectories[idx].identity.identity,"identity_index":idx,"split":split,"contracts":{"action":ACTION_CONTRACT_ID,"observation":OBSERVATION_CONTRACT_ID,"reward":REWARD_CONTRACT_ID},"package_digest":catalog.package_digest,"manifest_sha256":catalog.manifest_sha256,"seed":args.seed,"split_seed":args.split_seed,"num_envs":1,"rollouts":args.rollouts,"total_transitions":args.updates*args.rollouts}; run=_wandb_start(args,metadata)
     observations,_=wrapper.reset(); rows=[]
     for update in range(args.updates):
-        if update > 0: observations,_=wrapper.reset()
         rewards=[]; terminations=[]; truncations=[]
         for timestep in range(args.rollouts):
             with torch.no_grad(): actions,_=agent.act(observations,None,timestep=timestep,timesteps=args.rollouts)
             next_obs,reward,terminated,truncated,infos=wrapper.step(actions); rt=torch.as_tensor(reward); td=torch.as_tensor(terminated); tr=torch.as_tensor(truncated)
             agent.record_transition(observations=observations,states=None,actions=actions,rewards=rt,next_observations=next_obs,next_states=None,terminated=td,truncated=tr,infos=infos,timestep=timestep,timesteps=args.rollouts); agent.post_interaction(timestep=timestep+1,timesteps=args.rollouts)
             rewards.append(float(rt.mean())); terminations.append(bool(td.any())); truncations.append(bool(tr.any())); observations=next_obs
-            if bool((td | tr).any()) and timestep + 1 < args.rollouts: observations,_=wrapper.reset()
+            if bool((td | tr).any()): observations,_=wrapper.reset()
         row={"update":update,"reward_mean":float(np.mean(rewards)),"terminated":sum(terminations),"truncated":sum(truncations),"transitions":(update+1)*args.rollouts}; rows.append(row); print(json.dumps(row),flush=True); run and run.log(row)
-    out=Path(args.checkpoint); out.parent.mkdir(parents=True,exist_ok=True); payload={"format":"manorl.autonomy.formalppo.v1","training_contract":TRAINING_CONTRACT_ID,"contracts":{"action":ACTION_CONTRACT_ID,"observation":OBSERVATION_CONTRACT_ID,"reward":REWARD_CONTRACT_ID},"package":{"digest":catalog.package_digest,"manifest_sha256":catalog.manifest_sha256,"catalog_digest":catalog.catalog_digest},"split":split,"identity_index":idx,"identity":catalog.trajectories[idx].identity.identity,"setting":args.setting,"seed":args.seed,"config":vars(args),"model":model.state_dict(),"optimizer":agent.optimizer.state_dict(),"normalizer":agent._observation_preprocessor.state_dict() if hasattr(agent._observation_preprocessor,"state_dict") else None,"torch_rng":torch.get_rng_state(),"numpy_rng":np.random.get_state(),"python_rng":__import__("random").getstate(),"rows":rows}; torch.save(payload,out); out.with_suffix(".json").write_text(json.dumps({k:v for k,v in payload.items() if k not in {"model","optimizer","normalizer","torch_rng","numpy_rng"}},default=str,indent=2)+"\n"); print(json.dumps({"checkpoint":str(out),"run_id":None if run is None else run.id,"run_url":None if run is None else run.url})); run and run.finish(); return 0
+    out=Path(args.checkpoint); out.parent.mkdir(parents=True,exist_ok=True); payload={"format":"manorl.autonomy.formalppo.v1","training_contract":TRAINING_CONTRACT_ID,"contracts":{"action":ACTION_CONTRACT_ID,"observation":OBSERVATION_CONTRACT_ID,"reward":REWARD_CONTRACT_ID},"package":{"digest":catalog.package_digest,"manifest_sha256":catalog.manifest_sha256,"catalog_digest":catalog.catalog_digest},"split":split,"identity_index":idx,"identity":catalog.trajectories[idx].identity.identity,"setting":args.setting,"seed":args.seed,"config":{k:v for k,v in vars(args).items() if k != "fn"},"model":model.state_dict(),"optimizer":agent.optimizer.state_dict(),"normalizer":agent._observation_preprocessor.state_dict() if hasattr(agent._observation_preprocessor,"state_dict") else None,"torch_rng":torch.get_rng_state(),"numpy_rng":np.random.get_state(),"python_rng":__import__("random").getstate(),"rows":rows}; torch.save(payload,out); out.with_suffix(".json").write_text(json.dumps({k:v for k,v in payload.items() if k not in {"model","optimizer","normalizer","torch_rng","numpy_rng"}},default=str,indent=2)+"\n"); print(json.dumps({"checkpoint":str(out),"run_id":None if run is None else run.id,"run_url":None if run is None else run.url})); run and run.finish(); return 0
 
 def evaluate(args):
     seed_everything(args.seed); catalog=_catalog(args.package); payload=torch.load(args.checkpoint,map_location="cpu",weights_only=False); split=identity_split(catalog,seed=payload["split"]["seed"])

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import torch
 import gymnasium as gym
 from sim.manorl.autonomy_training import ACTION_DIM, OBSERVATION_DIM, AutonomyActorCritic, RESERVED_TRAIN_IDENTITIES, canonical_gae, identity_split
+from tools.train_manorl_autonomy import formal_rollout_schedule
 
 def fake_catalog():
     ids=[f"cube2_02_{2833+i}" for i in range(50)]
@@ -40,6 +41,12 @@ def test_split_rejects_wrong_catalog_size():
     try: identity_split(catalog,seed=0)
     except ValueError as exc: assert "50" in str(exc)
     else: raise AssertionError("split accepted a non-50 catalog")
+
+def test_formaltrain_schedule_keeps_episode_across_rollout_cuts():
+    records, resets=formal_rollout_schedule(horizon=5,rollouts=3,updates=3)
+    assert [phase for phase,_ in records] == [1,2,3,4,5,1,2,3,4]
+    assert [phase for phase,terminal in records if terminal] == [5]
+    assert resets == 2
 
 def test_ordinary_adapter_requires_explicit_reset_and_marks_horizon_terminated():
     import numpy as np
