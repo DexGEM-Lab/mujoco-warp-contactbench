@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import lru_cache
 from time import perf_counter
 from typing import Any, Mapping, Sequence
+
+from sim.manorl.assets import object_collision_vertices
+from sim.manorl.contracts import FLOOR_TOP_Z
 
 import numpy as np
 
@@ -67,6 +71,39 @@ def _mean(values: Sequence[float]) -> float | None:
     return float(np.mean(values)) if values else None
 
 
+def _quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
+    qv, qw = q[:3], q[3]
+    t = 2.0 * np.cross(qv, v)
+    return v + qw * t + np.cross(qv, t)
+
+
+@lru_cache(maxsize=4)
+def _cached_collision_vertices(object_type: str) -> np.ndarray:
+    return np.asarray(object_collision_vertices(object_type), dtype=float).copy()
+
+
+def genuine_airborne_contact(info: Mapping[str, Any], *, clearance_m: float = 0.01, force_threshold_N: float = 0.02, object_type: str = "cube2") -> bool:
+    """Require genuine force and bottom-vertex clearance above the table."""
+    force = np.asarray(info.get("hand_object_force", []), dtype=float)
+    if not force.size or np.linalg.norm(force.reshape(-1, 3), axis=1).max() <= force_threshold_N:
+        return False
+    position = np.asarray(info.get("object_position", []), dtype=float)
+    quat = np.asarray(info.get("object_quaternion_xyzw", []), dtype=float)
+    if position.shape != (3,) or quat.shape != (4,):
+        return False
+    quat = quat / max(np.linalg.norm(quat), 1e-12)
+    vertices = _cached_collision_vertices(object_type)
+    bottom = float(np.min(np.asarray([_quat_rotate(quat, vertex) for vertex in vertices])[:, 2] + position[2]))
+    return bottom > FLOOR_TOP_Z + clearance_m
+
+
+def _orientation_angles(actual: np.ndarray, target: np.ndarray) -> tuple[float, float]:
+    actual = actual / max(np.linalg.norm(actual), 1e-12)
+    target = target / max(np.linalg.norm(target), 1e-12)
+    angle_rad = float(2.0 * np.arccos(np.clip(abs(float(np.dot(actual, target))), 0.0, 1.0)))
+    return angle_rad, float(np.degrees(angle_rad))
+
+
 def _longest_true(values: Sequence[bool]) -> int:
     best = current = 0
     for value in values:
@@ -89,22 +126,31 @@ class TelemetryAccumulator:
     rewards: list[float] = field(default_factory=list)
     terms: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     infos: list[Mapping[str, Any]] = field(default_factory=list)
+    ongoing_episode_return: dict[int, float] = field(default_factory=lambda: defaultdict(float))
+    ongoing_episode_length: dict[int, int] = field(default_factory=lambda: defaultdict(int))
+    completed_episode_returns: list[float] = field(default_factory=list)
+    completed_episode_lengths: list[int] = field(default_factory=list)
 
-    def add(self, info: Mapping[str, Any], reward: float, terms: Mapping[str, Any] | None = None) -> None:
+    def add(self, info: Mapping[str, Any], reward: float, terms: Mapping[str, Any] | None = None, *, terminated: bool = False, truncated: bool = False, env_id: int = 0) -> None:
         self.rewards.append(float(reward))
         self.infos.append(info)
+        self.ongoing_episode_return[env_id] += float(reward)
+        self.ongoing_episode_length[env_id] += 1
+        if terminated or truncated:
+            self.completed_episode_returns.append(self.ongoing_episode_return.pop(env_id, 0.0))
+            self.completed_episode_lengths.append(self.ongoing_episode_length.pop(env_id, 0))
         for name, value in (terms or info.get("terms", {})).items():
             scalar = _scalar(value)
             if scalar is not None:
                 self.terms[str(name)].append(scalar)
 
-    def add_batch(self, infos: Sequence[Mapping[str, Any]], rewards: Sequence[float], terms: Sequence[Mapping[str, Any]] | None = None) -> None:
+    def add_batch(self, infos: Sequence[Mapping[str, Any]], rewards: Sequence[float], terms: Sequence[Mapping[str, Any]] | None = None, terminated: Sequence[bool] | None = None, truncated: Sequence[bool] | None = None) -> None:
         if len(infos) != len(rewards):
             raise ValueError("telemetry infos and rewards must have equal lengths")
         for index, (info, reward) in enumerate(zip(infos, rewards)):
-            self.add(info, reward, None if terms is None else terms[index])
+            self.add(info, reward, None if terms is None else terms[index], terminated=bool(terminated[index]) if terminated is not None else False, truncated=bool(truncated[index]) if truncated is not None else False, env_id=index)
 
-    def reduce(self, *, update: int, transitions: int, update_elapsed_seconds: float | None = None, agent: Any = None) -> dict[str, float]:
+    def reduce(self, *, update: int, transitions: int, window_transitions: int | None = None, update_elapsed_seconds: float | None = None, agent: Any = None) -> dict[str, float]:
         metrics: dict[str, float] = {
             "global_step": float(transitions),
             "update": float(update),
@@ -113,11 +159,13 @@ class TelemetryAccumulator:
             "performance/update_time": float(update_elapsed_seconds if update_elapsed_seconds is not None else perf_counter() - self.started_at),
         }
         if metrics["performance/update_time"] > 0:
-            metrics["performance/step_fps"] = float(transitions / metrics["performance/update_time"])
+            measured_transitions = int(window_transitions if window_transitions is not None else len(self.infos))
+            metrics["performance/step_fps"] = float(measured_transitions / metrics["performance/update_time"])
             metrics["performance/update_fps"] = float(1.0 / metrics["performance/update_time"])
-        metrics["episodes/length_mean"] = float(len(self.infos))
-        if self.infos and any(bool(info.get("terminated", False) or info.get("truncated", False)) for info in self.infos):
-            metrics["episodes/return_mean"] = metrics["reward_mean"] * metrics["episodes/length_mean"]
+        if self.completed_episode_lengths:
+            metrics["episodes/completed_count"] = float(len(self.completed_episode_lengths))
+            metrics["episodes/length_mean"] = float(np.mean(self.completed_episode_lengths))
+            metrics["episodes/return_mean"] = float(np.mean(self.completed_episode_returns))
         for name, values in self.terms.items():
             value = _mean(values)
             if value is not None:
@@ -143,7 +191,8 @@ class TelemetryAccumulator:
             if actual_q.shape == (4,) and target_q.shape == (4,):
                 actual_q = actual_q / max(np.linalg.norm(actual_q), 1e-12)
                 target_q = target_q / max(np.linalg.norm(target_q), 1e-12)
-                orientation_errors.append(float(1.0 - min(1.0, abs(float(np.dot(actual_q, target_q))))))
+                angle_rad, angle_degrees = _orientation_angles(actual_q, target_q)
+                orientation_errors.append(angle_rad)
             for key, values in (("actual_peak_lift", lifts), ("target_peak_lift", target_lifts), ("lift_error", [])):
                 value = _scalar(info.get(key))
                 if value is not None and key != "lift_error": values.append(value)
@@ -154,11 +203,13 @@ class TelemetryAccumulator:
             force_contact = bool(force.size and np.linalg.norm(force.reshape(-1, 3), axis=1).max() > 0.02)
             contact.append(force_contact)
             actual_z = _scalar(actual[2]) if actual.shape == (3,) else None
-            airborne_contact.append(bool(force_contact and actual_z is not None and actual_z > 0.03))
+            airborne_contact.append(genuine_airborne_contact(info))
             phase = info.get("failure_phase")
             if phase is not None: phases[str(phase)] += 1
         if path_errors: metrics["physics/path_rmse"] = float(np.sqrt(np.mean(np.square(path_errors))) )
-        if orientation_errors: metrics["physics/orientation_error"] = float(np.mean(orientation_errors))
+        if orientation_errors:
+            metrics["physics/orientation_error_rad"] = float(np.mean(orientation_errors))
+            metrics["physics/orientation_error_degrees"] = float(np.degrees(np.mean(orientation_errors)))
         if lifts: metrics["physics/peak_lift"] = float(max(lifts))
         if target_lifts: metrics["physics/target_peak_lift"] = float(max(target_lifts))
         if slips: metrics["physics/slip_proxy"] = float(np.mean(slips))
@@ -174,7 +225,9 @@ class TelemetryAccumulator:
         return metrics
 
     def clear(self) -> None:
+        """Clear only the current update window; episode state crosses PPO cuts."""
         self.rewards.clear(); self.terms.clear(); self.infos.clear(); self.started_at = perf_counter()
+        self.completed_episode_returns.clear(); self.completed_episode_lengths.clear()
 
 
 def configure_wandb_axis(run: Any) -> None:

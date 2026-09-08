@@ -75,11 +75,11 @@ def formaltrain(args):
     try:
         observations, _ = wrapper.reset()
         rows = []
+        telemetry = TelemetryAccumulator()
         for update in range(args.updates):
             update_started = __import__("time").perf_counter()
             terminations = []
             truncations = []
-            telemetry = TelemetryAccumulator()
             for timestep in range(args.rollouts):
                 with torch.no_grad():
                     actions, _ = agent.act(observations, None, timestep=timestep, timesteps=args.rollouts)
@@ -90,13 +90,14 @@ def formaltrain(args):
                     timestep=timestep, timesteps=args.rollouts)
                 agent.post_interaction(timestep=timestep + 1, timesteps=args.rollouts)
                 info = infos if isinstance(infos, dict) else infos[0]
-                telemetry.add(info, float(rt.mean()), info.get("terms", {}))
+                telemetry.add(info, float(rt.mean()), info.get("terms", {}), terminated=bool(td.any()), truncated=bool(tr.any()))
                 terminations.append(bool(td.any())); truncations.append(bool(tr.any())); observations = next_obs
                 if bool((td | tr).any()): observations, _ = wrapper.reset()
             row = telemetry.reduce(update=update + 1, transitions=(update + 1) * args.rollouts,
-                update_elapsed_seconds=__import__("time").perf_counter() - update_started, agent=agent)
+                window_transitions=args.rollouts, update_elapsed_seconds=__import__("time").perf_counter() - update_started, agent=agent)
             row.update({"terminated": float(sum(terminations)), "truncated": float(sum(truncations))})
             rows.append(row); print(json.dumps(row, default=_jsonable), flush=True); log_update(run, row)
+            telemetry.clear()
         out = Path(args.checkpoint); out.parent.mkdir(parents=True, exist_ok=True)
         payload = {"format": "manorl.autonomy.formalppo.v1", "training_contract": TRAINING_CONTRACT_ID,
             "contracts": {"action": ACTION_CONTRACT_ID, "observation": OBSERVATION_CONTRACT_ID, "reward": REWARD_CONTRACT_ID},

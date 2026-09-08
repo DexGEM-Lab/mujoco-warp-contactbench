@@ -20,12 +20,17 @@ minibatch count and policy standard deviation. A metric is emitted only when
 the canonical agent exposes it. The current agent does not expose PPO clip
 fraction, so no fabricated clip-fraction value is logged.
 
-Per-update physics telemetry includes reward terms, path RMSE, orientation
-error, peak/target lift, genuine hand-object contact frame counts and sustained
-runs, airborne-contact counts, slip proxy, failure-phase counts and transition
-throughput. Accumulation accepts batches of `info` mappings so a future batched
-adapter can reduce at update boundaries without materializing device tensors on
-every step.
+Per-update physics telemetry includes reward terms, path RMSE, normalized
+quaternion geodesic orientation error in radians and degrees, peak/target lift,
+genuine hand-object contact frame counts and sustained runs, airborne-contact
+counts, slip proxy, failure-phase counts and transition throughput. Airborne
+contact requires both genuine hand-object force and rotated collision-vertex
+bottom clearance above the floor; a resting 5 cm cube is not airborne.
+Transition FPS uses only the current update window. Episode return/length are
+emitted only for episodes that actually terminate; ongoing episodes carry their
+counters across PPO rollout cuts. Accumulation accepts batches of `info`
+mappings so a future batched adapter can reduce at update boundaries without
+materializing device tensors on every step.
 
 ## Post-training publication
 
@@ -41,8 +46,14 @@ python tools/publish_manorl_autonomy_evaluation.py \
 It requires the trace/checkpoint format to match, computes a readable JSON
 summary with explicit denominators, and appends evaluation metrics/artifacts to
 an existing **FINISHED** run. It does not retrain or write historical training
-losses. The MP4 is a real MuJoCo offscreen render: each frame places actual and
-reference states into the same one-world model and camera, side-by-side. The
-`max_lift_endpose_diagnostic` field is intentionally separate from
-`task_success`; sustained airborne genuine hand-object contact, path fidelity,
-slip and release are required for a future success claim.
+losses. Evaluation uses W&B's automatic monotonic SDK history step and records
+checkpoint transition count as a field; it does not reuse the 538-frame count
+as the training history step. A `wandb.Video` and `wandb.Table` are logged into
+history/UI as well as the JSON/MP4 artifact. The MP4 is a real MuJoCo offscreen
+render: source 120 Hz frames are decimated by four for 30 FPS playback (about
+4.5 seconds), with actual and reference states in the same one-world model and
+camera and labeled panels. The `max_lift_endpose_diagnostic` field is separate
+from nullable `full_task_success`; the reference-release-window contact-free
+count is explicitly a statistic, not successful release. Sustained airborne
+genuine hand-object contact, path fidelity, slip and release are required for a
+future success claim.
