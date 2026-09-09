@@ -689,6 +689,62 @@ def _hand_rows_by_side(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return mapping
 
 
+def _modern_scene_object_names(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the ordered object-state names carried by a modern capture row."""
+
+    metadata = row.get("trajectory_metadata")
+    if isinstance(metadata, Mapping):
+        object_names = metadata.get("object_names")
+        if isinstance(object_names, list) and object_names:
+            names = tuple(str(value).strip() for value in object_names)
+            if all(names) and len(set(names)) == len(names):
+                return names
+    index = row.get("index")
+    scene = index.get("scene") if isinstance(index, Mapping) else None
+    if not isinstance(scene, str):
+        return ()
+    names = tuple(value.strip() for value in scene.split(","))
+    if not names or not all(names) or len(set(names)) != len(names):
+        return ()
+    return names
+
+
+def _modern_active_object_context(
+    row: Mapping[str, Any],
+) -> tuple[str, tuple[str, ...], int] | None:
+    """Resolve the sole manipulated object and its ordered object-state slot."""
+
+    names = _modern_scene_object_names(row)
+    if not names:
+        return None
+    metadata = row.get("trajectory_metadata")
+    trajectory_info = (
+        metadata.get("trajectory_info") if isinstance(metadata, Mapping) else None
+    )
+    movement = (
+        trajectory_info.get("object_move")
+        if isinstance(trajectory_info, Mapping)
+        else None
+    )
+    moved_names = (
+        [str(item.get("object_name", "")).strip() for item in movement]
+        if isinstance(movement, list)
+        and all(isinstance(item, Mapping) for item in movement)
+        else []
+    )
+    moved_names = [name for name in moved_names if name]
+    if len(moved_names) == 1:
+        active = moved_names[0]
+    elif len(names) == 1 and not moved_names:
+        # Preserve modern single-object rows that omit movement annotations.
+        active = names[0]
+    else:
+        return None
+    if active not in names:
+        return None
+    return active, names, names.index(active)
+
+
 def _safe_row_identity(row: dict[str, Any], row_index: int = 0) -> str:
     """Derive a stable identity for both old source and new capture rows."""
 
@@ -698,7 +754,12 @@ def _safe_row_identity(row: dict[str, Any], row_index: int = 0) -> str:
         candidate = Path(source_path).parent.name
         if candidate.count("_") == 2:
             return candidate
-    scene = str(index.get("scene", "object")) if isinstance(index, dict) else "object"
+    active_context = _modern_active_object_context(row)
+    scene = (
+        active_context[0]
+        if active_context is not None
+        else str(index.get("scene", "object")) if isinstance(index, dict) else "object"
+    )
     gesture = str(index.get("gesture", "01")) if isinstance(index, dict) else "01"
     # Keep environment's object_action_sequence convention even when the new
     # capture uses a descriptive gesture string.
@@ -748,10 +809,11 @@ def _modern_row_pair_identity(
     metadata = row.get("trajectory_metadata")
     if not isinstance(index, dict) or not isinstance(metadata, dict):
         return None
-    object_type = str(index.get("scene", "")).strip()
+    active_context = _modern_active_object_context(row)
     action_id = _gesture_action_id(index.get("gesture", ""))
-    if not object_type or action_id is None:
+    if active_context is None or action_id is None:
         return None
+    object_type = active_context[0]
     try:
         pair = ObjectActionPair(object_type, action_id)
     except ValueError:
@@ -847,14 +909,19 @@ def trajectory_from_lance_row(
     if np.any(np.diff(timestamps) <= 0):
         raise ValueError("source timestamps are not strictly increasing")
 
-    object_names = metadata.get("object_names")
-    if not isinstance(object_names, list):
-        object_names = [str(row.get("index", {}).get("scene", OBJECT_TYPE))]
+    active_context = _modern_active_object_context(row)
+    if active_context is None:
+        raise ValueError(
+            "modern row must identify exactly one manipulated object present in its scene"
+        )
+    object_type, object_names, object_index = active_context
     objects = row.get("objects")
     if not isinstance(objects, list) or not objects:
         raise ValueError("row must contain at least one object state")
-    object_type = str(row.get("index", {}).get("scene", object_names[0]))
-    object_index = object_names.index(object_type) if object_type in object_names else 0
+    if len(object_names) != len(objects):
+        raise ValueError(
+            "ordered scene object names must match the number of object states"
+        )
     if object_index >= len(objects):
         raise ValueError("selected object state is absent")
     object_state = objects[object_index]
@@ -1445,7 +1512,7 @@ def _candidate_from_metadata_row(
     except ValueError:
         return None
     index_action = _gesture_action_id(index.get("gesture", ""))
-    if str(index.get("scene", "")) != object_type or index_action != pair.action_id:
+    if index_action != pair.action_id:
         return None
     if isinstance(source_path, str) and source_path and Path(source_path).parent.name != identity:
         return None

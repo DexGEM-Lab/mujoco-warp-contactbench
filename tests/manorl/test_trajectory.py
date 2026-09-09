@@ -363,6 +363,99 @@ def test_modern_capture_edge_holds_missing_padding_to_exact_duration() -> None:
     np.testing.assert_allclose(np.diff(trajectory.timestamps), 0.01, atol=1e-15)
 
 
+def _composite_scene_row(
+    *, active_object: str = "mayonnaisebottle"
+) -> dict[str, object]:
+    frames = 6
+    scene_objects = ["bowl", "mayonnaisebottle"]
+    active_index = scene_objects.index(active_object)
+    return {
+        "index": {
+            "uuid": "composite-row",
+            "file_uuid": "composite-file",
+            "scene": ",".join(scene_objects),
+            "gesture": "005-mayonnaisebottle-bowl-pick-up",
+            "is_generated": False,
+        },
+        "trajectory_metadata": {
+            "total_frames": frames,
+            "data_fps": 100,
+            "hand_names": ["right"],
+            "trajectory_info": {
+                "object_move": [
+                    {
+                        "object_name": active_object,
+                        "start_frame": 1,
+                        "end_frame": 4,
+                    }
+                ]
+            },
+        },
+        "timestamp": (np.arange(frames, dtype=np.float64) / 100.0).tolist(),
+        "hands": [
+            {
+                "hand_name": "right",
+                "urdf_dof": np.zeros((frames, 28), dtype=np.float64).tolist(),
+            }
+        ],
+        "objects": [
+            {
+                "pos": np.repeat([[float(index), 0.0, 1.0]], frames, axis=0).tolist(),
+                "rot_aa": np.zeros((frames, 3), dtype=np.float64).tolist(),
+            }
+            for index in range(len(scene_objects))
+        ],
+        "_expected_active_index": active_index,
+    }
+
+
+def test_composite_scene_uses_unique_manipulated_object_and_ordered_state() -> None:
+    row = _composite_scene_row()
+    expected_index = row.pop("_expected_active_index")
+    selection = TrajectorySelection(
+        object_type="mayonnaisebottle",
+        gesture="05",
+        selector="mayonnaisebottle:05",
+        pre_padding=0,
+        post_padding=0,
+        hand_side="right",
+    )
+
+    candidate = _candidate_from_metadata_row(row, row_index=7, selection=selection)
+    assert candidate is not None
+    assert candidate.pair == ObjectActionPair("mayonnaisebottle", "05")
+    assert candidate.identity == "mayonnaisebottle_05_008"
+
+    trajectory = _selected_trajectory_from_row(
+        row,
+        5,
+        row_index=7,
+        selection=selection,
+        expected_pair=ObjectActionPair("mayonnaisebottle", "05"),
+    )
+    assert trajectory.identity.identity == "mayonnaisebottle_05_008"
+    assert trajectory.identity.object_index == expected_index == 1
+    np.testing.assert_allclose(trajectory.object_pos_raw[:, 0], 1.0)
+    assert (trajectory.movement_start_step, trajectory.movement_end_step) == (0, 3)
+
+
+def test_composite_scene_rejects_ambiguous_manipulated_objects() -> None:
+    row = _composite_scene_row()
+    row.pop("_expected_active_index")
+    row["trajectory_metadata"]["trajectory_info"]["object_move"].append(
+        {"object_name": "bowl", "start_frame": 1, "end_frame": 4}
+    )
+    selection = TrajectorySelection(
+        object_type="mayonnaisebottle",
+        gesture="05",
+        selector="mayonnaisebottle:05",
+    )
+
+    assert _candidate_from_metadata_row(row, row_index=0, selection=selection) is None
+    with pytest.raises(ValueError, match="exactly one manipulated object"):
+        trajectory_from_lance_row(row, dataset_version=5)
+
+
 def test_candidate_rejects_negative_movement_pre_padding_margin(tmp_path: Path) -> None:
     row = deepcopy(_accepted_fake_row(np.arange(1373, dtype=np.float64) / 111.0))
     row["index"].update(

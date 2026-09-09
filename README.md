@@ -340,9 +340,28 @@ variables documented in each script.
 The trainer also accepts exact multi-object/action selection via
 `--pairs cube1:01,cube1:02,cube2:01` or `--all-pairs`. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
-remain single-object modes. Strict resume binds the package schema, package
-manifest SHA256, and catalog digest in the checkpoint environment ABI; moving a
-verified package does not change its identity, changing any catalog byte does.
+remain single-object modes. Modern capture rows may list ordered scene objects
+as a comma-separated `index.scene`; the unique `object_move` entry selects the
+one object controlled by that environment and its position in the scene list
+selects the matching `objects` state. Passive scene objects are not materialized
+in the training physics model, and composite rows with zero or multiple
+manipulated objects are rejected. Strict resume binds the package schema,
+package manifest SHA256, and catalog digest in the checkpoint environment ABI;
+moving a verified
+package does not change its identity, changing any catalog byte does.
+
+A policy-free GPU replay records the source-following environment to Rerun
+without loading a checkpoint or applying residual actions:
+
+```bash
+PYTHONPATH=. XLA_PYTHON_CLIENT_PREALLOCATE=false \
+python tools/record_manorl_rerun.py \
+  --output outputs/manorl/reference.rrd \
+  --dataset-path /path/to/capture.lance \
+  --object bowl --gesture 03 --reference-fps 100 \
+  --hand-side right --device gpu --use_residual false \
+  --terminal false --steps 650
+```
 
 ### Training output and monitoring
 
