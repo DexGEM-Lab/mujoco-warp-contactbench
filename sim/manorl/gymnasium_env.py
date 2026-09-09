@@ -144,6 +144,23 @@ class ManoGymnasiumVectorEnv(gym.vector.VectorEnv):
             raise ValueError("reset_done requires at least one terminal environment")
         return self.reset(options={"env_ids": env_ids})
 
+    def reset_done_device(self, done: NDArray[object]) -> Any:
+        """Reset terminal device-transition worlds and keep their policy observation on JAX."""
+
+        if not self.environment.config.device_transition:
+            raise RuntimeError("reset_done_device requires EnvironmentConfig.device_transition=True")
+        mask = np.asarray(done, dtype=bool).reshape(-1)
+        if mask.shape != (self.num_envs,):
+            raise ValueError(f"done must have shape ({self.num_envs},)")
+        env_ids = np.flatnonzero(mask).astype(np.int64)
+        if env_ids.size == 0:
+            raise ValueError("reset_done_device requires at least one terminal environment")
+        observation = self.environment.device_reset(env_ids)
+        if observation.shape != (self.num_envs, self.observation_dim):
+            raise RuntimeError("physical environment returned an invalid device reset observation batch")
+        self._pending_reset_mask()[env_ids] = False
+        return observation
+
     def step_device(self, raw_actions: np.ndarray) -> tuple[DeviceTransitionBatch, dict[str, Any]]:
         """Run the training-only device egress without materializing policy tensors.
 

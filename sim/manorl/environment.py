@@ -2981,23 +2981,17 @@ class MujocoManoEnvironment:
         )
         world = self.jp.arange(self.config.num_envs)
 
-        def transition(
+        def policy_observation(
             data: Any,
             indices: Any,
             next_indices: Any,
-            progress: Any,
-            trajectory_steps: Any,
-            early_mask: Any,
             cumulative_offset: Any,
             cumulative_joint_offset: Any,
-            prior_progress: Any,
-            prior_steps: Any,
-            prior_returns: Any,
-            pending_reset: Any,
-            prior_control_call: Any,
             point_cloud: Any,
             point_scale: Any,
-        ) -> tuple[Any, ...]:
+        ) -> tuple[Any, Any, Any, Any, Any]:
+            """Build policy inputs from current MJX data without host snapshots."""
+
             physical = extract_mjx_physical_features(
                 qpos=data.qpos,
                 qvel=data.qvel,
@@ -3016,6 +3010,60 @@ class MujocoManoEnvironment:
             contacts = self.producer.device_contact_reduction(data)
             target_pos = self._device_reference_object_pos[world, indices]
             target_quat = self._device_reference_object_quat[world, indices]
+            raw_observation, observation_valid = build_device_observation_28(
+                physical=physical,
+                hand_keypoint_contact_forces=contacts.keypoint_forces,
+                target_object_position=target_pos,
+                target_object_orientation_xyzw=target_quat,
+                target_object_pos_next_5=self._device_reference_object_pos[
+                    world, next_indices
+                ],
+                cumulative_offset=cumulative_offset,
+                cumulative_joint_offset=cumulative_joint_offset,
+                point_cloud_local=point_cloud,
+                point_cloud_scale=point_scale,
+                object_geometry=self._device_object_geometry,
+                expected_contact_mask=self._device_expected_contact_mask,
+                action_ids=self._device_action_ids,
+                object_support_points=self._device_object_support_points,
+                table_surface_height=FLOOR_TOP_Z,
+                mano_dof_lower=self._joint_lower_device[:JOINT_DOF],
+                mano_dof_upper=self._joint_upper_device[:JOINT_DOF],
+            )
+            return physical, contacts, target_pos, target_quat, (
+                self.jp.clip(raw_observation, -5.0, 5.0).astype(self.jp.float32),
+                observation_valid,
+            )
+
+        def transition(
+            data: Any,
+            indices: Any,
+            next_indices: Any,
+            progress: Any,
+            trajectory_steps: Any,
+            early_mask: Any,
+            cumulative_offset: Any,
+            cumulative_joint_offset: Any,
+            prior_progress: Any,
+            prior_steps: Any,
+            prior_returns: Any,
+            pending_reset: Any,
+            prior_control_call: Any,
+            point_cloud: Any,
+            point_scale: Any,
+        ) -> tuple[Any, ...]:
+            physical, contacts, target_pos, target_quat, (
+                raw_observation,
+                observation_valid,
+            ) = policy_observation(
+                data,
+                indices,
+                next_indices,
+                cumulative_offset,
+                cumulative_joint_offset,
+                point_cloud,
+                point_scale,
+            )
             termination = check_device_termination(
                 object_position=physical.object_position,
                 target_position=target_pos,
@@ -3046,26 +3094,6 @@ class MujocoManoEnvironment:
                 termination=termination,
                 config=self.config.reward_config,
             )
-            raw_observation, observation_valid = build_device_observation_28(
-                physical=physical,
-                hand_keypoint_contact_forces=contacts.keypoint_forces,
-                target_object_position=target_pos,
-                target_object_orientation_xyzw=target_quat,
-                target_object_pos_next_5=self._device_reference_object_pos[
-                    world, next_indices
-                ],
-                cumulative_offset=cumulative_offset,
-                cumulative_joint_offset=cumulative_joint_offset,
-                point_cloud_local=point_cloud,
-                point_cloud_scale=point_scale,
-                object_geometry=self._device_object_geometry,
-                expected_contact_mask=self._device_expected_contact_mask,
-                action_ids=self._device_action_ids,
-                object_support_points=self._device_object_support_points,
-                table_surface_height=FLOOR_TOP_Z,
-                mano_dof_lower=self._joint_lower_device[:JOINT_DOF],
-                mano_dof_upper=self._joint_upper_device[:JOINT_DOF],
-            )
             counters = advance_device_task_counters(
                 progress=prior_progress,
                 trajectory_steps=prior_steps,
@@ -3095,6 +3123,17 @@ class MujocoManoEnvironment:
             )
 
         self._device_transition_fn = self.jax.jit(transition)
+        self._device_reset_observation_fn = self.jax.jit(
+            lambda data, indices, next_indices, cumulative_offset, cumulative_joint_offset, point_cloud, point_scale: policy_observation(
+                data,
+                indices,
+                next_indices,
+                cumulative_offset,
+                cumulative_joint_offset,
+                point_cloud,
+                point_scale,
+            )[-1]
+        )
 
     def _device_transition_outputs(
         self,
@@ -3252,6 +3291,74 @@ class MujocoManoEnvironment:
             deviation_reset=deviation_reset,
             valid=valid,
         )
+
+    def device_reset(self, env_ids: NDArray[object]) -> Any:
+        """Reset selected device-transition worlds and return their JAX policy inputs.
+
+        The ordinary :meth:`reset` contract deliberately continues through
+        ``producer.extract`` for host Gym and evaluation consumers. This narrow
+        training path uses the same device observation primitives as a device
+        transition, so it neither materializes a physical snapshot nor calls
+        the host contact decoder.
+        """
+
+        if not self.config.device_transition:
+            raise RuntimeError("device_reset requires EnvironmentConfig.device_transition=True")
+        if self.is_heterogeneous:
+            raise RuntimeError("device_reset does not support heterogeneous batches")
+        indices = np.asarray(env_ids)
+        if indices.ndim != 1 or not np.issubdtype(indices.dtype, np.integer):
+            raise ValueError("env_ids must be a one-dimensional integer array")
+        indices = np.unique(indices.astype(np.int64, copy=False))
+        if indices.size == 0:
+            raise ValueError("device_reset requires at least one environment index")
+        if np.any(indices < 0) or np.any(indices >= self.config.num_envs):
+            raise ValueError("env_ids contains an invalid environment index")
+        self._reset_indices(indices)
+        self._initialize_device_transition_kernel()
+        target_indices = self._target_indices()
+        next_indices = np.minimum(target_indices + 5, self.trajectory_lengths - 1)
+        template = self._point_template()
+        point_cloud = np.asarray(template.local_points, dtype=np.float64)
+        point_scale = (
+            np.asarray(template.scale, dtype=np.float64)
+            if template.normalized and template.scale is not None
+            else np.ones(3, dtype=np.float64)
+        )
+        (
+            device_indices,
+            device_next_indices,
+            device_cumulative_offset,
+            device_cumulative_joint_offset,
+            device_point_cloud,
+            device_point_scale,
+        ) = self.jax.device_put(
+            (
+                target_indices,
+                next_indices,
+                self.cumulative_offset,
+                self.cumulative_joint_offset,
+                point_cloud,
+                point_scale,
+            ),
+            self.device,
+        )
+        policy_observation, valid = self._device_reset_observation_fn(
+            self.data,
+            device_indices,
+            device_next_indices,
+            device_cumulative_offset,
+            device_cumulative_joint_offset,
+            device_point_cloud,
+            device_point_scale,
+        )
+        if not bool(self.jax.device_get(valid)):
+            raise RuntimeError("device_reset rejected non-finite or invalid reset inputs")
+        # A prior host snapshot cannot describe the newly reset device state.
+        self.last_physical = None
+        self.last_observation = None
+        self.last_transition = None
+        return policy_observation
 
     def _build_observation(self, physical: PhysicalSnapshot) -> ObservationResult:
         indices = self._target_indices()

@@ -525,6 +525,58 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
 
 
 @pytest.mark.skipif(
+    os.environ.get("MANORL_RUN_DEVICE_TRANSITION_PARITY") != "1",
+    reason="device reset host oracle is opt-in and requires configured CUDA JAX/MJX",
+)
+def test_device_reset_matches_host_rows_without_host_extraction(monkeypatch) -> None:
+    """Device reset retains the host reset lifecycle without materializing s0 on host."""
+    if jax.default_backend() != "gpu":
+        pytest.skip("configured CUDA JAX backend required")
+
+    trajectory = load_reference_trajectory()
+    common = dict(
+        num_envs=3,
+        device="gpu",
+        device_resident_controls=True,
+        capture_transition_diagnostics=False,
+        point_sampling_backend="numpy_per_env",
+        contact_capacity=recommended_warp_contact_capacity(3, trajectory.hand_sides),
+    )
+    host = MujocoManoEnvironment(trajectory, EnvironmentConfig(**common))
+    device = MujocoManoEnvironment(
+        trajectory, EnvironmentConfig(**common, device_transition=True)
+    )
+    selected = np.asarray([0, 2], dtype=np.int64)
+    for environment in (host, device):
+        environment.progress[:] = np.asarray([7, 4, 2], dtype=np.int64)
+        environment.trajectory_steps[:] = np.asarray([6, 3, 1], dtype=np.int64)
+        environment.cumulative_offset[:] = np.asarray([0.2, 0.3, 0.4])
+        environment.cumulative_joint_offset[:] = 0.5
+        environment.episode_returns[:] = np.asarray([4.0, 5.0, 6.0])
+        environment.reset_mask[:] = np.asarray([True, False, True])
+
+    host_observation = host.reset(selected)["obs"]
+
+    def fail_extract(*_args, **_kwargs):
+        raise AssertionError("device_reset must not call producer.extract")
+
+    monkeypatch.setattr(device.producer, "extract", fail_extract)
+    device_observation = device.device_reset(selected)
+
+    np.testing.assert_allclose(
+        np.asarray(device_observation)[selected], host_observation[selected], rtol=1e-4, atol=4e-4
+    )
+    np.testing.assert_array_equal(device.progress, host.progress)
+    np.testing.assert_array_equal(device.trajectory_steps, host.trajectory_steps)
+    np.testing.assert_allclose(device.cumulative_offset, host.cumulative_offset)
+    np.testing.assert_allclose(device.cumulative_joint_offset, host.cumulative_joint_offset)
+    np.testing.assert_allclose(device.episode_returns, host.episode_returns)
+    np.testing.assert_array_equal(device.reset_mask, host.reset_mask)
+    assert device.last_physical is None
+    assert device.last_observation is None
+
+
+@pytest.mark.skipif(
     not os.environ.get("MANORL_COMPOSITE_PARITY_DATASET"),
     reason="set MANORL_COMPOSITE_PARITY_DATASET to a dataset-v5 Lance path",
 )
