@@ -60,6 +60,22 @@ def _np_quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     u,w=q[...,:3],q[...,3:]
     return v*(2*w*w-1)+2*w*np.cross(u,v)+2*u*np.sum(u*v,axis=-1,keepdims=True)
 
+def align_reference_trajectory_v4(trajectory, vertices: np.ndarray, table_height: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pure v4 support alignment; no legacy/native autonomy route is imported."""
+    vertices=np.asarray(vertices,dtype=np.float64).reshape(-1,3)
+    q=np.asarray(trajectory.q_ref,dtype=np.float64).copy()
+    object_pos=np.asarray(trajectory.object_pos_raw,dtype=np.float64).copy()
+    quat=np.asarray(trajectory.object_quat_xyzw[0],dtype=np.float64)
+    if len(q) == 0 or object_pos.shape != (len(q),3) or quat.shape != (4,):
+        raise ValueError("v4 reference alignment requires nonempty q/object/quaternion tables")
+    if not np.all(np.isfinite(vertices)) or np.linalg.norm(quat) <= 1e-12:
+        raise ValueError("v4 reference alignment received invalid collision geometry or quaternion")
+    rotated=_np_quat_rotate(np.broadcast_to(quat,(len(vertices),4)),vertices)
+    shift=np.array([0.,0.,float(table_height)-float(np.min(rotated[:,2]+object_pos[0,2]))])
+    q[:,:3] += shift
+    return q, object_pos + shift, shift
+
+
 def _mesh_body_geometry(model, geom_id: int) -> tuple[np.ndarray, np.ndarray]:
     """Return one collision mesh in its owning body frame, applying geom pose once."""
     mesh_id=int(model.geom_dataid[geom_id])
@@ -124,8 +140,14 @@ def _savgol(values: np.ndarray) -> np.ndarray:
     return savgol_filter(values,width,min(2,width-1),axis=0,mode='interp') if width >= 3 else values
 
 def _filtered_derivative(values: np.ndarray, dt: float) -> np.ndarray:
+    """Filtered derivative with a defined short-table contract."""
+    values=np.asarray(values)
     if dt <= 0 or not np.isfinite(dt): raise ValueError("reference control timestep must be finite positive")
-    return _savgol(np.gradient(values,dt,axis=0,edge_order=2 if len(values)>=3 else 1))
+    if len(values) == 0: raise ValueError("reference derivative requires at least one frame")
+    # numpy's edge_order=2 needs three samples; Savgol's width is odd and
+    # bounded by both the table and the v4 seven-frame policy.
+    derivative=np.gradient(values,dt,axis=0,edge_order=min(2,len(values)-1)) if len(values)>1 else np.zeros_like(values)
+    return _savgol(derivative)
 
 def _filtered_angular_velocity(quaternions: np.ndarray, dt: float) -> np.ndarray:
     """Source-consistent relative quaternion log rotations, then Savgol."""
@@ -145,7 +167,6 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     import jax, jax.numpy as j
     from mujoco import mjx
     from sim.manorl.assets import compile_model_metadata_only, object_collision_vertices
-    from sim.manorl.autonomy import align_reference_trajectory
     from sim.manorl.environment import MjxWarpPhysicalProducer
     from sim.manorl.observations import geometry_encoding
     mujoco,model=compile_model_metadata_only(object_type=object_type,hand_side="right",physics_timestep=1/480)
@@ -166,10 +187,12 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     # sequential faces preserves that exact mesh without applying geom pose.
     object_points=_deterministic_surface_samples(object_triangles.reshape(-1,3),np.arange(object_triangles.size//3,dtype=np.int32).reshape(-1,3),64)
     dev=jax.devices(device)[0]; m=mjx.put_model(model,device=dev,impl="warp")
-    raw=np.asarray(trajectory.q_ref,dtype=np.float64).copy(); q_aligned,obj,shift=align_reference_trajectory(trajectory,object_triangles.reshape(-1,3),table_height)
+    raw=np.asarray(trajectory.q_ref,dtype=np.float64).copy(); q_aligned,obj,shift=align_reference_trajectory_v4(trajectory,object_triangles.reshape(-1,3),table_height)
     lower=np.asarray(model.jnt_range[:28,0]); upper=np.asarray(model.jnt_range[:28,1]); feasible=np.clip(q_aligned,lower,upper)
     raw[:, :3]+=shift
-    T=len(feasible); base=mjx.make_data(model,device=dev,impl="warp"); qpos=np.broadcast_to(np.asarray(base.qpos),(T,model.nq)).copy(); qpos[:,:28]=feasible
+    T=len(feasible)
+    if T < 2: raise ValueError("v4 reference cache requires at least two frames")
+    base=mjx.make_data(model,device=dev,impl="warp"); qpos=np.broadcast_to(np.asarray(base.qpos),(T,model.nq)).copy(); qpos[:,:28]=feasible
     qpos[:,producer.object_qpos_address:producer.object_qpos_address+3]=obj; qpos[:,producer.object_qpos_address+3:producer.object_qpos_address+7]=np.asarray(trajectory.object_quat_xyzw)[:,(3,0,1,2)]
     # Sequential/chunked offline N=1 FK keeps reference compilation distinct
     # from runtime physics batching.
@@ -286,39 +309,66 @@ def _gather(cache: ReferenceCacheV4, index, offset=0):
     i=j.minimum(j.asarray(index)+offset,len(cache.q_feasible)-1)
     return i
 
-def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, addresses, friction, frame, position, constraint_force, ngeom: int, hand_geom_ids, object_geom_ids, object_com, cone: str = "pyramidal"):
-    """Fail-closed same-transition reducer for pinned pyramidal/condim3 Warp buffers.
+def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, addresses, friction, frame, position, constraint_force, ngeom: int, hand_geom_ids, object_geom_ids, object_com, hand_com=None, hand_v_com=None, hand_w=None, object_v_com=None, object_w=None, cone: str = "pyramidal"):
+    """Reduce one *global* Warp contact arena into object and regional signals.
 
-    Contact force rows apply negatively to geom1 and positively to geom2.
-    The returned paired channel is therefore the canonical hand→object force,
-    while object_all includes every contact incident on object collision geoms.
+    Padded/unsolved (`efc_address=-1`) rows are erased before force, lever, or
+    velocity arithmetic.  A solved row with malformed IDs, frame, friction or
+    force is invalid rather than silently redirected by the safe gather.
     """
     import jax.numpy as j
     geom,world,dimension,addresses,friction,frame,position,constraint_force=map(j.asarray,(geom,world,dimension,addresses,friction,frame,position,constraint_force))
     capacity=geom.shape[0]; batch=constraint_force.shape[0]; slots=j.arange(capacity); count=j.asarray(nacon).reshape(())
     hand_host,obj_host=np.asarray(hand_geom_ids,dtype=np.int32),np.asarray(object_geom_ids,dtype=np.int32)
     if cone != "pyramidal": raise ValueError("v4 fast reducer supports pyramidal cone only")
-    if hand_host.shape != (16,) or not len(obj_host) or np.intersect1d(hand_host,obj_host).size or (ngeom >= 16 and len(set(hand_host.tolist())) != 16): raise ValueError("v4 contact geom ownership is invalid")
-    if geom.shape!=(capacity,2) or addresses.shape!=(capacity,4) or position.shape!=(capacity,3) or frame.shape!=(capacity,3,3): raise ValueError("pinned Warp contact ABI mismatch")
-    if count.dtype.kind not in 'iu': raise ValueError("contact count must be integer")
-    live=slots<count; active=addresses[:,0]>=0; solved=live&active; safe_world=j.clip(world,0,batch-1); safe_addr=j.clip(addresses,0,constraint_force.shape[1]-1); safe_geom=j.clip(geom,0,ngeom-1)
-    nefc=j.broadcast_to(j.asarray(nefc).reshape(-1),(batch,)) if j.asarray(nefc).size==1 else j.asarray(nefc).reshape(batch)
-    valid=(count>=0)&(count<capacity)&j.all((nefc>=0)&(nefc<constraint_force.shape[1]))&j.all(j.where(solved,(world>=0)&(world<batch)&(dimension==3)&j.all((geom>=0)&(geom<ngeom),axis=-1)&j.all((addresses>=0)&(addresses<nefc[safe_world,None]),axis=-1),True))
-    lam=constraint_force[safe_world[:,None],safe_addr]; local=j.stack((j.sum(lam,axis=-1),(lam[:,0]-lam[:,1])*friction[:,0],(lam[:,2]-lam[:,3])*friction[:,1]),axis=-1); force=j.einsum('ni,nij->nj',local,frame)
-    valid=valid&j.all(j.where(solved[:,None],j.isfinite(force),True))&j.all(j.where(solved[:,None],j.isfinite(position),True))
-    force=j.where(solved[:,None],force,0.); position=j.where(solved[:,None],position,0.); hand=hand_host; obj=obj_host
-    lookup=j.full((ngeom,),-1,dtype=j.int32).at[j.asarray(hand)].set(j.arange(16,dtype=j.int32)); a,b=lookup[safe_geom[:,0]],lookup[safe_geom[:,1]]
-    a_obj=j.any(safe_geom[:,0,None]==j.asarray(obj)[None],axis=-1); b_obj=j.any(safe_geom[:,1,None]==j.asarray(obj)[None],axis=-1)
-    paired=j.zeros((batch,16,3),force.dtype); torque=j.zeros_like(paired); counts=j.zeros((batch,16),j.int32); all_force=j.zeros((batch,3),force.dtype)
-    # object is geom2 → +force; geom1 → -force
-    all_force=all_force.at[safe_world].add(j.where(b_obj[:,None],force,0.)+j.where(a_obj[:,None],-force,0.))
+    if hand_host.shape != (16,) or not len(obj_host) or np.intersect1d(hand_host,obj_host).size or (ngeom >= 16 and len(set(hand_host.tolist())) != 16):
+        raise ValueError("v4 contact geom ownership is invalid")
+    if geom.shape!=(capacity,2) or addresses.shape!=(capacity,4) or position.shape!=(capacity,3) or frame.shape!=(capacity,3,3) or friction.ndim != 2 or friction.shape[0] != capacity:
+        raise ValueError("pinned Warp contact ABI mismatch")
+    if count.dtype.kind not in 'iu': raise ValueError("global contact count must be integer")
+    # Warp nacon is scalar for the arena, never B-wide.  Equality is overflow.
+    live=slots<count; solved=live&(addresses[:,0]>=0)
+    safe_world=j.clip(world,0,batch-1); safe_addr=j.clip(addresses,0,constraint_force.shape[1]-1); safe_geom=j.clip(geom,0,ngeom-1)
+    nefc_array=j.asarray(nefc)
+    nefc=j.broadcast_to(nefc_array.reshape(-1),(batch,)) if nefc_array.size==1 else nefc_array.reshape(batch)
+    row_valid=(world>=0)&(world<batch)&(dimension==3)&j.all((geom>=0)&(geom<ngeom),axis=-1)&j.all((addresses>=0)&(addresses<nefc[safe_world,None]),axis=-1)&j.all(j.isfinite(friction[:,:2]),axis=-1)&j.all(j.isfinite(frame),axis=(-1,-2))&j.all(j.isfinite(position),axis=-1)
+    valid=(count>=0)&(count<capacity)&j.all((nefc>=0)&(nefc<constraint_force.shape[1]))&j.all(j.where(solved,row_valid,True))
+    lam=constraint_force[safe_world[:,None],safe_addr]
+    local=j.stack((j.sum(lam,axis=-1),(lam[:,0]-lam[:,1])*friction[:,0],(lam[:,2]-lam[:,3])*friction[:,1]),axis=-1)
+    force=j.einsum('ni,nij->nj',local,frame)
+    valid=valid&j.all(j.where(solved[:,None],j.isfinite(lam),True))&j.all(j.where(solved[:,None],j.isfinite(force),True))
+    # Mask before calculating levers or point velocity so padded NaNs cannot
+    # enter a later reduction even transiently.
+    force=j.where(solved[:,None],force,0.); position=j.where(solved[:,None],position,0.); frame=j.where(solved[:,None,None],frame,0.)
+    lookup=j.full((ngeom,),-1,dtype=j.int32).at[j.asarray(hand_host)].set(j.arange(16,dtype=j.int32))
+    a,b=lookup[safe_geom[:,0]],lookup[safe_geom[:,1]]
+    a_obj=j.any(safe_geom[:,0,None]==j.asarray(obj_host)[None],axis=-1); b_obj=j.any(safe_geom[:,1,None]==j.asarray(obj_host)[None],axis=-1)
     first=solved&(a>=0)&b_obj; second=solved&(b>=0)&a_obj
+    paired=j.zeros((batch,16,3),force.dtype); torque=j.zeros_like(paired); counts=j.zeros((batch,16),j.int32); all_force=j.zeros((batch,3),force.dtype)
+    all_force=all_force.at[safe_world].add(j.where(b_obj[:,None],force,0.)+j.where(a_obj[:,None],-force,0.))
     paired=paired.at[safe_world,j.maximum(a,0)].add(force*first[:,None]); paired=paired.at[safe_world,j.maximum(b,0)].add(-force*second[:,None])
     lever=position-object_com[safe_world]
     torque=torque.at[safe_world,j.maximum(a,0)].add(j.cross(lever,force)*first[:,None]); torque=torque.at[safe_world,j.maximum(b,0)].add(-j.cross(lever,force)*second[:,None])
     counts=counts.at[safe_world,j.maximum(a,0)].add(first.astype(j.int32)); counts=counts.at[safe_world,j.maximum(b,0)].add(second.astype(j.int32))
-    valid=valid&j.all(j.isfinite(all_force))&j.all(j.isfinite(paired))&j.all(j.isfinite(torque))
-    return all_force,paired,torque,counts,valid
+    slip=j.zeros((batch,16,3),force.dtype)
+    if all(value is not None for value in (hand_com,hand_v_com,hand_w,object_v_com,object_w)):
+        hand_com,hand_v_com,hand_w,object_v_com,object_w=map(j.asarray,(hand_com,hand_v_com,hand_w,object_v_com,object_w))
+        region=j.maximum(j.where(first,a,j.where(second,b,0)),0)
+        hc,hv,hw=hand_com[safe_world,region],hand_v_com[safe_world,region],hand_w[safe_world,region]
+        ov,ow=object_v_com[safe_world],object_w[safe_world]
+        v_hand=hv+j.cross(hw,position-hc)
+        v_object=ov+j.cross(ow,position-object_com[safe_world])
+        normal=frame[:,0,:]
+        normal=normal/j.maximum(j.linalg.norm(normal,axis=-1,keepdims=True),1e-12)
+        tangential=(v_hand-v_object)-j.sum((v_hand-v_object)*normal,axis=-1,keepdims=True)*normal
+        pair=first|second; weight=j.linalg.norm(force,axis=-1)*pair
+        weighted=weight[:,None]*tangential
+        totals=j.zeros((batch,16,3),force.dtype).at[safe_world,region].add(weighted)
+        denom=j.zeros((batch,16),force.dtype).at[safe_world,region].add(weight)
+        slip=totals/j.maximum(denom[...,None],1e-12)
+        valid=valid&j.all(j.where(pair[:,None],j.isfinite(tangential),True))
+    valid=valid&j.all(j.isfinite(all_force))&j.all(j.isfinite(paired))&j.all(j.isfinite(torque))&j.all(j.isfinite(slip))
+    return all_force,paired,torque,counts,slip,valid
 
 def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command):
     """Build exact seven raw blocks, unclipped, from one same-time physical state."""

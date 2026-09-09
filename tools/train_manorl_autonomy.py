@@ -17,8 +17,8 @@ def _trajectory(path,identity):
 def inspect(args):
     t=_trajectory(args.package,args.identity)
     from sim.manorl.autonomy_batch import BatchedAutonomyRuntime
-    r=BatchedAutonomyRuntime(t,num_envs=1,device=args.device)
-    print(json.dumps({"contract":OBSERVATION_CONTRACT_ID,"identity":args.identity,"raw_shape":list(r.raw_observation.shape),"cache_hash":r.cache.content_hash,"control_dt":1/120,"training":"stopped"}))
+    r=BatchedAutonomyRuntime(t,num_envs=1,device=args.device,full_horizon_diagnostic=args.full_horizon_diagnostic)
+    print(json.dumps({"contract":OBSERVATION_CONTRACT_ID,"identity":args.identity,"raw_shape":list(r.raw_observation.shape),"cache_hash":r.cache.content_hash,"control_dt":1/120,"full_horizon_diagnostic":args.full_horizon_diagnostic,"training":"stopped"}))
 def smoke(args):
     t=_trajectory(args.package,args.identity)
     from sim.manorl.autonomy_training import BatchedAutonomyAdapter
@@ -37,5 +37,6 @@ def main():
     for name,fn in (("inspect",inspect),("smoke",smoke)):
         q=sub.add_parser(name); q.add_argument("--package",default=DEFAULT_PACKAGE); q.add_argument("--identity",default="cube2_02_2833"); q.add_argument("--device",choices=("cpu","gpu"),default="cpu"); q.set_defaults(fn=fn)
         if name=="smoke": q.add_argument("--checkpoint")
+        if name=="inspect": q.add_argument("--full-horizon-diagnostic",action="store_true",help="frozen evaluation/inspection only; unavailable to the disabled trainer")
     args=p.parse_args(); args.fn(args)
 if __name__=="__main__": main()
