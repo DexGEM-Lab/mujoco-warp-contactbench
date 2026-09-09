@@ -15,9 +15,9 @@ if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 import numpy as np
 import torch
 
-from sim.manorl.autonomy_batch_training import load_frozen_v4, run_batched_ppo
-from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID
-from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, identity_split, seed_everything
+from sim.manorl.autonomy_batch_training import inspect_v4_warmstart, load_frozen_v4, run_batched_ppo
+from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata
+from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything
 from sim.manorl.trajectory_package import load_trajectory_package
 
 DEFAULT_PACKAGE = "/home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180"
@@ -89,7 +89,6 @@ def train(args):
     warmstart_checkpoint = str(Path(args.warmstart).expanduser().resolve()) if args.warmstart else None
     mode = "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"
     config = {key: value for key, value in vars(args).items() if key not in {"fn", "wandb"}}
-    config.update({"warmstart_checkpoint": warmstart_checkpoint, "mode": mode})
     warmstart_expected = {
         key: provenance[key] for key in (
             "asset_pin", "package_digest", "manifest_sha256", "catalog_digest",
@@ -101,7 +100,15 @@ def train(args):
             "control_timestep", "physics_timestep", "physics_substeps",
         )
     }
-    provenance.update({"warmstart_checkpoint": warmstart_checkpoint, "mode": mode})
+    transfer_mode = None
+    if warmstart_checkpoint is not None:
+        _, transfer_mode = inspect_v4_warmstart(
+            warmstart_checkpoint, actor_critic_architecture(separate_critic=args.separate_critic),
+            expected_provenance=warmstart_expected,
+        )
+    lineage = {"separate_critic": bool(args.separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
+               "warmstart_transfer_mode": transfer_mode, "mode": mode}
+    config.update(lineage); provenance.update(lineage)
     metadata = {"training_contract": "manorl.autonomy.training.v4.single_reference", "config": config, "provenance": provenance}
     run = _wandb(args, metadata)
     try:
@@ -111,8 +118,8 @@ def train(args):
         _, _, rows = run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
             checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
-            warmstart=warmstart_checkpoint, expected_warmstart_provenance=warmstart_expected,
-            on_update=publish)
+            separate_critic=args.separate_critic, warmstart=warmstart_checkpoint,
+            expected_warmstart_provenance=warmstart_expected, on_update=publish)
     except BaseException:
         if run is not None: run.finish(exit_code=1)
         raise
@@ -121,12 +128,22 @@ def train(args):
     print(json.dumps({"checkpoint": args.checkpoint, "updates": len(rows), "cache_hash": provenance["cache_hash_recorded_not_compared"]}), flush=True)
 
 
+def _checkpoint_separate_critic(payload):
+    validate_v4_checkpoint_metadata(payload)
+    architecture = payload.get("model_architecture")
+    if architecture == actor_critic_architecture(separate_critic=False): return False
+    if architecture == actor_critic_architecture(separate_critic=True): return True
+    raise ValueError("checkpoint/model architecture mismatch")
+
+
 def evaluate(args):
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    separate_critic = _checkpoint_separate_critic(payload)
     split = identity_split(catalog, seed=payload.get("provenance", {}).get("identity_split", {}).get("seed", args.split_seed))
     adapter = _adapter(args, trajectory, full_horizon_diagnostic=args.full_horizon_diagnostic)
-    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=adapter.device)
+    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=adapter.device,
+                                separate_critic=separate_critic)
     expected = {"asset_pin": _git_revision(ROOT / "assets/dexstream_digital_assets"),
                 "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
                 "catalog_digest": catalog.catalog_digest, "identity_split": split,
@@ -178,6 +195,7 @@ def build_parser():
     train_parser.add_argument("--learning-epochs", type=int, default=4); train_parser.add_argument("--mini-batches", type=int, default=16); train_parser.add_argument("--total-transitions", type=int)
     train_parser.add_argument("--checkpoint", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt"); train_parser.add_argument("--checkpoint-interval", type=int, default=16)
     train_parser.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
+    train_parser.add_argument("--separate-critic", action="store_true", help="use an independent value trunk; shared remains the default")
     train_parser.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True); train_parser.add_argument("--wandb-project"); train_parser.add_argument("--wandb-entity"); train_parser.add_argument("--wandb-mode"); train_parser.set_defaults(fn=train)
     eval_parser = subs.add_parser("evaluate", parents=[common]); eval_parser.add_argument("--checkpoint", required=True); eval_parser.add_argument("--steps", type=int); eval_parser.add_argument("--full-horizon-diagnostic", action="store_true")
     eval_parser.add_argument("--trace", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_eval.json"); eval_parser.set_defaults(fn=evaluate)

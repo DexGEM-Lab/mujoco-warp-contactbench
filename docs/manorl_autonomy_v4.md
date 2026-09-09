@@ -136,11 +136,19 @@ keeps `njmax=512` per world. CPU integration commands explicitly use
 
 `train --warmstart PATH` validates the v4 model architecture plus pinned
 asset, package, catalog, manifest, split, identity, ABI, and physical clock
-provenance. It loads only the model state before the first rollout. PPO always
-constructs a fresh full actor/value Adam; the source checkpoint's optimizer,
-progress, and RNG are ignored. Warm-started outputs record
-`mode=ppo_warmstart` and the resolved `warmstart_checkpoint` in both config and
-provenance.
+provenance. With the default shared critic it loads an exact same-architecture
+model. `--separate-critic` selects the existing independent value trunk. A
+shared-trunk teacher may initialize that target through the one supported
+cross-architecture transfer: PointNet, policy `net`, `mean`, and `log_std` are
+copied exactly, while `value_net` and `value` retain their fresh target
+initialization. All other architecture direction or field mismatches fail.
+
+PPO always constructs a fresh Adam over every target actor/value parameter; the
+source checkpoint's optimizer, progress, and RNG are ignored. Outputs record
+`separate_critic`, `mode=ppo_warmstart`, the resolved `warmstart_checkpoint`,
+and `warmstart_transfer_mode` in both config and provenance. Frozen evaluation
+reads the checkpoint's exact shared/separate architecture before strict model
+loading.
 
 ```bash
 TEACHER=outputs/manorl/contact_conditioned_autonomy/single-trajectory-cpu-20260909/teacher-bc-v4.pt
@@ -153,8 +161,9 @@ python tools/train_manorl_autonomy.py train --device cpu --num-envs 1 \
 
 # Future GPU launch candidate; run only in an approved free GPU window.
 python tools/train_manorl_autonomy.py train --device gpu --num-envs 4096 \
-  --persistentworkspace --ccd-contacts-per-world 121 --warmstart "$TEACHER" \
-  --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo_warmstart.pt
+  --persistentworkspace --ccd-contacts-per-world 121 --separate-critic \
+  --warmstart "$TEACHER" \
+  --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_separate_critic.pt
 
 python tools/train_manorl_autonomy.py evaluate --device cpu --num-envs 1 \
   --no-persistentworkspace --checkpoint /tmp/cube2-v4-warmstart-smoke.pt --steps 4

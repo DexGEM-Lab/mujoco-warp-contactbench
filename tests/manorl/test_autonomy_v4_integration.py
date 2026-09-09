@@ -6,8 +6,8 @@ import pytest, torch, gymnasium as gym
 from sim.manorl.autonomy_contracts import RAW_OBSERVATION_DIM,ENCODED_OBSERVATION_DIM,ACTION_DIM,CHECKPOINT_FORMAT,OBSERVATION_CONTRACT_ID,ACTION_CONTRACT_ID,REWARD_CONTRACT_ID,validate_v4_checkpoint_metadata
 from sim.manorl.autonomy_training import AutonomyActorCritic
 
-def _model():
-    return AutonomyActorCritic(gym.spaces.Box(-1.,1.,shape=(RAW_OBSERVATION_DIM,)),gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,)),device='cpu')
+def _model(*, separate_critic=False):
+    return AutonomyActorCritic(gym.spaces.Box(-1.,1.,shape=(RAW_OBSERVATION_DIM,)),gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,)),device='cpu',separate_critic=separate_critic)
 
 def test_raw957_pointnet829_policy_value_and_encoder_gradients():
     model=_model(); raw=torch.randn(3,RAW_OBSERVATION_DIM)
@@ -71,7 +71,7 @@ def _v4_payload(model, provenance):
             'provenance':provenance}
 
 
-def test_v4_warmstart_is_exact_before_first_rollout_and_uses_fresh_full_optimizer(tmp_path, monkeypatch):
+def test_v4_shared_teacher_to_separate_critic_preserves_policy_and_fresh_value_before_rollout(tmp_path, monkeypatch):
     import sim.manorl.autonomy_batch_training as training
     torch.manual_seed(11); teacher=_model()
     warmstart=tmp_path/'teacher.pt'
@@ -82,55 +82,109 @@ def test_v4_warmstart_is_exact_before_first_rollout_and_uses_fresh_full_optimize
     original=training.build_batched_runtime; observed={}
     def inspect_first_rollout(*args, **kwargs):
         model,agent=original(*args,**kwargs)
+        assert model.separate_critic and model.value_net is not None
         observed['fresh_optimizer_state']=len(agent.optimizer.state)
+        observed['initial_value']={name:value.detach().clone() for name,value in model.value.named_parameters()}
+        observed['initial_value_net']={name:value.detach().clone() for name,value in model.value_net.named_parameters()}
         original_act=agent.act
         def act(observations, *act_args, **act_kwargs):
             if 'first_mean' not in observed:
                 with torch.no_grad():
                     observed['first_mean']=model.compute({'observations':observations},role='policy')[0].clone()
                     observed['teacher_mean']=teacher.compute({'observations':observations},role='policy')[0].clone()
+                    observed['loaded_net']={name:value.detach().clone() for name,value in model.net.named_parameters()}
+                    observed['loaded_value']={name:value.detach().clone() for name,value in model.value.named_parameters()}
+                    observed['loaded_value_net']={name:value.detach().clone() for name,value in model.value_net.named_parameters()}
             return original_act(observations,*act_args,**act_kwargs)
         agent.act=act
         return model,agent
     monkeypatch.setattr(training,'build_batched_runtime',inspect_first_rollout)
-    output=tmp_path/'ppo.pt'; lineage={'warmstart_checkpoint':str(warmstart),'mode':'ppo_warmstart'}
+    output=tmp_path/'ppo.pt'
     model,agent,_=training.run_batched_ppo(
         _TinyV4Adapter(),updates=1,rollouts=2,learning_epochs=1,mini_batches=1,
-        checkpoint=output,warmstart=warmstart,
+        checkpoint=output,separate_critic=True,warmstart=warmstart,
         expected_warmstart_provenance={'package_digest':'p','clock':{'control_timestep':1/120,'physics_substeps':4}},
-        config=lineage,provenance={'package_digest':'p',**lineage},
+        provenance={'package_digest':'p'},
     )
     assert observed['fresh_optimizer_state']==0
     torch.testing.assert_close(observed['first_mean'],observed['teacher_mean'],rtol=0,atol=0)
+    for name in observed['initial_value']:
+        assert torch.equal(observed['initial_value'][name],observed['loaded_value'][name])
+    for name in observed['initial_value_net']:
+        assert torch.equal(observed['initial_value_net'][name],observed['loaded_value_net'][name])
+    assert any(not torch.equal(observed['loaded_net'][name], observed['loaded_value_net'][name])
+               for name in observed['loaded_value_net'])
     assert {id(p) for group in agent.optimizer.param_groups for p in group['params']} == {
         id(p) for p in model.parameters() if p.requires_grad
     }
     saved=torch.load(output,map_location='cpu',weights_only=False)
-    assert saved['config']['mode']=='ppo_warmstart'
-    assert saved['provenance']['warmstart_checkpoint']==str(warmstart)
+    assert saved['model_architecture']['value_trunk']=='separate'
+    assert saved['config']['separate_critic'] is True
+    assert saved['config']['warmstart_transfer_mode']=='shared_policy_to_separate_critic'
+    assert saved['provenance']['warmstart_checkpoint']==str(warmstart.resolve())
+    assert saved['provenance']['warmstart_transfer_mode']=='shared_policy_to_separate_critic'
     assert saved['optimizer']['state']
 
 
-def test_v4_warmstart_rejects_legacy_architecture_and_provenance_mismatch(tmp_path):
+def test_v4_same_architecture_warmstart_remains_exact_and_strict(tmp_path):
+    import sim.manorl.autonomy_batch_training as training
+    torch.manual_seed(3); teacher=_model(separate_critic=True); path=tmp_path/'same.pt'
+    torch.save(_v4_payload(teacher,{'package_digest':'p'}),path)
+    torch.manual_seed(4); target=_model(separate_critic=True)
+    payload=training.load_v4_warmstart(path,target,expected_provenance={'package_digest':'p'})
+    assert payload['warmstart_transfer_mode']=='exact_model'
+    for name,value in teacher.state_dict().items(): assert torch.equal(value,target.state_dict()[name])
+    malformed=_v4_payload(teacher,{'package_digest':'p'}); malformed['model'].pop('value.bias')
+    bad=tmp_path/'malformed.pt'; torch.save(malformed,bad)
+    with pytest.raises(RuntimeError,match='Missing key'):
+        training.load_v4_warmstart(bad,_model(separate_critic=True))
+
+
+@pytest.mark.parametrize(('field','incompatible'),(('action_dim',27),('raw_observation_dim',956)))
+def test_v4_warmstart_rejects_incompatible_action_and_observation_architecture(tmp_path,field,incompatible):
+    import sim.manorl.autonomy_batch_training as training
+    source=_model(); payload=_v4_payload(source,{'package_digest':'teacher-package'})
+    payload['model_architecture']={**payload['model_architecture'],field:incompatible}
+    architecture=tmp_path/f'{field}.pt'; torch.save(payload,architecture)
+    with pytest.raises(ValueError,match='architecture'):
+        training.load_v4_warmstart(architecture,_model(separate_critic=True))
+
+
+def test_v4_warmstart_rejects_legacy_reverse_transfer_and_provenance_mismatch(tmp_path):
     import sim.manorl.autonomy_batch_training as training
     legacy=tmp_path/'v3.pt'; torch.save({'checkpoint_format':'manorl.autonomy.ppo.v3.1'},legacy)
     with pytest.raises(ValueError,match='checkpoint_format'):
         training.load_v4_warmstart(legacy,_model())
-    source=_model(); payload=_v4_payload(source,{'package_digest':'teacher-package'})
-    architecture=tmp_path/'architecture.pt'; payload['model_architecture']={**payload['model_architecture'],'action_dim':27}
-    torch.save(payload,architecture)
+    separate=_model(separate_critic=True); reverse=tmp_path/'reverse.pt'
+    torch.save(_v4_payload(separate,{'package_digest':'teacher-package'}),reverse)
     with pytest.raises(ValueError,match='architecture'):
-        training.load_v4_warmstart(architecture,_model())
-    payload=_v4_payload(source,{'package_digest':'teacher-package'}); provenance=tmp_path/'provenance.pt'; torch.save(payload,provenance)
+        training.load_v4_warmstart(reverse,_model())
+    payload=_v4_payload(_model(),{'package_digest':'teacher-package'}); provenance=tmp_path/'provenance.pt'; torch.save(payload,provenance)
     with pytest.raises(ValueError,match='provenance.package_digest'):
         training.load_v4_warmstart(provenance,_model(),expected_provenance={'package_digest':'current-package'})
 
 
-def test_v4_public_cli_lists_and_parses_warmstart():
+def test_v4_public_cli_lists_and_parses_warmstart_and_separate_critic():
     root=Path(__file__).resolve().parents[2]
     output=subprocess.check_output([sys.executable,str(root/'tools/train_manorl_autonomy.py'),'train','--help'],text=True)
-    for option in ('--num-envs','--persistentworkspace','--ccd-contacts-per-world','--warmstart','--wandb'):
+    for option in ('--num-envs','--persistentworkspace','--ccd-contacts-per-world','--warmstart','--separate-critic','--wandb'):
         assert option in output
     from tools import train_manorl_autonomy as cli
-    assert cli.parse_args(['train']).warmstart is None
-    assert cli.parse_args(['train','--warmstart','teacher.pt']).warmstart=='teacher.pt'
+    defaults=cli.parse_args(['train'])
+    assert defaults.warmstart is None and defaults.separate_critic is False
+    selected=cli.parse_args(['train','--warmstart','teacher.pt','--separate-critic'])
+    assert selected.warmstart=='teacher.pt' and selected.separate_critic is True
+
+
+def test_frozen_separate_critic_architecture_is_selected_and_strictly_loaded(tmp_path):
+    import sim.manorl.autonomy_batch_training as training
+    from tools import train_manorl_autonomy as cli
+    source=_model(separate_critic=True); path=tmp_path/'separate.pt'
+    torch.save(_v4_payload(source,{'package_digest':'p'}),path)
+    payload=torch.load(path,map_location='cpu',weights_only=False)
+    assert cli._checkpoint_separate_critic(payload) is True
+    target=_model(separate_critic=True)
+    training.load_frozen_v4(path,target,expected_provenance={'package_digest':'p'})
+    for name,value in source.state_dict().items(): assert torch.equal(value,target.state_dict()[name])
+    with pytest.raises(ValueError,match='architecture'):
+        training.load_frozen_v4(path,_model(),expected_provenance={'package_digest':'p'})

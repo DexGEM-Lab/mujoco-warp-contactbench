@@ -105,30 +105,83 @@ def _validate_provenance(actual: Any, expected: Any, path: str = "provenance") -
         raise ValueError(f"checkpoint provenance mismatch for {path}")
 
 
-def _load_v4_model_state(path: str | Path, model: torch.nn.Module, *,
-                         map_location: str | torch.device,
-                         expected_provenance: dict[str, Any] | None) -> dict[str, Any]:
+_POLICY_STATE_PREFIXES = ("pointnet.", "net.", "mean.")
+
+
+def _is_policy_state(name: str) -> bool:
+    return name == "log_std" or name.startswith(_POLICY_STATE_PREFIXES)
+
+
+def _warmstart_transfer_mode(source: Any, target: dict[str, Any]) -> str:
+    if source == target:
+        return "exact_model"
+    if not isinstance(source, dict):
+        raise ValueError("checkpoint/model architecture mismatch")
+    source_policy = {key: value for key, value in source.items() if key != "value_trunk"}
+    target_policy = {key: value for key, value in target.items() if key != "value_trunk"}
+    if source.get("value_trunk") == "shared" and target.get("value_trunk") == "separate" and source_policy == target_policy:
+        return "shared_policy_to_separate_critic"
+    raise ValueError("checkpoint/model architecture mismatch")
+
+
+def inspect_v4_warmstart(path: str | Path, target_architecture: dict[str, Any], *,
+                         map_location: str | torch.device = "cpu",
+                         expected_provenance: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
+    """Validate public metadata/provenance and resolve the only supported transfer mode."""
     payload = torch.load(path, map_location=map_location, weights_only=False)
     validate_v4_checkpoint_metadata(payload)
-    if payload.get("model_architecture") != model.checkpoint_architecture():
-        raise ValueError("checkpoint/model architecture mismatch")
+    mode = _warmstart_transfer_mode(payload.get("model_architecture"), target_architecture)
     _validate_provenance(payload.get("provenance", {}), expected_provenance or {})
-    model.load_state_dict(payload["model"], strict=True)
-    return payload
+    return payload, mode
+
+
+def _load_v4_model_state(path: str | Path, model: torch.nn.Module, *,
+                         map_location: str | torch.device,
+                         expected_provenance: dict[str, Any] | None,
+                         allow_shared_policy_transfer: bool = False) -> tuple[dict[str, Any], str]:
+    payload, mode = inspect_v4_warmstart(path, model.checkpoint_architecture(),
+                                         map_location=map_location,
+                                         expected_provenance=expected_provenance)
+    if mode == "exact_model":
+        model.load_state_dict(payload["model"], strict=True)
+        return payload, mode
+    if not allow_shared_policy_transfer:
+        raise ValueError("checkpoint/model architecture mismatch")
+
+    source_state = payload.get("model")
+    if not isinstance(source_state, dict):
+        raise ValueError("checkpoint model state must be a mapping")
+    target_state = model.state_dict()
+    expected_source_keys = set(target_state) - {name for name in target_state if name.startswith("value_net.")}
+    if set(source_state) != expected_source_keys:
+        raise ValueError("shared warm-start model state does not match the declared architecture")
+    for name, source_value in source_state.items():
+        target_value = target_state[name]
+        if (not isinstance(source_value, torch.Tensor) or source_value.shape != target_value.shape
+                or source_value.dtype != target_value.dtype):
+            raise ValueError(f"shared warm-start tensor mismatch for {name}")
+    transferred = {name: value for name, value in source_state.items() if _is_policy_state(name)}
+    if set(transferred) != {name for name in target_state if _is_policy_state(name)}:
+        raise ValueError("shared warm-start policy state is incomplete")
+    target_state.update(transferred)
+    model.load_state_dict(target_state, strict=True)
+    return payload, mode
 
 
 def load_v4_warmstart(path: str | Path, model: torch.nn.Module, *,
                       map_location: str | torch.device = "cpu",
                       expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Strictly load v4 model weights, intentionally ignoring optimizer/progress/RNG."""
-    return _load_v4_model_state(path, model, map_location=map_location,
-                                expected_provenance=expected_provenance)
+    """Load exact v4 weights or shared policy weights into a separate-critic target."""
+    payload, mode = _load_v4_model_state(path, model, map_location=map_location,
+                                         expected_provenance=expected_provenance,
+                                         allow_shared_policy_transfer=True)
+    return {**payload, "warmstart_transfer_mode": mode}
 
 
 def load_frozen_v4(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu",
                    expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = _load_v4_model_state(path, model, map_location=map_location,
-                                   expected_provenance=expected_provenance)
+    payload, _ = _load_v4_model_state(path, model, map_location=map_location,
+                                      expected_provenance=expected_provenance)
     model.eval()
     return payload
 
@@ -157,12 +210,19 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         raise ValueError("mini-batches cannot exceed rollout transitions")
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
                                          mini_batches=mini_batches, device=str(adapter.device), separate_critic=separate_critic)
+    config, provenance = dict(config or {}), dict(provenance or {})
+    warmstart_checkpoint = str(Path(warmstart).expanduser().resolve()) if warmstart is not None else None
+    transfer_mode = None
     # The PPO agent and its full actor/value Adam are always new. A warm-start
     # supplies model weights only; teacher optimizer/progress/RNG are ignored.
     if warmstart is not None:
-        load_v4_warmstart(warmstart, model, map_location=adapter.device,
-                          expected_provenance=expected_warmstart_provenance)
-    config, provenance = config or {}, provenance or {}
+        warmstart_payload = load_v4_warmstart(warmstart, model, map_location=adapter.device,
+                                              expected_provenance=expected_warmstart_provenance)
+        transfer_mode = warmstart_payload["warmstart_transfer_mode"]
+    lineage = {"separate_critic": bool(separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
+               "warmstart_transfer_mode": transfer_mode,
+               "mode": "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"}
+    config.update(lineage); provenance.update(lineage)
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()
     episode_return = torch.zeros((adapter.num_envs, 1), device=adapter.device)

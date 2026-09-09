@@ -70,6 +70,13 @@ class BatchedAutonomyAdapter:
         obs,reward,done,info=self.runtime.step(jax_actions)
         return self._to_torch(obs),self._to_torch(reward).reshape(self.num_envs,1),self._to_torch(done).reshape(self.num_envs,1).bool(),info
 
+def actor_critic_architecture(*, separate_critic: bool = False) -> dict[str, Any]:
+    return {"id": ACTOR_CRITIC_ARCHITECTURE_ID, "raw_observation_dim": RAW_OBSERVATION_DIM,
+            "encoded_feature_dim": ENCODED_OBSERVATION_DIM,
+            "pointnet": "3-64-128-256-max-256-64",
+            "value_trunk": "separate" if separate_critic else "shared", "action_dim": ACTION_DIM}
+
+
 class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
     """Every seven raw blocks feed both policy and value after PointNet."""
     def __init__(self,observation_space,action_space,device="cpu",*,separate_critic=False,clip_actions=False):
@@ -87,7 +94,7 @@ class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
         if x.ndim!=2 or x.shape[1]!=RAW_OBSERVATION_DIM: raise ValueError("v4 model requires (batch,957) raw observations")
         cloud=x[:,703:895].reshape(-1,64,3); embedding=self.pointnet(cloud)
         return torch.cat((x[:,:703],embedding,x[:,895:]),dim=-1)
-    def checkpoint_architecture(self): return {"id":ACTOR_CRITIC_ARCHITECTURE_ID,"raw_observation_dim":957,"encoded_feature_dim":829,"pointnet":"3-64-128-256-max-256-64","value_trunk":"separate" if self.separate_critic else "shared","action_dim":28}
+    def checkpoint_architecture(self): return actor_critic_architecture(separate_critic=self.separate_critic)
     def act(self,inputs,role=""):
         if role=="policy": return GaussianMixin.act(self,inputs,role=role)
         if role=="value": return DeterministicMixin.act(self,inputs,role=role)
