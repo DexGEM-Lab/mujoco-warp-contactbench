@@ -20,17 +20,18 @@ class AutonomyTransitionState(NamedTuple):
 class BatchedAutonomyRuntime:
     """Pinned cube2 v4 transition: 4 Warp steps then exactly one Warp forward."""
     def __init__(self, trajectory, *, num_envs: int=1, device: str="cpu", seed: int=0, **_: Any):
-        if num_envs != 1: raise ValueError("v4 vertical slice is intentionally N=1")
+        if not isinstance(num_envs,int) or num_envs < 1: raise ValueError("num_envs must be positive")
         if device not in {"cpu","gpu"}: raise ValueError("device must be cpu or gpu")
         import jax, jax.numpy as j
         from mujoco import mjx
         from sim.manorl.assets import compile_model_metadata_only, object_collision_vertices
         from sim.manorl.environment import MjxWarpPhysicalProducer
-        self.jax,self.jp,self.mjx=jax,j,mjx; self.num_envs=1; self.device_name=device; self.trajectory=trajectory
+        self.jax,self.jp,self.mjx=jax,j,mjx; self.num_envs=num_envs; self.device_name=device; self.trajectory=trajectory
         self.mujoco,self.model=compile_model_metadata_only(object_type="cube2",hand_side="right",physics_timestep=1/480)
         self.device=jax.devices(device)[0]; self.mjx_model=mjx.put_model(self.model,device=self.device,impl="warp")
         if getattr(self.mjx_model,"_impl",None) is None: raise RuntimeError("v4 requires mjx.put_model(..., impl='warp')")
         self.producer=MjxWarpPhysicalProducer(self.mujoco,self.model,object_type="cube2",hand_sides=("right",))
+        if int(self.model.opt.cone) != int(self.mujoco.mjtCone.mjCONE_PYRAMIDAL): raise RuntimeError("v4 supports only pyramidal contact cone")
         self.cache=compile_reference_cache_v4(trajectory,device=device)
         self.length=len(self.cache.q_feasible); self.lower=np.asarray(self.model.jnt_range[:28,0],np.float32); self.upper=np.asarray(self.model.jnt_range[:28,1],np.float32)
         self.rate=DOF_RATE.copy(); self.envelope=ANTIWINDUP_ERROR.copy()
@@ -38,12 +39,12 @@ class BatchedAutonomyRuntime:
         base=mjx.make_data(self.model,device=self.device,impl="warp",naconmax=128,njmax=512)
         qpos=np.asarray(base.qpos).copy(); qpos[:28]=self.cache.q_feasible[0]; qpos[self.producer.object_qpos_address:self.producer.object_qpos_address+3]=self.cache.object_origin[0]; qpos[self.producer.object_qpos_address+3:self.producer.object_qpos_address+7]=self.cache.object_quat_xyzw[0,(3,0,1,2)]
         self.initial=base.replace(qpos=j.asarray(qpos),ctrl=j.asarray(np.r_[self.cache.q_feasible[0],np.asarray(base.ctrl)[28:]].copy()))
-        self.data=jax.vmap(lambda _: mjx.forward(self.mjx_model,self.initial))(j.arange(1)); self.indices=j.zeros((1,),j.int32); self.pending_reset=j.zeros((1,),bool); self.previous_command=j.asarray(self.cache.q_feasible[:1],j.float32)
+        self.data=jax.vmap(lambda _: mjx.forward(self.mjx_model,self.initial))(j.arange(num_envs)); self.indices=j.zeros((num_envs,),j.int32); self.pending_reset=j.zeros((num_envs,),bool); self.previous_command=j.broadcast_to(j.asarray(self.cache.q_feasible[0],j.float32),(num_envs,28))
         # Static collision vertices give exact cube2 bottom after the same forward.
         self.object_vertices=j.asarray(object_collision_vertices("cube2"),j.float32)
         # Runtime emits raw 957; trainable PointNet belongs to the next model slice.
         self._transition_fn=jax.jit(self._transition)
-        self._refresh(False,j.zeros((1,28),j.float32))
+        self._refresh(False,j.zeros((num_envs,28),j.float32))
 
     def _physical(self,data,previous):
         objq=data.xquat[:,self.producer.object_body_id][...,(1,2,3,0)]
@@ -54,14 +55,16 @@ class BatchedAutonomyRuntime:
         x=data._impl; required=("nacon","nefc","contact__geom","contact__worldid","contact__dim","contact__efc_address","contact__friction","contact__frame","contact__pos","efc__force")
         if any(not hasattr(x,n) for n in required): raise RuntimeError("pinned MJX-Warp contact ABI unavailable")
         allf,pair,torque,count,valid=reduce_pyramidal_contacts_v4(nacon=x.nacon,nefc=x.nefc,geom=x.contact__geom,world=x.contact__worldid,dimension=x.contact__dim,addresses=x.contact__efc_address,friction=x.contact__friction,frame=x.contact__frame,position=x.contact__pos,constraint_force=x.efc__force,ngeom=self.model.ngeom,hand_geom_ids=self.producer.keypoint_geom_ids,object_geom_ids=tuple(self.producer.object_geom_ids),object_com=physical.object_com)
-        return V4Contact(allf,pair,torque,count,self.jp.zeros((1,16,3)),valid)
+        return V4Contact(allf,pair,torque,count,self.jp.zeros((self.num_envs,16,3)),valid)
     def _observe(self,data,index,previous):
         physical=self._physical(data,previous); contact=self._contact(data,physical); raw=build_raw_observation(physical,contact,self.cache,index,previous); return physical,contact,raw,raw
     def _transition(self,data,index,previous,action,execute):
         import jax
         physical=self._physical(data,previous)
-        command=previous+self.jp.clip(action,-1,1)*self.jp.asarray(self.rate)[None]/120
-        command=self.jp.clip(self.jp.clip(command,physical.q_raw-self.jp.asarray(self.envelope),physical.q_raw+self.jp.asarray(self.envelope)),self.jp.asarray(self.lower),self.jp.asarray(self.upper))
+        def command_for_action(_):
+            candidate=previous+self.jp.clip(action,-1,1)*self.jp.asarray(self.rate)[None]/120
+            return self.jp.clip(self.jp.clip(candidate,physical.q_raw-self.jp.asarray(self.envelope),physical.q_raw+self.jp.asarray(self.envelope)),self.jp.asarray(self.lower),self.jp.asarray(self.upper))
+        command=jax.lax.cond(execute,command_for_action,lambda _: previous,None)
         stepped=data.replace(ctrl=command)
         def advance(x):
             for _ in range(4): x=jax.vmap(lambda row:self.mjx.step(self.mjx_model,row))(x)
@@ -73,14 +76,18 @@ class BatchedAutonomyRuntime:
         self.data,self.indices,self.previous_command,self.raw_observation,self.observation,self.last_reward,self.last_valid,self.last_contact=self._transition_fn(self.data,self.indices,self.previous_command,action,execute)
         self.last_done=self.last_reward.done; self.last_reason=self.last_reward.reason; self.last_command=self.previous_command
     def reset(self,mask=None):
-        if mask is not None and not bool(np.asarray(mask)[0]): return self.observation
-        self.data=self.jax.vmap(lambda _:self.mjx.forward(self.mjx_model,self.initial))(self.jp.arange(1)); self.indices=self.jp.zeros((1,),self.jp.int32); self.previous_command=self.jp.asarray(self.cache.q_feasible[:1],self.jp.float32); self._refresh(False,self.jp.zeros((1,28),self.jp.float32)); return self.observation
+        if mask is None: mask=np.ones(self.num_envs,bool)
+        mask=self.jp.asarray(mask,dtype=bool)
+        if mask.shape != (self.num_envs,): raise ValueError("reset mask must be (num_envs,)")
+        initial=self.jax.vmap(lambda _:self.mjx.forward(self.mjx_model,self.initial))(self.jp.arange(self.num_envs))
+        self.data=self.jax.tree.map(lambda old,new:self.jp.where(mask.reshape((self.num_envs,)+(1,)*(old.ndim-1)),new,old),self.data,initial)
+        self.indices=self.jp.where(mask,0,self.indices); initial_command=self.jp.broadcast_to(self.jp.asarray(self.cache.q_feasible[0]),(self.num_envs,28)); self.previous_command=self.jp.where(mask[:,None],initial_command,self.previous_command)
+        self._refresh(False,self.jp.zeros((self.num_envs,28),self.jp.float32)); return self.observation
     def prepare_action(self):
-        if bool(np.asarray(self.last_done)[0]): self.reset()
-        return self.observation
+        return self.reset(self.last_done) if bool(np.asarray(self.last_done).any()) else self.observation
     def step(self,actions):
         action=self.jp.asarray(actions)
-        if action.shape!=(1,28): raise ValueError("v4 requires actions shape (1,28)")
+        if action.shape!=(self.num_envs,28): raise ValueError("v4 actions must be (num_envs,28)")
         self._refresh(True,action)
         return self.observation,self.last_reward.total,self.last_done,{"valid":self.last_valid,"reason_code":self.last_reason,"command":self.last_command,"raw_observation":self.raw_observation,"contact":self.last_contact,"contract":AUTONOMY_VERSION}
 

@@ -8,7 +8,7 @@ from sim.manorl.autonomy_v4 import ReferenceCacheV4, V4Physical, V4Contact, anch
 
 def _cache(T=25):
     q=np.zeros((T,28)); quat=np.tile([0.,0.,0.,1.],(T,1)); ah=np.zeros((T,16,3)); ao=np.zeros_like(ah); gap=np.full((T,16),.003)
-    h=ReferenceCacheV4(q,q,-np.ones(28),np.ones(28),np.zeros((T,3)),quat,np.zeros(3),np.zeros((T,3)),quat,np.zeros((T,3)),np.zeros((T,3)),np.zeros((T,3)),np.zeros((T,3)),ah,ao,np.zeros_like(ah),gap,np.exp(-(gap/.01)**2),np.ones((T,16)),np.ones((T,16)),np.full(T,.02),-.001,np.zeros((64,3)),np.array([.25,.25,.25]+[0.]*9),2,np.zeros(3),"test")
+    h=ReferenceCacheV4(q,q,-np.ones(28),np.ones(28),np.zeros((T,3)),quat,np.zeros(3),np.zeros((T,3)),quat,np.zeros((T,3)),np.zeros((T,3)),np.zeros((T,3)),np.zeros((T,3)),ah,ao,np.zeros_like(ah),gap,np.exp(-(gap/.01)**2),np.ones((T,16)),np.ones((T,16)),np.full(T,.02),-.001,1/120,(T-1)/120,np.zeros((64,3)),np.array([.25,.25,.25]+[0.]*9),2,np.zeros(3),"test")
     return h
 
 def _state(b=1):
@@ -93,7 +93,7 @@ def test_reference_cache_is_warp_only_even_when_native_fk_oracle_is_disabled(mon
     assert len(np.unique(np.round(cache.points_object_local,10),axis=0))==64 and np.max(np.abs(cache.object_w))>0
 
 def test_scaled_actual_reference_and_bottom_fields_are_named_physical_quantities():
-    jax=pytest.importorskip("jax"); j=jax.numpy; cache=_cache(); cache=cache.__class__(**{**cache.__dict__,"reference_bottom":np.full(25,.03),"table_height":-.001})
+    jax=pytest.importorskip("jax"); j=jax.numpy; cache=_cache(); cache=cache.__class__(**{**cache.__dict__,"reference_bottom":np.full(25,.03),"table_height":-.001,"control_timestep":1/120,"duration":24/120})
     state=_state(); state=state._replace(q_raw=j.asarray(np.r_[np.zeros(6),np.full(22,.3)][None]),q_normalized=j.asarray(np.r_[np.zeros(6),np.full(22,.25)][None]),object_v_com=j.asarray([[1.,0,0]]),object_w=j.asarray([[0,0,3.]]),palm_origin=j.asarray([[.1,0,0]]),palm_w=j.asarray([[0,0,3.]]),object_bottom=j.asarray([.02]))
     raw=build_raw_observation(state,_contact(),cache,j.asarray([0]),j.zeros((1,28))); actual=np.asarray(raw[0,:119]); ref=np.asarray(raw[0,119:228])
     np.testing.assert_allclose(actual[93:99],[1,0,0,0,0,1],atol=1e-6)

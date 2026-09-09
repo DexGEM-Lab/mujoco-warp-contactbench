@@ -28,9 +28,9 @@ POLICY_SAMPLING_CONTRACT: Final[dict[str, str]] = {
 ACTION_DIM: Final = 28
 RAW_OBSERVATION_DIM: Final = 957
 ENCODED_OBSERVATION_DIM: Final = 829
-# The public actor consumes the encoded representation. Raw 957 is retained
-# as a first-class ABI for PointNet and independent formula tests.
-OBSERVATION_DIM: Final = ENCODED_OBSERVATION_DIM
+# Environments and PPO memory own raw 957. The registered Torch PointNet in
+# the actor converts only the cloud to the 829 model feature internally.
+OBSERVATION_DIM: Final = RAW_OBSERVATION_DIM
 RAW_OBSERVATION_FIELDS: Final[tuple[tuple[str, int], ...]] = (
     ("autonomous_actual", 119), ("autonomous_reference", 109),
     ("autonomous_future", 123), ("autonomous_geometry", 352),
@@ -51,8 +51,7 @@ def _slices(fields: tuple[tuple[str, int], ...]) -> dict[str, slice]:
 
 def raw_observation_slices() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS)
 def encoded_observation_slices() -> dict[str, slice]: return _slices(ENCODED_OBSERVATION_FIELDS)
-# Compatibility name is deliberately v4 encoded, never the old 538 layout.
-def observation_slices() -> dict[str, slice]: return encoded_observation_slices()
+def observation_slices() -> dict[str, slice]: return raw_observation_slices()
 
 @dataclass(frozen=True)
 class AutonomousActionContract:

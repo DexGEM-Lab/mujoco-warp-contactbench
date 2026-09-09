@@ -43,6 +43,7 @@ class ReferenceCacheV4:
     signed_gap: np.ndarray; proximity: np.ndarray; confidence: np.ndarray; valid: np.ndarray
     reference_bottom: np.ndarray
     table_height: float
+    control_timestep: float; duration: float
     points_object_local: np.ndarray; object_geometry: np.ndarray; action_id: int
     support_shift: np.ndarray; content_hash: str
     def __post_init__(self):
@@ -51,7 +52,7 @@ class ReferenceCacheV4:
         for name, shape in expected.items():
             value=np.asarray(getattr(self,name));
             if value.shape != shape or not np.all(np.isfinite(value)): raise ValueError(f"v4 cache {name} must be finite {shape}")
-        if not np.isfinite(self.table_height): raise ValueError("table height must be finite")
+        if not np.isfinite(self.table_height) or not np.isfinite(self.control_timestep) or self.control_timestep <= 0 or not np.isfinite(self.duration) or self.duration <= 0: raise ValueError("cache table/clock/duration must be finite")
         if not 1 <= self.action_id <= 50: raise ValueError("action_id must be in [1,50]")
 
 def _np_quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
@@ -117,21 +118,27 @@ def signed_closest_convex_mesh(points, triangles):
         return cp,j.where(inside,-distance,distance),inside
     return jax.jit(kernel)(points,triangles)
 
-def _filtered_derivative(values: np.ndarray, dt: float) -> np.ndarray:
+def _savgol(values: np.ndarray) -> np.ndarray:
     from scipy.signal import savgol_filter
+    width=min(7, len(values) if len(values)%2 else len(values)-1)
+    return savgol_filter(values,width,min(2,width-1),axis=0,mode='interp') if width >= 3 else values
+
+def _filtered_derivative(values: np.ndarray, dt: float) -> np.ndarray:
     if dt <= 0 or not np.isfinite(dt): raise ValueError("reference control timestep must be finite positive")
-    derivative=np.gradient(values,dt,axis=0)
-    return savgol_filter(derivative,7,2,axis=0,mode='interp') if len(values)>=7 else derivative
+    return _savgol(np.gradient(values,dt,axis=0,edge_order=2 if len(values)>=3 else 1))
 
 def _filtered_angular_velocity(quaternions: np.ndarray, dt: float) -> np.ndarray:
+    """Source-consistent relative quaternion log rotations, then Savgol."""
     q=np.asarray(quaternions,dtype=np.float64).copy()
     for i in range(1,len(q)):
         if np.dot(q[i-1],q[i]) < 0: q[i]*=-1
-    dq=np.empty_like(q); dq[0]=(q[1]-q[0])/dt; dq[-1]=(q[-1]-q[-2])/dt; dq[1:-1]=(q[2:]-q[:-2])/(2*dt)
-    # qdot = .5 omega_quat * q -> omega = 2 qdot * conj(q), vector part
-    conj=q.copy(); conj[:,:3]*=-1
-    omega=2*np.asarray(quat_mul(np.asarray(dq),np.asarray(conj)))[:,:3]
-    return _filtered_derivative(np.cumsum(omega,axis=0)*dt,dt)
+    def log_delta(a,b):
+        rel=np.asarray(quat_mul(np.asarray(b[None]),np.asarray(quat_conj(a[None]))))[0].copy()
+        rel/=max(np.linalg.norm(rel),1e-12); angle=2*np.arctan2(np.linalg.norm(rel[:3]),abs(rel[3]))
+        return np.zeros(3) if np.linalg.norm(rel[:3])<1e-12 else rel[:3]/np.linalg.norm(rel[:3])*angle
+    interval=np.stack([log_delta(q[i],q[i+1])/dt for i in range(len(q)-1)])
+    omega=np.empty((len(q),3)); omega[0]=interval[0]; omega[-1]=interval[-1]; omega[1:-1]=(interval[:-1]+interval[1:])/2
+    return _savgol(omega)
 
 def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: str = "cube2", table_height: float = -0.001) -> ReferenceCacheV4:
     """Compile the cache through Warp FK and exact compiled collision meshes only."""
@@ -179,13 +186,16 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     object_anchor_world=object_origin[:,None]+_np_quat_rotate(object_q[:,None],ao)
     delta=np.asarray(quat_unrotate(j.asarray(object_q[:,None]),j.asarray(hand_anchor_world-object_anchor_world)))
     gap=signed[rows,region,chosen]; depth=np.maximum(-np.min(signed,axis=-1),0); fraction=np.mean(signed<-.001,axis=-1); proximity=np.exp(-(np.maximum(gap,0)/.01)**2); confidence=np.exp(-(np.maximum(depth-.001,0)/.003)**2)*(1-fraction); valid=(depth<=.01).astype(np.float64)
-    dt=1./float(trajectory.control_fps or trajectory.reference_fps or 120)
+    fps=float(trajectory.control_fps or trajectory.reference_fps or 120)
+    if fps != 120 or trajectory.timestamps.shape != (T,) or np.any(np.diff(trajectory.timestamps) < 0): raise ValueError("v4 requires monotonic 120 Hz reference clock")
+    dt=1./fps; duration=float(trajectory.timestamps[-1]-trajectory.timestamps[0])
+    if duration <= 0: duration=(T-1)*dt
     com_local=np.asarray(model.body_ipos[producer.object_body_id]); com=object_origin+_np_quat_rotate(object_q,np.broadcast_to(com_local,(T,3))); ov=_filtered_derivative(com,dt); ow=_filtered_angular_velocity(object_q,dt); palm=hand_origin[:,0]; pv=_filtered_derivative(palm,dt); pw=_filtered_angular_velocity(hand_q[:,0],dt)
     object_bottom=np.min(object_origin[:,None,2]+_np_quat_rotate(object_q[:,None],object_triangles.reshape(-1,3))[:,:,2],axis=1)
     dimensions=np.ptp(object_triangles.reshape(-1,3),axis=0); geometry=geometry_encoding(object_name="cube2",geometry_type="box",dimensions=dimensions)
-    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height]),object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]))
+    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration]),object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]))
     digest=cache_hash(*[np.asarray(x) for x in values],kernel_version="warp-mesh-cache-v4.1")
-    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest)
+    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest)
     for name in result.__dataclass_fields__:
         value=getattr(result,name)
         if isinstance(value,np.ndarray): value.setflags(write=False)
@@ -250,8 +260,10 @@ def extract_v4_physical(*, qpos, qvel, xpos, xquat, xipos, subtree_com, cvel, bo
     normalized=j.concatenate((q_raw[:,:3]/WORLD_POSITION,q_raw[:,3:6]/j.pi,2*(q_raw[:,6:]-lower[6:])/(upper[6:]-lower[6:])-1),axis=-1)
     qdot=qd/j.maximum(dof_rate,1e-6)
     error=(previous-q_raw)/j.maximum(antiwindup,1e-6)
-    all_state=j.concatenate((q_raw,qd,oo,oc,ov,ow,po,pc,pv,pw,ro.reshape(q_raw.shape[0],-1),rc.reshape(q_raw.shape[0],-1),rv.reshape(q_raw.shape[0],-1),rw.reshape(q_raw.shape[0],-1)),axis=-1)
-    finite=j.all(j.isfinite(all_state),axis=-1)&j.all(j.isfinite(oq),axis=-1)&j.all(j.isfinite(rq),axis=(-1,-2))
+    all_state=j.concatenate((q_raw,qd,previous,oo,oc,ov,ow,po,pc,pv,pw,ro.reshape(q_raw.shape[0],-1),rc.reshape(q_raw.shape[0],-1),rv.reshape(q_raw.shape[0],-1),rw.reshape(q_raw.shape[0],-1)),axis=-1)
+    raw_quat=xquat[:,np.r_[object_body_id,palm_body_id,ids]]
+    quat_ok=j.all(j.isfinite(raw_quat),axis=(-1,-2))&j.all(j.linalg.norm(raw_quat,axis=-1)>1e-12,axis=-1)
+    finite=j.all(j.isfinite(all_state),axis=-1)&j.all(j.isfinite(j.asarray(object_bottom)),axis=-1)&quat_ok
     return V4Physical(q_raw,normalized,qdot,error,oo,oq,oc,ov,ow,po,pq,pw,ro,rq,rc,rv,rw,j.asarray(object_bottom),finite)
 
 def point_velocity(origin, com, v_com, omega, point):
@@ -274,7 +286,7 @@ def _gather(cache: ReferenceCacheV4, index, offset=0):
     i=j.minimum(j.asarray(index)+offset,len(cache.q_feasible)-1)
     return i
 
-def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, addresses, friction, frame, position, constraint_force, ngeom: int, hand_geom_ids, object_geom_ids, object_com):
+def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, addresses, friction, frame, position, constraint_force, ngeom: int, hand_geom_ids, object_geom_ids, object_com, cone: str = "pyramidal"):
     """Fail-closed same-transition reducer for pinned pyramidal/condim3 Warp buffers.
 
     Contact force rows apply negatively to geom1 and positively to geom2.
@@ -284,20 +296,23 @@ def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, address
     import jax.numpy as j
     geom,world,dimension,addresses,friction,frame,position,constraint_force=map(j.asarray,(geom,world,dimension,addresses,friction,frame,position,constraint_force))
     capacity=geom.shape[0]; batch=constraint_force.shape[0]; slots=j.arange(capacity); count=j.asarray(nacon).reshape(())
+    hand_host,obj_host=np.asarray(hand_geom_ids,dtype=np.int32),np.asarray(object_geom_ids,dtype=np.int32)
+    if cone != "pyramidal": raise ValueError("v4 fast reducer supports pyramidal cone only")
+    if hand_host.shape != (16,) or not len(obj_host) or np.intersect1d(hand_host,obj_host).size or (ngeom >= 16 and len(set(hand_host.tolist())) != 16): raise ValueError("v4 contact geom ownership is invalid")
     if geom.shape!=(capacity,2) or addresses.shape!=(capacity,4) or position.shape!=(capacity,3) or frame.shape!=(capacity,3,3): raise ValueError("pinned Warp contact ABI mismatch")
     if count.dtype.kind not in 'iu': raise ValueError("contact count must be integer")
-    live=slots<count; safe_world=j.clip(world,0,batch-1); safe_addr=j.clip(addresses,0,constraint_force.shape[1]-1); safe_geom=j.clip(geom,0,ngeom-1)
+    live=slots<count; active=addresses[:,0]>=0; solved=live&active; safe_world=j.clip(world,0,batch-1); safe_addr=j.clip(addresses,0,constraint_force.shape[1]-1); safe_geom=j.clip(geom,0,ngeom-1)
     nefc=j.broadcast_to(j.asarray(nefc).reshape(-1),(batch,)) if j.asarray(nefc).size==1 else j.asarray(nefc).reshape(batch)
-    valid=(count>=0)&(count<capacity)&j.all((nefc>=0)&(nefc<constraint_force.shape[1]))&j.all(j.where(live,(world>=0)&(world<batch)&(dimension==3)&j.all((geom>=0)&(geom<ngeom),axis=-1)&j.all((addresses>=0)&(addresses<nefc[safe_world,None]),axis=-1),True))
+    valid=(count>=0)&(count<capacity)&j.all((nefc>=0)&(nefc<constraint_force.shape[1]))&j.all(j.where(solved,(world>=0)&(world<batch)&(dimension==3)&j.all((geom>=0)&(geom<ngeom),axis=-1)&j.all((addresses>=0)&(addresses<nefc[safe_world,None]),axis=-1),True))
     lam=constraint_force[safe_world[:,None],safe_addr]; local=j.stack((j.sum(lam,axis=-1),(lam[:,0]-lam[:,1])*friction[:,0],(lam[:,2]-lam[:,3])*friction[:,1]),axis=-1); force=j.einsum('ni,nij->nj',local,frame)
-    valid=valid&j.all(j.where(live[:,None],j.isfinite(force),True))&j.all(j.where(live[:,None],j.isfinite(position),True))
-    force=j.where(live[:,None],force,0.); hand=np.asarray(hand_geom_ids,dtype=np.int32); obj=np.asarray(object_geom_ids,dtype=np.int32)
+    valid=valid&j.all(j.where(solved[:,None],j.isfinite(force),True))&j.all(j.where(solved[:,None],j.isfinite(position),True))
+    force=j.where(solved[:,None],force,0.); position=j.where(solved[:,None],position,0.); hand=hand_host; obj=obj_host
     lookup=j.full((ngeom,),-1,dtype=j.int32).at[j.asarray(hand)].set(j.arange(16,dtype=j.int32)); a,b=lookup[safe_geom[:,0]],lookup[safe_geom[:,1]]
     a_obj=j.any(safe_geom[:,0,None]==j.asarray(obj)[None],axis=-1); b_obj=j.any(safe_geom[:,1,None]==j.asarray(obj)[None],axis=-1)
     paired=j.zeros((batch,16,3),force.dtype); torque=j.zeros_like(paired); counts=j.zeros((batch,16),j.int32); all_force=j.zeros((batch,3),force.dtype)
     # object is geom2 → +force; geom1 → -force
     all_force=all_force.at[safe_world].add(j.where(b_obj[:,None],force,0.)+j.where(a_obj[:,None],-force,0.))
-    first=live&(a>=0)&b_obj; second=live&(b>=0)&a_obj
+    first=solved&(a>=0)&b_obj; second=solved&(b>=0)&a_obj
     paired=paired.at[safe_world,j.maximum(a,0)].add(force*first[:,None]); paired=paired.at[safe_world,j.maximum(b,0)].add(-force*second[:,None])
     lever=position-object_com[safe_world]
     torque=torque.at[safe_world,j.maximum(a,0)].add(j.cross(lever,force)*first[:,None]); torque=torque.at[safe_world,j.maximum(b,0)].add(-j.cross(lever,force)*second[:,None])
@@ -324,8 +339,8 @@ def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: Refer
     for horizon in (6,12,24):
         fi=_gather(cache,index,horizon); fq=C(cache.q_feasible)[fi]; fop=C(cache.object_origin)[fi]; foq=C(cache.object_quat_xyzw)[fi]; fpp=C(cache.palm_origin)[fi]; fpq=C(cache.palm_quat_xyzw)[fi]
         frel=quat_unrotate(foq,fpp-fop); frelq=quat_mul(quat_conj(foq),fpq)
-        valid=(j.asarray(index)+horizon <= len(cache.q_feasible)-1).astype(j.float32)
-        futures.append(j.concatenate(((fq[:,6:]-rq[:,6:])/JOINT_ERROR,quat_unrotate(oq,(fpp-fop)-(pp-op))/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),frelq)),quat_unrotate(oq,fop-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),foq)),valid[:,None]),axis=-1))
+        valid=((j.asarray(index)+horizon)*cache.control_timestep <= cache.duration+1e-6).astype(j.float32)
+        futures.append(j.concatenate(((fq[:,6:]-rq[:,6:])/JOINT_ERROR,(frel-ref_rel)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),frelq)),quat_unrotate(oq,fop-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),foq)),valid[:,None]),axis=-1))
     _,_,delta,velocity=anchor_delta_and_velocity(physical,C(cache.region_anchor_hand)[i],C(cache.region_anchor_object)[i])
     error=delta-C(cache.delta_ref)[i]
     geom=j.concatenate((C(cache.signed_gap)[i][...,None]/CONTACT_DISTANCE,C(cache.proximity)[i][...,None],C(cache.confidence)[i][...,None],C(cache.valid)[i][...,None],C(cache.region_anchor_hand)[i]/RELATIVE_POSITION,C(cache.region_anchor_object)[i]/RELATIVE_POSITION,C(cache.delta_ref)[i]/CONTACT_DISTANCE,error/CONTACT_DISTANCE,j.tanh(quat_unrotate(physical.object_quat_xyzw[:,None],contact.paired_force_on_object)/FORCE_SCALE),velocity/CONTACT_VELOCITY),axis=-1).reshape(b,352)
