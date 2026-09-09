@@ -65,7 +65,8 @@ def _fixture() -> dict[str, object]:
 def _jitted_reducer(fixture: dict[str, object], *, compute_dtype: str = "float32"):
     static = {
         key: fixture[key]
-        for key in ("ngeom", "keypoint_geom_ids", "object_geom_ids")
+        for key in ("ngeom", "keypoint_geom_ids", "object_geom_ids", "active_object_geom_ids")
+        if key in fixture
     }
     static["compute_dtype"] = compute_dtype
     dynamic = {key: value for key, value in fixture.items() if key not in static}
@@ -524,6 +525,8 @@ def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_forc
     fixture["ngeom"] = 48
     fixture["keypoint_geom_ids"] = tuple(range(16))
     fixture["object_geom_ids"] = (40,)
+    # Exercise static active-target forwarding through the bimanual reducer.
+    fixture["active_object_geom_ids"] = ((40,), (40,), (40,), (40,))
     fixture["nacon"] = np.asarray([2], dtype=np.int32)
     fixture["geom"] = np.asarray(
         [(0, 40), (24, 40)] + [(0, 0)] * 15, dtype=np.int32
@@ -533,11 +536,12 @@ def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_forc
     fixture["friction"] = np.zeros((17, 5), dtype=np.float32)
     fixture["frame"] = np.broadcast_to(np.eye(3, dtype=np.float32), (17, 3, 3)).copy()
     constraint_force = np.zeros((4, 64), dtype=np.float32)
-    constraint_force[0, 0] = 2.0
+    # Four pyramidal slots at address zero sum to the intended normal force.
+    constraint_force[0, 0] = 0.5
     fixture["constraint_force"] = constraint_force
     static = {
         key: fixture[key]
-        for key in ("ngeom", "object_geom_ids")
+        for key in ("ngeom", "object_geom_ids", "active_object_geom_ids")
     }
     dynamic = {
         key: value for key, value in fixture.items()
@@ -555,6 +559,64 @@ def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_forc
     np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[0, 0], (4.0, 0.0, 0.0))
     np.testing.assert_array_equal(np.asarray(actual.per_world_count), (2, 0, 0, 0))
     assert bool(actual.valid) is True
+
+
+def test_jitted_contact_reduction_filters_only_per_world_target_reward_contacts() -> None:
+    """Passive contacts remain observable/live but cannot earn target reward."""
+    batch, capacity, ngeom = 2, 7, 32
+    fixture: dict[str, object] = {
+        "nacon": np.asarray([6], dtype=np.int32),
+        "nefc": np.full(batch, 8, dtype=np.int32),
+        "geom": np.asarray(
+            [(0, 21), (20, 1), (20, 22), (2, 20), (22, 3), (4, 30), (0, 0)],
+            dtype=np.int32,
+        ),
+        "world": np.asarray((0, 0, 0, 1, 1, 1, 0), dtype=np.int32),
+        "dimension": np.full(capacity, 3, dtype=np.int32),
+        "addresses": np.zeros((capacity, 4), dtype=np.int32),
+        "friction": np.zeros((capacity, 5), dtype=np.float32),
+        "frame": np.broadcast_to(np.eye(3, dtype=np.float32), (capacity, 3, 3)).copy(),
+        "constraint_force": np.pad(
+            np.full((batch, 1), 0.5, dtype=np.float32), ((0, 0), (0, 7))
+        ),
+        "ngeom": ngeom,
+        "keypoint_geom_ids": tuple(range(16)),
+        "object_geom_ids": (20, 21, 22, 23),
+        # Unequal target pieces, deliberately not global object-type order.
+        "active_object_geom_ids": ((20, -1), (22, 23)),
+    }
+    actual = _jitted_reducer(fixture)
+    expected = _decode_contact_forces(
+        count=6, geom=np.asarray(fixture["geom"]), world=np.asarray(fixture["world"]),
+        dimension=np.asarray(fixture["dimension"]), addresses=np.asarray(fixture["addresses"]),
+        nefc=np.asarray(fixture["nefc"]), friction=np.asarray(fixture["friction"]),
+        frame=np.asarray(fixture["frame"]), constraint_force=np.asarray(fixture["constraint_force"]),
+        ngeom=ngeom, keypoint_geom_ids=fixture["keypoint_geom_ids"],
+        object_geom_ids=set(fixture["object_geom_ids"]),
+        active_object_geom_ids=np.asarray(fixture["active_object_geom_ids"], dtype=np.int32),
+    )
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces), expected[0][:, :16])
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces), expected[1])
+    np.testing.assert_array_equal(np.asarray(actual.per_world_count), expected[2])
+    # World 0's hand-passive contact and world 1's other-type passive contact
+    # both remain observations, while only their local target rows get reward.
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces)[0, 0], (-2.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[0, 0], (0.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[0, 1], (-2.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces)[1, 2], (-2.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[1, 2], (0.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[1, 3], (-2.0, 0.0, 0.0))
+    np.testing.assert_array_equal(np.asarray(actual.per_world_count), (3, 3))
+
+
+def test_jitted_contact_reduction_rejects_invalid_static_active_target_table() -> None:
+    fixture = _fixture()
+    fixture["active_object_geom_ids"] = ((20, -2),) * 4
+    with pytest.raises(ValueError, match="invalid MuJoCo geom"):
+        _jitted_reducer(fixture)
+    fixture["active_object_geom_ids"] = ((19,),) * 4
+    with pytest.raises(ValueError, match="unified object geom set"):
+        _jitted_reducer(fixture)
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:

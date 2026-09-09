@@ -23,10 +23,17 @@ when their captured reference barely moves. Repeated instances of the same
 object type in a row are unsupported and rejected.
 
 Single-object decoding and default collision masks remain unchanged. Legacy
-source-path identity/scene checks remain strict. The device-transition and
-device-contact-decode fast paths currently aggregate non-target contact and
-therefore reject composite scenes explicitly; use the normal host-decoded
-transition path. `--device-resident-controls` is a separate setting.
+source-path identity/scene checks remain strict. Composite right-policy
+`device_transition` keeps every contact in the observation and live-contact
+counts, but filters its reward-only hand-object force through each world's
+immutable target-geometry row. The rows permit `-1` padding for targets with
+unequal collision-piece counts; a hand touching a passive scene object cannot
+earn target-contact reward. The bimanual transition path applies the same
+filter to both hands while retaining the right-hand observation interface.
+Standalone `device_contact_decode` remains restricted to homogeneous
+single-hand scenes because its compact output cannot satisfy the composite
+host-snapshot diagnostics contract. `--device-resident-controls` is a separate
+setting.
 
 ## Persisted packages
 

@@ -1284,6 +1284,16 @@ class MjxWarpPhysicalProducer:
         if self._device_contact_decoder is None:
             import jax
 
+            active_object_geom_ids = None
+            if self.active_object_geom_ids is not None:
+                active_object_geom_array = np.asarray(self.active_object_geom_ids, dtype=np.int32)
+                active_object_geom_ids = (
+                    tuple(int(geom_id) for geom_id in active_object_geom_array)
+                    if active_object_geom_array.ndim == 1 else tuple(
+                        tuple(int(geom_id) for geom_id in row)
+                        for row in active_object_geom_array
+                    )
+                )
             if len(self.hand_sides) == 1:
                 self._device_contact_decoder = jax.jit(
                     lambda nacon, nefc, geom, world, dimension, addresses, friction, frame, force:
@@ -1291,7 +1301,8 @@ class MjxWarpPhysicalProducer:
                         nacon=nacon, nefc=nefc, geom=geom, world=world, dimension=dimension,
                         addresses=addresses, friction=friction, frame=frame, constraint_force=force,
                         ngeom=self.model.ngeom, keypoint_geom_ids=tuple(self.keypoint_geom_ids),
-                        object_geom_ids=tuple(sorted(self.object_geom_ids)), compute_dtype="float32",
+                        object_geom_ids=tuple(sorted(self.object_geom_ids)),
+                        active_object_geom_ids=active_object_geom_ids, compute_dtype="float32",
                     )
                 )
             else:
@@ -1303,7 +1314,8 @@ class MjxWarpPhysicalProducer:
                         ngeom=self.model.ngeom,
                         right_keypoint_geom_ids=tuple(self.keypoint_geom_ids_by_side["right"]),
                         left_keypoint_geom_ids=tuple(self.keypoint_geom_ids_by_side["left"]),
-                        object_geom_ids=tuple(sorted(self.object_geom_ids)), compute_dtype="float32",
+                        object_geom_ids=tuple(sorted(self.object_geom_ids)),
+                        active_object_geom_ids=active_object_geom_ids, compute_dtype="float32",
                     )
                 )
         return self._device_contact_decoder(
@@ -1683,12 +1695,10 @@ class MujocoManoEnvironment:
             len(trajectory.scene_object_types) > 1
             for trajectory in self.trajectories
         )
-        if has_multi_object_scene and (
-            config.device_transition or config.device_contact_decode
-        ):
+        if has_multi_object_scene and config.device_contact_decode:
             raise ValueError(
-                "multi-object scenes require host contact decoding; "
-                "device fast paths aggregate non-target contacts"
+                "device_contact_decode supports a homogeneous object batch; "
+                "multi-object scenes require the host contact snapshot path"
             )
         if config.device_transition and (
             self.hand_layout.controlled_sides != ("right",)
