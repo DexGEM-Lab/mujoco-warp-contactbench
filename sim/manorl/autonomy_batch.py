@@ -271,7 +271,7 @@ def build_device_autonomy_observation(*, physical: Any, contact: Any, witness: D
     out = out.at[:, s["measured_keypoint_relative"]].set((physical.hand_keypoint_positions - physical.object_position[:, None]).reshape(b, -1))
     out = out.at[:, s["surface_proximity"]].set(witness.proximity)
     out = out.at[:, s["surface_anchor_local"]].set(witness.object_endpoint_local.reshape(b, -1))
-    out = out.at[:, s["contact_phase_confidence"]].set(jp.stack((index / jp.maximum(reference_q.shape[1] - 1, 1), jp.mean(witness.confidence, axis=1)), axis=1))
+    out = out.at[:, s["contact_phase_confidence"]].set(jp.stack((i / jp.maximum(horizon - 1, 1), jp.mean(witness.confidence, axis=1)), axis=1))
     out = out.at[:, s["reference_surface_proximity"]].set(jp.exp(-jp.abs(witness.signed_distance) / .01))
     out = out.at[:, s["reference_surface_anchor_local"]].set(witness.object_endpoint_local.reshape(b, -1))
     out = out.at[:, s["reference_contact_confidence"]].set(witness.confidence)

@@ -12,7 +12,7 @@ from sim.manorl.autonomy_batch import (
     rate_limited_command_batch,
     transform_fixed_witnesses,
 )
-from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, rate_limited_command, validate_v3_checkpoint_metadata, CHECKPOINT_V3_FORMAT, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
+from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, observation_slices, rate_limited_command, validate_v3_checkpoint_metadata, CHECKPOINT_V3_FORMAT, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
 from sim.manorl.environment import recommended_warp_contact_capacity
 from sim.manorl.mjx_sim import CONSTRAINT_CAPACITY
 
@@ -82,6 +82,25 @@ def test_v3_observation_keeps_width_and_batch_axis_without_host_geometry_queries
     assert np.isfinite(np.asarray(observation)).all()
 
 
+@pytest.mark.parametrize("unique", [True, False])
+def test_v31_phase_uses_reference_horizon_for_unique_and_batched_tables(unique: bool):
+    jax = pytest.importorskip("jax")
+    jp = jax.numpy
+    batch, horizon = 4, 539
+    physical = _physical(batch)
+    contact = type("Contact", (), {"hand_object_forces": jp.zeros((batch, 16, 3))})()
+    witness = DeviceWitnessFeatures(*(jp.zeros((batch, 16, 3)) for _ in range(2)), jp.zeros((batch, 16)), jp.ones((batch, 16)), jp.ones((batch, 16)), jp.zeros((batch, 16)), jp.zeros((batch, 16, 3)))
+    reference_q = jp.zeros((horizon, 28)) if unique else jp.zeros((batch, horizon, 28))
+    reference_object = jp.zeros((horizon, 3)) if unique else jp.zeros((batch, horizon, 3))
+    observation = build_device_autonomy_observation(physical=physical, contact=contact, witness=witness,
+        reference_q=reference_q, reference_object=reference_object, previous_command=jp.zeros((batch, 28)),
+        action_ids=jp.ones((batch,)), index=jp.asarray([0, 134, 269, 538]),
+        lower=jp.full((28,), -1.), upper=jp.full((28,), 1.))
+    phase = np.asarray(observation[:, observation_slices()["contact_phase_confidence"]])[:, 0]
+    np.testing.assert_allclose(phase, [0., 134 / 538, .5, 1.], rtol=0., atol=2e-7)
+    assert np.all(phase <= 1.)
+
+
 def test_masked_reset_changes_only_completed_rows():
     jax = pytest.importorskip("jax")
     jp = jax.numpy
@@ -93,9 +112,11 @@ def test_masked_reset_changes_only_completed_rows():
     np.testing.assert_array_equal(np.asarray(result), [[-1., -1., -1.], [3., 4., 5.]])
 
 
-def test_v3_checkpoint_rejects_v2_and_requires_all_contract_ids():
+def test_v31_checkpoint_rejects_v2_and_phase_bug_v3_metadata():
     with pytest.raises(ValueError, match="v2"):
         validate_v3_checkpoint_metadata({"checkpoint_format": "manorl.autonomy.ppo.v2"})
+    with pytest.raises(ValueError, match="explicit legacy reader"):
+        validate_v3_checkpoint_metadata({"checkpoint_format": "manorl.autonomy.ppo.v3", "observation_contract": "manorl.autonomy.observation.v3"})
     validate_v3_checkpoint_metadata({"checkpoint_format": CHECKPOINT_V3_FORMAT, "observation_contract": OBSERVATION_V3_CONTRACT_ID, "reward_contract": REWARD_V3_CONTRACT_ID})
 
 

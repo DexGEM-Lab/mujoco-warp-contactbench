@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from sim.manorl.autonomy_batch_training import load_frozen_v3, run_batched_ppo
-from sim.manorl.autonomy_contracts import ACTION_DIM, ACTION_V3_CONTRACT_ID
+from sim.manorl.autonomy_contracts import ACTION_DIM, ACTION_V3_CONTRACT_ID, CHECKPOINT_V3_FORMAT, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
 
 
 class FakeBatchedAdapter:
@@ -86,13 +86,37 @@ def test_real_ppo_loop_global_valid_window_metrics_and_streaming_callback(tmp_pa
     assert checkpoint["global_policy_step"] == 12
 
 
-def test_v3_loader_rejects_wrong_provenance_before_model_load(tmp_path: Path):
+def test_v31_loader_rejects_wrong_provenance_before_model_load(tmp_path: Path):
     path = tmp_path / "wrong-package.pt"
-    torch.save({"checkpoint_format": "manorl.autonomy.ppo.v3", "observation_contract": "manorl.autonomy.observation.v3",
-                "reward_contract": "manorl.autonomy.reward.v3", "action_contract": ACTION_V3_CONTRACT_ID,
+    torch.save({"checkpoint_format": CHECKPOINT_V3_FORMAT, "observation_contract": OBSERVATION_V3_CONTRACT_ID,
+                "reward_contract": REWARD_V3_CONTRACT_ID, "action_contract": ACTION_V3_CONTRACT_ID,
                 "provenance": {"package_digest": "wrong"}, "model": {}}, path)
     with pytest.raises(ValueError, match="provenance mismatch"):
         load_frozen_v3(path, torch.nn.Linear(1, 1), expected_provenance={"package_digest": "expected"})
+
+
+def test_installed_gaussian_mixin_preserves_logprob_for_clipped_actions():
+    # This is the production mixin path.  Saturation must not create a PPO
+    # old/new log-probability mismatch when the policy is unchanged.
+    from skrl.models.torch import GaussianMixin, Model
+
+    class SaturatingGaussian(GaussianMixin, Model):
+        def __init__(self):
+            Model.__init__(self, observation_space=gym.spaces.Box(-1., 1., shape=(1,), dtype=float),
+                           action_space=gym.spaces.Box(-1., 1., shape=(1,), dtype=float), device="cpu")
+            GaussianMixin.__init__(self, clip_actions=True, clip_mean_actions=False,
+                                   clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum")
+
+        def compute(self, inputs, role=""):
+            return torch.zeros((inputs["observations"].shape[0], 1)), {"log_std": torch.full((1,), 1.25)}
+
+    torch.manual_seed(0)
+    policy = SaturatingGaussian()
+    observations = torch.zeros((4096, 1))
+    actions, old = policy.act({"observations": observations})
+    _, new = policy.act({"observations": observations, "taken_actions": actions})
+    assert (actions.abs() == 1.).any(dim=1).float().mean() > .7
+    torch.testing.assert_close(new["log_prob"], old["log_prob"], rtol=0., atol=0.)
 
 
 def test_v3_loader_strictly_rejects_v2_metadata(tmp_path: Path):
