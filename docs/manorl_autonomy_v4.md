@@ -74,3 +74,25 @@ reward boundaries, and checkpoint rejection. The N=1 CPU smoke loads
 `cube2_02_2833`, resets to finite raw `(1,957)` / encoded `(1,829)`, then
 performs one finite Warp transition. No trainer, server, GPU scale job, or W&B
 run is launched by this implementation.
+
+## v4.1 cache/state correction
+
+The initial v4 cache was corrected to use every compiled hand collision mesh
+(`mesh_vert`/`mesh_face`) with its `geom_pos` and `geom_quat` transformed once
+into the owning body frame. Cube2's source collision triangles are already
+body-local and deliberately do not receive the object geom transform again.
+JAX closest-triangle plus oriented convex-halfspace logic supplies signed gaps;
+interior points project onto a mesh surface. Surface templates are deterministic
+area-spread 128-per-region and 64-on-object samples, not AABB corners.
+
+V4 compilation now calls `compile_model_metadata_only`, which retains static
+MjModel/XML validation but does not execute the legacy `MjData`/`mj_forward`
+static-FK oracle. Warp FK validates the v4 path. Reference raw and feasible q
+both receive the common support shift before FK, and cached velocities use
+7-frame/poly2 filtering with quaternion-derived angular velocity. Runtime
+observation stays raw 957; trainable PointNet/829 is a later model slice.
+
+Raw SI q, not normalized q, is used in commands and reward. The shared v4
+configuration resolves source `dofRate` and `antiwindupError`; qdot, servo
+error and command envelope use their respective source quantities. Bottom
+fields use collision vertices and the cached table height.

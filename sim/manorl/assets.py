@@ -1198,6 +1198,32 @@ def validate_compiled_model(
             raise ValueError(f"hand body gravity compensation missing: {name}")
 
 
+def compile_model_metadata_only(
+    servo: ServoConfig = ServoConfig(),
+    *,
+    object_type: str = OBJECT_TYPE,
+    visual_meshes: bool = False,
+    hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
+) -> tuple[Any, Any]:
+    """Compile static model metadata without native ``MjData`` FK validation.
+
+    Warp-only consumers use this narrow constructor then validate kinematics
+    through MJX. Legacy ``compile_model`` retains its native static-FK oracle.
+    """
+    try:
+        import mujoco
+    except ImportError as exc:
+        raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
+    model = mujoco.MjModel.from_xml_string(
+        build_scene_xml(servo, object_type=object_type, visual_meshes=visual_meshes,
+                        hand_side=hand_side, physics_timestep=physics_timestep)
+    )
+    validate_compiled_model(mujoco, model, servo, object_type=object_type,
+                            hand_side=hand_side, physics_timestep=physics_timestep)
+    return mujoco, model
+
+
 def compile_model(
     servo: ServoConfig = ServoConfig(),
     *,
@@ -1212,22 +1238,9 @@ def compile_model(
         import mujoco
     except ImportError as exc:
         raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
-    model = mujoco.MjModel.from_xml_string(
-        build_scene_xml(
-            servo,
-            object_type=object_type,
-            visual_meshes=visual_meshes,
-            hand_side=hand_side,
-            physics_timestep=physics_timestep,
-        )
-    )
-    validate_compiled_model(
-        mujoco,
-        model,
-        servo,
-        object_type=object_type,
-        hand_side=hand_side,
-        physics_timestep=physics_timestep,
+    mujoco, model = compile_model_metadata_only(
+        servo, object_type=object_type, visual_meshes=visual_meshes,
+        hand_side=hand_side, physics_timestep=physics_timestep,
     )
     validate_static_fk(mujoco, model, object_type=object_type, hand_side=hand_side)
     return mujoco, model

@@ -9,7 +9,7 @@ import numpy as np
 from sim.manorl.autonomy_contracts import ACTION_DIM, AUTONOMY_VERSION, OBSERVATION_DIM
 from sim.manorl.autonomy_v4 import (ReferenceCacheV4, V4Contact, compile_reference_cache_v4,
     extract_v4_physical, reduce_pyramidal_contacts_v4, build_raw_observation,
-    compute_reward, pointnet_encode, encode_observation)
+    compute_reward, DOF_RATE, ANTIWINDUP_ERROR)
 
 V4_OBSERVATION_DIM=OBSERVATION_DIM
 V3_OBSERVATION_DIM=V4_OBSERVATION_DIM # import-only migration alias, never 538
@@ -24,24 +24,24 @@ class BatchedAutonomyRuntime:
         if device not in {"cpu","gpu"}: raise ValueError("device must be cpu or gpu")
         import jax, jax.numpy as j
         from mujoco import mjx
-        from sim.manorl.assets import compile_model, object_collision_vertices
+        from sim.manorl.assets import compile_model_metadata_only, object_collision_vertices
         from sim.manorl.environment import MjxWarpPhysicalProducer
         self.jax,self.jp,self.mjx=jax,j,mjx; self.num_envs=1; self.device_name=device; self.trajectory=trajectory
-        self.mujoco,self.model=compile_model(object_type="cube2",hand_side="right",physics_timestep=1/480)
+        self.mujoco,self.model=compile_model_metadata_only(object_type="cube2",hand_side="right",physics_timestep=1/480)
         self.device=jax.devices(device)[0]; self.mjx_model=mjx.put_model(self.model,device=self.device,impl="warp")
         if getattr(self.mjx_model,"_impl",None) is None: raise RuntimeError("v4 requires mjx.put_model(..., impl='warp')")
         self.producer=MjxWarpPhysicalProducer(self.mujoco,self.model,object_type="cube2",hand_sides=("right",))
         self.cache=compile_reference_cache_v4(trajectory,device=device)
         self.length=len(self.cache.q_feasible); self.lower=np.asarray(self.model.jnt_range[:28,0],np.float32); self.upper=np.asarray(self.model.jnt_range[:28,1],np.float32)
-        self.rate=np.r_[.5,.5,.5,2.,2.,2.,np.full(22,4.)].astype(np.float32); self.envelope=np.r_[.02,.02,.02,.25,.25,.25,np.full(22,.35)].astype(np.float32)
-        self.antiwindup=np.r_[np.ones(3),np.full(25,np.pi)].astype(np.float32)
+        self.rate=DOF_RATE.copy(); self.envelope=ANTIWINDUP_ERROR.copy()
+        self.antiwindup=ANTIWINDUP_ERROR.copy()
         base=mjx.make_data(self.model,device=self.device,impl="warp",naconmax=128,njmax=512)
         qpos=np.asarray(base.qpos).copy(); qpos[:28]=self.cache.q_feasible[0]; qpos[self.producer.object_qpos_address:self.producer.object_qpos_address+3]=self.cache.object_origin[0]; qpos[self.producer.object_qpos_address+3:self.producer.object_qpos_address+7]=self.cache.object_quat_xyzw[0,(3,0,1,2)]
         self.initial=base.replace(qpos=j.asarray(qpos),ctrl=j.asarray(np.r_[self.cache.q_feasible[0],np.asarray(base.ctrl)[28:]].copy()))
         self.data=jax.vmap(lambda _: mjx.forward(self.mjx_model,self.initial))(j.arange(1)); self.indices=j.zeros((1,),j.int32); self.pending_reset=j.zeros((1,),bool); self.previous_command=j.asarray(self.cache.q_feasible[:1],j.float32)
         # Static collision vertices give exact cube2 bottom after the same forward.
         self.object_vertices=j.asarray(object_collision_vertices("cube2"),j.float32)
-        rng=np.random.default_rng(0); self.pointnet_weights=(j.asarray(rng.normal(0,.1,(3,32)),j.float32),j.zeros(32),j.asarray(rng.normal(0,.1,(32,64)),j.float32),j.zeros(64))
+        # Runtime emits raw 957; trainable PointNet belongs to the next model slice.
         self._transition_fn=jax.jit(self._transition)
         self._refresh(False,j.zeros((1,28),j.float32))
 
@@ -49,19 +49,19 @@ class BatchedAutonomyRuntime:
         objq=data.xquat[:,self.producer.object_body_id][...,(1,2,3,0)]
         from sim.manorl.autonomy_v4 import quat_rotate
         bottom=self.jp.min(data.xpos[:,self.producer.object_body_id,None,2]+quat_rotate(objq[:,None],self.object_vertices)[:,:,2],axis=1)
-        return extract_v4_physical(qpos=data.qpos,qvel=data.qvel,xpos=data.xpos,xquat=data.xquat,xipos=data.xipos,subtree_com=data.subtree_com,cvel=data.cvel,body_rootid=self.model.body_rootid,hand_dof_address=0,object_body_id=self.producer.object_body_id,palm_body_id=self.producer.keypoint_body_ids[0],region_body_ids=self.producer.keypoint_body_ids,object_bottom=bottom,lower=self.jp.asarray(self.lower),upper=self.jp.asarray(self.upper),previous_command=previous,antiwindup=self.jp.asarray(self.antiwindup))
+        return extract_v4_physical(qpos=data.qpos,qvel=data.qvel,xpos=data.xpos,xquat=data.xquat,xipos=data.xipos,subtree_com=data.subtree_com,cvel=data.cvel,body_rootid=self.model.body_rootid,hand_dof_address=0,object_body_id=self.producer.object_body_id,palm_body_id=self.producer.keypoint_body_ids[0],region_body_ids=self.producer.keypoint_body_ids,object_bottom=bottom,lower=self.jp.asarray(self.lower),upper=self.jp.asarray(self.upper),previous_command=previous,dof_rate=self.jp.asarray(self.rate),antiwindup=self.jp.asarray(self.antiwindup))
     def _contact(self,data,physical):
         x=data._impl; required=("nacon","nefc","contact__geom","contact__worldid","contact__dim","contact__efc_address","contact__friction","contact__frame","contact__pos","efc__force")
         if any(not hasattr(x,n) for n in required): raise RuntimeError("pinned MJX-Warp contact ABI unavailable")
         allf,pair,torque,count,valid=reduce_pyramidal_contacts_v4(nacon=x.nacon,nefc=x.nefc,geom=x.contact__geom,world=x.contact__worldid,dimension=x.contact__dim,addresses=x.contact__efc_address,friction=x.contact__friction,frame=x.contact__frame,position=x.contact__pos,constraint_force=x.efc__force,ngeom=self.model.ngeom,hand_geom_ids=self.producer.keypoint_geom_ids,object_geom_ids=tuple(self.producer.object_geom_ids),object_com=physical.object_com)
         return V4Contact(allf,pair,torque,count,self.jp.zeros((1,16,3)),valid)
     def _observe(self,data,index,previous):
-        physical=self._physical(data,previous); contact=self._contact(data,physical); raw=build_raw_observation(physical,contact,self.cache,index,previous); embedding=pointnet_encode(raw[:,703:895].reshape(1,64,3),weights=self.pointnet_weights); return physical,contact,raw,encode_observation(raw,embedding)
+        physical=self._physical(data,previous); contact=self._contact(data,physical); raw=build_raw_observation(physical,contact,self.cache,index,previous); return physical,contact,raw,raw
     def _transition(self,data,index,previous,action,execute):
         import jax
         physical=self._physical(data,previous)
         command=previous+self.jp.clip(action,-1,1)*self.jp.asarray(self.rate)[None]/120
-        command=self.jp.clip(self.jp.clip(command,physical.q-self.jp.asarray(self.envelope),physical.q+self.jp.asarray(self.envelope)),self.jp.asarray(self.lower),self.jp.asarray(self.upper))
+        command=self.jp.clip(self.jp.clip(command,physical.q_raw-self.jp.asarray(self.envelope),physical.q_raw+self.jp.asarray(self.envelope)),self.jp.asarray(self.lower),self.jp.asarray(self.upper))
         stepped=data.replace(ctrl=command)
         def advance(x):
             for _ in range(4): x=jax.vmap(lambda row:self.mjx.step(self.mjx_model,row))(x)
