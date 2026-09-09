@@ -38,6 +38,36 @@ def test_actor_provenance_is_all28_and_deterministic_in_eval_mode():
     model.eval(); x={"observations":torch.zeros((1,OBSERVATION_DIM))}; first=model.compute(x,role="policy")[0]; second=model.compute(x,role="policy")[0]
     value, _ = model.act(x, role="value")
     assert first.shape == (1,ACTION_DIM) and torch.equal(first,second) and value.shape == (1,1)
+    assert not model.separate_critic and not hasattr(model, "value_net")
+    assert model.checkpoint_architecture()["value_trunk"] == "shared"
+
+
+def test_separate_critic_initializes_from_actor_and_isolates_optimizer_updates():
+    torch.manual_seed(3)
+    model = AutonomyActorCritic(gym.spaces.Box(-5., 5., shape=(OBSERVATION_DIM,), dtype=float),
+                                gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=float),
+                                device="cpu", separate_critic=True)
+    observations = {"observations": torch.randn(4, OBSERVATION_DIM)}
+    policy_before = model.compute(observations, role="policy")[0].detach().clone()
+    actor_before = {name: value.detach().clone() for name, value in model.named_parameters()
+                    if not name.startswith("value_net.") and not name.startswith("value.")}
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
+    assert {id(parameter) for group in optimizer.param_groups for parameter in group["params"]} == {id(parameter) for parameter in model.parameters()}
+
+    optimizer.zero_grad(set_to_none=True)
+    model.compute(observations, role="value")[0].square().mean().backward()
+    optimizer.step()
+    assert torch.equal(policy_before, model.compute(observations, role="policy")[0])
+    for name, expected in actor_before.items():
+        assert torch.equal(expected, dict(model.named_parameters())[name])
+
+    value_net_before = {name: value.detach().clone() for name, value in model.named_parameters() if name.startswith("value_net.")}
+    optimizer.zero_grad(set_to_none=True)
+    model.compute(observations, role="policy")[0].square().mean().backward()
+    assert all(parameter.grad is None for name, parameter in model.named_parameters() if name.startswith("value_net."))
+    optimizer.step()
+    for name, expected in value_net_before.items():
+        assert torch.equal(expected, dict(model.named_parameters())[name])
 
 def test_split_rejects_wrong_catalog_size():
     catalog=SimpleNamespace(trajectories=tuple(fake_catalog().trajectories[:49]))

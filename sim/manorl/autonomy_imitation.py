@@ -167,12 +167,14 @@ def fit_policy_mean(
 
 def imitation_checkpoint_payload(*, model: torch.nn.Module, config: dict[str, Any], provenance: dict[str, Any], teacher_config: dict[str, Any], fit_metrics: dict[str, Any]) -> dict[str, Any]:
     """Build a frozen-loader-compatible actor initialization checkpoint."""
+    if not hasattr(model, "checkpoint_architecture"):
+        raise TypeError("imitation checkpoint model must declare its architecture")
     return {
         "checkpoint_format": CHECKPOINT_V3_FORMAT,
         "observation_contract": OBSERVATION_V3_CONTRACT_ID,
         "reward_contract": REWARD_V3_CONTRACT_ID,
         "action_contract": ACTION_V3_CONTRACT_ID,
-        "model": model.state_dict(),
+        "model": model.state_dict(), "model_architecture": model.checkpoint_architecture(),
         "optimizer": None,
         "global_policy_step": 0, "policy_steps": 0, "environment_transitions": 0,
         "config": config,

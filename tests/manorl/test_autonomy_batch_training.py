@@ -170,6 +170,28 @@ def test_imitation_checkpoint_loads_and_warmstarts_without_optimizer_resume(tmp_
         torch.testing.assert_close(got, expected)
 
 
+def test_shared_bc_conversion_copies_actor_trunk_without_changing_initial_outputs(tmp_path: Path):
+    torch.manual_seed(7)
+    space = gym.spaces.Box(-5., 5., shape=(538,), dtype=float)
+    action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=float)
+    source = AutonomyActorCritic(space, action_space, device="cpu")
+    checkpoint = tmp_path / "shared-bc.pt"
+    provenance = {"package_digest": "package", "identity_split": {"digest": "split"}, "witness_digest": "witness"}
+    legacy_payload = imitation_checkpoint_payload(model=source, config={}, provenance=provenance,
+                                                teacher_config={}, fit_metrics={})
+    legacy_payload.pop("model_architecture")  # actual pre-feature BC warm-start shape
+    torch.save(legacy_payload, checkpoint)
+    target = AutonomyActorCritic(space, action_space, device="cpu", separate_critic=True)
+    with pytest.raises(ValueError, match="architecture mismatch"):
+        load_frozen_v3(checkpoint, target, expected_provenance=provenance)
+    payload = load_frozen_v3(checkpoint, target, expected_provenance=provenance,
+                             allow_weights_only_init_conversion=True)
+    inputs = {"observations": torch.randn(5, 538)}
+    torch.testing.assert_close(target.compute(inputs, role="policy")[0], source.compute(inputs, role="policy")[0], rtol=0., atol=0.)
+    torch.testing.assert_close(target.compute(inputs, role="value")[0], source.compute(inputs, role="value")[0], rtol=0., atol=0.)
+    assert payload["weights_only_init_conversion"] == "shared-BC-to-separate-critic value_net copied from loaded actor trunk"
+
+
 def _physical_warmstart_provenance(*, source_commit: str, asset_pin: str = "asset", witness_digest: str = "witness"):
     return {"source_commit": source_commit, "asset_pin": asset_pin,
             "package_digest": "package", "manifest_sha256": "manifest",
@@ -177,6 +199,22 @@ def _physical_warmstart_provenance(*, source_commit: str, asset_pin: str = "asse
             "witness_digest": witness_digest,
             "clock": {"policy_fps": 120, "physics_fps": 480, "substeps": 4},
             "v3_contract": {"action": "action", "observation": "observation", "reward": "reward"}}
+
+
+def test_separate_ppo_checkpoint_round_trips_with_architecture_metadata(tmp_path: Path):
+    adapter = FakeBatchedAdapter()
+    output = tmp_path / "separate.pt"
+    model, agent, _ = run_batched_ppo(adapter, updates=1, rollouts=1, learning_epochs=1, mini_batches=1,
+                                      checkpoint=output, separate_critic=True)
+    payload = torch.load(output, weights_only=False)
+    assert payload["model_architecture"]["value_trunk"] == "separate"
+    assert any(name.startswith("value_net.") for name in payload["model"])
+    restored = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device="cpu", separate_critic=True)
+    load_frozen_v3(output, restored)
+    inputs = {"observations": torch.randn(3, 538)}
+    torch.testing.assert_close(restored.compute(inputs, role="policy")[0], model.compute(inputs, role="policy")[0], rtol=0., atol=0.)
+    torch.testing.assert_close(restored.compute(inputs, role="value")[0], model.compute(inputs, role="value")[0], rtol=0., atol=0.)
+    assert agent.optimizer.state
 
 
 def test_ppo_warmstart_accepts_different_source_lineage_and_records_it(tmp_path: Path):

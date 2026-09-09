@@ -144,22 +144,48 @@ class AutonomyVectorEnv(gym.Env):
 from skrl.models.torch import Model
 from skrl.models.torch.gaussian import GaussianMixin
 from skrl.models.torch.deterministic import DeterministicMixin
+ACTOR_CRITIC_ARCHITECTURE_ID = "manorl.autonomy.actor_critic.v2"
+
+
 class AutonomyActorCritic(GaussianMixin, DeterministicMixin, Model):
     """Small Gaussian actor/value model compatible with canonical skrl PPO.
 
-    The input width comes from the live space, allowing the versioned v3
-    witness features without changing PPO or the frozen v2 model ABI.
+    ``separate_critic`` keeps the BC policy trunk (``net``), mean head, and
+    log-standard-deviation surface unchanged while routing value prediction
+    through an independently registered 128x128 trunk.
     """
-    def __init__(self, observation_space, action_space, device="cpu"):
+    def __init__(self, observation_space, action_space, device="cpu", *, separate_critic: bool = False):
         Model.__init__(self, observation_space=observation_space, state_space=None, action_space=action_space, device=device)
         self.observation_dim = int(self.num_observations)
         self.action_dim = int(self.num_actions)
+        self.separate_critic = bool(separate_critic)
         if self.action_dim != ACTION_DIM or self.observation_dim < 1:
             raise ValueError("autonomy actor requires 28 actions and a positive observation width")
         GaussianMixin.__init__(self, clip_actions=True, clip_mean_actions=False, clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum", role="policy")
         DeterministicMixin.__init__(self, clip_actions=False, role="value")
-        self.net=nn.Sequential(nn.Linear(self.observation_dim,128),nn.Tanh(),nn.Linear(128,128),nn.Tanh()).to(device)
-        self.mean=nn.Linear(128,self.action_dim).to(device); self.value=nn.Linear(128,1).to(device); self.log_std=nn.Parameter(torch.full((self.action_dim,),-1.,device=device))
+        self.net = self._make_trunk(device)
+        if self.separate_critic:
+            self.value_net = self._make_trunk(device)
+            # A separate critic begins from precisely the actor representation.
+            # Warm-start conversion repeats this copy *after* actor weights load.
+            self.initialize_value_net_from_actor()
+        self.mean = nn.Linear(128, self.action_dim).to(device)
+        self.value = nn.Linear(128, 1).to(device)
+        self.log_std = nn.Parameter(torch.full((self.action_dim,), -1., device=device))
+
+    def _make_trunk(self, device: str | torch.device) -> nn.Sequential:
+        return nn.Sequential(nn.Linear(self.observation_dim, 128), nn.Tanh(), nn.Linear(128, 128), nn.Tanh()).to(device)
+
+    def checkpoint_architecture(self) -> dict[str, Any]:
+        return {"id": ACTOR_CRITIC_ARCHITECTURE_ID, "policy_trunk": [self.observation_dim, 128, 128],
+                "value_trunk": "separate" if self.separate_critic else "shared",
+                "action_dim": self.action_dim}
+
+    def initialize_value_net_from_actor(self) -> None:
+        if not self.separate_critic:
+            raise ValueError("shared critic has no value_net to initialize")
+        self.value_net.load_state_dict(self.net.state_dict())
+
     def act(self, inputs, role=""):
         # Multiple inheritance otherwise resolves every role through
         # GaussianMixin, which expects log_std for a scalar value head.
@@ -168,22 +194,26 @@ class AutonomyActorCritic(GaussianMixin, DeterministicMixin, Model):
         raise ValueError("role must be policy or value")
 
     def compute(self, inputs, role=""):
-        h=self.net(inputs["observations"])
-        if role=="policy": return self.mean(h), {"log_std":self.log_std.expand_as(self.mean(h))}
-        if role=="value": return self.value(h), {}
+        observations = inputs["observations"]
+        if role == "policy":
+            mean = self.mean(self.net(observations))
+            return mean, {"log_std": self.log_std.expand_as(mean)}
+        if role == "value":
+            trunk = self.value_net if self.separate_critic else self.net
+            return self.value(trunk(observations)), {}
         raise ValueError("role must be policy or value")
 
-def build_runtime(environment, *, rollouts=2, learning_epochs=1, mini_batches=1, device="cpu"):
+def build_runtime(environment, *, rollouts=2, learning_epochs=1, mini_batches=1, device="cpu", separate_critic=False):
     """Construct canonical RlGamesPPO with done-aware skrl GAE."""
-    wrapper=GymnasiumWrapper(environment); memory=RandomMemory(memory_size=rollouts,num_envs=environment.num_envs,device=device); model=AutonomyActorCritic(wrapper.observation_space,wrapper.action_space,device=device)
+    wrapper=GymnasiumWrapper(environment); memory=RandomMemory(memory_size=rollouts,num_envs=environment.num_envs,device=device); model=AutonomyActorCritic(wrapper.observation_space,wrapper.action_space,device=device, separate_critic=separate_critic)
     cfg={"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":mini_batches,"discount_factor":.99,"gae_lambda":.95,"learning_rate":3e-4,"ratio_clip":.2,"value_clip":.2,"entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":0,"time_limit_bootstrap":True,"experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,observation_space=wrapper.observation_space,state_space=None,action_space=wrapper.action_space,device=device,cfg=cfg); agent.init(); return wrapper,model,agent
 
 
-def build_batched_runtime(adapter, *, rollouts=32, learning_epochs=4, mini_batches=16, device="cuda"):
+def build_batched_runtime(adapter, *, rollouts=32, learning_epochs=4, mini_batches=16, device="cuda", separate_critic=False):
     """Build the existing PPO against DLPack-owning batched spaces, no Gym loop."""
     memory = RandomMemory(memory_size=rollouts, num_envs=adapter.num_envs, device=device)
-    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=device)
+    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=device, separate_critic=separate_critic)
     cfg = {"rollouts": rollouts, "learning_epochs": learning_epochs, "mini_batches": mini_batches,
            "discount_factor": .99, "gae_lambda": .95, "learning_rate": 3e-4, "ratio_clip": .2,
            "value_clip": .2, "entropy_loss_scale": .001, "value_loss_scale": .5,

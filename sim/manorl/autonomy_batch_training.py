@@ -52,12 +52,15 @@ def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
 
 
 def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, Any], provenance: dict[str, Any], policy_steps: int, environment_transitions: int) -> dict[str, Any]:
+    if not hasattr(model, "checkpoint_architecture"):
+        raise TypeError("v3 checkpoint model must declare its architecture")
     return {
         "checkpoint_format": CHECKPOINT_V3_FORMAT,
         "observation_contract": OBSERVATION_V3_CONTRACT_ID,
         "reward_contract": REWARD_V3_CONTRACT_ID,
         "action_contract": ACTION_V3_CONTRACT_ID,
-        "model": model.state_dict(), "optimizer": agent.optimizer.state_dict(),
+        "model": model.state_dict(), "model_architecture": model.checkpoint_architecture(),
+        "optimizer": agent.optimizer.state_dict(),
         # Retain prior name/meaning for consumers that already interpret it as
         # environment transitions. The explicit fields remove that ambiguity.
         "global_policy_step": int(environment_transitions),
@@ -81,7 +84,54 @@ def _save_checkpoint(*, checkpoint: str | Path, model: torch.nn.Module, agent: A
         _atomic_torch_save(payload, final)
 
 
-def load_frozen_v3(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu", expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+def checkpoint_model_architecture(payload: dict[str, Any]) -> dict[str, Any]:
+    """Read architecture before a frozen model is constructed.
+
+    Pre-metadata v3 checkpoints are unambiguously the original shared-trunk
+    layout when their state dict has no ``value_net`` keys. New writes always
+    carry the explicit form below.
+    """
+    architecture = payload.get("model_architecture")
+    if architecture is None:
+        state = payload.get("model")
+        if not isinstance(state, dict) or any(name.startswith("value_net.") for name in state):
+            raise ValueError("legacy checkpoint has no reconstructible shared architecture")
+        try:
+            return {"id": "manorl.autonomy.actor_critic.v2",
+                    "policy_trunk": [int(state["net.0.weight"].shape[1]), int(state["net.0.weight"].shape[0]), int(state["net.2.weight"].shape[0])],
+                    "value_trunk": "shared", "action_dim": int(state["mean.weight"].shape[0])}
+        except (KeyError, IndexError, AttributeError) as error:
+            raise ValueError("legacy checkpoint has no reconstructible shared architecture") from error
+    if not isinstance(architecture, dict):
+        raise ValueError("checkpoint model architecture metadata is malformed")
+    required = {"id", "policy_trunk", "value_trunk", "action_dim"}
+    if set(architecture) != required:
+        raise ValueError("checkpoint model architecture metadata is malformed")
+    return architecture
+
+
+def _load_weights_only_init(model: torch.nn.Module, state: dict[str, Any], source_architecture: dict[str, Any] | None) -> str:
+    """Load old shared BC weights and explicitly copy its trunk into value_net."""
+    if not hasattr(model, "checkpoint_architecture"):
+        raise TypeError("weights-only initialization target must declare its architecture")
+    target_architecture = model.checkpoint_architecture()
+    if source_architecture is not None and source_architecture == target_architecture:
+        model.load_state_dict(state, strict=True)
+        return "architecture-matched weights-only initialization"
+    if not getattr(model, "separate_critic", False):
+        raise ValueError("weights-only architecture conversion only supports shared BC into a separate critic")
+    expected_source = {**target_architecture, "value_trunk": "shared"}
+    if source_architecture is not None and source_architecture != expected_source:
+        raise ValueError("incompatible source/target model architecture for weights-only initialization")
+    result = model.load_state_dict(state, strict=False)
+    expected_missing = {name for name in model.state_dict() if name.startswith("value_net.")}
+    if set(result.missing_keys) != expected_missing or result.unexpected_keys:
+        raise ValueError("legacy BC weights must differ only by missing value_net parameters")
+    model.initialize_value_net_from_actor()
+    return "shared-BC-to-separate-critic value_net copied from loaded actor trunk"
+
+
+def load_frozen_v3(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu", expected_provenance: dict[str, Any] | None = None, allow_weights_only_init_conversion: bool = False) -> dict[str, Any]:
     """Load a frozen v3 checkpoint only after contract/provenance agreement."""
     payload = torch.load(path, map_location=map_location, weights_only=False)
     validate_v3_checkpoint_metadata(payload)
@@ -92,7 +142,15 @@ def load_frozen_v3(path: str | Path, model: torch.nn.Module, *, map_location: st
         for key, expected in expected_provenance.items():
             if actual.get(key) != expected:
                 raise ValueError(f"checkpoint provenance mismatch for {key}")
-    model.load_state_dict(payload["model"])
+    source_architecture = checkpoint_model_architecture(payload)
+    if allow_weights_only_init_conversion:
+        lineage = _load_weights_only_init(model, payload["model"], source_architecture)
+        payload["weights_only_init_conversion"] = lineage
+    else:
+        architecture = checkpoint_model_architecture(payload)
+        if not hasattr(model, "checkpoint_architecture") or architecture != model.checkpoint_architecture():
+            raise ValueError("checkpoint/model architecture mismatch")
+        model.load_state_dict(payload["model"], strict=True)
     model.eval()
     return payload
 
@@ -137,6 +195,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None,
                     init_checkpoint: str | Path | None = None,
+                    separate_critic: bool = False,
                     on_update: Callable[[dict[str, float]], None] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
     """Run canonical PPO against an adapter exposing direct device tensors.
 
@@ -150,7 +209,8 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     if rollouts * adapter.num_envs < mini_batches:
         raise ValueError("mini-batches cannot exceed rollout transitions")
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
-                                         mini_batches=mini_batches, device=str(adapter.device))
+                                         mini_batches=mini_batches, device=str(adapter.device),
+                                         separate_critic=separate_critic)
     # This is a weights-only warm start. The fresh PPO instance owns a new
     # optimizer; explicitly clearing state prevents a future builder change
     # from silently turning --init-checkpoint into an optimizer resume.
@@ -164,11 +224,13 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         init_payload = load_frozen_v3(
             init_path, model, map_location=adapter.device,
             expected_provenance=_warmstart_compatibility_provenance(provenance),
+            allow_weights_only_init_conversion=True,
         )
         provenance = {**provenance,
                       "init_source_commit": init_payload.get("provenance", {}).get("source_commit"),
                       "init_checkpoint_sha256": _checkpoint_sha256(init_path),
-                      "init_checkpoint_path": str(init_path)}
+                      "init_checkpoint_path": str(init_path),
+                      "init_model_conversion": init_payload["weights_only_init_conversion"]}
         agent.optimizer.state.clear()
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()
