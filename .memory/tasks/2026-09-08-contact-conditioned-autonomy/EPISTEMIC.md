@@ -40,3 +40,5 @@ Next boundary: trainable PointNet/raw→829 model wiring, checkpoint encoder has
 batching, general cone/helper parity, actual contact slip and force integration
 are explicitly deferred. They must not be inferred as complete from this
 cache/state slice.
+
+The B4096 retry exposed an allocation invariant, not a CCD-quality or physics failure: pinned MJX-Warp demands global `naccdmax <= naconmax`. The compiled cube2 bound is 121 mesh×mesh convex pairs/world, hence explicit B4096 scratch is 495616. The previous v4 recommended contact arena (262208) violated that invariant before workspace installation. The corrected runtime must make its global contact arena at least explicit global CCD scratch while preserving the default recommended arena. The historical successful fast path capacity 524352 supports this direction. This changes allocation only; it does not validate B4096 execution or resolve the earlier transition-memory OOM.

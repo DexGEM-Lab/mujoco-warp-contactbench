@@ -32,6 +32,18 @@ class BatchedAutonomyRuntime:
     Structural B>1 support is intentional.  Dynamic validation remains N=1:
     no caller should infer multi-world physics throughput from this class.
     """
+    @staticmethod
+    def _capacity_contract(
+        num_envs: int, ccd_contacts_per_world: int | None, recommended_capacity: int,
+    ) -> tuple[int, int | None]:
+        ccd_capacity = (
+            None if ccd_contacts_per_world is None else ccd_contacts_per_world * num_envs
+        )
+        return (
+            max(recommended_capacity, 0 if ccd_capacity is None else ccd_capacity),
+            ccd_capacity,
+        )
+
     def __init__(
         self, trajectory, *, num_envs: int = 1, device: str = "cpu", seed: int = 0,
         persistent_ccd_workspace: bool = False, ccd_contacts_per_world: int | None = None,
@@ -94,11 +106,14 @@ class BatchedAutonomyRuntime:
         self.table_metadata = {"height": self.cache.table_height, "object_type": "cube2"}
 
         # naconmax is one global contact arena, not a per-world capacity.
-        self.warp_contact_capacity = recommended_warp_contact_capacity(num_envs, ("right",))
-        self.warp_constraint_capacity = 512
-        self.warp_ccd_naccdmax = (
-            None if ccd_contacts_per_world is None else ccd_contacts_per_world * num_envs
+        # Explicit CCD scratch shares the same global allocation contract:
+        # MJX-Warp requires naccdmax <= naconmax.
+        self.warp_contact_capacity, self.warp_ccd_naccdmax = self._capacity_contract(
+            num_envs,
+            ccd_contacts_per_world,
+            recommended_warp_contact_capacity(num_envs, ("right",)),
         )
+        self.warp_constraint_capacity = 512
         make_kwargs = dict(
             device=self.device, impl="warp", naconmax=self.warp_contact_capacity,
             njmax=self.warp_constraint_capacity,

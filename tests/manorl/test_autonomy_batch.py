@@ -11,6 +11,7 @@ from sim.manorl.autonomy_batch import (
     AutonomyTransitionState, BatchedAutonomyRuntime, V3_OBSERVATION_DIM,
     V4_OBSERVATION_DIM,
 )
+from sim.manorl.environment import recommended_warp_contact_capacity
 from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM
 
 
@@ -30,3 +31,26 @@ def test_runtime_constructor_rejects_invalid_batch_and_workspace_contracts():
     with pytest.raises(TypeError, match="full_horizon_diagnostic"):
         BatchedAutonomyRuntime(None, full_horizon_diagnostic=1)
     assert ACTION_DIM == 28
+
+
+def test_explicit_ccd_scratch_expands_global_contact_arena():
+    """The Warp naccdmax <= naconmax precondition holds at B4096."""
+    batch, contacts_per_world = 4096, 121
+    recommended = recommended_warp_contact_capacity(batch, ("right",))
+    contact_arena, ccd_capacity = BatchedAutonomyRuntime._capacity_contract(
+        batch, contacts_per_world, recommended
+    )
+    assert recommended == 262208
+    assert ccd_capacity == 495616
+    assert contact_arena == ccd_capacity
+    assert ccd_capacity <= contact_arena
+
+
+def test_default_contact_arena_remains_recommended():
+    batch = 4096
+    recommended = recommended_warp_contact_capacity(batch, ("right",))
+    contact_arena, ccd_capacity = BatchedAutonomyRuntime._capacity_contract(
+        batch, None, recommended
+    )
+    assert ccd_capacity is None
+    assert contact_arena == recommended == 262208
