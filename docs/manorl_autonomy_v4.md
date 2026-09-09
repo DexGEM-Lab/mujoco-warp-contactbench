@@ -134,17 +134,30 @@ Real GPU train commands default to W&B enabled and expose the B4096 controls:
 keeps `njmax=512` per world. CPU integration commands explicitly use
 `--no-wandb --no-persistentworkspace`.
 
-```bash
-# Real training launch candidate; do not start it without the launch decision.
-python tools/train_manorl_autonomy.py train --device gpu --num-envs 4096 \
-  --persistentworkspace --ccd-contacts-per-world 121 --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt
+`train --warmstart PATH` validates the v4 model architecture plus pinned
+asset, package, catalog, manifest, split, identity, ABI, and physical clock
+provenance. It loads only the model state before the first rollout. PPO always
+constructs a fresh full actor/value Adam; the source checkpoint's optimizer,
+progress, and RNG are ignored. Warm-started outputs record
+`mode=ppo_warmstart` and the resolved `warmstart_checkpoint` in both config and
+provenance.
 
-# Authorized bounded local validation.
+```bash
+TEACHER=outputs/manorl/contact_conditioned_autonomy/single-trajectory-cpu-20260909/teacher-bc-v4.pt
+
+# Bounded CPU wiring smoke with the offline teacher-initialized v4 model.
 python tools/train_manorl_autonomy.py train --device cpu --num-envs 1 \
   --no-persistentworkspace --updates 2 --rollouts 8 --learning-epochs 1 \
-  --mini-batches 1 --no-wandb --checkpoint /tmp/cube2-v4-n1.pt
+  --mini-batches 1 --no-wandb --warmstart "$TEACHER" \
+  --checkpoint /tmp/cube2-v4-warmstart-smoke.pt
+
+# Future GPU launch candidate; run only in an approved free GPU window.
+python tools/train_manorl_autonomy.py train --device gpu --num-envs 4096 \
+  --persistentworkspace --ccd-contacts-per-world 121 --warmstart "$TEACHER" \
+  --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo_warmstart.pt
+
 python tools/train_manorl_autonomy.py evaluate --device cpu --num-envs 1 \
-  --no-persistentworkspace --checkpoint /tmp/cube2-v4-n1.pt --steps 4
+  --no-persistentworkspace --checkpoint /tmp/cube2-v4-warmstart-smoke.pt --steps 4
 ```
 
 Frozen evaluation always resets at reference frame 0, follows deterministic

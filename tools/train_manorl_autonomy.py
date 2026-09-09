@@ -86,7 +86,22 @@ def train(args):
     if args.total_transitions is not None and args.total_transitions != args.updates * args.rollouts * args.num_envs:
         raise ValueError("total-transitions must equal updates * rollouts * num-envs")
     adapter = _adapter(args, trajectory); provenance = _provenance(catalog, split, adapter)
+    warmstart_checkpoint = str(Path(args.warmstart).expanduser().resolve()) if args.warmstart else None
+    mode = "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"
     config = {key: value for key, value in vars(args).items() if key not in {"fn", "wandb"}}
+    config.update({"warmstart_checkpoint": warmstart_checkpoint, "mode": mode})
+    warmstart_expected = {
+        key: provenance[key] for key in (
+            "asset_pin", "package_digest", "manifest_sha256", "catalog_digest",
+            "identity_split", "contracts", "identity",
+        )
+    }
+    warmstart_expected["clock"] = {
+        key: provenance["clock"][key] for key in (
+            "control_timestep", "physics_timestep", "physics_substeps",
+        )
+    }
+    provenance.update({"warmstart_checkpoint": warmstart_checkpoint, "mode": mode})
     metadata = {"training_contract": "manorl.autonomy.training.v4.single_reference", "config": config, "provenance": provenance}
     run = _wandb(args, metadata)
     try:
@@ -95,7 +110,9 @@ def train(args):
             if run is not None: run.log(row, step=int(row["transitions"]))
         _, _, rows = run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
-            checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance, on_update=publish)
+            checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
+            warmstart=warmstart_checkpoint, expected_warmstart_provenance=warmstart_expected,
+            on_update=publish)
     except BaseException:
         if run is not None: run.finish(exit_code=1)
         raise
@@ -149,7 +166,7 @@ def inspect(args):
         "constraint_capacity_per_world": adapter.runtime.warp_constraint_capacity}))
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__); subs = parser.add_subparsers(required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--package", default=DEFAULT_PACKAGE); common.add_argument("--identity", default=DEFAULT_IDENTITY)
@@ -160,10 +177,19 @@ def main():
     train_parser = subs.add_parser("train", parents=[common]); train_parser.add_argument("--updates", type=int, default=256); train_parser.add_argument("--rollouts", type=int, default=32)
     train_parser.add_argument("--learning-epochs", type=int, default=4); train_parser.add_argument("--mini-batches", type=int, default=16); train_parser.add_argument("--total-transitions", type=int)
     train_parser.add_argument("--checkpoint", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt"); train_parser.add_argument("--checkpoint-interval", type=int, default=16)
+    train_parser.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
     train_parser.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True); train_parser.add_argument("--wandb-project"); train_parser.add_argument("--wandb-entity"); train_parser.add_argument("--wandb-mode"); train_parser.set_defaults(fn=train)
     eval_parser = subs.add_parser("evaluate", parents=[common]); eval_parser.add_argument("--checkpoint", required=True); eval_parser.add_argument("--steps", type=int); eval_parser.add_argument("--full-horizon-diagnostic", action="store_true")
     eval_parser.add_argument("--trace", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_eval.json"); eval_parser.set_defaults(fn=evaluate)
     inspect_parser = subs.add_parser("inspect", parents=[common]); inspect_parser.set_defaults(fn=inspect)
-    args = parser.parse_args(); return args.fn(args)
+    return parser
+
+
+def parse_args(argv=None):
+    return build_parser().parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv); return args.fn(args)
 
 if __name__ == "__main__": raise SystemExit(main())

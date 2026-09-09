@@ -92,16 +92,43 @@ def save_checkpoint(*, checkpoint: str | Path, model: torch.nn.Module, agent: An
         _atomic_torch_save(payload, path.with_name(f"{path.stem}.final{path.suffix}"))
 
 
-def load_frozen_v4(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu",
-                   expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+def _validate_provenance(actual: Any, expected: Any, path: str = "provenance") -> None:
+    """Require every expected provenance leaf while allowing recorded diagnostics."""
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            raise ValueError(f"checkpoint provenance mismatch for {path}")
+        for key, value in expected.items():
+            if key not in actual:
+                raise ValueError(f"checkpoint provenance mismatch for {path}.{key}")
+            _validate_provenance(actual[key], value, f"{path}.{key}")
+    elif actual != expected:
+        raise ValueError(f"checkpoint provenance mismatch for {path}")
+
+
+def _load_v4_model_state(path: str | Path, model: torch.nn.Module, *,
+                         map_location: str | torch.device,
+                         expected_provenance: dict[str, Any] | None) -> dict[str, Any]:
     payload = torch.load(path, map_location=map_location, weights_only=False)
     validate_v4_checkpoint_metadata(payload)
     if payload.get("model_architecture") != model.checkpoint_architecture():
         raise ValueError("checkpoint/model architecture mismatch")
-    for key, expected in (expected_provenance or {}).items():
-        if payload.get("provenance", {}).get(key) != expected:
-            raise ValueError(f"checkpoint provenance mismatch for {key}")
+    _validate_provenance(payload.get("provenance", {}), expected_provenance or {})
     model.load_state_dict(payload["model"], strict=True)
+    return payload
+
+
+def load_v4_warmstart(path: str | Path, model: torch.nn.Module, *,
+                      map_location: str | torch.device = "cpu",
+                      expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Strictly load v4 model weights, intentionally ignoring optimizer/progress/RNG."""
+    return _load_v4_model_state(path, model, map_location=map_location,
+                                expected_provenance=expected_provenance)
+
+
+def load_frozen_v4(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu",
+                   expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = _load_v4_model_state(path, model, map_location=map_location,
+                                   expected_provenance=expected_provenance)
     model.eval()
     return payload
 
@@ -115,6 +142,8 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                     mini_batches: int, checkpoint: str | Path | None = None,
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None, separate_critic: bool = False,
+                    warmstart: str | Path | None = None,
+                    expected_warmstart_provenance: dict[str, Any] | None = None,
                     on_update: Callable[[dict[str, float]], None] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
     """Execute canonical PPO with finite-horizon terminal bootstrapping.
 
@@ -128,6 +157,11 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         raise ValueError("mini-batches cannot exceed rollout transitions")
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
                                          mini_batches=mini_batches, device=str(adapter.device), separate_critic=separate_critic)
+    # The PPO agent and its full actor/value Adam are always new. A warm-start
+    # supplies model weights only; teacher optimizer/progress/RNG are ignored.
+    if warmstart is not None:
+        load_v4_warmstart(warmstart, model, map_location=adapter.device,
+                          expected_provenance=expected_warmstart_provenance)
     config, provenance = config or {}, provenance or {}
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()

@@ -64,8 +64,73 @@ def test_v4_ppo_raw_action_terminal_reset_and_checkpoint_roundtrip(tmp_path, mon
     assert payload['optimizer']['state'] and payload['normalizer'] is None
 
 
-def test_v4_public_cli_lists_train_evaluate_and_b4096_controls():
+def _v4_payload(model, provenance):
+    return {'checkpoint_format':CHECKPOINT_FORMAT,'observation_contract':OBSERVATION_CONTRACT_ID,
+            'action_contract':ACTION_CONTRACT_ID,'reward_contract':REWARD_CONTRACT_ID,
+            'model':model.state_dict(),'model_architecture':model.checkpoint_architecture(),
+            'provenance':provenance}
+
+
+def test_v4_warmstart_is_exact_before_first_rollout_and_uses_fresh_full_optimizer(tmp_path, monkeypatch):
+    import sim.manorl.autonomy_batch_training as training
+    torch.manual_seed(11); teacher=_model()
+    warmstart=tmp_path/'teacher.pt'
+    provenance={'package_digest':'p','clock':{'control_timestep':1/120,'physics_substeps':4,
+                                             'full_horizon_diagnostic':True}}
+    # Deliberately omit optimizer: PPO warm-start must never require or restore it.
+    torch.save(_v4_payload(teacher,provenance),warmstart)
+    original=training.build_batched_runtime; observed={}
+    def inspect_first_rollout(*args, **kwargs):
+        model,agent=original(*args,**kwargs)
+        observed['fresh_optimizer_state']=len(agent.optimizer.state)
+        original_act=agent.act
+        def act(observations, *act_args, **act_kwargs):
+            if 'first_mean' not in observed:
+                with torch.no_grad():
+                    observed['first_mean']=model.compute({'observations':observations},role='policy')[0].clone()
+                    observed['teacher_mean']=teacher.compute({'observations':observations},role='policy')[0].clone()
+            return original_act(observations,*act_args,**act_kwargs)
+        agent.act=act
+        return model,agent
+    monkeypatch.setattr(training,'build_batched_runtime',inspect_first_rollout)
+    output=tmp_path/'ppo.pt'; lineage={'warmstart_checkpoint':str(warmstart),'mode':'ppo_warmstart'}
+    model,agent,_=training.run_batched_ppo(
+        _TinyV4Adapter(),updates=1,rollouts=2,learning_epochs=1,mini_batches=1,
+        checkpoint=output,warmstart=warmstart,
+        expected_warmstart_provenance={'package_digest':'p','clock':{'control_timestep':1/120,'physics_substeps':4}},
+        config=lineage,provenance={'package_digest':'p',**lineage},
+    )
+    assert observed['fresh_optimizer_state']==0
+    torch.testing.assert_close(observed['first_mean'],observed['teacher_mean'],rtol=0,atol=0)
+    assert {id(p) for group in agent.optimizer.param_groups for p in group['params']} == {
+        id(p) for p in model.parameters() if p.requires_grad
+    }
+    saved=torch.load(output,map_location='cpu',weights_only=False)
+    assert saved['config']['mode']=='ppo_warmstart'
+    assert saved['provenance']['warmstart_checkpoint']==str(warmstart)
+    assert saved['optimizer']['state']
+
+
+def test_v4_warmstart_rejects_legacy_architecture_and_provenance_mismatch(tmp_path):
+    import sim.manorl.autonomy_batch_training as training
+    legacy=tmp_path/'v3.pt'; torch.save({'checkpoint_format':'manorl.autonomy.ppo.v3.1'},legacy)
+    with pytest.raises(ValueError,match='checkpoint_format'):
+        training.load_v4_warmstart(legacy,_model())
+    source=_model(); payload=_v4_payload(source,{'package_digest':'teacher-package'})
+    architecture=tmp_path/'architecture.pt'; payload['model_architecture']={**payload['model_architecture'],'action_dim':27}
+    torch.save(payload,architecture)
+    with pytest.raises(ValueError,match='architecture'):
+        training.load_v4_warmstart(architecture,_model())
+    payload=_v4_payload(source,{'package_digest':'teacher-package'}); provenance=tmp_path/'provenance.pt'; torch.save(payload,provenance)
+    with pytest.raises(ValueError,match='provenance.package_digest'):
+        training.load_v4_warmstart(provenance,_model(),expected_provenance={'package_digest':'current-package'})
+
+
+def test_v4_public_cli_lists_and_parses_warmstart():
     root=Path(__file__).resolve().parents[2]
     output=subprocess.check_output([sys.executable,str(root/'tools/train_manorl_autonomy.py'),'train','--help'],text=True)
-    for option in ('--num-envs','--persistentworkspace','--ccd-contacts-per-world','--wandb'):
+    for option in ('--num-envs','--persistentworkspace','--ccd-contacts-per-world','--warmstart','--wandb'):
         assert option in output
+    from tools import train_manorl_autonomy as cli
+    assert cli.parse_args(['train']).warmstart is None
+    assert cli.parse_args(['train','--warmstart','teacher.pt']).warmstart=='teacher.pt'

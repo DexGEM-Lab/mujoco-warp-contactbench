@@ -39,6 +39,20 @@ four-control evaluation loaded the produced v4 model+PointNet checkpoint and
 returned 8.824434 with no natural termination in those four controls. This is
 not a reward-tuning signal and does not change physics/reward/clock/geometry.
 
-The next meaningful decision is whether the parent authorizes a real GPU/W&B
-training launch. That decision must specify the experiment budget; the default
-CLI exposes B4096 workspace/CCD settings but has not been launched here.
+The offline v4 teacher checkpoint for `cube2_02_2833` is the current strongest
+initialization signal: frozen neural means produced 175/538 paired-contact
+frames and 9.64 mm peak height delta, but naturally terminated at index 228
+with object-deviation reason 2. The production PPO route now accepts this as a
+strict model-only warm-start after validating architecture, package,
+manifest/catalog, split, identity, asset, ABI, and physical clock provenance.
+The teacher optimizer, progress, and RNG cannot enter PPO; a new full
+actor/value Adam is constructed before the weights load. The teacher's
+`full_horizon_diagnostic=true` is not a physical clock field and is therefore
+recorded but excluded from the equality gate; control/physics timestep and
+substeps remain equality-gated.
+
+No physical PPO training was launched in the warm-start implementation slice.
+The next meaningful intervention is the parent-approved real GPU/W&B run using
+this teacher initialization. Actual single-trajectory competence remains
+unresolved until frozen physical evaluation demonstrates stable contact/lift
+through the trajectory rather than reason-2 termination.
