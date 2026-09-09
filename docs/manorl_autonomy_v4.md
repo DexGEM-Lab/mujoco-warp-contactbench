@@ -1,7 +1,8 @@
 # Contact-conditioned autonomy v4 (cube2 vertical slice)
 
-Training is intentionally stopped. This document describes the runnable N=1
-MJX-Warp CPU vertical slice and its frozen ABI, not a training result.
+This document describes the runnable single-reference v4 PPO path and its
+frozen ABI. It is an implementation/one-small-update validation surface, not a
+claim of learned grasp competence.
 
 ## ABI and provenance
 
@@ -102,8 +103,54 @@ fields use collision vertices and the cached table height.
 The environment and PPO memory ABI are raw 957. `AutonomyActorCritic` owns a
 registered trainable `PointNetEncoder` and replaces only raw cloud `703:895`
 with its 64-D embedding before both policy and value trunks consume all 829
-features. The inspection-only CLI exposes `inspect` and frozen-model `smoke`;
-it intentionally exposes no trainer command while training is stopped.
+features.
+
+## PPO, checkpoint, and public commands
+
+`tools/train_manorl_autonomy.py` has three public commands: `inspect`, `train`,
+and `evaluate`. `train` uses the existing `RlGamesPPO` GAE/clip/Normal/Adam
+implementation. PPO memory stores raw 957-D observations and the unmodified
+Normal sample; `BatchedAutonomyAdapter.step` alone clips a separate copy at the
+physical boundary. The same raw action used to choose the command is recorded
+with its original Normal log-probability.
+
+The loop records `terminal_next` before `prepare_action()`. The runtime resets
+from `last_done`, not the unused `pending_reset` field. Thus a physical terminal
+transition has no bootstrap, while a rollout cut has the normal finite-horizon
+value bootstrap. `PointNetEncoder` is a registered model parameter and is in
+both the Adam optimizer and model state dict.
+
+A checkpoint is `manorl.autonomy.ppo.v4` and requires the v4 action,
+observation, reward, model-architecture, raw-sampling, model, optimizer and
+RNG metadata; v3/538-D inputs fail validation. It records source and asset
+commit, package/catalog/manifest/split, clock, identity and v4 ABI. Cache hash
+is recorded independently but is deliberately not compared at load: equivalent
+supported cache builds can differ in float bytes, whereas source/asset/package
+and ABI/clock are the compatibility contract. There is no observation
+normalizer in this minimal route (`normalizer: null`).
+
+Real GPU train commands default to W&B enabled and expose the B4096 controls:
+`--num-envs`, `--persistentworkspace`, `--ccd-contacts-per-world 121`; runtime
+keeps `njmax=512` per world. CPU integration commands explicitly use
+`--no-wandb --no-persistentworkspace`.
+
+```bash
+# Real training launch candidate; do not start it without the launch decision.
+python tools/train_manorl_autonomy.py train --device gpu --num-envs 4096 \
+  --persistentworkspace --ccd-contacts-per-world 121 --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt
+
+# Authorized bounded local validation.
+python tools/train_manorl_autonomy.py train --device cpu --num-envs 1 \
+  --no-persistentworkspace --updates 2 --rollouts 8 --learning-epochs 1 \
+  --mini-batches 1 --no-wandb --checkpoint /tmp/cube2-v4-n1.pt
+python tools/train_manorl_autonomy.py evaluate --device cpu --num-envs 1 \
+  --no-persistentworkspace --checkpoint /tmp/cube2-v4-n1.pt --steps 4
+```
+
+Frozen evaluation always resets at reference frame 0, follows deterministic
+clipped means, and reports the natural first termination. Its optional
+`--full-horizon-diagnostic` continues after that boundary only while preserving
+`natural_first_termination` and an explicit diagnostic-boundary label.
 
 The fast contact reducer now asserts the static pyramidal cone, requires
 ownership-disjoint geoms in real models, rejects unsupported cones, and skips

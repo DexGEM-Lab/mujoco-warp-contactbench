@@ -1,44 +1,44 @@
 # Current model
 
-The active correction is restricted to the v4 reference cache, physical state
-and raw-observation semantics. The prior v4 cache was physically invalid: it
-sampled 16 compiled mesh hand geoms as `geom_size` boxes, treated mesh AABB
-size as cube shape, and left reference angular velocity at zero. It also fed
-normalized q into command/reward code. These failures could make an internally
-finite observation describe geometry and actuator state that the simulator does
-not have.
+The active bounded objective is no longer empirical autonomy replication. It is
+a runnable, contract-correct v4 single-reference PPO/frozen-evaluation path for
+pinned `cube2_02_2833`, validated by N=1 CPU two-update physics. Long training,
+server jobs, remote activity, and W&B/network runs remain stopped pending the
+parent launch decision.
 
-The corrected source compiles static model metadata through
-`compile_model_metadata_only`, which does not call legacy native static FK.
-Warp FK creates the cache. Every hand region uses its compiled
-`mesh_vert/mesh_face` triangles transformed once by static geom pose into body
-coordinates. Cube2 source collision triangles are already body-local; applying
-the object geom pose would be a double transform. JAX closest-triangle plus
-convex halfspaces produces signed reference gaps and returns a surface point
-for an interior sample. Geometry is immutable T-only cache content, with
-128 deterministic area-spread samples per hand region and 64 object surface
-samples. Cache raw/feasible q and object origin receive the same support shift.
+v4 raw state is 957-D. The registered PointNet converts only the raw cloud to
+the 829-D actor/value feature inside `AutonomyActorCritic`; PPO memory retains
+raw 957 observations. All 28 commands remain policy-owned. PPO records raw
+Normal samples and their raw Gaussian likelihoods; clipping occurs only at the
+physical adapter boundary. The direct CPU two-update run produced finite losses,
+gradients/Adam state and a v4 checkpoint. This validates wiring, not learning.
 
-Raw SI q is distinct from normalized q. Commands and finger reward consume
-raw q. qdot divides by source `dofRate`; servo error/envelope use source
-`antiwindupError`. All values resolve from MANOHandAutonomousV1 constants.
-The raw ABI has corrected .1/.3/.01/.1m/s scaling and current-reference frame
-rules. Actual/reference bottom fields use collision vertices relative to cached
-table height, and falling means bottom < table−.05. Reference velocities use
-7-frame/poly2 filtered derivatives; angular velocity is quaternion-derived.
+The PPO loop preserves the mature RlGamesPPO GAE/clip/Normal/Adam path. It
+records post-step terminal observations/rewards before `prepare_action`; reset
+is driven solely by `runtime.last_done`. Physical terminal transitions do not
+bootstrap; rollout cuts do. `pending_reset` is retained only as a runtime
+structural field and cannot control PPO resets.
 
-Evidence [OPS 2026-09-10T01:00:00Z]: 11 focused checks pass, including a
-monkeypatch proving the v4 cache does not invoke legacy native static FK,
-compiled-mesh transform/surface spread, skewed convex signed geometry,
-reference anchor/joint identity, scaling/bottom fields and prior contact/reward
-checks. The real pinned cube2_02_2833 N=1 CPU Warp reset and step gives finite
-raw `(1,957)`, reward `2.2570746`, valid=true, and nonzero cache angular
-velocity. Training remains stopped; this is source correctness evidence, not
-learning evidence.
+Frozen load rejects old v3/538-D contracts and validates model architecture plus
+package/catalog/manifest/split provenance. v4 checkpoints contain raw-action
+sampling metadata, PointNet state, optimizer state, config, source/asset and
+package provenance, and available RNG. Cache float hashes may differ across
+supported builds; they are recorded but not equality-gated. Compatibility gates
+source/asset/package/ABI/clock contracts instead.
 
-Next boundary: trainable PointNet/raw→829 model wiring, checkpoint encoder hash,
-batching, general cone/helper parity, actual contact slip and force integration
-are explicitly deferred. They must not be inferred as complete from this
-cache/state slice.
+The current v4 cache/state model remains: compiled hand mesh surfaces are
+Warp-FK-derived, object collision geometry is body-local, raw SI q drives
+control/reward, and cache geometry/velocities are physically named. The B4096
+allocation contract remains `--ccd-contacts-per-world 121`, global CCD scratch
+495616 and `naconmax >= naccdmax`, with `njmax=512` per world.
 
-The B4096 retry exposed an allocation invariant, not a CCD-quality or physics failure: pinned MJX-Warp demands global `naccdmax <= naconmax`. The compiled cube2 bound is 121 mesh×mesh convex pairs/world, hence explicit B4096 scratch is 495616. The previous v4 recommended contact arena (262208) violated that invariant before workspace installation. The corrected runtime must make its global contact arena at least explicit global CCD scratch while preserving the default recommended arena. The historical successful fast path capacity 524352 supports this direction. This changes allocation only; it does not validate B4096 execution or resolve the earlier transition-memory OOM.
+N1 result: two updates × eight control transitions on CPU for frame-0
+`cube2_02_2833` were finite/valid with rewards 2.213626 and 2.188532;
+hand-object force was zero, as expected at 16 untrained transitions. A frozen
+four-control evaluation loaded the produced v4 model+PointNet checkpoint and
+returned 8.824434 with no natural termination in those four controls. This is
+not a reward-tuning signal and does not change physics/reward/clock/geometry.
+
+The next meaningful decision is whether the parent authorizes a real GPU/W&B
+training launch. That decision must specify the experiment budget; the default
+CLI exposes B4096 workspace/CCD settings but has not been launched here.

@@ -97,4 +97,10 @@ Fixed-config optimizer continuation retains the shared critic OFF, reward, contr
 
 ## v4 implementation boundary (2026-09-10)
 
-Training remains stopped. The active implementation contract is the pinned cube2 `manorl.autonomy.*.v4` seven-block 957/829 Warp-only vertical slice. v3.1/538-D checkpoint and cache contracts are rejected. N=1 CPU physics is the only runtime validation authorized in this implementation checkpoint; no trainer, server, scale, or W&B execution follows from it.
+The active implementation contract is the pinned cube2 `manorl.autonomy.*.v4` seven-block 957/829 Warp-only vertical slice. v3.1/538-D checkpoint and cache contracts are rejected.
+
+## v4 single-reference PPO restoration (latest scope)
+
+Restore the smallest usable public v4 `train`/frozen `evaluate` route for TRAIN identity `cube2_02_2833`. Reuse mature RlGamesPPO GAE/clip/Normal/Adam logic rather than reimplementing returns. PPO memory must retain raw 957 observations and raw Normal actions; PointNet remains registered/trainable and checkpointed. Reset is driven by `runtime.last_done`; terminal observation/reward is stored before reset and finite-horizon bootstrap remains correct. Frozen evaluation begins at reference frame 0 and reports natural termination; its optional full-horizon diagnostic labels continuation after that boundary.
+
+Authorized runtime evidence is exactly one local CPU N=1 two-update integration test and a short frozen load/evaluate pass. The previous long-training stop remains: no server, remote, long GPU, W&B/network training, or reward/physics/clock/geometry tuning follows from this implementation. Real CLI training defaults W&B enabled; the local test may explicitly disable it. The B4096 GPU public surface exposes num-envs, persistent workspace, CCD121 and current njmax512 allocation contract. Cache float hashes are recorded separately and do not block compatible package/asset/source/ABI evaluation.

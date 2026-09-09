@@ -13,6 +13,8 @@ from torch import nn
 from skrl.models.torch import Model
 from skrl.models.torch.gaussian import GaussianMixin
 from skrl.models.torch.deterministic import DeterministicMixin
+from skrl.memories.torch import RandomMemory
+from sim.manorl.rl_games_ppo import RlGamesPPO
 from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM
 from sim.manorl.model import PointNetEncoder
 from sim.manorl.trajectory_package import TrajectoryCatalog
@@ -48,6 +50,14 @@ class BatchedAutonomyAdapter:
     def reset(self,*,mask=None):
         return self._to_torch(self.runtime.reset(mask)),{"num_envs":self.num_envs,"contract":"manorl.autonomy.v4"}
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
+    def compact_summary(self):
+        """Current-transition reductions, captured before terminal rows reset."""
+        jp=self.runtime.jp; index=jp.minimum(self.runtime.indices,self.runtime.length-1)
+        return {
+            "object_motion":self._to_torch(jp.sum(self.runtime.last_physical.object_origin[:,2])),
+            "contact_force":self._to_torch(jp.sum(jp.linalg.norm(self.runtime.last_contact.paired_force_on_object,axis=-1))),
+            "path":self._to_torch(jp.sum(jp.linalg.norm(self.runtime.last_physical.object_origin-self.runtime.cache.object_origin[index],axis=1))),
+        }
     def step(self,actions):
         # Preserve raw Gaussian actions for likelihood; physical boundary clips.
         if not isinstance(actions,torch.Tensor): actions=torch.as_tensor(actions,dtype=torch.float32,device=self._device)
@@ -88,5 +98,18 @@ class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
             mean=self.mean(self.net(features)); return mean,{"log_std":self.log_std.expand_as(mean)}
         if role=="value": return self.value((self.value_net or self.net)(features)),{}
         raise ValueError("role must be policy or value")
+
+def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False):
+    """Canonical RlGamesPPO over raw-957 storage and the v4 PointNet model."""
+    memory=RandomMemory(memory_size=rollouts,num_envs=adapter.num_envs,device=device)
+    model=AutonomyActorCritic(adapter.observation_space,adapter.action_space,device=device,separate_critic=separate_critic,clip_actions=False)
+    cfg={"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":mini_batches,
+         "discount_factor":.99,"gae_lambda":.95,"learning_rate":3e-4,"ratio_clip":.2,
+         "value_clip":.2,"entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":0,
+         "time_limit_bootstrap":True,"experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
+    agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
+                     observation_space=adapter.observation_space,state_space=None,
+                     action_space=adapter.action_space,device=device,cfg=cfg)
+    agent.init(); return model,agent
 
 def seed_everything(seed:int): random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
