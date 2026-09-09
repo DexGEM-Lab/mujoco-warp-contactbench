@@ -133,3 +133,9 @@ The cache now samples each of the 16 real compiled mesh collision geoms from its
 Physical state now retains raw SI q separately from normalized q; command clamps and finger reward consume raw q. Resolved MANOHandAutonomousV1 `dofRate` and `antiwindupError` arrays are the common source for qdot, servo error and envelope. Observation scales, future/reference frames, cached table-relative bottom pair and fallen threshold are corrected. Runtime emits raw 957; trainable PointNet/829 is deferred.
 
 Focused test command passed 11 tests. Corrected real N=1 CPU pinned package `cube2_02_2833`: reset raw/runtime `(1,957)/(1,957)`, finite; one zero-action Warp step reward `2.2570745944976807`, done false, valid true, finite true; max cached reference angular speed `1.4964786768`. No training/server/GPU-scale/W&B process ran.
+
+## 2026-09-10T02:00:00Z — v4 raw-model integration
+
+Commit `531e51a` replaces the public stale v3 training CLI with stopped-training `inspect` and `smoke` commands. Raw 957 observations flow through `BatchedAutonomyAdapter` into a registered trainable Torch PointNet and both actor/value consume the derived 829 feature. Model forward/backward tests prove pointnet gradients and checkpoint state roundtrip. No optimizer/trainer was invoked. The pinned `inspect` and frozen untrained `smoke` commands passed on cube2_02_2833 CPU with finite valid one-step physics.
+
+The fast reducer now rejects non-pyramidal explicit requests and skips unsolved `efc_address=-1` rows before NaN contact positions can enter a torque lever. It remains a pyramidal/condim3-only fast path; helper parity, actual pair-contact oracle, slip and full batch reset integration remain unresolved.

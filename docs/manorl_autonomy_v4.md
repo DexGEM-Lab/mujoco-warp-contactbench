@@ -96,3 +96,17 @@ Raw SI q, not normalized q, is used in commands and reward. The shared v4
 configuration resolves source `dofRate` and `antiwindupError`; qdot, servo
 error and command envelope use their respective source quantities. Bottom
 fields use collision vertices and the cached table height.
+
+## v4 integration boundary
+
+The environment and PPO memory ABI are raw 957. `AutonomyActorCritic` owns a
+registered trainable `PointNetEncoder` and replaces only raw cloud `703:895`
+with its 64-D embedding before both policy and value trunks consume all 829
+features. The inspection-only CLI exposes `inspect` and frozen-model `smoke`;
+it intentionally exposes no trainer command while training is stopped.
+
+The fast contact reducer now asserts the static pyramidal cone, requires
+ownership-disjoint geoms in real models, rejects unsupported cones, and skips
+live contacts with inactive `efc_address=-1` without allowing masked NaN
+positions into a lever arm. General cone/helper parity and real slip diagnostics
+are still separate work.

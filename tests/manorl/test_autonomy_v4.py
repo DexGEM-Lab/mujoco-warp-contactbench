@@ -49,6 +49,14 @@ def test_contact_pair_order_all_object_and_torque():
     allf,pair,tau,count,valid=reduce_pyramidal_contacts_v4(geom=j.asarray([[0,1],[1,0],[1,2],[2,2]]),world=j.zeros(4,j.int32),**kw)
     np.testing.assert_allclose(np.asarray(pair[0,0]),[-1,0,0],atol=1e-6); np.testing.assert_allclose(np.asarray(allf[0]),[-4,0,0],atol=1e-6); np.testing.assert_allclose(np.asarray(tau[0,0]),[0,0,-1],atol=1e-6); assert bool(valid)
 
+def test_contact_rejects_unsupported_cone_and_skips_unsolved_rows():
+    jax=pytest.importorskip("jax"); j=jax.numpy
+    kwargs=dict(nacon=j.asarray(1),nefc=j.asarray([1]),geom=j.asarray([[0,16],[0,0]]),world=j.asarray([0,0]),dimension=j.asarray([3,3]),addresses=j.asarray([[-1,-1,-1,-1],[0,0,0,0]]),friction=j.ones((2,5)),frame=j.tile(j.eye(3),(2,1,1)),position=j.asarray([[np.nan,np.nan,np.nan],[0,0,0.]]),constraint_force=j.zeros((1,2)),ngeom=17,hand_geom_ids=list(range(16)),object_geom_ids=[16],object_com=j.zeros((1,3)))
+    _,pair,_,count,valid=reduce_pyramidal_contacts_v4(**kwargs)
+    assert bool(valid) and int(count.sum())==0 and np.isfinite(np.asarray(pair)).all()
+    with pytest.raises(ValueError,match="pyramidal"):
+        reduce_pyramidal_contacts_v4(**kwargs,cone="elliptic")
+
 def test_reward_boundaries_clipped_action_and_reason_bits():
     jax=pytest.importorskip("jax"); j=jax.numpy; cache=_cache(); s=_state(); r=compute_reward(s,_contact(),cache,j.asarray([0]),j.full((1,28),2.))
     np.testing.assert_allclose(np.asarray(r.action),[-.002],atol=1e-7); np.testing.assert_allclose(np.asarray(r.object_position),[1.2],atol=1e-6); assert not bool(r.done[0])
