@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """M3 formal skrl PPO train/evaluate entrypoint for cube2 autonomy."""
 from __future__ import annotations
-import argparse, json, os, hashlib, sys
+import argparse, json, os, hashlib, sys, subprocess
 from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path: sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 from sim.manorl.autonomy import Cube2AutonomousMJX, PACKAGE_DEFAULT
-from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID
+from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, ACTION_V3_CONTRACT_ID, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
 from sim.manorl.autonomy_training import AutonomyVectorEnv, BatchedAutonomyAdapter, build_runtime, identity_split, seed_everything, TRAINING_CONTRACT_ID
 from sim.manorl.autonomy_batch_training import load_frozen_v3, run_batched_ppo
 from sim.manorl.autonomy_telemetry import TelemetryAccumulator, configure_wandb_axis, log_update
@@ -121,6 +121,10 @@ def formaltrain(args):
         if run is not None: run.finish()
     return 0
 
+def _git_revision(path: Path) -> str:
+    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+
+
 def batchtrain(args):
     """Launch direct DLPack batched v3 runtime training with canonical PPO."""
     seed_everything(args.seed)
@@ -134,24 +138,31 @@ def batchtrain(args):
                                      persistent_ccd_workspace=args.persistentworkspace,
                                      ccd_contacts_per_world=args.ccd_contacts_per_world)
     config = {k: v for k, v in vars(args).items() if k != "fn"}
-    provenance = {"source": "tools/train_manorl_autonomy.py", "package_digest": catalog.package_digest,
-                  "manifest_sha256": catalog.manifest_sha256, "catalog_digest": catalog.catalog_digest,
-                  "identity_split": split, "witness_digest": adapter.runtime.witness.digest,
-                  "v3_contract": {"action": "manorl.autonomy.action.v3", "observation": "manorl.autonomy.observation.v3", "reward": "manorl.autonomy.reward.v3"},
+    provenance = {"source": "tools/train_manorl_autonomy.py", "source_commit": _git_revision(_ROOT),
+                  "asset_pin": _git_revision(_ROOT / "assets/dexstream_digital_assets"),
+                  "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
+                  "catalog_digest": catalog.catalog_digest, "identity_split": split,
+                  "witness_digest": adapter.runtime.witness.digest,
+                  "clock": {"policy_fps": adapter.runtime.clock.policy_fps, "physics_fps": adapter.runtime.clock.physics_fps, "substeps": adapter.runtime.clock.physics_substeps_per_control},
+                  "v3_contract": {"action": ACTION_V3_CONTRACT_ID, "observation": OBSERVATION_V3_CONTRACT_ID, "reward": REWARD_V3_CONTRACT_ID},
                   "ppo": {"learning_epochs": args.learning_epochs, "mini_batches": args.mini_batches, "rollouts": args.rollouts}}
     metadata = {**provenance, "config": config, "identity": trajectory.identity.identity}
     run = _wandb_start(args, metadata)
     if run is not None:
         print(json.dumps({"wandb_run_id": run.id, "wandb_run_url": run.url, "identity": trajectory.identity.identity}), flush=True)
+    def publish(row):
+        print(json.dumps(row), flush=True)
+        log_update(run, row)
     try:
-        model, agent, rows = run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
+        run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
-            checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance)
-        for row in rows:
-            print(json.dumps(row), flush=True)
-            log_update(run, row)
-    finally:
-        if run is not None: run.finish()
+            checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
+            on_update=publish)
+    except BaseException:
+        if run is not None: run.finish(exit_code=1)
+        raise
+    else:
+        if run is not None: run.finish(exit_code=0)
     return 0
 
 
@@ -164,7 +175,10 @@ def batchevaluate(args):
                                      ccd_contacts_per_world=args.ccd_contacts_per_world)
     from sim.manorl.autonomy_training import AutonomyActorCritic
     model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=str(adapter.device))
-    payload = load_frozen_v3(args.checkpoint, model, map_location=adapter.device)
+    expected_provenance = {"package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
+                           "catalog_digest": catalog.catalog_digest, "identity_split": identity_split(catalog, seed=args.split_seed),
+                           "witness_digest": adapter.runtime.witness.digest}
+    payload = load_frozen_v3(args.checkpoint, model, map_location=adapter.device, expected_provenance=expected_provenance)
     observations, _ = adapter.reset(); steps = adapter.runtime.length - 1 if args.steps is None else args.steps
     trace, total = [], torch.zeros((args.num_envs, 1), device=adapter.device)
     for policy_step in range(steps):
@@ -179,6 +193,8 @@ def batchevaluate(args):
                       "object_position": np.asarray(physical.object_position[0]).tolist(),
                       "object_quaternion_xyzw": np.asarray(physical.object_orientation_xyzw[0]).tolist(),
                       "target_object_position": np.asarray(adapter.runtime.reference_obj[min(int(np.asarray(adapter.runtime.indices[0])), adapter.runtime.length - 1)]).tolist(),
+                      "target_object_quaternion_xyzw": np.asarray(adapter.runtime.reference_quat[min(int(np.asarray(adapter.runtime.indices[0])), adapter.runtime.length - 1)]).tolist(),
+                      "reference_q": np.asarray(adapter.runtime.reference_q[min(int(np.asarray(adapter.runtime.indices[0])), adapter.runtime.length - 1)]).tolist(),
                       "contact_force": np.asarray(contact.hand_object_forces[0]).tolist(),
                       "path": float(np.linalg.norm(np.asarray(physical.object_position[0]) - np.asarray(adapter.runtime.reference_obj[min(int(np.asarray(adapter.runtime.indices[0])), adapter.runtime.length - 1)]))),
                       "termination_reason": int(np.asarray(adapter.runtime.last_reason[0]))})

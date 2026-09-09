@@ -1,8 +1,8 @@
 """Direct CUDA rollout boundary for the v3 homogeneous autonomy runtime.
 
-The runtime owns reset/physics; PPO owns GAE and optimisation.  This module
-keeps their tensor boundary explicit so a terminal state is recorded before
-only that row is reset for the next policy action.
+The runtime owns reset/physics; PPO owns GAE and optimisation. This boundary
+records physical terminal observations before masked reset and only reduces
+compact device telemetry at PPO update boundaries.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import random
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -35,81 +35,127 @@ def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, Any], provenance: dict[str, Any], step: int) -> dict[str, Any]:
+def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, Any], provenance: dict[str, Any], policy_steps: int, environment_transitions: int) -> dict[str, Any]:
     return {
         "checkpoint_format": CHECKPOINT_V3_FORMAT,
         "observation_contract": OBSERVATION_V3_CONTRACT_ID,
         "reward_contract": REWARD_V3_CONTRACT_ID,
         "action_contract": ACTION_V3_CONTRACT_ID,
         "model": model.state_dict(), "optimizer": agent.optimizer.state_dict(),
-        "global_policy_step": int(step), "config": config, "provenance": provenance,
+        # Retain prior name/meaning for consumers that already interpret it as
+        # environment transitions. The explicit fields remove that ambiguity.
+        "global_policy_step": int(environment_transitions),
+        "policy_steps": int(policy_steps), "environment_transitions": int(environment_transitions),
+        "config": config, "provenance": provenance,
         "torch_rng": torch.get_rng_state(), "numpy_rng": np.random.get_state(),
         "python_rng": random.getstate(),
     }
 
 
-def load_frozen_v3(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu") -> dict[str, Any]:
+def _save_checkpoint(*, checkpoint: str | Path, model: torch.nn.Module, agent: Any, config: dict[str, Any], provenance: dict[str, Any], policy_steps: int, environment_transitions: int, update: int, periodic: bool) -> None:
+    path = Path(checkpoint)
+    payload = checkpoint_payload(model=model, agent=agent, config=config, provenance=provenance,
+                                 policy_steps=policy_steps, environment_transitions=environment_transitions)
+    if periodic:
+        numbered = path.with_name(f"{path.stem}.update{update:06d}{path.suffix}")
+        _atomic_torch_save(payload, numbered)
+    _atomic_torch_save(payload, path)  # atomic latest
+    if not periodic:
+        final = path.with_name(f"{path.stem}.final{path.suffix}")
+        _atomic_torch_save(payload, final)
+
+
+def load_frozen_v3(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu", expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Load a frozen v3 checkpoint only after contract/provenance agreement."""
     payload = torch.load(path, map_location=map_location, weights_only=False)
     validate_v3_checkpoint_metadata(payload)
     if payload.get("action_contract") != ACTION_V3_CONTRACT_ID:
         raise ValueError("incompatible v3 autonomy action contract")
+    if expected_provenance:
+        actual = payload.get("provenance", {})
+        for key, expected in expected_provenance.items():
+            if actual.get(key) != expected:
+                raise ValueError(f"checkpoint provenance mismatch for {key}")
     model.load_state_dict(payload["model"])
     model.eval()
     return payload
 
 
-def _compact_window(runtime: Any, reward_sum: torch.Tensor, done_count: torch.Tensor, valid: torch.Tensor, sample_seconds: float, optimize_seconds: float, transitions: int, update: int, episode_return: torch.Tensor, episode_length: torch.Tensor) -> dict[str, float]:
+def _sync_torch(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def _compact_window(*, reward_sum: torch.Tensor, done_count: torch.Tensor, valid: torch.Tensor,
+                    completed_return_sum: torch.Tensor, completed_length_sum: torch.Tensor,
+                    completed_count: torch.Tensor, physics_sums: dict[str, torch.Tensor],
+                    sample_seconds: float, optimize_seconds: float, window_count: int,
+                    environment_transitions: int, policy_steps: int, update: int) -> dict[str, float]:
     """Transfer only update reductions, never per-env contact/info rows."""
-    device_summary = {
-        "reward_sum": reward_sum, "done_count": done_count, "valid": valid,
-        "episode_return_sum": episode_return.sum(), "episode_length_sum": episode_length.sum(),
-        **runtime.compact_summary(),
-    }
-    # DLPack is used until this compact, once-per-update scalar egress.
+    device_summary = {"reward_sum": reward_sum, "done_count": done_count, "valid": valid,
+                      "completed_return_sum": completed_return_sum,
+                      "completed_length_sum": completed_length_sum,
+                      "completed_count": completed_count, **physics_sums}
     host = {name: float(tensor.detach().cpu()) for name, tensor in device_summary.items()}
-    # A real adapter stores telemetry in torch; fake adapters can return CPU tensors.
-    count = max(transitions, 1)
     result = {
-        "update": float(update), "transitions": float(transitions), "global_step": float(transitions),
-        "reward_mean": host["reward_sum"] / count, "terminations": host["done_count"],
-        "valid_rows": host["valid"], "performance/sampling_time": sample_seconds,
-        "performance/optimizer_time": optimize_seconds,
-        "performance/total_transitions_per_second": count / max(sample_seconds + optimize_seconds, 1e-12),
-        "performance/sampling_transitions_per_second": count / max(sample_seconds, 1e-12),
-        "physics/object_z_sum": host["object_motion"], "physics/contact_force_sum": host["contact_force"],
-        "physics/path_error_sum": host["path"],
+        "update": float(update), "transitions": float(environment_transitions),
+        "global_step": float(environment_transitions), "policy_steps": float(policy_steps),
+        "window_transitions": float(window_count), "reward_mean": host["reward_sum"] / window_count,
+        "terminations": host["done_count"], "valid": host["valid"],
+        "performance/sampling_time": sample_seconds, "performance/optimizer_time": optimize_seconds,
+        "performance/total_transitions_per_second": window_count / max(sample_seconds + optimize_seconds, 1e-12),
+        "performance/sampling_transitions_per_second": window_count / max(sample_seconds, 1e-12),
+        "physics/window_object_z_mean": host["object_motion"] / window_count,
+        "physics/window_contact_force_mean": host["contact_force"] / window_count,
+        "physics/window_path_error_mean": host["path"] / window_count,
     }
+    if host["completed_count"]:
+        result["episodes/completed_count"] = host["completed_count"]
+        result["episodes/return_mean"] = host["completed_return_sum"] / host["completed_count"]
+        result["episodes/length_mean"] = host["completed_length_sum"] / host["completed_count"]
     return result
 
 
-def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epochs: int, mini_batches: int, checkpoint: str | Path | None = None, checkpoint_interval: int = 16, config: dict[str, Any] | None = None, provenance: dict[str, Any] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
-    """Run PPO against an adapter exposing reset/step/prepare_action tensors.
+def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epochs: int,
+                    mini_batches: int, checkpoint: str | Path | None = None,
+                    checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
+                    provenance: dict[str, Any] | None = None,
+                    on_update: Callable[[dict[str, float]], None] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
+    """Run canonical PPO against an adapter exposing direct device tensors.
 
-    `step` returns terminal *next* observations. They are recorded before
-    `prepare_action` mutates only completed rows. This is essential for GAE
-    on mixed terminal/nonterminal batches.
+    ``step`` returns physical terminal next observations. They are recorded for
+    GAE before ``prepare_action`` resets only terminal rows for the next actor
+    call. Update callback execution is synchronous, after optimizer/checkpoint
+    work for that update and before sampling the next one.
     """
     if updates < 1 or rollouts < 1 or learning_epochs < 1 or mini_batches < 1:
         raise ValueError("updates, rollouts, learning_epochs and mini_batches must be positive")
     if rollouts * adapter.num_envs < mini_batches:
         raise ValueError("mini-batches cannot exceed rollout transitions")
-    model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs, mini_batches=mini_batches, device=str(adapter.device))
+    model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
+                                         mini_batches=mini_batches, device=str(adapter.device))
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()
     device = observations.device
     episode_return = torch.zeros((adapter.num_envs, 1), device=device)
     episode_length = torch.zeros((adapter.num_envs, 1), device=device)
     rows: list[dict[str, float]] = []
-    global_step = 0
+    policy_steps = 0
     config, provenance = config or {}, provenance or {}
+    window_count = adapter.num_envs * rollouts
     for update in range(1, updates + 1):
+        _sync_torch(device)
         sample_started = time.perf_counter()
-        reward_sum = torch.zeros((), device=device); done_count = torch.zeros((), device=device); valid_all = torch.ones((), device=device)
+        reward_sum = torch.zeros((), device=device); done_count = torch.zeros((), device=device)
+        valid_all = torch.ones((), device=device, dtype=torch.bool)
+        completed_return_sum = torch.zeros((), device=device); completed_length_sum = torch.zeros((), device=device)
+        completed_count = torch.zeros((), device=device)
+        physics_sums: dict[str, torch.Tensor] = {"object_motion": torch.zeros((), device=device),
+                                                   "contact_force": torch.zeros((), device=device),
+                                                   "path": torch.zeros((), device=device)}
         for _ in range(rollouts):
             with torch.no_grad():
-                actions, _ = agent.act(observations, None, timestep=global_step, timesteps=updates * rollouts)
-                # GaussianMixin clips to action space. Store the exact bounded
-                # command that crosses DLPack and enters the physical rate map.
+                actions, _ = agent.act(observations, None, timestep=policy_steps, timesteps=updates * rollouts)
                 actions = torch.clamp(actions, -1.0, 1.0)
             terminal_next, rewards, terminated, info = adapter.step(actions)
             truncated = torch.zeros_like(terminated)
@@ -117,32 +163,49 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                 raise RuntimeError("batched runtime must return rewards/dones shaped (B, 1)")
             agent.record_transition(observations=observations, states=None, actions=actions, rewards=rewards,
                                     next_observations=terminal_next, next_states=None, terminated=terminated,
-                                    truncated=truncated, infos=info, timestep=global_step, timesteps=updates * rollouts)
+                                    truncated=truncated, infos=info, timestep=policy_steps, timesteps=updates * rollouts)
             reward_sum += rewards.sum(); done_count += terminated.sum()
             episode_return += rewards; episode_length += 1
-            # Preserve episode sums across rollout cuts. Completed rows are
-            # reduced then zeroed on device; live neighbours retain their state.
+            # Reduce completed episodes before clearing exactly those rows.
+            completed_return_sum += torch.where(terminated, episode_return, torch.zeros_like(episode_return)).sum()
+            completed_length_sum += torch.where(terminated, episode_length, torch.zeros_like(episode_length)).sum()
+            completed_count += terminated.sum()
             episode_return = torch.where(terminated, torch.zeros_like(episode_return), episode_return)
             episode_length = torch.where(terminated, torch.zeros_like(episode_length), episode_length)
-            valid = adapter._to_torch(info["valid"]).reshape(adapter.num_envs, 1).to(torch.bool)
-            valid_all = valid_all * valid.all().to(valid_all.dtype)
-            # terminal_next remains in agent's current transition. prepare_action
-            # is called only afterwards to obtain next actor observation.
+            # Runtime validity is globally reduced today; accept either scalar
+            # or future row-wise tensors and fail an entire PPO update on false.
+            valid_all &= adapter._to_torch(info["valid"]).to(torch.bool).all()
+            # These are current-transition device reductions, captured before
+            # prepare_action can reset completed rows.
+            for name, value in adapter.compact_summary().items():
+                physics_sums[name] += value
             observations = adapter.prepare_action()
-            global_step += 1
+            policy_steps += 1
+        _sync_torch(device)
+        sampling_seconds = time.perf_counter() - sample_started
         if not bool(valid_all.detach().cpu()):
             raise RuntimeError("invalid physics/contact reduction in batched PPO update; checkpoint withheld")
-        sampling_seconds = time.perf_counter() - sample_started
+        _sync_torch(device)
         optimize_started = time.perf_counter()
-        # PPO's rollout counter is independent of public global policy steps;
-        # call update directly so the learning schedule never restarts per update.
-        agent.update(timestep=global_step, timesteps=updates * rollouts)
+        agent.update(timestep=policy_steps, timesteps=updates * rollouts)
+        _sync_torch(device)
         optimizer_seconds = time.perf_counter() - optimize_started
-        transitions = global_step * adapter.num_envs
-        row = _compact_window(adapter, reward_sum, done_count, valid_all, sampling_seconds, optimizer_seconds, transitions, update, episode_return, episode_length)
+        environment_transitions = policy_steps * adapter.num_envs
+        row = _compact_window(reward_sum=reward_sum, done_count=done_count, valid=valid_all,
+                              completed_return_sum=completed_return_sum, completed_length_sum=completed_length_sum,
+                              completed_count=completed_count, physics_sums=physics_sums,
+                              sample_seconds=sampling_seconds, optimize_seconds=optimizer_seconds,
+                              window_count=window_count, environment_transitions=environment_transitions,
+                              policy_steps=policy_steps, update=update)
         row.update(latest_ppo_metrics(agent)); rows.append(row)
         if checkpoint is not None and update % checkpoint_interval == 0:
-            _atomic_torch_save(checkpoint_payload(model=model, agent=agent, config=config, provenance=provenance, step=transitions), Path(checkpoint))
+            _save_checkpoint(checkpoint=checkpoint, model=model, agent=agent, config=config, provenance=provenance,
+                             policy_steps=policy_steps, environment_transitions=environment_transitions,
+                             update=update, periodic=True)
+        if on_update is not None:
+            on_update(row)
     if checkpoint is not None:
-        _atomic_torch_save(checkpoint_payload(model=model, agent=agent, config=config, provenance=provenance, step=global_step * adapter.num_envs), Path(checkpoint))
+        _save_checkpoint(checkpoint=checkpoint, model=model, agent=agent, config=config, provenance=provenance,
+                         policy_steps=policy_steps, environment_transitions=policy_steps * adapter.num_envs,
+                         update=updates, periodic=False)
     return model, agent, rows
