@@ -37,7 +37,11 @@ from sim.manorl.observations import (
     PointCloudTemplate,
     build_observation,
 )
-from sim.manorl.trajectory import load_reference_trajectory
+from sim.manorl.trajectory import (
+    TrajectorySelection,
+    load_assigned_trajectory_batch,
+    load_reference_trajectory,
+)
 
 
 def _fixture() -> dict[str, object]:
@@ -65,7 +69,8 @@ def _fixture() -> dict[str, object]:
 def _jitted_reducer(fixture: dict[str, object], *, compute_dtype: str = "float32"):
     static = {
         key: fixture[key]
-        for key in ("ngeom", "keypoint_geom_ids", "object_geom_ids")
+        for key in ("ngeom", "keypoint_geom_ids", "object_geom_ids", "active_object_geom_ids")
+        if key in fixture
     }
     static["compute_dtype"] = compute_dtype
     dynamic = {key: value for key, value in fixture.items() if key not in static}
@@ -519,11 +524,90 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
     assert saw_terminal and saw_deviation and saw_contact and saw_post_window
 
 
+@pytest.mark.skipif(
+    not os.environ.get("MANORL_COMPOSITE_PARITY_DATASET"),
+    reason="set MANORL_COMPOSITE_PARITY_DATASET to a dataset-v5 Lance path",
+)
+def test_composite_device_transition_shared_snapshot_parity() -> None:
+    """Compare transition arithmetic on one bowl/cuboid1 physics snapshot."""
+    if jax.default_backend() != "gpu":
+        pytest.skip("configured CUDA JAX backend required")
+
+    dataset_path = os.environ["MANORL_COMPOSITE_PARITY_DATASET"]
+    trajectory = load_assigned_trajectory_batch(
+        TrajectorySelection(
+            "bowl", "03", dataset_path=dataset_path,
+            expected_dataset_version=5, reference_fps=100,
+            pre_padding=180, post_padding=250,
+        ),
+        num_envs=1,
+    )
+    common = dict(
+        num_envs=1, device="gpu", reference_fps=100,
+        device_resident_controls=True, capture_transition_diagnostics=False,
+        point_sampling_backend="numpy_per_env", max_deviation_distance=1e6,
+        unified_object_batch=True,
+    )
+    host = MujocoManoEnvironment(trajectory, EnvironmentConfig(**common))
+    device = MujocoManoEnvironment(
+        trajectory, EnvironmentConfig(**common, device_transition=True)
+    )
+    saw_target_contact = False
+    for step in range(260):
+        if step == 240:
+            host.reset(np.asarray([0], dtype=np.int64))
+            device.reset(np.asarray([0], dtype=np.int64))
+        prior = dict(
+            prior_progress=host.progress.copy(),
+            prior_steps=host.trajectory_steps.copy(),
+            prior_returns=host.episode_returns.copy(),
+            prior_control_call=host.control_call,
+            pending_reset=host.reset_mask.copy(),
+        )
+        host_output, host_reward, host_done, host_extras = host.step(
+            np.zeros((1, host.action_dim), dtype=np.float32)
+        )
+        # Independent MuJoCo/MJX solver runs drift slightly.  Supplying the
+        # host's post-physics snapshot tests the transition contract itself.
+        device.data = host.data
+        for name in (
+            "progress", "trajectory_steps", "cumulative_offset",
+            "cumulative_joint_offset",
+        ):
+            setattr(device, name, getattr(host, name).copy())
+        device._dynamic_templates = (
+            host._dynamic_templates.copy()
+            if host._dynamic_templates is not None
+            else None
+        )
+        actual = device._device_transition_outputs(**prior)
+        np.testing.assert_allclose(
+            np.asarray(actual.observation), host_output["obs"], rtol=1e-4, atol=4e-4
+        )
+        np.testing.assert_allclose(np.asarray(actual.reward), host_reward, rtol=1e-4, atol=1e-4)
+        np.testing.assert_array_equal(np.asarray(actual.reset), host_done)
+        np.testing.assert_array_equal(
+            np.asarray(actual.reason_code), host_extras["termination_reason_code"]
+        )
+        np.testing.assert_array_equal(
+            np.asarray(actual.deviation_reset), host_extras["deviation_reset_mask"]
+        )
+        np.testing.assert_array_equal(device.progress, host.progress)
+        np.testing.assert_array_equal(device.trajectory_steps, host.trajectory_steps)
+        np.testing.assert_allclose(device.episode_returns, host.episode_returns, rtol=1e-4, atol=1e-4)
+        np.testing.assert_array_equal(device.reset_mask, host.reset_mask)
+        assert device.control_call == host.control_call
+        saw_target_contact |= bool(np.any(device.last_reward.raw_contact > 0.0))
+    assert saw_target_contact
+
+
 def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_force() -> None:
     fixture = _fixture()
     fixture["ngeom"] = 48
     fixture["keypoint_geom_ids"] = tuple(range(16))
     fixture["object_geom_ids"] = (40,)
+    # Exercise static active-target forwarding through the bimanual reducer.
+    fixture["active_object_geom_ids"] = ((40,), (40,), (40,), (40,))
     fixture["nacon"] = np.asarray([2], dtype=np.int32)
     fixture["geom"] = np.asarray(
         [(0, 40), (24, 40)] + [(0, 0)] * 15, dtype=np.int32
@@ -533,11 +617,12 @@ def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_forc
     fixture["friction"] = np.zeros((17, 5), dtype=np.float32)
     fixture["frame"] = np.broadcast_to(np.eye(3, dtype=np.float32), (17, 3, 3)).copy()
     constraint_force = np.zeros((4, 64), dtype=np.float32)
-    constraint_force[0, 0] = 2.0
+    # Four pyramidal slots at address zero sum to the intended normal force.
+    constraint_force[0, 0] = 0.5
     fixture["constraint_force"] = constraint_force
     static = {
         key: fixture[key]
-        for key in ("ngeom", "object_geom_ids")
+        for key in ("ngeom", "object_geom_ids", "active_object_geom_ids")
     }
     dynamic = {
         key: value for key, value in fixture.items()
@@ -555,6 +640,64 @@ def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_forc
     np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[0, 0], (4.0, 0.0, 0.0))
     np.testing.assert_array_equal(np.asarray(actual.per_world_count), (2, 0, 0, 0))
     assert bool(actual.valid) is True
+
+
+def test_jitted_contact_reduction_filters_only_per_world_target_reward_contacts() -> None:
+    """Passive contacts remain observable/live but cannot earn target reward."""
+    batch, capacity, ngeom = 2, 7, 32
+    fixture: dict[str, object] = {
+        "nacon": np.asarray([6], dtype=np.int32),
+        "nefc": np.full(batch, 8, dtype=np.int32),
+        "geom": np.asarray(
+            [(0, 21), (20, 1), (20, 22), (2, 20), (22, 3), (4, 30), (0, 0)],
+            dtype=np.int32,
+        ),
+        "world": np.asarray((0, 0, 0, 1, 1, 1, 0), dtype=np.int32),
+        "dimension": np.full(capacity, 3, dtype=np.int32),
+        "addresses": np.zeros((capacity, 4), dtype=np.int32),
+        "friction": np.zeros((capacity, 5), dtype=np.float32),
+        "frame": np.broadcast_to(np.eye(3, dtype=np.float32), (capacity, 3, 3)).copy(),
+        "constraint_force": np.pad(
+            np.full((batch, 1), 0.5, dtype=np.float32), ((0, 0), (0, 7))
+        ),
+        "ngeom": ngeom,
+        "keypoint_geom_ids": tuple(range(16)),
+        "object_geom_ids": (20, 21, 22, 23),
+        # Unequal target pieces, deliberately not global object-type order.
+        "active_object_geom_ids": ((20, -1), (22, 23)),
+    }
+    actual = _jitted_reducer(fixture)
+    expected = _decode_contact_forces(
+        count=6, geom=np.asarray(fixture["geom"]), world=np.asarray(fixture["world"]),
+        dimension=np.asarray(fixture["dimension"]), addresses=np.asarray(fixture["addresses"]),
+        nefc=np.asarray(fixture["nefc"]), friction=np.asarray(fixture["friction"]),
+        frame=np.asarray(fixture["frame"]), constraint_force=np.asarray(fixture["constraint_force"]),
+        ngeom=ngeom, keypoint_geom_ids=fixture["keypoint_geom_ids"],
+        object_geom_ids=set(fixture["object_geom_ids"]),
+        active_object_geom_ids=np.asarray(fixture["active_object_geom_ids"], dtype=np.int32),
+    )
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces), expected[0][:, :16])
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces), expected[1])
+    np.testing.assert_array_equal(np.asarray(actual.per_world_count), expected[2])
+    # World 0's hand-passive contact and world 1's other-type passive contact
+    # both remain observations, while only their local target rows get reward.
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces)[0, 0], (-2.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[0, 0], (0.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[0, 1], (-2.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.keypoint_forces)[1, 2], (-2.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[1, 2], (0.0, 0.0, 0.0))
+    np.testing.assert_allclose(np.asarray(actual.hand_object_forces)[1, 3], (-2.0, 0.0, 0.0))
+    np.testing.assert_array_equal(np.asarray(actual.per_world_count), (3, 3))
+
+
+def test_jitted_contact_reduction_rejects_invalid_static_active_target_table() -> None:
+    fixture = _fixture()
+    fixture["active_object_geom_ids"] = ((20, -2),) * 4
+    with pytest.raises(ValueError, match="invalid MuJoCo geom"):
+        _jitted_reducer(fixture)
+    fixture["active_object_geom_ids"] = ((19,),) * 4
+    with pytest.raises(ValueError, match="unified object geom set"):
+        _jitted_reducer(fixture)
 
 
 def test_jitted_contact_reduction_matches_numpy_decoder_and_masks_capacity() -> None:

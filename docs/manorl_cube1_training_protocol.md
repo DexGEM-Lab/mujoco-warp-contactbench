@@ -284,9 +284,13 @@ host when `--trajectory-package` is omitted. Production supplies the package
 explicitly. The source `--dataset-path` and exact `--dataset-version` remain part
 of selection provenance even when the arrays come from MTP. The package schema,
 package digest, manifest SHA256, and catalog digest are recorded in metrics and
-checkpoint runtime configuration. Strict resume requires all four identities to
-match; cross-package transfer uses explicit warm-start lineage and resets
-optimizer, scheduler, memory, and progress.
+checkpoint runtime configuration. Strict checkpoint loading requires all four identities to match and restores the
+policy/value modules, optimizer, and observation/value normalizers. It does not
+resume the trainer's loop position: `_train` iterates `range(budget.updates)`,
+so a new invocation begins its local update numbering at 1 with the budget it
+was given. Checkpoint progress remains recorded provenance and cadence data;
+cross-package transfer uses explicit warm-start lineage and resets optimizer,
+scheduler, memory, and progress.
 
 Physical assets are a separate checkpoint identity. The runtime uses
 `git@github.com:DexGEM-Lab/dexstream_digital-assets.git` at the pinned

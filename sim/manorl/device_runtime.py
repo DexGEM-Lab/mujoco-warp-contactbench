@@ -620,7 +620,9 @@ def advance_device_task_counters(
 def reduce_warp_contacts(
     *, nacon: Any, nefc: Any, geom: Any, world: Any, dimension: Any, addresses: Any,
     friction: Any, frame: Any, constraint_force: Any, ngeom: int,
-    keypoint_geom_ids: Sequence[int], object_geom_ids: Sequence[int], compute_dtype: str = "float32",
+    keypoint_geom_ids: Sequence[int], object_geom_ids: Sequence[int],
+    active_object_geom_ids: Sequence[Sequence[int]] | Sequence[int] | None = None,
+    compute_dtype: str = "float32",
 ) -> DeviceContactReduction:
     """Reduce pinned MJX-Warp contacts without host materialization."""
 
@@ -647,6 +649,17 @@ def reduce_warp_contacts(
     capacity, batch = geom.shape[0], force.shape[0]
     if world.shape != (capacity,) or dimension.shape != (capacity,) or addresses.shape != (capacity, 4) or friction.ndim != 2 or friction.shape[0] != capacity or friction.shape[1] < 2 or frame.shape != (capacity, 3, 3) or force.ndim != 2 or nefc_values.shape not in {(1,), (batch,)}:
         raise ValueError("MJX-Warp contact ABI shapes differ from the pinned contract")
+    if active_object_geom_ids is None:
+        active_object_ids = None
+    else:
+        active_object_ids = np.asarray(active_object_geom_ids, dtype=np.int32)
+        if active_object_ids.ndim not in (1, 2) or active_object_ids.shape[0] != batch:
+            raise ValueError("active object geom ids must have one entry or a padded set of entries per MJX world")
+        valid_active = active_object_ids[active_object_ids >= 0]
+        if np.any(active_object_ids < -1) or np.any(valid_active >= ngeom):
+            raise ValueError("active object geom ids contain an invalid MuJoCo geom")
+        if not np.all(np.isin(valid_active, object_ids)):
+            raise ValueError("active object geom ids must belong to the unified object geom set")
     nefc = jp.broadcast_to(nefc_values, (batch,)) if nefc_values.shape == (1,) else nefc_values
     count, slots = jp.asarray(nacon).reshape(()), jp.arange(capacity, dtype=jp.int32)
     live = slots < count
@@ -666,8 +679,20 @@ def reduce_warp_contacts(
     first_is, second_is = contribution & (first >= 0), contribution & (second >= 0)
     keypoint_forces = keypoint_forces.at[safe_world, jp.maximum(first, 0)].add(-world_force * first_is[:, None])
     keypoint_forces = keypoint_forces.at[safe_world, jp.maximum(second, 0)].add(world_force * second_is[:, None])
-    object_device = jp.asarray(object_ids)
-    first_object, second_object = jp.any(safe_geom[:, 1, None] == object_device[None], axis=1), jp.any(safe_geom[:, 0, None] == object_device[None], axis=1)
+    if active_object_ids is None:
+        object_device = jp.asarray(object_ids)
+        first_object = jp.any(safe_geom[:, 1, None] == object_device[None], axis=1)
+        second_object = jp.any(safe_geom[:, 0, None] == object_device[None], axis=1)
+    else:
+        active_object_device = jp.asarray(active_object_ids)
+        world_active = active_object_device[safe_world]
+        if active_object_ids.ndim == 1:
+            first_object = safe_geom[:, 1] == world_active
+            second_object = safe_geom[:, 0] == world_active
+        else:
+            active_mask = world_active >= 0
+            first_object = jp.any((safe_geom[:, 1, None] == world_active) & active_mask, axis=1)
+            second_object = jp.any((safe_geom[:, 0, None] == world_active) & active_mask, axis=1)
     first_hand, second_hand = contribution & (first >= 0) & (second < 0) & first_object, contribution & (second >= 0) & (first < 0) & second_object
     hand_object = jp.zeros_like(keypoint_forces)
     hand_object = hand_object.at[safe_world, jp.maximum(first, 0)].add(world_force * first_hand[:, None])
