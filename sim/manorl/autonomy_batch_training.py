@@ -177,14 +177,17 @@ def load_optimizer_resume_v3(path: str | Path, model: torch.nn.Module, agent: An
         raise ValueError(f"optimizer resume checkpoint missing {', '.join(missing)}")
     model.load_state_dict(payload["model"], strict=True)
     agent.optimizer.load_state_dict(payload["optimizer"])
-    torch.set_rng_state(payload["torch_rng"])
+    # ``map_location=adapter.device`` places every serialized tensor on CUDA,
+    # including CPU generator buffers. Torch and CUDA generator setters each
+    # require CPU ByteTensors, while model and Adam tensors remain on device.
+    torch.set_rng_state(payload["torch_rng"].detach().cpu())
     np.random.set_state(payload["numpy_rng"])
     random.setstate(payload["python_rng"])
     cuda_rng = payload.get("cuda_rng")
     if cuda_rng is not None:
         if not torch.cuda.is_available():
             raise ValueError("resume checkpoint has CUDA RNG state but CUDA is unavailable")
-        torch.cuda.set_rng_state_all(cuda_rng)
+        torch.cuda.set_rng_state_all([state.detach().cpu() for state in cuda_rng])
         payload["cuda_rng_restore"] = "restored"
     else:
         payload["cuda_rng_restore"] = "unavailable in source checkpoint; CUDA continuation is not bit-exact"

@@ -19,12 +19,12 @@ from sim.manorl.autonomy_training import AutonomyActorCritic
 
 class FakeBatchedAdapter:
     """Small runtime fixture; the trainer, not a hand-written schedule, drives it."""
-    def __init__(self):
-        self.num_envs = 2
-        self.device = torch.device("cpu")
+    def __init__(self, *, num_envs: int = 2, device: str = "cpu"):
+        self.num_envs = num_envs
+        self.device = torch.device(device)
         self.observation_space = gym.spaces.Box(-5., 5., shape=(538,), dtype=float)
         self.action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=float)
-        self.phase = torch.zeros((2, 1))
+        self.phase = torch.zeros((num_envs, 1), device=self.device)
         self.prepares = 0
         self.recorded_actions = []
         self.terminal_next = []
@@ -36,11 +36,12 @@ class FakeBatchedAdapter:
     def step(self, actions):
         self.recorded_actions.append(actions.detach().clone())
         self.phase += 1
-        done = torch.tensor([[self.prepares == 0], [False]], dtype=torch.bool)
+        done = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
+        done[0, 0] = self.prepares == 0
         next_obs = self.phase.repeat(1, 538)
         self.terminal_next.append(next_obs.detach().clone())
         # Current runtime validity is one global JAX scalar, not a B-vector.
-        return next_obs, torch.ones((2, 1)), done, {"valid": torch.tensor(True)}
+        return next_obs, torch.ones((self.num_envs, 1), device=self.device), done, {"valid": torch.tensor(True, device=self.device)}
 
     def prepare_action(self):
         self.prepares += 1
@@ -51,7 +52,7 @@ class FakeBatchedAdapter:
         return value
 
     def compact_summary(self):
-        return {"object_motion": torch.tensor(1.), "contact_force": torch.tensor(2.), "path": torch.tensor(3.)}
+        return {"object_motion": torch.tensor(1., device=self.device), "contact_force": torch.tensor(2., device=self.device), "path": torch.tensor(3., device=self.device)}
 
 
 def test_real_ppo_loop_global_valid_window_metrics_and_streaming_callback(tmp_path: Path, monkeypatch):
@@ -129,6 +130,30 @@ def test_optimizer_resume_restores_adam_and_continues_cumulative_update_numbers(
     assert payload["provenance"]["optimizer_resume"] is True
     assert payload["provenance"]["resume_boundary"] == "optimizer/model continuation with full-start env reset"
     assert not any(name.startswith("value_net.") for name in payload["model"])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires local CUDA")
+def test_gpu_n1_optimizer_resume_restores_mapped_rng_and_advances_adam(tmp_path: Path):
+    config = {"num_envs": 1, "rollouts": 1, "learning_epochs": 1, "mini_batches": 1,
+              "seed": 7, "setting": "contact-conditioned", "learning_rate": 3e-4}
+    provenance = _physical_warmstart_provenance(source_commit="first")
+    source = tmp_path / "gpu-source.pt"
+    _, source_agent, _ = run_batched_ppo(FakeBatchedAdapter(num_envs=1, device="cuda"), updates=1,
+                                         rollouts=1, learning_epochs=1, mini_batches=1,
+                                         checkpoint=source, config=config, provenance=provenance)
+    source_step = next(iter(source_agent.optimizer.state.values()))["step"].item()
+    saved = torch.load(source, map_location="cpu", weights_only=False)
+    assert saved["cuda_rng"] is not None
+    output = tmp_path / "gpu-resumed.pt"
+    _, agent, rows = run_batched_ppo(FakeBatchedAdapter(num_envs=1, device="cuda"), updates=1,
+                                     rollouts=1, learning_epochs=1, mini_batches=1,
+                                     checkpoint=output, config=config, provenance=provenance,
+                                     resume_checkpoint=source)
+    assert rows[0]["update"] == 2. and rows[0]["transitions"] == 2.
+    assert next(iter(agent.optimizer.state.values()))["step"].item() > source_step
+    resumed = torch.load(output, map_location="cpu", weights_only=False)
+    assert resumed["cuda_rng"] is not None
+    assert not any(name.startswith("value_net.") for name in resumed["model"])
 
 
 @pytest.mark.parametrize("bad_config", [
