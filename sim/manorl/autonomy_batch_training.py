@@ -54,6 +54,9 @@ def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
 def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, Any], provenance: dict[str, Any], policy_steps: int, environment_transitions: int) -> dict[str, Any]:
     if not hasattr(model, "checkpoint_architecture"):
         raise TypeError("v3 checkpoint model must declare its architecture")
+    cuda_rng = None
+    if torch.cuda.is_available():
+        cuda_rng = torch.cuda.get_rng_state_all()
     return {
         "checkpoint_format": CHECKPOINT_V3_FORMAT,
         "observation_contract": OBSERVATION_V3_CONTRACT_ID,
@@ -67,7 +70,7 @@ def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, 
         "policy_steps": int(policy_steps), "environment_transitions": int(environment_transitions),
         "config": config, "provenance": provenance,
         "torch_rng": torch.get_rng_state(), "numpy_rng": np.random.get_state(),
-        "python_rng": random.getstate(),
+        "python_rng": random.getstate(), "cuda_rng": cuda_rng,
     }
 
 
@@ -129,6 +132,64 @@ def _load_weights_only_init(model: torch.nn.Module, state: dict[str, Any], sourc
         raise ValueError("legacy BC weights must differ only by missing value_net parameters")
     model.initialize_value_net_from_actor()
     return "shared-BC-to-separate-critic value_net copied from loaded actor trunk"
+
+
+def _resume_config_compatible(source: dict[str, Any], current: dict[str, Any]) -> None:
+    """Reject changes that alter the PPO/environment trajectory contract."""
+    critical = ("num_envs", "rollouts", "learning_epochs", "mini_batches", "seed", "setting", "learning_rate")
+    for key in critical:
+        if key in source and key in current and source[key] != current[key]:
+            raise ValueError(f"resume configuration mismatch for {key}")
+
+
+def load_optimizer_resume_v3(path: str | Path, model: torch.nn.Module, agent: Any, *,
+                             map_location: str | torch.device = "cpu",
+                             expected_provenance: dict[str, Any], current_config: dict[str, Any],
+                             rollouts: int) -> dict[str, Any]:
+    """Restore a v3.1 shared-model PPO checkpoint at an update boundary.
+
+    This is deliberately unlike weights-only initialization: Adam moments and
+    CPU RNG streams are restored, while the physical runtime starts a new
+    full-start episode because MJX state is not checkpointed.
+    """
+    payload = torch.load(path, map_location=map_location, weights_only=False)
+    validate_v3_checkpoint_metadata(payload)
+    if payload.get("action_contract") != ACTION_V3_CONTRACT_ID:
+        raise ValueError("incompatible v3 autonomy action contract")
+    actual = payload.get("provenance", {})
+    for key, expected in expected_provenance.items():
+        if actual.get(key) != expected:
+            raise ValueError(f"checkpoint provenance mismatch for {key}")
+    if checkpoint_model_architecture(payload) != model.checkpoint_architecture():
+        raise ValueError("checkpoint/model architecture mismatch")
+    if model.checkpoint_architecture()["value_trunk"] != "shared":
+        raise ValueError("optimizer resume supports the fixed shared critic only")
+    _resume_config_compatible(payload.get("config", {}), current_config)
+    policy_steps = payload.get("policy_steps")
+    transitions = payload.get("environment_transitions")
+    if not isinstance(policy_steps, int) or policy_steps < 0 or policy_steps % rollouts:
+        raise ValueError("resume checkpoint policy_steps must be divisible by rollouts")
+    if not isinstance(transitions, int) or transitions != policy_steps * current_config["num_envs"]:
+        raise ValueError("resume checkpoint has inconsistent environment transition counter")
+    required = ("model", "optimizer", "torch_rng", "numpy_rng", "python_rng")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError(f"optimizer resume checkpoint missing {', '.join(missing)}")
+    model.load_state_dict(payload["model"], strict=True)
+    agent.optimizer.load_state_dict(payload["optimizer"])
+    torch.set_rng_state(payload["torch_rng"])
+    np.random.set_state(payload["numpy_rng"])
+    random.setstate(payload["python_rng"])
+    cuda_rng = payload.get("cuda_rng")
+    if cuda_rng is not None:
+        if not torch.cuda.is_available():
+            raise ValueError("resume checkpoint has CUDA RNG state but CUDA is unavailable")
+        torch.cuda.set_rng_state_all(cuda_rng)
+        payload["cuda_rng_restore"] = "restored"
+    else:
+        payload["cuda_rng_restore"] = "unavailable in source checkpoint; CUDA continuation is not bit-exact"
+    payload["resume_update"] = policy_steps // rollouts
+    return payload
 
 
 def load_frozen_v3(path: str | Path, model: torch.nn.Module, *, map_location: str | torch.device = "cpu", expected_provenance: dict[str, Any] | None = None, allow_weights_only_init_conversion: bool = False) -> dict[str, Any]:
@@ -195,6 +256,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None,
                     init_checkpoint: str | Path | None = None,
+                    resume_checkpoint: str | Path | None = None,
                     separate_critic: bool = False,
                     on_update: Callable[[dict[str, float]], None] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
     """Run canonical PPO against an adapter exposing direct device tensors.
@@ -206,6 +268,8 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     """
     if updates < 1 or rollouts < 1 or learning_epochs < 1 or mini_batches < 1:
         raise ValueError("updates, rollouts, learning_epochs and mini_batches must be positive")
+    if init_checkpoint is not None and resume_checkpoint is not None:
+        raise ValueError("init_checkpoint and resume_checkpoint are mutually exclusive")
     if rollouts * adapter.num_envs < mini_batches:
         raise ValueError("mini-batches cannot exceed rollout transitions")
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
@@ -232,16 +296,41 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                       "init_checkpoint_path": str(init_path),
                       "init_model_conversion": init_payload["weights_only_init_conversion"]}
         agent.optimizer.state.clear()
+    config, provenance = config or {}, provenance or {}
+    start_policy_steps = 0
+    if resume_checkpoint is not None:
+        if provenance is None:
+            raise ValueError("optimizer resume requires physical-contract provenance")
+        resume_path = Path(resume_checkpoint)
+        if checkpoint is not None and resume_path.resolve() == Path(checkpoint).resolve():
+            raise ValueError("resume checkpoint output must differ from its source checkpoint")
+        payload = load_optimizer_resume_v3(
+            resume_path, model, agent, map_location=adapter.device,
+            expected_provenance=_warmstart_compatibility_provenance(provenance),
+            current_config=config, rollouts=rollouts,
+        )
+        start_policy_steps = payload["policy_steps"]
+        parent_provenance = payload.get("provenance", {})
+        provenance = {**parent_provenance, **provenance,
+            "parent_checkpoint_sha256": _checkpoint_sha256(resume_path),
+            "parent_checkpoint_path": str(resume_path),
+            "parent_source_commit": parent_provenance.get("source_commit"),
+            "optimizer_resume": True,
+            "resume_boundary": "optimizer/model continuation with full-start env reset",
+            "cuda_rng_restore": payload["cuda_rng_restore"],
+            "additional_budget": {"updates": updates, "policy_steps": updates * rollouts,
+                                  "environment_transitions": updates * rollouts * adapter.num_envs},
+        }
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()
     device = observations.device
     episode_return = torch.zeros((adapter.num_envs, 1), device=device)
     episode_length = torch.zeros((adapter.num_envs, 1), device=device)
     rows: list[dict[str, float]] = []
-    policy_steps = 0
-    config, provenance = config or {}, provenance or {}
+    policy_steps = start_policy_steps
     window_count = adapter.num_envs * rollouts
-    for update in range(1, updates + 1):
+    for additional_update in range(1, updates + 1):
+        update = start_policy_steps // rollouts + additional_update
         _sync_torch(device)
         sample_started = time.perf_counter()
         reward_sum = torch.zeros((), device=device); done_count = torch.zeros((), device=device)
@@ -253,7 +342,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                                                    "path": torch.zeros((), device=device)}
         for _ in range(rollouts):
             with torch.no_grad():
-                actions, _ = agent.act(observations, None, timestep=policy_steps, timesteps=updates * rollouts)
+                actions, _ = agent.act(observations, None, timestep=policy_steps, timesteps=start_policy_steps + updates * rollouts)
                 actions = torch.clamp(actions, -1.0, 1.0)
             terminal_next, rewards, terminated, info = adapter.step(actions)
             truncated = torch.zeros_like(terminated)
@@ -261,7 +350,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                 raise RuntimeError("batched runtime must return rewards/dones shaped (B, 1)")
             agent.record_transition(observations=observations, states=None, actions=actions, rewards=rewards,
                                     next_observations=terminal_next, next_states=None, terminated=terminated,
-                                    truncated=truncated, infos=info, timestep=policy_steps, timesteps=updates * rollouts)
+                                    truncated=truncated, infos=info, timestep=policy_steps, timesteps=start_policy_steps + updates * rollouts)
             reward_sum += rewards.sum(); done_count += terminated.sum()
             episode_return += rewards; episode_length += 1
             # Reduce completed episodes before clearing exactly those rows.
@@ -285,7 +374,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
             raise RuntimeError("invalid physics/contact reduction in batched PPO update; checkpoint withheld")
         _sync_torch(device)
         optimize_started = time.perf_counter()
-        agent.update(timestep=policy_steps, timesteps=updates * rollouts)
+        agent.update(timestep=policy_steps, timesteps=start_policy_steps + updates * rollouts)
         _sync_torch(device)
         optimizer_seconds = time.perf_counter() - optimize_started
         environment_transitions = policy_steps * adapter.num_envs
@@ -305,5 +394,5 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     if checkpoint is not None:
         _save_checkpoint(checkpoint=checkpoint, model=model, agent=agent, config=config, provenance=provenance,
                          policy_steps=policy_steps, environment_transitions=policy_steps * adapter.num_envs,
-                         update=updates, periodic=False)
+                         update=start_policy_steps // rollouts + updates, periodic=False)
     return model, agent, rows

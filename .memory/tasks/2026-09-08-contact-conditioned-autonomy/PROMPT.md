@@ -79,3 +79,14 @@ Parent's 67M run/eval is a failed learning result (0 contact, 0 lift), not an au
 
 ## Teacher-imitation initialization slice (2026-09-09)
 The phase-fixed 67M PPO result remains a failure: no contact/lift and full-start wrist RMSE 0.1798 m. This bounded slice does not alter reward, physics, clock, PPO semantics, observation width, or the neural actor architecture. It tests the narrower hypothesis that the existing MLP needs a physically valid approach/contact action prior: collect exactly one full-start real MJX-Warp rollout from TRAIN identity `cube2_02_2833`; target each pre-action observation with `clip((aligned_ref_q[t+1]-previous_command)/(rate_per_second*dt), -1, 1)`; fit only the policy mean offline; then warm-start PPO from weights only after v3.1/package/split/witness validation. Teacher controls never enter PPO or frozen neural evaluation.
+
+## Fixed-config optimizer continuation (2026-09-09)
+
+The shared v3.1 67M run is extended for learning time only: preserve its shared
+model, Adam state, fixed physics/control/reward/observation/PPO configuration,
+and all established package/split/witness/clock contracts. Continue from update
+256 through cumulative update 2048 using an additional 1792 updates at
+8192×32 transitions, with the old checkpoint retained unchanged. The optional
+separate critic remains held out. The continuation must explicitly record that
+optimizer/model state continues but the MJX runtime begins full-start episodes;
+old checkpoint CUDA RNG absence cannot be represented as bit-exact continuation.

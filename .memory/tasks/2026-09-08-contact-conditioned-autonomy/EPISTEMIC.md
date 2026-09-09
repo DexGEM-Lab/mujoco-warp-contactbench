@@ -19,3 +19,12 @@ The 67,108,864-transition Server1 PPO run and full-start 538-step evaluation fai
 The phase-fixed PPO failure establishes that correcting phase encoding alone did not provide usable approach/contact behavior. A bounded alternative is now supported: the unchanged physical rate-map can execute diagnostic pursuit with real contact, and the same actor MLP can imitate those pre-action observation/action pairs. On the single TRAIN reference, offline fitting cut action MSE by 99.1% and a frozen all-neural full-start rollout attained 0.09799 m wrist RMSE versus the phase-fixed PPO's 0.1798 m, with 242 force-positive frames. This supports teacher-imitation initialization as a PPO starting distribution, not task competence: there is no lift criterion, no held-out result, and no evidence that the neural contact force is stable or useful. Provenance and metrics: OPS 2026-09-09T09:58:00Z.
 
 The measured first-update critic pathway is now isolated by an optional separate value trunk. With `--separate-critic`, value loss can reach only `value_net` and `value`; policy loss reaches only the original BC surfaces (`net`, `mean`, `log_std`). A shared BC checkpoint warms this form by exact actor-state loading followed by a deterministic `value_net <- net` copy, making the initial policy and value outputs equal to the shared baseline before the first optimizer step. Frozen checkpoints encode architecture and fail closed across shared/separate layouts; the sole explicit conversion is weights-only shared-BC into separate critic, recorded in checkpoint provenance. Focused CPU tests establish these graph and persistence properties. This removes one verified early BC-destruction mechanism, while actor-only drift in the probe remains live and means no grasp or retention outcome is implied.
+
+The current intervention is a fixed-config optimizer continuation, not a
+mechanism change. The completed shared 67M checkpoint has usable model/Adam/CPU
+RNG state at update 256 but no resume surface. Resuming those states preserves
+the learning trajectory across update boundaries; resetting full-start
+environments is the explicit boundary because no MJX state was serialized. The
+next evidence is whether 1792 additional unchanged updates change physical
+full-start contact/lift metrics, not whether a separate critic, PPO, reward,
+observation, geometry, controller, or initialization improves them.

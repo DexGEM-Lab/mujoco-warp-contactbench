@@ -39,12 +39,14 @@ def _wandb_start(args, metadata):
     import wandb
     # The default is the canonical entity/project path; both are overrideable
     # for offline smoke tests or a separately configured project.
+    resume_id = getattr(args, "wandb_resume_id", None)
     run = wandb.init(
         project=getattr(args, "wandb_project", None) or os.environ.get("WANDB_PROJECT", "mujoco-mano"),
         entity=getattr(args, "wandb_entity", None) or os.environ.get("WANDB_ENTITY", "sunjay45711-dexerto"),
         config=metadata,
         mode=getattr(args, "wandb_mode", None) or os.environ.get("WANDB_MODE", "online"),
-        reinit=True,
+        id=resume_id, resume="must" if resume_id else None,
+        allow_val_change=bool(resume_id), reinit=True,
     )
     configure_wandb_axis(run)
     return run
@@ -219,9 +221,11 @@ def batchtrain(args):
                                      persistent_ccd_workspace=args.persistentworkspace,
                                      ccd_contacts_per_world=args.ccd_contacts_per_world)
     config = {k: v for k, v in vars(args).items() if k != "fn"}
+    config["learning_rate"] = 3e-4
     config["model_architecture"] = _model_architecture_config(adapter, separate_critic=args.separate_critic)
     provenance = {**_batch_provenance(args, catalog, split, adapter),
-                  "ppo": {"learning_epochs": args.learning_epochs, "mini_batches": args.mini_batches, "rollouts": args.rollouts}}
+                  "ppo": {"learning_epochs": args.learning_epochs, "mini_batches": args.mini_batches,
+                          "rollouts": args.rollouts, "learning_rate": 3e-4}}
     metadata = {**provenance, "config": config, "identity": trajectory.identity.identity}
     run = _wandb_start(args, metadata)
     if run is not None:
@@ -233,7 +237,8 @@ def batchtrain(args):
         run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
             checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
-            init_checkpoint=args.init_checkpoint, separate_critic=args.separate_critic, on_update=publish)
+            init_checkpoint=args.init_checkpoint, resume_checkpoint=args.resume_checkpoint,
+            separate_critic=args.separate_critic, on_update=publish)
     except BaseException:
         if run is not None: run.finish(exit_code=1)
         raise
@@ -311,7 +316,7 @@ def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="mode",required=True); common=argparse.ArgumentParser(add_help=False); common.add_argument("--package",default=str(PACKAGE_DEFAULT)); common.add_argument("--device",choices=("cpu","gpu"),default="cpu"); common.add_argument("--seed",type=int,default=0); common.add_argument("--split-seed",type=int,default=0); common.add_argument("--identity-index",type=int,default=0); common.add_argument("--setting",choices=("contact-conditioned","state-only"),default="contact-conditioned")
     t=sub.add_parser("formaltrain",parents=[common]); t.add_argument("--updates",type=int,default=1); t.add_argument("--num-envs",type=int,default=1); t.add_argument("--rollouts",type=int,default=2); t.add_argument("--total-transitions",type=int,default=None); t.add_argument("--learning-epochs",type=int,default=1); t.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/cube2_02_formalppo.pt"); t.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); t.add_argument("--wandb-project",default=None); t.add_argument("--wandb-entity",default=None); t.add_argument("--wandb-mode",default=None); t.set_defaults(fn=formaltrain)
     pt=sub.add_parser("pretrain",parents=[common]); pt.add_argument("--num-envs",type=int,default=1); pt.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=False); pt.add_argument("--ccd-contacts-per-world",type=int,default=None); pt.add_argument("--gradient-steps",type=int,default=2000); pt.add_argument("--batch-size",type=int,default=128); pt.add_argument("--lr",type=float,default=1e-3); pt.add_argument("--loss",choices=("mse","huber"),default="huber"); pt.add_argument("--output-dir",default="outputs/manorl/contact_conditioned_autonomy/teacher-init"); pt.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); pt.add_argument("--wandb-project",default=None); pt.add_argument("--wandb-entity",default=None); pt.add_argument("--wandb-mode",default=None); pt.set_defaults(fn=pretrain)
-    b=sub.add_parser("batchtrain",parents=[common]); b.add_argument("--num-envs",type=int,default=8192); b.add_argument("--rollouts",type=int,default=32); b.add_argument("--updates",type=int,default=256); b.add_argument("--total-transitions",type=int,default=None); b.add_argument("--learning-epochs",type=int,default=4); b.add_argument("--mini-batches",type=int,default=16); b.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--ccd-contacts-per-world",type=int,default=None); b.add_argument("--checkpoint-interval",type=int,default=16); b.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3.pt"); b.add_argument("--init-checkpoint",default=None,help="strict v3.1 provenance-checked actor weights-only PPO warm start"); b.add_argument("--separate-critic",action=argparse.BooleanOptionalAction,default=False,help="give the value function an independent copied 128x128 trunk"); b.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--wandb-project",default=None); b.add_argument("--wandb-entity",default=None); b.add_argument("--wandb-mode",default=None); b.set_defaults(fn=batchtrain)
+    b=sub.add_parser("batchtrain",parents=[common]); b.add_argument("--num-envs",type=int,default=8192); b.add_argument("--rollouts",type=int,default=32); b.add_argument("--updates",type=int,default=256); b.add_argument("--total-transitions",type=int,default=None); b.add_argument("--learning-epochs",type=int,default=4); b.add_argument("--mini-batches",type=int,default=16); b.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--ccd-contacts-per-world",type=int,default=None); b.add_argument("--checkpoint-interval",type=int,default=16); b.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3.pt"); resume_group=b.add_mutually_exclusive_group(); resume_group.add_argument("--init-checkpoint",default=None,help="strict v3.1 provenance-checked actor weights-only PPO warm start"); resume_group.add_argument("--resume-checkpoint",default=None,help="strict v3.1 model, Adam, CPU-RNG and cumulative-counter continuation"); b.add_argument("--separate-critic",action=argparse.BooleanOptionalAction,default=False,help="give the value function an independent copied 128x128 trunk"); b.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--wandb-project",default=None); b.add_argument("--wandb-entity",default=None); b.add_argument("--wandb-mode",default=None); b.add_argument("--wandb-resume-id",default=None,help="append to an existing W&B run; requires that run to exist"); b.set_defaults(fn=batchtrain)
     be=sub.add_parser("batchevaluate",parents=[common]); be.add_argument("--num-envs",type=int,default=1); be.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); be.add_argument("--ccd-contacts-per-world",type=int,default=None); be.add_argument("--checkpoint",required=True); be.add_argument("--steps",type=int,default=None); be.add_argument("--trace",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3-eval.json"); be.set_defaults(fn=batchevaluate)
     e=sub.add_parser("evaluate",parents=[common]); e.add_argument("--checkpoint",required=True); e.add_argument("--steps",type=int,default=8); e.add_argument("--trace",default="outputs/manorl/contact_conditioned_autonomy/formalppo_eval.json"); e.add_argument("--allow-train-eval",action="store_true"); e.set_defaults(fn=evaluate)
     a=p.parse_args(); return a.fn(a)

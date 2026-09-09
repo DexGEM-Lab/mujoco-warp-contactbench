@@ -8,7 +8,7 @@ import gymnasium as gym
 import pytest
 import torch
 
-from sim.manorl.autonomy_batch_training import load_frozen_v3, run_batched_ppo
+from sim.manorl.autonomy_batch_training import load_frozen_v3, load_optimizer_resume_v3, run_batched_ppo
 from sim.manorl.autonomy_contracts import ACTION_DIM, ACTION_V3_CONTRACT_ID, CHECKPOINT_V3_FORMAT, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
 from sim.manorl.autonomy_imitation import (
     fit_policy_mean, imitation_checkpoint_payload, teacher_command_pursuit_action,
@@ -89,6 +89,77 @@ def test_real_ppo_loop_global_valid_window_metrics_and_streaming_callback(tmp_pa
     checkpoint = torch.load(tmp_path / "v3.pt", weights_only=False)
     assert checkpoint["policy_steps"] == 6 and checkpoint["environment_transitions"] == 12
     assert checkpoint["global_policy_step"] == 12
+
+
+def test_optimizer_resume_restores_adam_and_continues_cumulative_update_numbers(tmp_path: Path):
+    config = {"num_envs": 2, "rollouts": 2, "learning_epochs": 1, "mini_batches": 1,
+              "seed": 7, "setting": "contact-conditioned", "learning_rate": 3e-4}
+    source_path = tmp_path / "source.pt"
+    provenance = _physical_warmstart_provenance(source_commit="first")
+    _, source_agent, _ = run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2,
+                                         learning_epochs=1, mini_batches=1,
+                                         checkpoint=source_path, config=config, provenance=provenance)
+    saved = torch.load(source_path, weights_only=False)
+    saved_weight = saved["model"]["net.0.weight"].clone()
+    saved_state = next(iter(saved["optimizer"]["state"].values()))
+    assert saved_state["step"] > 0 and torch.count_nonzero(saved_state["exp_avg"])
+
+    # The loader alone proves the exact optimizer tensor state reaches a fresh
+    # agent before the first resumed update.
+    target_adapter = FakeBatchedAdapter()
+    model, agent = batch_training.build_batched_runtime(target_adapter, rollouts=2, learning_epochs=1,
+                                                        mini_batches=1, device="cpu")
+    restored = load_optimizer_resume_v3(source_path, model, agent, expected_provenance={},
+                                        current_config=config, rollouts=2)
+    torch.testing.assert_close(model.state_dict()["net.0.weight"], saved_weight)
+    restored_state = next(iter(agent.optimizer.state.values()))
+    torch.testing.assert_close(restored_state["exp_avg"], saved_state["exp_avg"])
+    assert restored_state["step"] == saved_state["step"]
+    assert restored["resume_update"] == 1
+
+    resumed_path = tmp_path / "resumed.pt"
+    _, resumed_agent, rows = run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2,
+                                              learning_epochs=1, mini_batches=1, checkpoint=resumed_path,
+                                              config=config, provenance=provenance, resume_checkpoint=source_path)
+    assert rows[0]["update"] == 2. and rows[0]["policy_steps"] == 4. and rows[0]["transitions"] == 8.
+    resumed_state = next(iter(resumed_agent.optimizer.state.values()))
+    assert resumed_state["step"] > saved_state["step"]
+    payload = torch.load(resumed_path, weights_only=False)
+    assert payload["policy_steps"] == 4 and payload["environment_transitions"] == 8
+    assert payload["provenance"]["optimizer_resume"] is True
+    assert payload["provenance"]["resume_boundary"] == "optimizer/model continuation with full-start env reset"
+    assert not any(name.startswith("value_net.") for name in payload["model"])
+
+
+@pytest.mark.parametrize("bad_config", [
+    {"num_envs": 3, "rollouts": 2, "learning_epochs": 1, "mini_batches": 1, "seed": 7, "setting": "contact-conditioned", "learning_rate": 3e-4},
+    {"num_envs": 2, "rollouts": 2, "learning_epochs": 1, "mini_batches": 1, "seed": 7, "setting": "state-only", "learning_rate": 3e-4},
+])
+def test_optimizer_resume_rejects_incompatible_config(tmp_path: Path, bad_config: dict[str, object]):
+    config = {"num_envs": 2, "rollouts": 2, "learning_epochs": 1, "mini_batches": 1,
+              "seed": 7, "setting": "contact-conditioned", "learning_rate": 3e-4}
+    source = tmp_path / "source.pt"
+    provenance = _physical_warmstart_provenance(source_commit="first")
+    run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2, learning_epochs=1, mini_batches=1,
+                    checkpoint=source, config=config, provenance=provenance)
+    with pytest.raises(ValueError, match="resume configuration mismatch"):
+        run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2, learning_epochs=1, mini_batches=1,
+                        checkpoint=tmp_path / "other.pt", config=bad_config, provenance=provenance, resume_checkpoint=source)
+
+
+@pytest.mark.parametrize("changed_key", ["witness_digest", "v3_contract"])
+def test_optimizer_resume_rejects_changed_physical_or_reward_contract(tmp_path: Path, changed_key: str):
+    config = {"num_envs": 2, "rollouts": 2, "learning_epochs": 1, "mini_batches": 1,
+              "seed": 7, "setting": "contact-conditioned", "learning_rate": 3e-4}
+    provenance = _physical_warmstart_provenance(source_commit="first")
+    source = tmp_path / "source.pt"
+    run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2, learning_epochs=1, mini_batches=1,
+                    checkpoint=source, config=config, provenance=provenance)
+    changed = {**provenance, "source_commit": "second"}
+    changed[changed_key] = "wrong" if changed_key == "witness_digest" else {"action": "action", "observation": "observation", "reward": "wrong"}
+    with pytest.raises(ValueError, match=f"provenance mismatch for {changed_key}"):
+        run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2, learning_epochs=1, mini_batches=1,
+                        checkpoint=tmp_path / "other.pt", config=config, provenance=changed, resume_checkpoint=source)
 
 
 def test_v31_loader_rejects_wrong_provenance_before_model_load(tmp_path: Path):
