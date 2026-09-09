@@ -113,3 +113,53 @@ def test_unified_mixed_environment_matches_route_and_indexed_reset() -> None:
     reset_output = unified.reset(np.asarray([1], dtype=np.int64))
     assert reset_output["obs"].shape == (2, 480)
     np.testing.assert_array_equal(unified.progress, (1, 0))
+
+
+def test_scene_model_enables_object_object_contact_only_when_requested():
+    _require_materialized_objects()
+    mj, model = compile_unified_model(object_types=("cube1", "cube2"), object_collisions=True)
+    data = mj.MjData(model)
+    data.qpos[:3] = [0., 0., 5.]  # Move hand out of contact probe.
+    bodies = []
+    for name in ("cube1", "cube2"):
+        runtime = object_runtime(name)
+        body = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, runtime.body_name)
+        bodies.append(body)
+        joint = mj.mj_name2id(model, mj.mjtObj.mjOBJ_JOINT, runtime.free_joint_name)
+        address = model.jnt_qposadr[joint]
+        data.qpos[address:address+3] = [.0, .0, .5]
+        data.qpos[address+3:address+7] = [1., 0., 0., 0.]
+    mj.mj_forward(model, data)
+    assert any(set(model.geom_bodyid[c.geom]) == set(bodies) for c in data.contact)
+
+
+def test_scene_reset_places_present_bodies_and_parks_only_absent_types():
+    from types import SimpleNamespace
+    from sim.manorl.trajectory import xyzw_to_wxyz
+    active = _trajectory("cube2")
+    scene = replace(
+        active,
+        identity=replace(active.identity, object_index=1),
+        scene_object_types=("cube1", "cube2"),
+        scene_object_initial_pos=np.array([[.1,.2,.3], [.0,.0,.5]]),
+        scene_object_initial_quat_xyzw=np.tile([0.,0.,0.,1.], (2,1)),
+    )
+    env = object.__new__(MujocoManoEnvironment)
+    env.config = SimpleNamespace(num_envs=2, object_init_xy_offset_range_m=0., object_init_xy_offsets_m=None)
+    env.model = SimpleNamespace(nq=49)
+    env.model_hand_sides = ("right",)
+    env.hand_dof = 28
+    env.reference_q_by_side = {"right": np.zeros((2, 2, 28))}
+    env.reference_object_pos = np.stack([scene.object_pos, active.object_pos])
+    env.reference_object_quat_xyzw = np.stack([scene.object_quat_xyzw, active.object_quat_xyzw])
+    env.trajectories = (scene, active)
+    env.object_types = ("cube2", "cube2")
+    env._unified_object_batch = True
+    env._unified_object_types = ("cube1", "cube2", "bowl")
+    env._unified_qpos_addresses = np.array([28,35,42])
+    qpos = env._initial_qpos()
+    np.testing.assert_allclose(qpos[0, 28:31], [.1,.2,.3])
+    np.testing.assert_allclose(qpos[:, 35:38], [[0.,0.,.5], [0.,0.,.5]])
+    np.testing.assert_allclose(qpos[0,31:35], xyzw_to_wxyz(scene.scene_object_initial_quat_xyzw[0]))
+    assert qpos[1,28] >= 1000  # no passive cube1 in world 1
+    assert np.all(qpos[:,42] >= 1000)  # bowl absent from both worlds

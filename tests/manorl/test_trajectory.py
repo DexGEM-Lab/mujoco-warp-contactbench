@@ -694,3 +694,29 @@ def test_loader_rejects_dataset_version_before_take(
     monkeypatch.setattr(lance, "dataset", lambda _: FakeDataset())
     with pytest.raises(ValueError, match="dataset version"):
         load_reference_trajectory(path)
+
+
+def test_composite_scene_ground_shift_preserves_all_relative_positions(monkeypatch):
+    import sim.manorl.trajectory as module
+    row = _composite_scene_row()
+    # Active object is deliberately second; first body is the lowest support.
+    row["objects"][0]["pos"] = np.tile([0., 0., .1], (6, 1)).tolist()
+    row["objects"][1]["pos"] = np.tile([0., 0., .4], (6, 1)).tolist()
+    monkeypatch.setattr(module, "_initial_support_shift", lambda pos, quat, name: -pos[2])
+    trajectory = trajectory_from_lance_row(row, 5)
+    assert trajectory.scene_object_types == ("bowl", "mayonnaisebottle")
+    assert trajectory.object_z_shift == pytest.approx(-.1)
+    np.testing.assert_allclose(trajectory.scene_object_initial_pos[:, 2], [0., .3])
+    np.testing.assert_allclose(trajectory.object_pos[:, 2], .3)
+    np.testing.assert_allclose(trajectory.q_ref[:, 2], -.1)
+    assert not trajectory.scene_object_initial_pos.flags.writeable
+    resampled = resample_reference_trajectory(trajectory, reference_fps=100)
+    np.testing.assert_array_equal(resampled.scene_object_initial_pos, trajectory.scene_object_initial_pos)
+    np.testing.assert_allclose(resampled.object_pos[0], trajectory.scene_object_initial_pos[1])
+
+
+def test_composite_scene_rejects_malformed_passive_pose():
+    row = _composite_scene_row()
+    row["objects"][0]["pos"][0][0] = float("nan")
+    with pytest.raises(ValueError, match="bowl pose arrays contain non-finite"):
+        trajectory_from_lance_row(row, 5)

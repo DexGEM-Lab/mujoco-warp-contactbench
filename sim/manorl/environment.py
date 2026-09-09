@@ -1671,6 +1671,25 @@ class MujocoManoEnvironment:
         if any(len(parts) != 3 or not parts[1].isdigit() for parts in identity_parts):
             raise ValueError("each trajectory identity must be object_action_sequence")
         object_types = {parts[0] for parts in identity_parts}
+        scene_object_types = {
+            object_type
+            for trajectory in self.trajectories
+            for object_type in (
+                trajectory.scene_object_types
+                or (trajectory.identity.identity.split("_")[0],)
+            )
+        }
+        has_multi_object_scene = any(
+            len(trajectory.scene_object_types) > 1
+            for trajectory in self.trajectories
+        )
+        if has_multi_object_scene and (
+            config.device_transition or config.device_contact_decode
+        ):
+            raise ValueError(
+                "multi-object scenes require host contact decoding; "
+                "device fast paths aggregate non-target contacts"
+            )
         if config.device_transition and (
             self.hand_layout.controlled_sides != ("right",)
             or (len(object_types) != 1 and not config.unified_object_batch)
@@ -1689,11 +1708,22 @@ class MujocoManoEnvironment:
         if len(object_types) != 1:
             if config.unified_object_batch:
                 self._initialize_unified_batch(
-                    trajectories, identity_parts, object_types, config
+                    trajectories,
+                    identity_parts,
+                    scene_object_types,
+                    config,
                 )
                 return
             self._initialize_heterogeneous_router(
                 trajectories, identity_parts, object_types, config
+            )
+            return
+        if has_multi_object_scene:
+            self._initialize_unified_batch(
+                trajectories,
+                identity_parts,
+                scene_object_types,
+                config,
             )
             return
         self.object_type = next(iter(object_types))
@@ -1870,7 +1900,7 @@ class MujocoManoEnvironment:
         object_types: set[str],
         config: EnvironmentConfig,
     ) -> None:
-        """Build one fixed-topology MJX model for all mixed-object worlds."""
+        """Build one fixed-topology MJX model for every physical scene body."""
 
         names = tuple(sorted(object_types))
         for object_type in names:
@@ -1882,6 +1912,7 @@ class MujocoManoEnvironment:
         self._object_routes = {}
         self._unified_object_batch = True
         self._unified_object_types = names
+        self._scene_object_collisions = any(len(t.scene_object_types) > 1 for t in trajectories)
         type_to_index = {name: index for index, name in enumerate(names)}
         self._unified_object_indices = np.asarray(
             [type_to_index[name] for name in self.object_types], dtype=np.int64
@@ -1903,6 +1934,7 @@ class MujocoManoEnvironment:
         self.mujoco, self.model = compile_unified_model(
             config.servo,
             object_types=names,
+            object_collisions=self._scene_object_collisions,
             hand_side=self.model_hand_side,
             physics_timestep=config.physics_timestep,
         )
@@ -2469,13 +2501,27 @@ class MujocoManoEnvironment:
                     0.0,
                     1000.0,
                 )
-            active_addresses = self._unified_qpos_addresses[self._unified_object_indices]
-            for env_id, address in enumerate(active_addresses):
-                qpos[env_id, address : address + 3] = self.reference_object_pos[env_id, 0]
-                qpos[env_id, address : address + 2] += self._object_init_xy_offsets[env_id]
-                qpos[env_id, address + 3 : address + 7] = xyzw_to_wxyz(
-                    self.reference_object_quat_xyzw[env_id, 0]
-                )
+            type_to_index = {
+                name: index for index, name in enumerate(self._unified_object_types)
+            }
+            for env_id, trajectory in enumerate(self.trajectories):
+                for scene_index, object_type in enumerate(
+                    trajectory.scene_object_types or (self.object_types[env_id],)
+                ):
+                    address = self._unified_qpos_addresses[
+                        type_to_index[object_type]
+                    ]
+                    qpos[env_id, address : address + 3] = (
+                        trajectory.scene_object_initial_pos[scene_index]
+                        if trajectory.scene_object_types else self.reference_object_pos[env_id, 0]
+                    )
+                    qpos[env_id, address : address + 2] += (
+                        self._object_init_xy_offsets[env_id]
+                    )
+                    qpos[env_id, address + 3 : address + 7] = xyzw_to_wxyz(
+                        trajectory.scene_object_initial_quat_xyzw[scene_index]
+                        if trajectory.scene_object_types else self.reference_object_quat_xyzw[env_id, 0]
+                    )
             return qpos
         address = self.producer.object_qpos_address
         qpos[:, address : address + 3] = self.reference_object_pos[:, 0]
