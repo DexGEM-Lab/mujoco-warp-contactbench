@@ -49,9 +49,10 @@ def latest_ppo_metrics(agent: Any) -> dict[str, float]:
     for public_name, source_names in _PPO_TRACKING_NAMES.items():
         values = next((tracking.get(name) for name in source_names if tracking.get(name)), None)
         if values:
-            value = values[-1]
-            if np.isfinite(float(value)):
-                result[public_name] = float(value)
+            # A non-finite native PPO scalar is a failure signal. Keep it so
+            # the batch trainer's finite guard records and raises rather than
+            # silently presenting an incomplete healthy metrics row.
+            result[public_name] = float(values[-1])
     # Clip fraction is deliberately omitted: RlGamesPPO does not expose it.
     return result
 

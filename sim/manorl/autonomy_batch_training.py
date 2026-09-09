@@ -7,6 +7,8 @@ compact device telemetry at PPO update boundaries.
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
 import random
 import tempfile
@@ -19,7 +21,7 @@ import torch
 
 from sim.manorl.autonomy_contracts import (
     ACTION_V3_CONTRACT_ID, CHECKPOINT_V3_FORMAT, OBSERVATION_V3_CONTRACT_ID,
-    REWARD_V3_CONTRACT_ID, validate_v3_checkpoint_metadata,
+    POLICY_SAMPLING_CONTRACT, REWARD_V3_CONTRACT_ID, validate_v3_checkpoint_metadata,
 )
 from sim.manorl.autonomy_training import build_batched_runtime
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
@@ -62,6 +64,7 @@ def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, 
         "observation_contract": OBSERVATION_V3_CONTRACT_ID,
         "reward_contract": REWARD_V3_CONTRACT_ID,
         "action_contract": ACTION_V3_CONTRACT_ID,
+        "policy_sampling_contract": dict(POLICY_SAMPLING_CONTRACT),
         "model": model.state_dict(), "model_architecture": model.checkpoint_architecture(),
         "optimizer": agent.optimizer.state_dict(),
         # Retain prior name/meaning for consumers that already interpret it as
@@ -85,6 +88,66 @@ def _save_checkpoint(*, checkpoint: str | Path, model: torch.nn.Module, agent: A
     if not periodic:
         final = path.with_name(f"{path.stem}.final{path.suffix}")
         _atomic_torch_save(payload, final)
+
+
+def _finite_tensor_paths(value: Any, *, path: str) -> list[str]:
+    """Return tensor/scalar paths which cannot safely feed another PPO update."""
+    if isinstance(value, torch.Tensor):
+        if (value.is_floating_point() or value.is_complex()) and not bool(torch.isfinite(value).all()):
+            return [path]
+        return []
+    if isinstance(value, dict):
+        return [item for key, child in value.items() for item in _finite_tensor_paths(child, path=f"{path}.{key}")]
+    if isinstance(value, (list, tuple)):
+        return [item for index, child in enumerate(value) for item in _finite_tensor_paths(child, path=f"{path}[{index}]")]
+    if isinstance(value, (float, np.floating)) and not math.isfinite(float(value)):
+        return [path]
+    return []
+
+
+def _nonfinite_update_diagnostic(*, model: torch.nn.Module, agent: Any, row: dict[str, float],
+                                 checkpoint: str | Path | None, update: int,
+                                 policy_steps: int, environment_transitions: int) -> Path | None:
+    """Persist the exact failed state boundary; never replace the last finite save."""
+    bad_paths = _finite_tensor_paths(dict(model.named_parameters()), path="model")
+    bad_paths.extend(_finite_tensor_paths(agent.optimizer.state, path="optimizer"))
+    bad_metrics = [name for name, value in row.items() if not math.isfinite(float(value))]
+    if not bad_paths and not bad_metrics:
+        return None
+    diagnostic = {
+        "failure": "non-finite PPO update",
+        "update": update,
+        "policy_steps": policy_steps,
+        "environment_transitions": environment_transitions,
+        "nonfinite_model_or_optimizer_paths": bad_paths,
+        "nonfinite_metrics": bad_metrics,
+        "last_finite_checkpoint": None if checkpoint is None else str(Path(checkpoint)),
+        "policy_sampling_contract": POLICY_SAMPLING_CONTRACT,
+    }
+    if checkpoint is None:
+        return None
+    path = Path(checkpoint).with_name(f"{Path(checkpoint).stem}.nonfinite-update{update:06d}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(diagnostic, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def _raise_if_nonfinite_update(*, model: torch.nn.Module, agent: Any, row: dict[str, float],
+                                checkpoint: str | Path | None, update: int,
+                                policy_steps: int, environment_transitions: int) -> None:
+    diagnostic = _nonfinite_update_diagnostic(
+        model=model, agent=agent, row=row, checkpoint=checkpoint, update=update,
+        policy_steps=policy_steps, environment_transitions=environment_transitions,
+    )
+    if diagnostic is not None:
+        raise RuntimeError(f"non-finite PPO update {update}; diagnostic written to {diagnostic}; last finite checkpoint retained")
+    # With no checkpoint destination there is nowhere durable to write the
+    # requested diagnostic, but the failure still must surface synchronously.
+    bad_paths = _finite_tensor_paths(dict(model.named_parameters()), path="model")
+    bad_paths.extend(_finite_tensor_paths(agent.optimizer.state, path="optimizer"))
+    bad_metrics = [name for name, value in row.items() if not math.isfinite(float(value))]
+    if bad_paths or bad_metrics:
+        raise RuntimeError(f"non-finite PPO update {update}: model/optimizer={bad_paths}, metrics={bad_metrics}")
 
 
 def checkpoint_model_architecture(payload: dict[str, Any]) -> dict[str, Any]:
@@ -192,6 +255,12 @@ def load_optimizer_resume_v3(path: str | Path, model: torch.nn.Module, agent: An
     else:
         payload["cuda_rng_restore"] = "unavailable in source checkpoint; CUDA continuation is not bit-exact"
     payload["resume_update"] = policy_steps // rollouts
+    payload["policy_sampling_restore"] = (
+        "legacy clipped-action likelihood metadata absent; model and Adam restored exactly, "
+        "future PPO rollouts store raw Normal samples and clip only physical execution"
+        if payload.get("policy_sampling_contract") is None
+        else "raw Normal sampling contract preserved across optimizer resume"
+    )
     return payload
 
 
@@ -321,6 +390,8 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
             "optimizer_resume": True,
             "resume_boundary": "optimizer/model continuation with full-start env reset",
             "cuda_rng_restore": payload["cuda_rng_restore"],
+            "policy_sampling_restore": payload["policy_sampling_restore"],
+            "policy_sampling_contract": dict(POLICY_SAMPLING_CONTRACT),
             "additional_budget": {"updates": updates, "policy_steps": updates * rollouts,
                                   "environment_transitions": updates * rollouts * adapter.num_envs},
         }
@@ -345,8 +416,9 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                                                    "path": torch.zeros((), device=device)}
         for _ in range(rollouts):
             with torch.no_grad():
+                # Store the raw Normal sample with its own Gaussian likelihood.
+                # ``adapter.step`` clips only its physical-execution copy.
                 actions, _ = agent.act(observations, None, timestep=policy_steps, timesteps=start_policy_steps + updates * rollouts)
-                actions = torch.clamp(actions, -1.0, 1.0)
             terminal_next, rewards, terminated, info = adapter.step(actions)
             truncated = torch.zeros_like(terminated)
             if rewards.shape != (adapter.num_envs, 1) or terminated.shape != (adapter.num_envs, 1):
@@ -387,7 +459,13 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                               sample_seconds=sampling_seconds, optimize_seconds=optimizer_seconds,
                               window_count=window_count, environment_transitions=environment_transitions,
                               policy_steps=policy_steps, update=update)
-        row.update(latest_ppo_metrics(agent)); rows.append(row)
+        # Reject non-finite optimizer/model state and native PPO telemetry
+        # before callbacks or checkpoint writes can present this update as good.
+        row.update(latest_ppo_metrics(agent))
+        _raise_if_nonfinite_update(model=model, agent=agent, row=row, checkpoint=checkpoint,
+                                   update=update, policy_steps=policy_steps,
+                                   environment_transitions=environment_transitions)
+        rows.append(row)
         if checkpoint is not None and update % checkpoint_interval == 0:
             _save_checkpoint(checkpoint=checkpoint, model=model, agent=agent, config=config, provenance=provenance,
                              policy_steps=policy_steps, environment_transitions=environment_transitions,

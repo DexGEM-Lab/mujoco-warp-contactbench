@@ -102,7 +102,10 @@ class BatchedAutonomyAdapter:
         if actions.shape != (self.num_envs, ACTION_DIM):
             raise ValueError(f"actions must have shape ({self.num_envs}, 28)")
         from sim.manorl.device_runtime import torch_to_jax_cuda
-        jax_actions = torch_to_jax_cuda(actions) if self.device_name == "gpu" else np.asarray(actions.detach().cpu(), dtype=np.float32)
+        # PPO keeps ``actions`` untouched as its raw Normal sample. Physics
+        # receives the same saturation command as the old clipped sampler.
+        physical_actions = torch.clamp(actions, -1.0, 1.0)
+        jax_actions = torch_to_jax_cuda(physical_actions) if self.device_name == "gpu" else np.asarray(physical_actions.detach().cpu(), dtype=np.float32)
         observation, reward, done, info = self.runtime.step(jax_actions)
         # All PPO tensors borrow CUDA storage through DLPack. In particular,
         # done must not take the legacy np.asarray(done) path: it is both a
@@ -154,14 +157,17 @@ class AutonomyActorCritic(GaussianMixin, DeterministicMixin, Model):
     log-standard-deviation surface unchanged while routing value prediction
     through an independently registered 128x128 trunk.
     """
-    def __init__(self, observation_space, action_space, device="cpu", *, separate_critic: bool = False):
+    def __init__(self, observation_space, action_space, device="cpu", *, separate_critic: bool = False,
+                 clip_actions: bool = True):
         Model.__init__(self, observation_space=observation_space, state_space=None, action_space=action_space, device=device)
         self.observation_dim = int(self.num_observations)
         self.action_dim = int(self.num_actions)
         self.separate_critic = bool(separate_critic)
         if self.action_dim != ACTION_DIM or self.observation_dim < 1:
             raise ValueError("autonomy actor requires 28 actions and a positive observation width")
-        GaussianMixin.__init__(self, clip_actions=True, clip_mean_actions=False, clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum", role="policy")
+        # Keep legacy callers' clipped sampling by default. Batched PPO opts
+        # out so its memory retains the raw Gaussian sample and likelihood.
+        GaussianMixin.__init__(self, clip_actions=bool(clip_actions), clip_mean_actions=False, clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum", role="policy")
         DeterministicMixin.__init__(self, clip_actions=False, role="value")
         self.net = self._make_trunk(device)
         if self.separate_critic:
@@ -213,7 +219,10 @@ def build_runtime(environment, *, rollouts=2, learning_epochs=1, mini_batches=1,
 def build_batched_runtime(adapter, *, rollouts=32, learning_epochs=4, mini_batches=16, device="cuda", separate_critic=False):
     """Build the existing PPO against DLPack-owning batched spaces, no Gym loop."""
     memory = RandomMemory(memory_size=rollouts, num_envs=adapter.num_envs, device=device)
-    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=device, separate_critic=separate_critic)
+    # PPO must store unbounded Normal samples. The adapter clips a separate
+    # physical-control copy, preserving the legacy executed command sequence.
+    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=device,
+                                separate_critic=separate_critic, clip_actions=False)
     cfg = {"rollouts": rollouts, "learning_epochs": learning_epochs, "mini_batches": mini_batches,
            "discount_factor": .99, "gae_lambda": .95, "learning_rate": 3e-4, "ratio_clip": .2,
            "value_clip": .2, "entropy_loss_scale": .001, "value_loss_scale": .5,

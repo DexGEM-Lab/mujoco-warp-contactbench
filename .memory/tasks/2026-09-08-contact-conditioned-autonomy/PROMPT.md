@@ -90,3 +90,7 @@ and all established package/split/witness/clock contracts. Continue from update
 separate critic remains held out. The continuation must explicitly record that
 optimizer/model state continues but the MJX runtime begins full-start episodes;
 old checkpoint CUDA RNG absence cannot be represented as bit-exact continuation.
+
+## Raw action likelihood repair (2026-09-09)
+
+Fixed-config optimizer continuation retains the shared critic OFF, reward, controller, clock, PPO objective, learning rate, rollout shape and long-window intent. The only numerical correction is the batched PPO action contract: retain the raw Normal sample and its raw Gaussian log-probability in PPO memory; pass a clipped copy only to physical execution. This preserves commands for identical samples while removing the invalid boundary-density likelihood. Optimizer resume from the update-288 legacy checkpoint restores the same weights/Adam/RNG at the update boundary and records the future raw-likelihood correction in checkpoint metadata. Every update must detect non-finite model/optimizer/metric state before successful checkpointing, preserve named finite snapshots, write a diagnostic, and raise.

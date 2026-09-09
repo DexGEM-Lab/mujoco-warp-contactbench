@@ -20,6 +20,16 @@ OBSERVATION_V3_CONTRACT_ID: Final = "manorl.autonomy.observation.v3.1"
 ACTION_V3_CONTRACT_ID: Final = ACTION_CONTRACT_ID  # bit-equivalent measured-state map
 REWARD_V3_CONTRACT_ID: Final = "manorl.autonomy.reward.v3"
 CHECKPOINT_V3_FORMAT: Final = "manorl.autonomy.ppo.v3.1"
+# PPO actions are samples from an unbounded Normal. The runtime clips a copy
+# only at the physical-control boundary; PPO stores and scores the raw sample.
+# This avoids treating the clipped boundary point as Gaussian density mass.
+POLICY_SAMPLING_CONTRACT_ID: Final = "manorl.autonomy.policy_sampling.raw_normal.v1"
+POLICY_SAMPLING_CONTRACT: Final[dict[str, str]] = {
+    "id": POLICY_SAMPLING_CONTRACT_ID,
+    "ppo_taken_actions": "raw_normal_sample",
+    "physical_action": "clip(raw_normal_sample, action_space_low, action_space_high)",
+    "evaluation_action": "clip(policy_mean, action_space_low, action_space_high)",
+}
 LEGACY_PHASE_BUG_OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v3"
 LEGACY_PHASE_BUG_CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v3"
 WITNESS_TABLE_CONTRACT_ID: Final = "manorl.autonomy.reference_witness.v1"
@@ -106,6 +116,9 @@ def validate_v3_checkpoint_metadata(metadata: dict[str, object]) -> None:
     for name, expected in required.items():
         if metadata.get(name) != expected:
             raise ValueError(f"v3.1 checkpoint metadata {name} must be {expected!r}")
+    sampling = metadata.get("policy_sampling_contract")
+    if sampling is not None and sampling != POLICY_SAMPLING_CONTRACT:
+        raise ValueError("checkpoint has an incompatible policy sampling contract")
 
 def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1.0 / 120.0, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
     """Reference-independent rate map in actuator-units/second.

@@ -26,7 +26,8 @@ class FakeBatchedAdapter:
         self.action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=float)
         self.phase = torch.zeros((num_envs, 1), device=self.device)
         self.prepares = 0
-        self.recorded_actions = []
+        self.raw_actions = []
+        self.recorded_actions = []  # physical commands after the adapter boundary
         self.terminal_next = []
 
     def reset(self):
@@ -34,7 +35,10 @@ class FakeBatchedAdapter:
         return self.phase.repeat(1, 538), {}
 
     def step(self, actions):
-        self.recorded_actions.append(actions.detach().clone())
+        self.raw_actions.append(actions.detach().clone())
+        # Match the real adapter: raw samples remain available to PPO while
+        # only a clipped copy reaches physical execution.
+        self.recorded_actions.append(torch.clamp(actions, -1., 1.).detach().clone())
         self.phase += 1
         done = torch.zeros((self.num_envs, 1), dtype=torch.bool, device=self.device)
         done[0, 0] = self.prepares == 0
@@ -79,10 +83,10 @@ def test_real_ppo_loop_global_valid_window_metrics_and_streaming_callback(tmp_pa
     assert rows[-1]["valid"] == 1.
     assert adapter.terminal_next[0][0, 0] == 1 and adapter.terminal_next[0][1, 0] == 1
     assert adapter.terminal_next[0][0, 0] == 1 and adapter.terminal_next[0][1, 0] == 1
-    # The action handed to the fake physics path is the PPO-stored action.
+    # PPO stores raw Gaussian samples; the adapter alone clips physical input.
     stored = agent.memory.get_tensor_by_name("actions")
     assert stored.shape[-1] == ACTION_DIM
-    assert torch.all(stored <= 1.) and torch.all(stored >= -1.)
+    torch.testing.assert_close(adapter.recorded_actions[0], torch.clamp(adapter.raw_actions[0], -1., 1.))
     assert (tmp_path / "v3.pt").exists()
     # Adam state exists only after a real backward/optimizer step.
     assert agent.optimizer.state and rows[-1]["info/completed_minibatches"] == 1.0
@@ -134,26 +138,46 @@ def test_optimizer_resume_restores_adam_and_continues_cumulative_update_numbers(
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires local CUDA")
 def test_gpu_n1_optimizer_resume_restores_mapped_rng_and_advances_adam(tmp_path: Path):
-    config = {"num_envs": 1, "rollouts": 1, "learning_epochs": 1, "mini_batches": 1,
+    config = {"num_envs": 1, "rollouts": 2, "learning_epochs": 1, "mini_batches": 1,
               "seed": 7, "setting": "contact-conditioned", "learning_rate": 3e-4}
     provenance = _physical_warmstart_provenance(source_commit="first")
     source = tmp_path / "gpu-source.pt"
     _, source_agent, _ = run_batched_ppo(FakeBatchedAdapter(num_envs=1, device="cuda"), updates=1,
-                                         rollouts=1, learning_epochs=1, mini_batches=1,
+                                         rollouts=2, learning_epochs=1, mini_batches=1,
                                          checkpoint=source, config=config, provenance=provenance)
     source_step = next(iter(source_agent.optimizer.state.values()))["step"].item()
     saved = torch.load(source, map_location="cpu", weights_only=False)
     assert saved["cuda_rng"] is not None
     output = tmp_path / "gpu-resumed.pt"
     _, agent, rows = run_batched_ppo(FakeBatchedAdapter(num_envs=1, device="cuda"), updates=1,
-                                     rollouts=1, learning_epochs=1, mini_batches=1,
+                                     rollouts=2, learning_epochs=1, mini_batches=1,
                                      checkpoint=output, config=config, provenance=provenance,
                                      resume_checkpoint=source)
-    assert rows[0]["update"] == 2. and rows[0]["transitions"] == 2.
+    assert rows[0]["update"] == 2. and rows[0]["transitions"] == 4.
     assert next(iter(agent.optimizer.state.values()))["step"].item() > source_step
     resumed = torch.load(output, map_location="cpu", weights_only=False)
     assert resumed["cuda_rng"] is not None
     assert not any(name.startswith("value_net.") for name in resumed["model"])
+
+
+def test_legacy_optimizer_resume_preserves_weights_adam_and_records_raw_sampling_correction(tmp_path: Path):
+    config = {"num_envs": 2, "rollouts": 2, "learning_epochs": 1, "mini_batches": 1,
+              "seed": 7, "setting": "contact-conditioned", "learning_rate": 3e-4}
+    source = tmp_path / "legacy-source.pt"
+    provenance = _physical_warmstart_provenance(source_commit="first")
+    run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2, learning_epochs=1, mini_batches=1,
+                    checkpoint=source, config=config, provenance=provenance)
+    legacy_payload = torch.load(source, weights_only=False)
+    legacy_payload.pop("policy_sampling_contract")
+    torch.save(legacy_payload, source)
+    output = tmp_path / "resumed.pt"
+    _, _, rows = run_batched_ppo(FakeBatchedAdapter(), updates=1, rollouts=2, learning_epochs=1,
+                                 mini_batches=1, checkpoint=output, config=config, provenance=provenance,
+                                 resume_checkpoint=source)
+    assert rows[0]["update"] == 2.
+    resumed = torch.load(output, weights_only=False)
+    assert resumed["policy_sampling_contract"]["ppo_taken_actions"] == "raw_normal_sample"
+    assert "legacy clipped-action likelihood metadata absent" in resumed["provenance"]["policy_sampling_restore"]
 
 
 @pytest.mark.parametrize("bad_config", [
@@ -218,6 +242,107 @@ def test_installed_gaussian_mixin_preserves_logprob_for_clipped_actions():
     _, new = policy.act({"observations": observations, "taken_actions": actions})
     assert (actions.abs() == 1.).any(dim=1).float().mean() > .7
     torch.testing.assert_close(new["log_prob"], old["log_prob"], rtol=0., atol=0.)
+
+
+def test_actual_gaussian_mixin_raw_samples_avoid_saturated_boundary_density_overflow():
+    """The production mixin exposes the clipped-density singularity directly."""
+    from skrl.models.torch import GaussianMixin, Model
+
+    class SaturatedNormal(GaussianMixin, Model):
+        def __init__(self, mean: float, *, clip_actions: bool):
+            Model.__init__(self, observation_space=gym.spaces.Box(-1., 1., shape=(1,), dtype=float),
+                           action_space=gym.spaces.Box(-1., 1., shape=(1,), dtype=float), device="cpu")
+            GaussianMixin.__init__(self, clip_actions=clip_actions, clip_mean_actions=False,
+                                   clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum")
+            self.mean = mean
+
+        def compute(self, inputs, role=""):
+            return torch.full((inputs["observations"].shape[0], 1), self.mean), {"log_std": torch.full((1,), -4.6051702)}
+
+    observations = torch.zeros((1, 1))
+    clipped_old, _ = SaturatedNormal(4.01, clip_actions=True).act({"observations": observations})
+    assert clipped_old.item() == 1.
+    _, old_clipped = SaturatedNormal(4.01, clip_actions=True).act({"observations": observations, "taken_actions": clipped_old})
+    _, new_clipped = SaturatedNormal(4.00, clip_actions=True).act({"observations": observations, "taken_actions": clipped_old})
+    assert (new_clipped["log_prob"] - old_clipped["log_prob"]).item() > 299.
+    assert torch.isinf(torch.exp(new_clipped["log_prob"] - old_clipped["log_prob"])).item()
+
+    # The exact same far-bound sample is valid evidence under the raw Normal.
+    raw_sample = torch.full((1, 1), 4.01)
+    _, old_raw = SaturatedNormal(4.01, clip_actions=False).act({"observations": observations, "taken_actions": raw_sample})
+    _, new_raw = SaturatedNormal(4.00, clip_actions=False).act({"observations": observations, "taken_actions": raw_sample})
+    raw_ratio = torch.exp(new_raw["log_prob"] - old_raw["log_prob"])
+    assert torch.isfinite(raw_ratio).all() and raw_ratio.item() < 1.
+
+
+def test_batched_ppo_keeps_raw_gaussian_actions_and_replays_legacy_physical_clipping(monkeypatch, tmp_path: Path):
+    original_builder = batch_training.build_batched_runtime
+
+    def saturated_builder(*args, **kwargs):
+        model, agent = original_builder(*args, **kwargs)
+        with torch.no_grad():
+            for parameter in model.net.parameters():
+                parameter.zero_()
+            model.mean.weight.zero_()
+            model.mean.bias.fill_(4.)
+            model.log_std.fill_(-4.6051702)
+        return model, agent
+
+    monkeypatch.setattr(batch_training, "build_batched_runtime", saturated_builder)
+    adapter = FakeBatchedAdapter()
+    model, agent, _ = run_batched_ppo(adapter, updates=1, rollouts=1, learning_epochs=1,
+                                      mini_batches=1, checkpoint=tmp_path / "raw.pt")
+    raw = adapter.raw_actions[0]
+    stored = agent.memory.get_tensor_by_name("actions")[0]
+    assert (raw > 1.).all()
+    torch.testing.assert_close(stored, raw)
+    torch.testing.assert_close(adapter.recorded_actions[0], torch.clamp(raw, -1., 1.))
+
+    # Replaying identical RNG samples through old clipped sampling produces the
+    # exact command that the corrected adapter supplies to the runtime.
+    legacy = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device="cpu", clip_actions=True)
+    raw_policy = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device="cpu", clip_actions=False)
+    raw_policy.load_state_dict(model.state_dict())
+    legacy.load_state_dict(model.state_dict())
+    observations = torch.zeros((adapter.num_envs, 538))
+    torch.manual_seed(91); legacy_actions, _ = legacy.act({"observations": observations}, role="policy")
+    torch.manual_seed(91); raw_actions, old_raw = raw_policy.act({"observations": observations}, role="policy")
+    torch.testing.assert_close(legacy_actions, torch.clamp(raw_actions, -1., 1.), rtol=0., atol=0.)
+    _, unchanged = raw_policy.act({"observations": observations, "taken_actions": raw_actions}, role="policy")
+    torch.testing.assert_close(torch.exp(unchanged["log_prob"] - old_raw["log_prob"]), torch.ones_like(old_raw["log_prob"]), rtol=1e-6, atol=1e-6)
+    with torch.no_grad():
+        raw_policy.mean.bias.add_(.01)
+    _, shifted = raw_policy.act({"observations": observations, "taken_actions": raw_actions}, role="policy")
+    assert torch.isfinite(torch.exp(shifted["log_prob"] - old_raw["log_prob"])).all()
+
+
+def test_nonfinite_update_writes_diagnostic_before_checkpoint_overwrite(monkeypatch, tmp_path: Path):
+    original_builder = batch_training.build_batched_runtime
+    updates = 0
+
+    def poison_after_second_update(*args, **kwargs):
+        model, agent = original_builder(*args, **kwargs)
+        original_update = agent.update
+
+        def update(*update_args, **update_kwargs):
+            nonlocal updates
+            original_update(*update_args, **update_kwargs)
+            updates += 1
+            if updates == 2:
+                next(model.parameters()).data.fill_(float("nan"))
+
+        agent.update = update
+        return model, agent
+
+    monkeypatch.setattr(batch_training, "build_batched_runtime", poison_after_second_update)
+    checkpoint = tmp_path / "finite.pt"
+    with pytest.raises(RuntimeError, match="non-finite PPO update 2"):
+        run_batched_ppo(FakeBatchedAdapter(), updates=2, rollouts=1, learning_epochs=1,
+                        mini_batches=1, checkpoint=checkpoint, checkpoint_interval=1)
+    assert (tmp_path / "finite.update000001.pt").exists()
+    diagnostic = tmp_path / "finite.nonfinite-update000002.json"
+    assert diagnostic.exists()
+    assert "model.log_std" in diagnostic.read_text()
 
 
 def test_v3_loader_strictly_rejects_v2_metadata(tmp_path: Path):

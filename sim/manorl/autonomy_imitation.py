@@ -18,6 +18,7 @@ from sim.manorl.autonomy_contracts import (
     ACTION_V3_CONTRACT_ID,
     CHECKPOINT_V3_FORMAT,
     OBSERVATION_V3_CONTRACT_ID,
+    POLICY_SAMPLING_CONTRACT,
     REWARD_V3_CONTRACT_ID,
 )
 
@@ -174,6 +175,7 @@ def imitation_checkpoint_payload(*, model: torch.nn.Module, config: dict[str, An
         "observation_contract": OBSERVATION_V3_CONTRACT_ID,
         "reward_contract": REWARD_V3_CONTRACT_ID,
         "action_contract": ACTION_V3_CONTRACT_ID,
+        "policy_sampling_contract": dict(POLICY_SAMPLING_CONTRACT),
         "model": model.state_dict(), "model_architecture": model.checkpoint_architecture(),
         "optimizer": None,
         "global_policy_step": 0, "policy_steps": 0, "environment_transitions": 0,
