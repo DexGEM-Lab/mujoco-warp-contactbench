@@ -49,9 +49,13 @@ class BatchedAutonomyAdapter:
     On CUDA the only full-tensor crossings are DLPack borrows. Compact done
     and validity telemetry may be copied to host for episode bookkeeping.
     """
-    def __init__(self, trajectory, *, num_envs=1, device="gpu", seed=0):
+    def __init__(self, trajectory, *, num_envs=1, device="gpu", seed=0, persistent_ccd_workspace=True, ccd_contacts_per_world=None):
         from sim.manorl.autonomy_batch import BatchedAutonomyRuntime, V3_OBSERVATION_DIM
-        self.runtime = BatchedAutonomyRuntime(trajectory, num_envs=num_envs, device=device, seed=seed)
+        self.runtime = BatchedAutonomyRuntime(
+            trajectory, num_envs=num_envs, device=device, seed=seed,
+            persistent_ccd_workspace=persistent_ccd_workspace,
+            ccd_contacts_per_world=ccd_contacts_per_world,
+        )
         self.num_envs = int(num_envs)
         self.observation_dim = int(V3_OBSERVATION_DIM)
         self.action_dim = ACTION_DIM
@@ -78,6 +82,20 @@ class BatchedAutonomyAdapter:
         self._pending[:] = False
         return self._to_torch(observation), {"num_envs": self.num_envs, "contract": "manorl.autonomy.v3"}
 
+    def prepare_action(self):
+        """Reset only completed runtime rows after their terminal observation was recorded."""
+        return self._to_torch(self.runtime.prepare_action())
+
+    def compact_summary(self):
+        """Device reductions consumed once per PPO update by batch telemetry."""
+        jp = self.runtime.jp
+        index = jp.minimum(self.runtime.indices, self.runtime.length - 1)
+        return {
+            "object_motion": self._to_torch(jp.sum(self.runtime.last_physical.object_position[:, 2])),
+            "contact_force": self._to_torch(jp.sum(jp.linalg.norm(self.runtime.last_contact.hand_object_forces, axis=-1))),
+            "path": self._to_torch(jp.sum(jp.linalg.norm(self.runtime.last_physical.object_position - self.runtime.reference_obj[index], axis=1))),
+        }
+
     def step(self, actions):
         if not isinstance(actions, torch.Tensor):
             actions = torch.as_tensor(actions, dtype=torch.float32, device=self._device)
@@ -86,9 +104,12 @@ class BatchedAutonomyAdapter:
         from sim.manorl.device_runtime import torch_to_jax_cuda
         jax_actions = torch_to_jax_cuda(actions) if self.device_name == "gpu" else np.asarray(actions.detach().cpu(), dtype=np.float32)
         observation, reward, done, info = self.runtime.step(jax_actions)
-        # Full observation/reward tensors remain device resident for CUDA.
-        result = (self._to_torch(observation), self._to_torch(reward).reshape(self.num_envs), torch.as_tensor(np.asarray(done), dtype=torch.bool, device=self._device), info)
-        self._pending = np.asarray(done, dtype=bool)
+        # All PPO tensors borrow CUDA storage through DLPack. In particular,
+        # done must not take the legacy np.asarray(done) path: it is both a
+        # synchronization point and incorrect at 8192 rows.
+        reward_tensor = self._to_torch(reward).reshape(self.num_envs, 1)
+        done_tensor = self._to_torch(done).reshape(self.num_envs, 1).to(dtype=torch.bool)
+        result = (self._to_torch(observation), reward_tensor, done_tensor, info)
         return result
 
 
@@ -135,21 +156,44 @@ class AutonomyActorCritic(GaussianMixin, DeterministicMixin, Model):
         self.action_dim = int(self.num_actions)
         if self.action_dim != ACTION_DIM or self.observation_dim < 1:
             raise ValueError("autonomy actor requires 28 actions and a positive observation width")
-        GaussianMixin.__init__(self, clip_actions=False, clip_mean_actions=False, clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum", role="policy")
+        GaussianMixin.__init__(self, clip_actions=True, clip_mean_actions=False, clip_log_std=True, min_log_std=-5., max_log_std=2., reduction="sum", role="policy")
         DeterministicMixin.__init__(self, clip_actions=False, role="value")
         self.net=nn.Sequential(nn.Linear(self.observation_dim,128),nn.Tanh(),nn.Linear(128,128),nn.Tanh()).to(device)
         self.mean=nn.Linear(128,self.action_dim).to(device); self.value=nn.Linear(128,1).to(device); self.log_std=nn.Parameter(torch.full((self.action_dim,),-1.,device=device))
+    def act(self, inputs, role=""):
+        # Multiple inheritance otherwise resolves every role through
+        # GaussianMixin, which expects log_std for a scalar value head.
+        if role == "policy": return GaussianMixin.act(self, inputs, role=role)
+        if role == "value": return DeterministicMixin.act(self, inputs, role=role)
+        raise ValueError("role must be policy or value")
+
     def compute(self, inputs, role=""):
         h=self.net(inputs["observations"])
         if role=="policy": return self.mean(h), {"log_std":self.log_std.expand_as(self.mean(h))}
         if role=="value": return self.value(h), {}
         raise ValueError("role must be policy or value")
 
-def build_runtime(environment, *, rollouts=2, learning_epochs=1, device="cpu"):
+def build_runtime(environment, *, rollouts=2, learning_epochs=1, mini_batches=1, device="cpu"):
     """Construct canonical RlGamesPPO with done-aware skrl GAE."""
     wrapper=GymnasiumWrapper(environment); memory=RandomMemory(memory_size=rollouts,num_envs=environment.num_envs,device=device); model=AutonomyActorCritic(wrapper.observation_space,wrapper.action_space,device=device)
-    cfg={"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":1,"discount_factor":.99,"gae_lambda":.95,"learning_rate":3e-4,"ratio_clip":.2,"value_clip":.2,"entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":0,"time_limit_bootstrap":True,"experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
+    cfg={"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":mini_batches,"discount_factor":.99,"gae_lambda":.95,"learning_rate":3e-4,"ratio_clip":.2,"value_clip":.2,"entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":0,"time_limit_bootstrap":True,"experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,observation_space=wrapper.observation_space,state_space=None,action_space=wrapper.action_space,device=device,cfg=cfg); agent.init(); return wrapper,model,agent
+
+
+def build_batched_runtime(adapter, *, rollouts=32, learning_epochs=4, mini_batches=16, device="cuda"):
+    """Build the existing PPO against DLPack-owning batched spaces, no Gym loop."""
+    memory = RandomMemory(memory_size=rollouts, num_envs=adapter.num_envs, device=device)
+    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=device)
+    cfg = {"rollouts": rollouts, "learning_epochs": learning_epochs, "mini_batches": mini_batches,
+           "discount_factor": .99, "gae_lambda": .95, "learning_rate": 3e-4, "ratio_clip": .2,
+           "value_clip": .2, "entropy_loss_scale": .001, "value_loss_scale": .5,
+           "learning_starts": 0, "time_limit_bootstrap": True,
+           "experiment": {"write_interval": 0, "checkpoint_interval": 0}, "mixed_precision": False}
+    agent = RlGamesPPO(models={"policy": model, "value": model}, memory=memory,
+                        observation_space=adapter.observation_space, state_space=None,
+                        action_space=adapter.action_space, device=device, cfg=cfg)
+    agent.init()
+    return model, agent
 
 def seed_everything(seed:int):
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)

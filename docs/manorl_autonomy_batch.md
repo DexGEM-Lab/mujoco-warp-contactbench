@@ -45,3 +45,34 @@ reset and validity counts, and declared host-transfer scope. It intentionally
 leaves peak memory as operator-side telemetry and makes no speed claim before
 execution. Start with B=1/64/256 correctness and memory checks, then measure
 B=4096/8192 only on the assigned server without displacing existing jobs.
+
+## PPO training and evaluation
+
+`batchtrain` is the direct CUDA path: observations, sampled bounded actions,
+rewards, and `(B, 1)` terminal flags cross the JAX/Torch boundary by DLPack.
+The terminal next observation is handed to `RlGamesPPO.record_transition` for
+GAE before `prepare_action()` resets only completed rows. Per-update telemetry
+reduces on device and copies compact scalars once; it does not call
+`TelemetryAccumulator.add_batch`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_PREALLOCATE=false \
+/home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python tools/train_manorl_autonomy.py batchtrain \
+  --package /home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180 \
+  --device gpu --num-envs 8192 --rollouts 32 --updates 256 --total-transitions 67108864 \
+  --learning-epochs 4 --mini-batches 16 --identity-index 0 --persistentworkspace \
+  --checkpoint-interval 16 --checkpoint outputs/manorl/contact_conditioned_autonomy/batchppo-v3.pt
+```
+
+The checkpoint is an atomic v3 model/optimizer/RNG/config snapshot and refuses
+v2 metadata despite the shared 538-wide observation shape. Evaluation loads a
+frozen model only; its N=1 full-start trace records actual q, object pose,
+targets, contact force, path error, and termination reason without inventing a
+success flag.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_PREALLOCATE=false \
+/home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python tools/train_manorl_autonomy.py batchevaluate \
+  --package /home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180 \
+  --device gpu --num-envs 1 --identity-index 0 --checkpoint outputs/manorl/contact_conditioned_autonomy/batchppo-v3.pt
+```

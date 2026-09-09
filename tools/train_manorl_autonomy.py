@@ -1,13 +1,16 @@
 #!/usr/bin/env python
 """M3 formal skrl PPO train/evaluate entrypoint for cube2 autonomy."""
 from __future__ import annotations
-import argparse, json, os, hashlib
+import argparse, json, os, hashlib, sys
 from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path: sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 from sim.manorl.autonomy import Cube2AutonomousMJX, PACKAGE_DEFAULT
 from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID
-from sim.manorl.autonomy_training import AutonomyVectorEnv, build_runtime, identity_split, seed_everything, TRAINING_CONTRACT_ID
+from sim.manorl.autonomy_training import AutonomyVectorEnv, BatchedAutonomyAdapter, build_runtime, identity_split, seed_everything, TRAINING_CONTRACT_ID
+from sim.manorl.autonomy_batch_training import load_frozen_v3, run_batched_ppo
 from sim.manorl.autonomy_telemetry import TelemetryAccumulator, configure_wandb_axis, log_update
 from sim.manorl.trajectory_package import load_trajectory_package
 
@@ -118,6 +121,76 @@ def formaltrain(args):
         if run is not None: run.finish()
     return 0
 
+def batchtrain(args):
+    """Launch direct DLPack batched v3 runtime training with canonical PPO."""
+    seed_everything(args.seed)
+    catalog = _catalog(args.package); split = identity_split(catalog, seed=args.split_seed)
+    if args.identity_index not in split["train_indices"]:
+        raise ValueError("batchtrain identity must belong to deterministic TRAIN split")
+    if args.total_transitions is not None and args.total_transitions != args.num_envs * args.rollouts * args.updates:
+        raise ValueError("total-transitions must equal num-envs * rollouts * updates")
+    trajectory = catalog.trajectories[args.identity_index]
+    adapter = BatchedAutonomyAdapter(trajectory, num_envs=args.num_envs, device=args.device, seed=args.seed,
+                                     persistent_ccd_workspace=args.persistentworkspace,
+                                     ccd_contacts_per_world=args.ccd_contacts_per_world)
+    config = {k: v for k, v in vars(args).items() if k != "fn"}
+    provenance = {"source": "tools/train_manorl_autonomy.py", "package_digest": catalog.package_digest,
+                  "manifest_sha256": catalog.manifest_sha256, "catalog_digest": catalog.catalog_digest,
+                  "identity_split": split, "witness_digest": adapter.runtime.witness.digest,
+                  "v3_contract": {"action": "manorl.autonomy.action.v3", "observation": "manorl.autonomy.observation.v3", "reward": "manorl.autonomy.reward.v3"},
+                  "ppo": {"learning_epochs": args.learning_epochs, "mini_batches": args.mini_batches, "rollouts": args.rollouts}}
+    metadata = {**provenance, "config": config, "identity": trajectory.identity.identity}
+    run = _wandb_start(args, metadata)
+    if run is not None:
+        print(json.dumps({"wandb_run_id": run.id, "wandb_run_url": run.url, "identity": trajectory.identity.identity}), flush=True)
+    try:
+        model, agent, rows = run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
+            learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
+            checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance)
+        for row in rows:
+            print(json.dumps(row), flush=True)
+            log_update(run, row)
+    finally:
+        if run is not None: run.finish()
+    return 0
+
+
+def batchevaluate(args):
+    """Evaluate a frozen v3 model on a full-start runtime without optimisation."""
+    seed_everything(args.seed); catalog = _catalog(args.package)
+    trajectory = catalog.trajectories[args.identity_index]
+    adapter = BatchedAutonomyAdapter(trajectory, num_envs=args.num_envs, device=args.device, seed=args.seed,
+                                     persistent_ccd_workspace=args.persistentworkspace,
+                                     ccd_contacts_per_world=args.ccd_contacts_per_world)
+    from sim.manorl.autonomy_training import AutonomyActorCritic
+    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=str(adapter.device))
+    payload = load_frozen_v3(args.checkpoint, model, map_location=adapter.device)
+    observations, _ = adapter.reset(); steps = adapter.runtime.length - 1 if args.steps is None else args.steps
+    trace, total = [], torch.zeros((args.num_envs, 1), device=adapter.device)
+    for policy_step in range(steps):
+        with torch.no_grad():
+            mean, _ = model.compute({"observations": observations}, role="policy"); action = torch.clamp(mean, -1., 1.)
+        terminal_next, reward, done, info = adapter.step(action); total += reward
+        # Evaluation is N=1 by default; compact state copies here are deliberate
+        # output artifacts rather than training fast-path telemetry.
+        physical, contact = adapter.runtime.last_physical, adapter.runtime.last_contact
+        trace.append({"policy_step": policy_step, "reward": float(reward[0, 0].detach().cpu()), "done": bool(done[0, 0].detach().cpu()),
+                      "actual_q": np.asarray(physical.mano_dof_pos[0]).tolist(),
+                      "object_position": np.asarray(physical.object_position[0]).tolist(),
+                      "object_quaternion_xyzw": np.asarray(physical.object_orientation_xyzw[0]).tolist(),
+                      "target_object_position": np.asarray(adapter.runtime.reference_obj[min(int(np.asarray(adapter.runtime.indices[0])), adapter.runtime.length - 1)]).tolist(),
+                      "contact_force": np.asarray(contact.hand_object_forces[0]).tolist(),
+                      "path": float(np.linalg.norm(np.asarray(physical.object_position[0]) - np.asarray(adapter.runtime.reference_obj[min(int(np.asarray(adapter.runtime.indices[0])), adapter.runtime.length - 1)]))),
+                      "termination_reason": int(np.asarray(adapter.runtime.last_reason[0]))})
+        observations = adapter.prepare_action()
+        if bool(done.all().detach().cpu()): break
+    out = {"format": "manorl.autonomy.batch-eval.v3", "checkpoint": str(args.checkpoint), "global_policy_step": payload["global_policy_step"], "identity": trajectory.identity.identity,
+           "num_envs": args.num_envs, "steps": len(trace), "return": np.asarray(total.detach().cpu()).reshape(-1).tolist(), "trace": trace}
+    Path(args.trace).parent.mkdir(parents=True, exist_ok=True); Path(args.trace).write_text(json.dumps(out, indent=2) + "\n")
+    print(json.dumps({"trace": args.trace, "steps": len(trace), "return": out["return"]}), flush=True)
+    return 0
+
+
 def evaluate(args):
     seed_everything(args.seed); catalog=_catalog(args.package); payload=torch.load(args.checkpoint,map_location="cpu",weights_only=False); split=identity_split(catalog,seed=payload["split"]["seed"])
     if payload.get("format")!="manorl.autonomy.formalppo.v1" or payload.get("contracts") != {"action":ACTION_CONTRACT_ID,"observation":OBSERVATION_CONTRACT_ID,"reward":REWARD_CONTRACT_ID}: raise ValueError("incompatible autonomy PPO checkpoint contract")
@@ -136,6 +209,8 @@ def evaluate(args):
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="mode",required=True); common=argparse.ArgumentParser(add_help=False); common.add_argument("--package",default=str(PACKAGE_DEFAULT)); common.add_argument("--device",choices=("cpu","gpu"),default="cpu"); common.add_argument("--seed",type=int,default=0); common.add_argument("--split-seed",type=int,default=0); common.add_argument("--identity-index",type=int,default=0); common.add_argument("--setting",choices=("contact-conditioned","state-only"),default="contact-conditioned")
     t=sub.add_parser("formaltrain",parents=[common]); t.add_argument("--updates",type=int,default=1); t.add_argument("--num-envs",type=int,default=1); t.add_argument("--rollouts",type=int,default=2); t.add_argument("--total-transitions",type=int,default=None); t.add_argument("--learning-epochs",type=int,default=1); t.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/cube2_02_formalppo.pt"); t.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); t.add_argument("--wandb-project",default=None); t.add_argument("--wandb-entity",default=None); t.add_argument("--wandb-mode",default=None); t.set_defaults(fn=formaltrain)
+    b=sub.add_parser("batchtrain",parents=[common]); b.add_argument("--num-envs",type=int,default=8192); b.add_argument("--rollouts",type=int,default=32); b.add_argument("--updates",type=int,default=256); b.add_argument("--total-transitions",type=int,default=None); b.add_argument("--learning-epochs",type=int,default=4); b.add_argument("--mini-batches",type=int,default=16); b.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--ccd-contacts-per-world",type=int,default=None); b.add_argument("--checkpoint-interval",type=int,default=16); b.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3.pt"); b.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--wandb-project",default=None); b.add_argument("--wandb-entity",default=None); b.add_argument("--wandb-mode",default=None); b.set_defaults(fn=batchtrain)
+    be=sub.add_parser("batchevaluate",parents=[common]); be.add_argument("--num-envs",type=int,default=1); be.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); be.add_argument("--ccd-contacts-per-world",type=int,default=None); be.add_argument("--checkpoint",required=True); be.add_argument("--steps",type=int,default=None); be.add_argument("--trace",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3-eval.json"); be.set_defaults(fn=batchevaluate)
     e=sub.add_parser("evaluate",parents=[common]); e.add_argument("--checkpoint",required=True); e.add_argument("--steps",type=int,default=8); e.add_argument("--trace",default="outputs/manorl/contact_conditioned_autonomy/formalppo_eval.json"); e.add_argument("--allow-train-eval",action="store_true"); e.set_defaults(fn=evaluate)
     a=p.parse_args(); return a.fn(a)
 if __name__=="__main__": raise SystemExit(main())

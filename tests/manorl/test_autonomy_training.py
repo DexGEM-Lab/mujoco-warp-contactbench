@@ -34,7 +34,8 @@ def test_canonical_gae_bootstraps_time_limit_but_not_true_termination():
 def test_actor_provenance_is_all28_and_deterministic_in_eval_mode():
     model=AutonomyActorCritic(gym.spaces.Box(-5.,5.,shape=(OBSERVATION_DIM,),dtype=float),gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=float),device="cpu")
     model.eval(); x={"observations":torch.zeros((1,OBSERVATION_DIM))}; first=model.compute(x,role="policy")[0]; second=model.compute(x,role="policy")[0]
-    assert first.shape == (1,ACTION_DIM) and torch.equal(first,second)
+    value, _ = model.act(x, role="value")
+    assert first.shape == (1,ACTION_DIM) and torch.equal(first,second) and value.shape == (1,1)
 
 def test_split_rejects_wrong_catalog_size():
     catalog=SimpleNamespace(trajectories=tuple(fake_catalog().trajectories[:49]))
