@@ -173,6 +173,11 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint_options=checkpoint_options,
         has_checkpoint=checkpoint is not None,
     )
+    # A policy-free replay owns its public source/control clock. Checkpoints
+    # instead retain the exact control clock recorded in their runtime ABI.
+    control_fps = (
+        reference_fps if checkpoint is None else checkpoint_options.control_fps
+    )
     selection_kwargs = {
         "object_type": args.object_type,
         "gesture": args.gesture,
@@ -180,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         "post_padding": checkpoint_options.post_padding,
         "hand_side": args.hand_side,
         "reference_fps": reference_fps,
-        "control_fps": checkpoint_options.control_fps,
+        "control_fps": control_fps,
     }
     if args.dataset_path is not None:
         selection_kwargs["dataset_path"] = args.dataset_path
@@ -211,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.num_envs, getattr(trajectories, "hand_sides", ("right",))
             ),
             reference_fps=reference_fps,
-            control_fps=checkpoint_options.control_fps,
+            control_fps=control_fps,
             post_padding=checkpoint_options.post_padding,
             warp_ccd_iterations=checkpoint_options.warp_ccd_iterations,
             warp_ccd_contacts_per_world=checkpoint_options.warp_ccd_contacts_per_world,
