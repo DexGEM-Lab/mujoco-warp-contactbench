@@ -1,17 +1,70 @@
 # Current model
 
-## Objective and supported boundary
-Directly repair the human replay rather than train a policy. Source v5 has 59 rows; only representative bowl row49 and pitcher row31 have been physically characterized. No successful full-trajectory repair yet. The one-row object-only trial Lance is explicitly marked failed sustained hold; it must not be promoted as corrected production data.
+## Delivered behavior and remaining scope
+Five representative source-v5 rows, one per action category, have physically
+validated repairs: row0 stove-to-table bowl, row19 bottle tilt/return, row31
+pitcher tilt/return, row36 table-to-stove bowl, row49 lift-and-hold bowl. The
+remaining54 rows are unchanged. This is not a generalized policy or an all59
+repair. Canonical instructions and scope: `docs/direct_capture_repair.md`.
 
-## Mechanism
-Objects in the existing replay are free bodies after initialization, while captured hand commands drive position actuators. Later object-reference edits do not control physics. Small initial object translations change acquisition but are insufficient: row49 baseline lifts 2.7cm; (+6,+12,0)mm reaches 17.3cm transiently, then drops. Static held-pose tests also drop the bowl, ruling out motion timing as the sole cause. Simple thumb preload does not stabilize the original grasp.
+Each example has a version/UUID-bound JSON patch, optional hashed frozen
+actuator targets, actual post-step motion Lance/NPZ, full video and inspected
+storyboard. All objects move only via free-body physics after initialization.
+No RL implementation was inspected and no learned policy was trained. Recipe
+solver settings are explicit, local, and do not change dev defaults.
 
-The original/retargeted pinch places some finger links deeply through the bowl wall. Native geometric contacts at the held pose include index link penetrations around 13mm; many contact normals push the bowl down or outward instead of opposing across the wall. A fingertip-only position fit reproduced intermediate-link penetration. A collision-aware fit removes those deep intersections, placing outer finger normals inward/upward; thumb must then be moved outward from inside the bowl to establish opposing preload. This is the current discriminating intervention. Native contact recomputation is geometry evidence, not MJX force telemetry.
+## Mechanisms supported by experiments
+- Retargeted finger gaps, intermediate-link penetration and premature closure
+  break acquisition. Contact-aware wrist/finger fitting, an open approach and
+  object-relative transport repair it. Passive supports remain physical bodies.
+- Default pyramidal/impratio1 soft friction creeps. Same bottle grip under
+  elliptic/impratio1 drifts~8.14mm/s late; impratio100~0.118mm/s. Source bowl hand
+  still fails with improved solver, showing geometry and solver are independent
+  requirements. Mass, mu, gravity and actuator gains remain unchanged.
+- Pitcher1.28kg loads a100N/m wrist servo: roughly14cm sag is expected. Staged
+  load compensation in target space after contact enables lifting. Construction
+  feedback helped author commands; final independent replay uses frozen commands.
+- Corrected Euler commands require nearest representation relative to actual
+  joints; a2pi return jump previously flipped the pitcher.
+- Handle release requires clearing thumb then sideways finger withdrawal.
+  Radial pulling or uncurling inside the loop hooks and topples the pitcher.
+- Moving-bowl examples needed a translated proven grasp primitive, explicit
+  axial-orientation alignment, slower carry, leveling and release. Their timing
+  is deliberately longer (25.05/25.25s), not claimed as original-speed replay.
 
-## Constraints and interventions
-No RL implementation inspected, no learned policy or physical parameter changes. Wrist/finger pose changes are task-level trajectory edits announced during continuation; their deltas are separately represented. Original source remains immutable. A support grasp may require a local wrist-pose adjustment, not merely changed finger angles. Preserve all failed trials rather than claim they worked.
+## Accepted sample evidence
+- row49: extra10s held-tail minimum lift20.26cm, final tilt4.94deg, final position
+  error6.18cm, last-second movement<0.2mm.
+- row19: maximum lift12.46cm; representative pouring frame error1.43cm/2.68deg,
+  bottle axis intersects recipient bowl interior; final tilt1.06deg, error2.78cm.
+- row31: max lift16.66cm, full open-loop return and release, final tilt0.45deg,
+  error5.56cm, final no finger contact.
+- row0: max lift24.86cm, carry/level/place/release; final tilt0.39deg,
+  error2.88cm to edited target.
+- row36: max lift25.39cm, placed back on physical cuboid support; final tilt0.35deg,
+  error4.17mm to edited target. Initial bowl lowered7.74mm to meet table.
+No fluids are simulated; pouring evidence covers container geometry/motion only.
 
-## Next question
-Does collision-aware opposing contact hold the freely initialized bowl for three seconds? If yes, transport that fixed object-relative grasp through acquisition/lift and test the complete replay. If no, inspect actual force directions and loss-of-contact geometry before another trajectory experiment.
+## Data and replay invariants
+Generated-motion Lance is measured output with actual hand qpos and separate
+command_target_dof, not an unmodified source-capture input. Live reproduction
+uses original source plus patch/frozen commands. Frame mappings document
+correspondence, not original timestamps for retimed primitives. Small GPU contact
+variation is present; task behavior, not bitwise trajectory identity, is verified.
 
-See OPS.md for immutable evidence and output paths.
+Trace body/joint order must match exactly. Runtime sorts object types; a manual
+scene-order probe once swapped bowl with bottle/pitcher. Those contact probes are
+invalid, while viewer-ABI-matched saved poses stand. Native coordinate mirrors do
+not imply valid native contact buffers; native recomputed forces are separately
+labeled from MJX solver forces.
+
+## Final task state
+Published NAS bundle `dexgem_vla_demo_guangxue_astra_repair_5samples_20260910`
+contains five-row/8664-frame generated-motion Lance, complete physical state
+recordings, immutable patch/command assets, videos, previews, source catalog,
+Chinese README and executable replay/play_all launchers. Content round-trips
+exactly. Re-executing all five from NAS preserves task outcomes: final placement
+tilts<1.2deg, held bowl<5deg and >20cm lift. Small placement differences between
+replays are recorded, not hidden. DISPLAY=:1 cycles through the five examples.
+Source version5 and its59 rows remain untouched. Final source-branch checkpoint
+and artifact paths are recorded in OPS.md.

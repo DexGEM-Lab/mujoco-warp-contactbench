@@ -13,6 +13,7 @@ from pathlib import Path
 import lance
 import numpy as np
 from scipy.spatial.transform import Rotation
+from replay_pose_edits import apply_replay_edits
 
 from sim.manorl.assets import COLLISION_GEOM_GROUP
 from sim.manorl.trajectory import trajectory_from_lance_row, resample_reference_trajectory
@@ -29,6 +30,7 @@ def main():
     p.add_argument('--delta-pos', type=float, nargs=3, default=[0., 0., 0.])
     p.add_argument('--delta-rot', type=float, nargs=3, default=[0., 0., 0.], help='Local object rotation vector, radians')
     p.add_argument('--render', action='store_true')
+    p.add_argument('--edit', type=Path, help='Explicit JSON object/finger/grasp corrections')
     p.add_argument('--pre-padding', type=int, default=180)
     p.add_argument('--post-padding', type=int, default=180)
     a = p.parse_args()
@@ -45,6 +47,10 @@ def main():
     sq[active] = oq[0]
     tr = replace(tr, object_pos_raw=tr.object_pos_raw+delta, object_pos=tr.object_pos+delta,
                  object_quat_xyzw=oq, scene_object_initial_pos=spos, scene_object_initial_quat_xyzw=sq)
+    edit=json.loads(a.edit.read_text()) if a.edit else {}
+    before_hand=tr.q_ref.copy()
+    if edit: tr=apply_replay_edits(tr,edit)
+    hand_changed=not np.array_equal(before_hand,tr.q_ref)
     env = MujocoManoEnvironment(tr, EnvironmentConfig(device='gpu', num_envs=1, residual_enabled=False,
          compatibility=replace(SOURCE_ALIGNED_COMPATIBILITY, movement_pre_padding=a.pre_padding),
          max_deviation_distance=1e6, reference_fps=100, control_fps=100, post_padding=a.post_padding, hand_side='right'))
@@ -96,13 +102,13 @@ def main():
             renderer.update_scene(rd,camera=cam,scene_option=opt); left=Image.fromarray(renderer.render())
             renderer.update_scene(vd,camera=cam,scene_option=opt); right=Image.fromarray(renderer.render())
             panel=Image.new('RGB',(1280,510),'white'); panel.paste(left,(0,30)); panel.paste(right,(640,30))
-            draw=ImageDraw.Draw(panel); draw.text((12,8),f'Source object+hand | row {a.row} raw frame {tr.source_indices[ref]}',fill='black'); draw.text((652,8),'Free-body MJX replay | hand commands unchanged',fill='black')
+            draw=ImageDraw.Draw(panel); draw.text((12,8),f'{"Edited" if hand_changed else "Source"} reference | row {a.row} raw frame {tr.source_indices[ref]}',fill='black'); draw.text((652,8),'Free-body MJX replay | '+('explicit grasp correction' if hand_changed else 'hand commands unchanged'),fill='black')
             panel.save(a.output/f'frame_{ref:04d}.png'); panels.append(panel); snap.remove(ref)
         if bool(done[0]): break
     np.savez_compressed(a.output/'trace.npz', qpos=qpos,qvel=qvel,ctrl=ctrl,object_pos=positions,object_quat_wxyz=rots,reference_index=refs,source_indices=tr.source_indices,reference_object_pos=tr.object_pos,reference_object_quat_xyzw=tr.object_quat_xyzw,reference_hand=tr.q_ref,body_pos=body_pos,body_names=np.array([vm.body(i).name for i in range(vm.nbody)]),scene_initial_pos=tr.scene_object_initial_pos)
     (a.output/'contacts.json').write_text(json.dumps(contacts))
     pos=np.array(positions); refs=np.array(refs); err=np.linalg.norm(pos-tr.object_pos[refs],axis=1)
-    info={'source_dataset':a.dataset,'version':a.version,'row':a.row,'index':raw['index'],'delta_pos':a.delta_pos,'delta_rot':a.delta_rot,'source_start':tr.identity.source_start,'movement_steps':[lo,hi],'object_z_shift':tr.object_z_shift,'initial_height_m':float(tr.object_pos[0,2]),'max_lift_m':float(pos[:,2].max()-tr.object_pos[0,2]),'last_lift_m':float(pos[-1,2]-tr.object_pos[0,2]),'position_rmse_m':float(np.sqrt(np.mean(err**2))),'final_error_m':float(err[-1]),'hand_commands_modified':False,'object_pose_forced_after_reset':False}
+    info={'source_dataset':a.dataset,'version':a.version,'row':a.row,'index':raw['index'],'delta_pos':a.delta_pos,'delta_rot':a.delta_rot,'source_start':tr.identity.source_start,'movement_steps':[lo,hi],'object_z_shift':tr.object_z_shift,'initial_height_m':float(tr.object_pos[0,2]),'max_lift_m':float(pos[:,2].max()-tr.object_pos[0,2]),'last_lift_m':float(pos[-1,2]-tr.object_pos[0,2]),'position_rmse_m':float(np.sqrt(np.mean(err**2))),'final_error_m':float(err[-1]),'hand_commands_modified':hand_changed,'edit':edit,'object_pose_forced_after_reset':False}
     (a.output/'summary.json').write_text(json.dumps(info,indent=2,ensure_ascii=False)); print(json.dumps(info,ensure_ascii=False),flush=True)
     if renderer:
         renderer.close()

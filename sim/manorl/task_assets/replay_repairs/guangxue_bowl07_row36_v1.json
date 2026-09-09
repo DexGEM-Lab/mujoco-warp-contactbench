@@ -1,0 +1,64 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "guangxue_bowl07_row36_pickup_to_stove_v1",
+  "active_object": "bowl",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 36,
+    "uuid": "f4c8d0d4-d28e-4419-915f-eb32fced5fc4",
+    "frames": 712
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "edit": {
+    "translation": [
+      0.005999999999999998,
+      0.01200000000000001,
+      -0.007735247286413491
+    ],
+    "rotation": [
+      0.036140302229694506,
+      -0.01774145422438779,
+      -1.2958073595319668
+    ]
+  },
+  "initial_hand": [
+    0.1130634993314743,
+    -0.5636504292488098,
+    0.13298414969444275,
+    -0.0943460538983345,
+    0.029203498736023903,
+    1.6687328815460205,
+    0.09248562157154083,
+    0.15241660177707672,
+    -0.14288266003131866,
+    0.0,
+    0.11389680206775665,
+    0.25768178701400757,
+    -0.135351300239563,
+    0.3677600026130676,
+    -0.18147769570350647,
+    0.09210766106843948,
+    -0.1451961249113083,
+    -0.03977357968688011,
+    0.34822991490364075,
+    0.39958256483078003,
+    -0.06049499288201332,
+    0.06227172166109085,
+    0.287577748298645,
+    0.5411331653594971,
+    -0.6389403939247131,
+    0.5480456352233887,
+    -0.055208444595336914,
+    0.16341222822666168
+  ],
+  "command_track": {
+    "path": "guangxue_bowl07_row36_commands.npz",
+    "sha256": "033156bfd4d16099e947735356a9e2d85e3b8c362c5989429440a35f83e02a33",
+    "frames": 2525
+  },
+  "scope": "Source row36 task repair using verified bowl grasp and smooth table-to-stove transport, then leveling, release and retreat. Duration25.25s, original timing changed. Initial active bowl lowered7.74mm onto table and yaw-aligned; hand initialized consistently. All scene objects unactuated after reset."
+}
