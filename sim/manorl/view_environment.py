@@ -568,6 +568,7 @@ def _compile_native_viewer_model(
         mujoco, model = compile_unified_model(
             environment.config.servo,
             object_types=environment._unified_object_types,
+            object_collisions=getattr(environment, "_scene_object_collisions", False),
             visual_meshes=True,
             hand_side=hand_side,
             physics_timestep=environment.config.physics_timestep,

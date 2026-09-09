@@ -352,3 +352,25 @@ def test_strict_checkpoint_binds_trajectory_package_digest(tmp_path: Path) -> No
     )
     with pytest.raises(CheckpointFormatError, match="missing current MuJoCo hand signature"):
         load_skrl_checkpoint(target, direct_checkpoint)
+
+
+def test_package_preserves_composite_scene_initial_states(tmp_path):
+    from dataclasses import replace
+    from sim.manorl.trajectory_package import SCENE_TRAJECTORY_PACKAGE_SCHEMA
+    source = _trajectory("cube1:01", 1, 3)
+    source = replace(
+        source,
+        scene_object_types=("cube1", "cube2"),
+        scene_object_initial_pos=np.array([source.object_pos[0], [.4, .2, .1]]),
+        scene_object_initial_quat_xyzw=np.tile([0., 0., 0., 1.], (2, 1)),
+    )
+    package = write_trajectory_package(
+        tmp_path / "scene.mtp", (source,), selection=_selection(),
+        dataset_schema_digest="schema", discovery_digest="discovery",
+    )
+    catalog = load_trajectory_package(package)
+    assert catalog.manifest["schema"] == SCENE_TRAJECTORY_PACKAGE_SCHEMA
+    actual = catalog.trajectories[0]
+    assert actual.scene_object_types == source.scene_object_types
+    np.testing.assert_array_equal(actual.scene_object_initial_pos, source.scene_object_initial_pos)
+    np.testing.assert_array_equal(actual.scene_object_initial_quat_xyzw, source.scene_object_initial_quat_xyzw)

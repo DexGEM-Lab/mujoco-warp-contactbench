@@ -340,15 +340,23 @@ variables documented in each script.
 The trainer also accepts exact multi-object/action selection via
 `--pairs cube1:01,cube1:02,cube2:01` or `--all-pairs`. Mixed-object batches run
 headless through one static MJX-Warp model per object; GUI and Rerun recording
-remain single-object modes. Modern capture rows may list ordered scene objects
-as a comma-separated `index.scene`; the unique `object_move` entry selects the
-one object controlled by that environment and its position in the scene list
-selects the matching `objects` state. Passive scene objects are not materialized
-in the training physics model, and composite rows with zero or multiple
-manipulated objects are rejected. Strict resume binds the package schema,
-package manifest SHA256, and catalog digest in the checkpoint environment ABI;
-moving a verified
-package does not change its identity, changing any catalog byte does.
+remain single-target modes. Modern capture rows may list ordered scene objects
+as a comma-separated `index.scene`. The unique `object_move` entry chooses the
+policy target; **all scene objects** are initialized from their corresponding
+Lance poses and participate in physics, including object-object collisions.
+The initial hand and all objects receive one shared vertical ground shift, so
+support relationships are preserved (for example, bowl resting on cuboid1).
+Non-target bodies have no policy actions and evolve under the solver after
+initialization. Composite scenes automatically use the unified model even when
+only one target type is selected. Device-transition/contact-decode fast paths
+are rejected for these scenes until they can exclude non-target contacts.
+
+Composite trajectory packages use `manorl.trajectory_package.v2` to preserve
+all scene initial poses; old readers reject this schema instead of silently
+omitting supports. Single-object packages remain v1 and are still readable.
+Strict resume binds the package schema, manifest SHA256, and catalog digest;
+recompile packages made before scene-state support. See
+[`docs/manorl_composite_scenes.md`](docs/manorl_composite_scenes.md).
 
 A policy-free GPU replay records the source-following environment to Rerun
 without loading a checkpoint or applying residual actions:

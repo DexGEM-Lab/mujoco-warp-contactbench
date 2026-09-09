@@ -702,6 +702,7 @@ def _object_body(
     *,
     gravity_compensated: bool = False,
     visual_meshes: bool = False,
+    object_collisions: bool = False,
 ) -> None:
     object_link = urdf_root.find("link")
     if object_link is None or object_link.get("name") != runtime.link_name:
@@ -780,7 +781,7 @@ def _object_body(
             quat=_format(quaternion),
             rgba=runtime.rgba,
             contype="2",
-            conaffinity="5",
+            conaffinity="7" if object_collisions else "5",
             condim="3",
             friction="0.9 0.01 0.001",
         )
@@ -951,14 +952,16 @@ def build_unified_scene_xml(
     servo: ServoConfig = ServoConfig(),
     *,
     object_types: Iterable[str],
+    object_collisions: bool = False,
     visual_meshes: bool = False,
     hand_side: str = "right",
     physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> str:
     """Build one fixed-topology scene containing several real object meshes.
 
-    Each world in an MJX data batch selects one object by placing that object's
-    free body in the interaction workspace.  Inactive objects are parked far
+    Each world places its scene bodies in the interaction workspace. With
+    ``object_collisions=True``, these bodies also collide with each other.
+    Object types absent from that world are parked far
     above the floor and retain their native gravity/contact properties; their
     trajectories cannot interact with the active workspace during a bounded
     episode.  No collision geometry is approximated or replaced.
@@ -1025,6 +1028,7 @@ def build_unified_scene_xml(
             object_root,
             runtime,
             visual_meshes=visual_meshes,
+            object_collisions=object_collisions,
         )
 
     actuator = ET.SubElement(root, "actuator")
@@ -1239,6 +1243,7 @@ def validate_unified_compiled_model(
     servo: ServoConfig = ServoConfig(),
     *,
     object_types: Iterable[str],
+    object_collisions: bool = False,
     hand_side: str = "right",
     physics_timestep: float = PHYSICS_TIMESTEP,
 ) -> None:
@@ -1355,7 +1360,7 @@ def validate_unified_compiled_model(
                 f"got {len(object_geom_ids)}"
             )
         if not np.all(model.geom_contype[object_geom_ids] == 2) or not np.all(
-            model.geom_conaffinity[object_geom_ids] == 5
+            model.geom_conaffinity[object_geom_ids] == (7 if object_collisions else 5)
         ):
             raise ValueError(f"compiled {runtime.object_type} collision masks mismatch")
     validate_static_fk(mujoco, model, object_type=names[0], hand_side=side)
@@ -1365,6 +1370,7 @@ def compile_unified_model(
     servo: ServoConfig = ServoConfig(),
     *,
     object_types: Iterable[str],
+    object_collisions: bool = False,
     visual_meshes: bool = False,
     hand_side: str = "right",
     physics_timestep: float = PHYSICS_TIMESTEP,
@@ -1382,6 +1388,7 @@ def compile_unified_model(
         build_unified_scene_xml(
             servo,
             object_types=names,
+            object_collisions=object_collisions,
             visual_meshes=visual_meshes,
             hand_side=hand_side,
             physics_timestep=physics_timestep,
@@ -1392,6 +1399,7 @@ def compile_unified_model(
         model,
         servo,
         object_types=names,
+        object_collisions=object_collisions,
         hand_side=hand_side,
         physics_timestep=physics_timestep,
     )

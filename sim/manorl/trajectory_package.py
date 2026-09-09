@@ -25,6 +25,7 @@ from sim.manorl.trajectory import (
 )
 
 TRAJECTORY_PACKAGE_SCHEMA = "manorl.trajectory_package.v1"
+SCENE_TRAJECTORY_PACKAGE_SCHEMA = "manorl.trajectory_package.v2"
 _READY_FILE = "READY"
 _MANIFEST_FILE = "manifest.json"
 _ARRAY_FILES = {
@@ -63,7 +64,7 @@ class TrajectoryCatalog:
     @property
     def checkpoint_metadata(self) -> dict[str, str]:
         return {
-            "schema": TRAJECTORY_PACKAGE_SCHEMA,
+            "schema": str(self.manifest["schema"]),
             "package_digest": self.package_digest,
             "manifest_sha256": self.manifest_sha256,
             "catalog_digest": self.catalog_digest,
@@ -295,6 +296,11 @@ def write_trajectory_package(
                 {
                     "identity": asdict(trajectory.identity),
                     "object_z_shift": float(trajectory.object_z_shift),
+                    "scene_object_types": list(trajectory.scene_object_types),
+                    "scene_object_initial_pos": (None if trajectory.scene_object_initial_pos is None else trajectory.scene_object_initial_pos.tolist()),
+                    "scene_object_initial_quat_xyzw": (
+                        None if trajectory.scene_object_initial_quat_xyzw is None else trajectory.scene_object_initial_quat_xyzw.tolist()
+                    ),
                     "movement_start_step": trajectory.movement_start_step,
                     "movement_end_step": trajectory.movement_end_step,
                     "offset": [start, stop],
@@ -335,7 +341,7 @@ def write_trajectory_package(
             "source_catalog": source_catalog_metadata,
         }
         manifest: dict[str, object] = {
-            "schema": TRAJECTORY_PACKAGE_SCHEMA,
+            "schema": (SCENE_TRAJECTORY_PACKAGE_SCHEMA if any(t.scene_object_types for t in ordered) else TRAJECTORY_PACKAGE_SCHEMA),
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
             "reference_resampling": REFERENCE_RESAMPLING_ID,
             "dataset": {
@@ -401,7 +407,7 @@ def _load_manifest(path: Path) -> tuple[dict[str, Any], str]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise TrajectoryPackageError("trajectory package manifest is invalid JSON") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema") != TRAJECTORY_PACKAGE_SCHEMA:
+    if not isinstance(manifest, dict) or manifest.get("schema") not in {TRAJECTORY_PACKAGE_SCHEMA, SCENE_TRAJECTORY_PACKAGE_SCHEMA}:
         raise TrajectoryPackageError("unsupported trajectory package schema")
     package_digest = manifest.get("package_digest")
     if not isinstance(package_digest, str) or len(package_digest) != 64:
@@ -482,6 +488,12 @@ def load_trajectory_package(
     for index, record in enumerate(records):
         if not isinstance(record, dict) or not isinstance(record.get("identity"), dict):
             raise TrajectoryPackageError(f"trajectory package record {index} is invalid")
+        if manifest["schema"] == SCENE_TRAJECTORY_PACKAGE_SCHEMA and not all(
+            key in record for key in (
+                "scene_object_types", "scene_object_initial_pos", "scene_object_initial_quat_xyzw"
+            )
+        ):
+            raise TrajectoryPackageError("scene package record is missing initial object states")
         start, stop = int(offsets[index]), int(offsets[index + 1])
         recorded_offset = record.get("offset")
         if recorded_offset != [start, stop]:
@@ -501,6 +513,11 @@ def load_trajectory_package(
                 object_pos=_immutable(arrays["object_pos"][start:stop]),
                 object_quat_xyzw=_immutable(arrays["object_quat_xyzw"][start:stop]),
                 object_z_shift=float(record["object_z_shift"]),
+                scene_object_types=tuple(record.get("scene_object_types", ())),
+                scene_object_initial_pos=record.get("scene_object_initial_pos"),
+                scene_object_initial_quat_xyzw=record.get(
+                    "scene_object_initial_quat_xyzw"
+                ),
                 hand_sides=hand_sides,
                 q_ref_by_side=side_map,
                 selected_hand_sides=selected_hand_sides,

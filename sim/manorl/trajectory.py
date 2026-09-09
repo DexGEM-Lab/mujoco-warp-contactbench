@@ -131,6 +131,12 @@ class ReferenceTrajectory:
     # the anchor state remains immutable while subsequent tail XYZ may be a
     # smooth deformation of the original post-contact retreat.
     augmentation_suffix_frames: int = 0
+    # Ordered physical scene objects at the selected initial frame. The active
+    # object is still identified by ``identity.object_index`` and owns every
+    # target/reward trajectory; additional objects participate only in physics.
+    scene_object_types: tuple[str, ...] = ()
+    scene_object_initial_pos: NDArray[np.float64] | None = None
+    scene_object_initial_quat_xyzw: NDArray[np.float64] | None = None
 
     def __post_init__(self) -> None:
         expected = int(self.source_indices.shape[0])
@@ -167,6 +173,36 @@ class ReferenceTrajectory:
         object.__setattr__(self, "hand_sides", sides)
         object.__setattr__(self, "q_ref_by_side", normalized_map)
         object.__setattr__(self, "selected_hand_sides", selected)
+        if self.scene_object_types:
+            scene_types = tuple(self.scene_object_types)
+            active_object = self.identity.identity.split("_")[0]
+            if (
+                not all(isinstance(value, str) and value for value in scene_types)
+                or len(set(scene_types)) != len(scene_types)
+                or active_object not in scene_types
+                or self.identity.object_index != scene_types.index(active_object)
+            ):
+                raise ValueError("scene_object_types must uniquely map identity.object_index to the active object")
+            scene_pos = np.asarray(self.scene_object_initial_pos, dtype=np.float64)
+            scene_quat = np.asarray(self.scene_object_initial_quat_xyzw, dtype=np.float64)
+            if scene_pos.shape != (len(scene_types), 3) or not np.all(np.isfinite(scene_pos)):
+                raise ValueError("scene_object_initial_pos must be one finite XYZ per scene object")
+            if (
+                scene_quat.shape != (len(scene_types), 4)
+                or not np.all(np.isfinite(scene_quat))
+                or not np.allclose(np.linalg.norm(scene_quat, axis=1), 1.0, atol=1e-10)
+            ):
+                raise ValueError("scene_object_initial_quat_xyzw must contain normalized quaternions")
+            active_index = scene_types.index(active_object)
+            if not np.allclose(scene_pos[active_index], self.object_pos[0], rtol=0, atol=1e-10):
+                raise ValueError("scene active initial position differs from object reference")
+            if not np.isclose(abs(np.dot(scene_quat[active_index], self.object_quat_xyzw[0])), 1., atol=1e-10):
+                raise ValueError("scene active initial orientation differs from object reference")
+            object.__setattr__(self, "scene_object_types", scene_types)
+            object.__setattr__(self, "scene_object_initial_pos", _immutable(scene_pos))
+            object.__setattr__(self, "scene_object_initial_quat_xyzw", _immutable(scene_quat))
+        elif self.scene_object_initial_pos is not None or self.scene_object_initial_quat_xyzw is not None:
+            raise ValueError("scene initial poses require scene_object_types")
         if self.reference_fps is not None and (
             not isinstance(self.reference_fps, int)
             or isinstance(self.reference_fps, bool)
@@ -875,6 +911,34 @@ def _initial_support_shift(
     return -float(np.min(rotated[:, 2] + initial_position[2]))
 
 
+def _initial_scene_support_shift(
+    initial_positions: NDArray[np.float64],
+    initial_quaternions_xyzw: NDArray[np.float64],
+    object_types: tuple[str, ...],
+) -> float:
+    """Ground the lowest scene body while preserving every relative transform."""
+
+    if initial_positions.shape != (len(object_types), 3) or initial_quaternions_xyzw.shape != (
+        len(object_types),
+        4,
+    ):
+        raise ValueError("scene initial object poses do not match scene object types")
+    if len(object_types) > 1:
+        from sim.manorl.assets import validate_asset_manifest
+
+        for object_type in object_types:
+            validate_asset_manifest(object_type)
+    return max(
+        _initial_support_shift(position, quaternion, object_type)
+        for object_type, position, quaternion in zip(
+            object_types,
+            initial_positions,
+            initial_quaternions_xyzw,
+            strict=True,
+        )
+    )
+
+
 def trajectory_from_lance_row(
     row: dict[str, Any],
     dataset_version: int,
@@ -924,13 +988,21 @@ def trajectory_from_lance_row(
         )
     if object_index >= len(objects):
         raise ValueError("selected object state is absent")
-    object_state = objects[object_index]
-    object_pos_all = np.asarray(object_state.get("pos", ()), dtype=np.float64)
-    object_rotvec_all = np.asarray(object_state.get("rot_aa", ()), dtype=np.float64)
-    if object_pos_all.shape != (source_count, 3) or object_rotvec_all.shape != (source_count, 3):
-        raise ValueError("object pose arrays do not match total_frames")
-    if not np.all(np.isfinite(object_pos_all)) or not np.all(np.isfinite(object_rotvec_all)):
-        raise ValueError("object pose arrays contain non-finite values")
+    scene_pos_all: list[NDArray[np.float64]] = []
+    scene_quat_all: list[NDArray[np.float64]] = []
+    for scene_object, state in zip(object_names, objects, strict=True):
+        if not isinstance(state, dict):
+            raise ValueError(f"{scene_object} object state must be a mapping")
+        positions = np.asarray(state.get("pos", ()), dtype=np.float64)
+        rotvecs = np.asarray(state.get("rot_aa", ()), dtype=np.float64)
+        if positions.shape != (source_count, 3) or rotvecs.shape != (source_count, 3):
+            raise ValueError(f"{scene_object} pose arrays do not match total_frames")
+        if not np.all(np.isfinite(positions)) or not np.all(np.isfinite(rotvecs)):
+            raise ValueError(f"{scene_object} pose arrays contain non-finite values")
+        scene_pos_all.append(positions)
+        scene_quat_all.append(rotvec_to_xyzw(rotvecs))
+    object_pos_all = scene_pos_all[object_index]
+    object_quat_all = scene_quat_all[object_index]
 
     movement = metadata.get("trajectory_info", {}).get("object_move", [])
     movement_entry = next(
@@ -988,12 +1060,23 @@ def trajectory_from_lance_row(
         q_by_side[side] = _immutable(edge_hold(values))
     assert dof_dim is not None
     object_pos_raw = edge_hold(object_pos_all[start:stop].copy())
-    object_quat_xyzw = edge_hold(
-        rotvec_to_xyzw(object_rotvec_all[start:stop])
+    object_quat_xyzw = edge_hold(object_quat_all[start:stop].copy())
+    scene_initial_pos_raw = np.stack([values[start] for values in scene_pos_all])
+    scene_initial_quat = np.stack([values[start] for values in scene_quat_all])
+    z_shift = _initial_scene_support_shift(
+        scene_initial_pos_raw,
+        scene_initial_quat,
+        object_names,
     )
-    z_shift = _initial_support_shift(object_pos_raw[0], object_quat_xyzw[0], object_type)
     object_pos = object_pos_raw.copy()
     object_pos[:, 2] += z_shift
+    scene_initial_pos = scene_initial_pos_raw.copy()
+    scene_initial_pos[:, 2] += z_shift
+    if len(object_names) > 1:
+        for side, values in q_by_side.items():
+            shifted = values.copy()
+            shifted[:, 2] += z_shift
+            q_by_side[side] = _immutable(shifted)
     primary = "right" if "right" in selected else selected[0]
     index = row.get("index", {})
     identity = _safe_row_identity(row, row_index)
@@ -1038,6 +1121,9 @@ def trajectory_from_lance_row(
         object_pos=_immutable(object_pos),
         object_quat_xyzw=_immutable(object_quat_xyzw),
         object_z_shift=z_shift,
+        scene_object_types=object_names if len(object_names) > 1 else (),
+        scene_object_initial_pos=_immutable(scene_initial_pos) if len(object_names) > 1 else None,
+        scene_object_initial_quat_xyzw=_immutable(scene_initial_quat) if len(object_names) > 1 else None,
         hand_sides=sides,
         q_ref_by_side=q_by_side,
         selected_hand_sides=selected,
@@ -1513,6 +1599,8 @@ def _candidate_from_metadata_row(
         return None
     index_action = _gesture_action_id(index.get("gesture", ""))
     if index_action != pair.action_id:
+        return None
+    if source_path and str(index.get("scene", "")) != object_type:
         return None
     if isinstance(source_path, str) and source_path and Path(source_path).parent.name != identity:
         return None
