@@ -170,16 +170,46 @@ def test_imitation_checkpoint_loads_and_warmstarts_without_optimizer_resume(tmp_
         torch.testing.assert_close(got, expected)
 
 
-def test_ppo_warmstart_validates_and_uses_fresh_optimizer(tmp_path: Path):
+def _physical_warmstart_provenance(*, source_commit: str, asset_pin: str = "asset", witness_digest: str = "witness"):
+    return {"source_commit": source_commit, "asset_pin": asset_pin,
+            "package_digest": "package", "manifest_sha256": "manifest",
+            "catalog_digest": "catalog", "identity_split": {"digest": "split"},
+            "witness_digest": witness_digest,
+            "clock": {"policy_fps": 120, "physics_fps": 480, "substeps": 4},
+            "v3_contract": {"action": "action", "observation": "observation", "reward": "reward"}}
+
+
+def test_ppo_warmstart_accepts_different_source_lineage_and_records_it(tmp_path: Path):
     adapter = FakeBatchedAdapter()
     source = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device="cpu")
-    provenance = {"package_digest": "package", "identity_split": {"digest": "split"}, "witness_digest": "witness"}
+    teacher_provenance = _physical_warmstart_provenance(source_commit="9001c25")
+    checkpoint = tmp_path / "init.pt"
+    torch.save(imitation_checkpoint_payload(model=source, config={}, provenance=teacher_provenance,
+                                            teacher_config={}, fit_metrics={}), checkpoint)
+    current_provenance = {**_physical_warmstart_provenance(source_commit="bf6d52e"), "ppo": {"rollouts": 1}}
+    output = tmp_path / "fresh-ppo.pt"
+    _, agent, _ = run_batched_ppo(adapter, updates=1, rollouts=1, learning_epochs=1, mini_batches=1,
+                                  checkpoint=output, init_checkpoint=checkpoint, provenance=current_provenance)
+    payload = torch.load(output, weights_only=False)
+    assert agent.optimizer.state  # populated only by this new PPO update
+    assert payload["provenance"]["init_source_commit"] == "9001c25"
+    assert payload["provenance"]["init_checkpoint_path"] == str(checkpoint)
+    assert len(payload["provenance"]["init_checkpoint_sha256"]) == 64
+
+
+@pytest.mark.parametrize(("changed_key", "changed_value"), [("asset_pin", "other-asset"), ("witness_digest", "other-witness")])
+def test_ppo_warmstart_rejects_changed_physical_contract(tmp_path: Path, changed_key: str, changed_value: str):
+    adapter = FakeBatchedAdapter()
+    source = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device="cpu")
+    provenance = _physical_warmstart_provenance(source_commit="9001c25")
     checkpoint = tmp_path / "init.pt"
     torch.save(imitation_checkpoint_payload(model=source, config={}, provenance=provenance,
                                             teacher_config={}, fit_metrics={}), checkpoint)
-    _, agent, _ = run_batched_ppo(adapter, updates=1, rollouts=1, learning_epochs=1, mini_batches=1,
-                                  init_checkpoint=checkpoint, provenance={**provenance, "ppo": {"rollouts": 1}})
-    assert agent.optimizer.state  # populated only by this new PPO update
+    current_provenance = {**_physical_warmstart_provenance(source_commit="bf6d52e"), changed_key: changed_value,
+                          "ppo": {"rollouts": 1}}
+    with pytest.raises(ValueError, match=f"provenance mismatch for {changed_key}"):
+        run_batched_ppo(adapter, updates=1, rollouts=1, learning_epochs=1, mini_batches=1,
+                        init_checkpoint=checkpoint, provenance=current_provenance)
 
 
 def test_actor_mean_fit_reduces_teacher_error():

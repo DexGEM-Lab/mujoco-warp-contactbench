@@ -6,6 +6,7 @@ compact device telemetry at PPO update boundaries.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import random
 import tempfile
@@ -22,6 +23,21 @@ from sim.manorl.autonomy_contracts import (
 )
 from sim.manorl.autonomy_training import build_batched_runtime
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
+
+
+_WARMSTART_COMPATIBILITY_KEYS = (
+    "asset_pin", "package_digest", "manifest_sha256", "catalog_digest",
+    "identity_split", "witness_digest", "clock", "v3_contract",
+)
+
+
+def _warmstart_compatibility_provenance(provenance: dict[str, Any]) -> dict[str, Any]:
+    """Return the physical contracts which must agree for weights-only initialization."""
+    return {key: provenance[key] for key in _WARMSTART_COMPATIBILITY_KEYS}
+
+
+def _checkpoint_sha256(path: str | Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
@@ -139,10 +155,20 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     # optimizer; explicitly clearing state prevents a future builder change
     # from silently turning --init-checkpoint into an optimizer resume.
     if init_checkpoint is not None:
-        # PPO hyperparameters belong to the new optimization, while package,
-        # split, witness and v3.1 physical contracts must agree exactly.
-        warmstart_provenance = {key: value for key, value in (provenance or {}).items() if key != "ppo"}
-        load_frozen_v3(init_checkpoint, model, map_location=adapter.device, expected_provenance=warmstart_provenance)
+        # Source revision is lineage rather than physical compatibility: only
+        # the pinned assets, package/split/witness, clock, and v3 ABI gate a
+        # weights-only initialization. PPO itself is always newly created.
+        if provenance is None:
+            raise ValueError("warm start requires physical-contract provenance")
+        init_path = Path(init_checkpoint)
+        init_payload = load_frozen_v3(
+            init_path, model, map_location=adapter.device,
+            expected_provenance=_warmstart_compatibility_provenance(provenance),
+        )
+        provenance = {**provenance,
+                      "init_source_commit": init_payload.get("provenance", {}).get("source_commit"),
+                      "init_checkpoint_sha256": _checkpoint_sha256(init_path),
+                      "init_checkpoint_path": str(init_path)}
         agent.optimizer.state.clear()
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()
