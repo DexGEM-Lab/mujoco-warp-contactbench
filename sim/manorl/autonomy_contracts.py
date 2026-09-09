@@ -110,11 +110,3 @@ def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray
         if measured.shape != (ACTION_DIM,) or error.shape != (ACTION_DIM,) or np.any(error <= 0): raise ValueError("invalid measured-state envelope")
         command = np.clip(command, measured - error, measured + error)
     return np.clip(command, lo, hi)
-
-# Explicitly named aliases make accidental imports of old checkpoint IDs fail.
-AUTONOMY_V3_VERSION = "REJECTED_BY_V4"
-OBSERVATION_V3_CONTRACT_ID = "REJECTED_BY_V4"
-REWARD_V3_CONTRACT_ID = "REJECTED_BY_V4"
-CHECKPOINT_V3_FORMAT = "REJECTED_BY_V4"
-ACTION_V3_CONTRACT_ID = "REJECTED_BY_V4"
-def validate_v3_checkpoint_metadata(metadata: dict[str, object]) -> None: raise ValueError("v3.1/538-D checkpoints are incompatible with v4")
