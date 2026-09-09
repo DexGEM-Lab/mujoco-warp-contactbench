@@ -37,7 +37,11 @@ from sim.manorl.observations import (
     PointCloudTemplate,
     build_observation,
 )
-from sim.manorl.trajectory import load_reference_trajectory
+from sim.manorl.trajectory import (
+    TrajectorySelection,
+    load_assigned_trajectory_batch,
+    load_reference_trajectory,
+)
 
 
 def _fixture() -> dict[str, object]:
@@ -518,6 +522,83 @@ def test_device_transition_matches_host_oracle_over_forced_reset_branches() -> N
         saw_contact |= bool(np.any(device.last_reward.raw_contact > 0.0))
         saw_post_window |= bool(np.any(device.trajectory_steps > device.contact_end_frames))
     assert saw_terminal and saw_deviation and saw_contact and saw_post_window
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MANORL_COMPOSITE_PARITY_DATASET"),
+    reason="set MANORL_COMPOSITE_PARITY_DATASET to a dataset-v5 Lance path",
+)
+def test_composite_device_transition_shared_snapshot_parity() -> None:
+    """Compare transition arithmetic on one bowl/cuboid1 physics snapshot."""
+    if jax.default_backend() != "gpu":
+        pytest.skip("configured CUDA JAX backend required")
+
+    dataset_path = os.environ["MANORL_COMPOSITE_PARITY_DATASET"]
+    trajectory = load_assigned_trajectory_batch(
+        TrajectorySelection(
+            "bowl", "03", dataset_path=dataset_path,
+            expected_dataset_version=5, reference_fps=100,
+            pre_padding=180, post_padding=250,
+        ),
+        num_envs=1,
+    )
+    common = dict(
+        num_envs=1, device="gpu", reference_fps=100,
+        device_resident_controls=True, capture_transition_diagnostics=False,
+        point_sampling_backend="numpy_per_env", max_deviation_distance=1e6,
+        unified_object_batch=True,
+    )
+    host = MujocoManoEnvironment(trajectory, EnvironmentConfig(**common))
+    device = MujocoManoEnvironment(
+        trajectory, EnvironmentConfig(**common, device_transition=True)
+    )
+    saw_target_contact = False
+    for step in range(260):
+        if step == 240:
+            host.reset(np.asarray([0], dtype=np.int64))
+            device.reset(np.asarray([0], dtype=np.int64))
+        prior = dict(
+            prior_progress=host.progress.copy(),
+            prior_steps=host.trajectory_steps.copy(),
+            prior_returns=host.episode_returns.copy(),
+            prior_control_call=host.control_call,
+            pending_reset=host.reset_mask.copy(),
+        )
+        host_output, host_reward, host_done, host_extras = host.step(
+            np.zeros((1, host.action_dim), dtype=np.float32)
+        )
+        # Independent MuJoCo/MJX solver runs drift slightly.  Supplying the
+        # host's post-physics snapshot tests the transition contract itself.
+        device.data = host.data
+        for name in (
+            "progress", "trajectory_steps", "cumulative_offset",
+            "cumulative_joint_offset",
+        ):
+            setattr(device, name, getattr(host, name).copy())
+        device._dynamic_templates = (
+            host._dynamic_templates.copy()
+            if host._dynamic_templates is not None
+            else None
+        )
+        actual = device._device_transition_outputs(**prior)
+        np.testing.assert_allclose(
+            np.asarray(actual.observation), host_output["obs"], rtol=1e-4, atol=4e-4
+        )
+        np.testing.assert_allclose(np.asarray(actual.reward), host_reward, rtol=1e-4, atol=1e-4)
+        np.testing.assert_array_equal(np.asarray(actual.reset), host_done)
+        np.testing.assert_array_equal(
+            np.asarray(actual.reason_code), host_extras["termination_reason_code"]
+        )
+        np.testing.assert_array_equal(
+            np.asarray(actual.deviation_reset), host_extras["deviation_reset"]
+        )
+        np.testing.assert_array_equal(device.progress, host.progress)
+        np.testing.assert_array_equal(device.trajectory_steps, host.trajectory_steps)
+        np.testing.assert_allclose(device.episode_returns, host.episode_returns, rtol=1e-4, atol=1e-4)
+        np.testing.assert_array_equal(device.reset_mask, host.reset_mask)
+        assert device.control_call == host.control_call
+        saw_target_contact |= bool(np.any(device.last_reward.raw_contact > 0.0))
+    assert saw_target_contact
 
 
 def test_dual_contact_reducer_keeps_right_observation_and_aggregates_reward_force() -> None:
