@@ -590,7 +590,7 @@ def test_composite_device_transition_shared_snapshot_parity() -> None:
             np.asarray(actual.reason_code), host_extras["termination_reason_code"]
         )
         np.testing.assert_array_equal(
-            np.asarray(actual.deviation_reset), host_extras["deviation_reset"]
+            np.asarray(actual.deviation_reset), host_extras["deviation_reset_mask"]
         )
         np.testing.assert_array_equal(device.progress, host.progress)
         np.testing.assert_array_equal(device.trajectory_steps, host.trajectory_steps)
