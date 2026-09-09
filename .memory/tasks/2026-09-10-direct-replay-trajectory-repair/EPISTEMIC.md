@@ -4,8 +4,9 @@
 Five representative source-v5 rows, one per action category, have physically
 validated repairs: row0 stove-to-table bowl, row19 bottle tilt/return, row31
 pitcher tilt/return, row36 table-to-stove bowl, row49 lift-and-hold bowl. The
-remaining54 rows are unchanged. This is not a generalized policy or an all59
-repair. Canonical instructions and scope: `docs/direct_capture_repair.md`.
+remaining54 rows are unchanged. The user's clarified objective is the first
+five selected trajectories, not all59. Canonical instructions and scope:
+`docs/direct_capture_repair.md`.
 
 Each example has a version/UUID-bound JSON patch, optional hashed frozen
 actuator targets, actual post-step motion Lance/NPZ, full video and inspected
@@ -65,6 +66,16 @@ recordings, immutable patch/command assets, videos, previews, source catalog,
 Chinese README and executable replay/play_all launchers. Content round-trips
 exactly. Re-executing all five from NAS preserves task outcomes: final placement
 tilts<1.2deg, held bowl<5deg and >20cm lift. Small placement differences between
-replays are recorded, not hidden. DISPLAY=:1 cycles through the five examples.
-Source version5 and its59 rows remain untouched. Final source-branch checkpoint
-and artifact paths are recorded in OPS.md.
+replays are recorded, not hidden. The DISPLAY=:1 playlist completed; the remaining
+optional live loop and stale viewer were stopped after delivery to release GPU0.
+Do not restart them without coordinating with the other training task. Videos
+remain usable without simulation.
+Source version5 and its59 rows remain untouched. The complete 62-file NAS
+checksum inventory matches current contents. User-authorized independent
+read-only review reproduced source identities, measured task outcomes and
+export/replay semantics from the decisive artifacts, with no blocking defect.
+The reviewer lacked image capability; visual judgment remains grounded in the
+parent's earlier direct inspection of all five storyboards and desktop replay.
+The first-five objective is complete under the explicit recorded solver profile;
+default-profile success and original-timing fidelity are not claimed. Final
+source-branch checkpoint and artifact paths are recorded in OPS.md.
