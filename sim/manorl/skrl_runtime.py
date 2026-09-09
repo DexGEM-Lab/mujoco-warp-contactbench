@@ -257,6 +257,39 @@ class DeviceTransitionGymnasiumWrapper(ResettableGymnasiumWrapper):
         if str(transition.observation.dtype) != "float32":
             raise RuntimeError("device transition observation must be float32")
 
+    def reset_done_device(self, done: torch.Tensor | np.ndarray) -> torch.Tensor:
+        """Reset terminal rows through the JAX observation egress only."""
+
+        mask = torch.as_tensor(done, device=self.device, dtype=torch.bool).reshape(-1)
+        if mask.numel() != self.num_envs:
+            raise ValueError(f"done must contain {self.num_envs} environments")
+        if not bool(mask.any()):
+            return self._observation
+        observation = jax_to_torch_cuda(
+            self._env.reset_done_device(mask.detach().cpu().numpy())
+        )
+        if observation.shape != (self.num_envs, 480) or observation.dtype != torch.float32:
+            raise RuntimeError("device reset observation must be float32 (num_envs, 480)")
+        current_ordinal = torch.cuda.current_device()
+        expected_ordinal = _resolved_cuda_ordinal(
+            self.device, current_ordinal=current_ordinal
+        )
+        received_ordinal = _resolved_cuda_ordinal(
+            observation.device, current_ordinal=current_ordinal
+        )
+        if expected_ordinal is None or received_ordinal != expected_ordinal:
+            raise RuntimeError(
+                "JAX-to-Torch DLPack reset changed CUDA device: "
+                f"expected cuda:{expected_ordinal}, received cuda:{received_ordinal}"
+            )
+        self._observation = observation
+        return observation
+
+    def reset_done(self, done: torch.Tensor | np.ndarray) -> torch.Tensor:
+        """Override host indexed reset for the device-transition policy path."""
+
+        return self.reset_done_device(done)
+
     def step(
         self, actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
@@ -365,7 +398,11 @@ class ManoSkrlRuntime:
             raise ValueError(f"done must contain {self.gymnasium_env.num_envs} environments")
         if not bool(mask.any()):
             return observations
-        reset_observations = self.env.reset_done(mask)
+        reset_observations = (
+            self.env.reset_done_device(mask)
+            if self.gymnasium_env.environment.config.device_transition
+            else self.env.reset_done(mask)
+        )
         updated = observations.clone()
         row_ids = torch.nonzero(mask, as_tuple=False).reshape(-1).to(updated.device)
         updated[row_ids] = reset_observations.to(updated.device)[row_ids]

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from sim.manorl.abi import (
     TERMINATION_REASON_DEVIATION,
@@ -146,6 +147,70 @@ def test_gym_adapter_consumes_pending_terminal_ids_before_direct_step() -> None:
     np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [])
     adapter.step(np.zeros((2, ACTION_DIM), dtype=np.float64))
     assert physical.events[-2:] == [("reset", None), ("step", None)]
+
+
+def test_gym_adapter_device_reset_clears_only_selected_pending_rows() -> None:
+    pytest.importorskip("gymnasium")
+    from sim.manorl.gymnasium_env import ManoGymnasiumVectorEnv, OBSERVATION_DIM
+
+    class Physical:
+        config = SimpleNamespace(device_transition=True)
+
+        def __init__(self) -> None:
+            self.device_reset_calls: list[list[int]] = []
+
+        def reset(self, *, env_ids=None):
+            raise AssertionError("device reset must not use the host reset contract")
+
+        def device_reset(self, env_ids):
+            ids = np.asarray(env_ids, dtype=np.int64)
+            self.device_reset_calls.append(ids.tolist())
+            return np.full((3, OBSERVATION_DIM), 7.0, dtype=np.float32)
+
+    physical = Physical()
+    adapter = object.__new__(ManoGymnasiumVectorEnv)
+    adapter.num_envs = 3
+    adapter.observation_dim = OBSERVATION_DIM
+    adapter.environment = physical
+    adapter._pending_reset = np.asarray([True, True, False], dtype=bool)
+
+    observation = adapter.reset_done_device(np.asarray([True, False, True]))
+
+    np.testing.assert_array_equal(observation, np.full((3, OBSERVATION_DIM), 7.0, dtype=np.float32))
+    assert physical.device_reset_calls == [[0, 2]]
+    np.testing.assert_array_equal(adapter.pending_terminal_env_ids, [1])
+
+
+def test_runtime_device_reset_done_merges_only_terminal_rows() -> None:
+    import torch
+
+    pytest.importorskip("gymnasium")
+    pytest.importorskip("skrl")
+    from sim.manorl.skrl_runtime import ManoSkrlRuntime
+
+    class DeviceWrapper:
+        def __init__(self) -> None:
+            self.masks: list[torch.Tensor] = []
+
+        def reset_done_device(self, mask):
+            self.masks.append(mask.clone())
+            return torch.tensor([[5.0], [10.0], [7.0]])
+
+        def reset_done(self, _mask):
+            raise AssertionError("device-transition runtime must not call host reset_done")
+
+    wrapper = DeviceWrapper()
+    runtime = object.__new__(ManoSkrlRuntime)
+    runtime.gymnasium_env = SimpleNamespace(
+        num_envs=3, environment=SimpleNamespace(config=SimpleNamespace(device_transition=True))
+    )
+    runtime.env = wrapper
+    observations = torch.tensor([[1.0], [2.0], [3.0]])
+
+    updated = runtime.reset_done(observations, torch.tensor([[True], [False], [True]]))
+
+    torch.testing.assert_close(updated, torch.tensor([[5.0], [2.0], [7.0]]))
+    torch.testing.assert_close(wrapper.masks[0], torch.tensor([True, False, True]))
 
 
 def test_indexed_wrapper_reset_bypasses_cache_and_preserves_seed() -> None:
