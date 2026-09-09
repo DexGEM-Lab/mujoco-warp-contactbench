@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """M3 formal skrl PPO train/evaluate entrypoint for cube2 autonomy."""
 from __future__ import annotations
-import argparse, json, os, hashlib, sys, subprocess
+import argparse, json, os, hashlib, re, sys, subprocess
 from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path: sys.path.insert(0, str(_ROOT))
@@ -122,6 +122,14 @@ def formaltrain(args):
     return 0
 
 def _git_revision(path: Path) -> str:
+    deployed_commit = path / "DEPLOYED_COMMIT"
+    if deployed_commit.exists():
+        revision = deployed_commit.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise ValueError(
+                f"{deployed_commit} must contain one full 40-character lowercase hexadecimal commit"
+            )
+        return revision
     return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
 
 

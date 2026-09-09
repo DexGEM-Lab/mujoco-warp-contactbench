@@ -1,9 +1,11 @@
 from __future__ import annotations
 from types import SimpleNamespace
+import subprocess
+import pytest
 import torch
 import gymnasium as gym
 from sim.manorl.autonomy_training import ACTION_DIM, OBSERVATION_DIM, AutonomyActorCritic, RESERVED_TRAIN_IDENTITIES, canonical_gae, identity_split
-from tools.train_manorl_autonomy import formal_rollout_schedule
+from tools.train_manorl_autonomy import _git_revision, formal_rollout_schedule
 
 def fake_catalog():
     ids=[f"cube2_02_{2833+i}" for i in range(50)]
@@ -42,6 +44,20 @@ def test_split_rejects_wrong_catalog_size():
     try: identity_split(catalog,seed=0)
     except ValueError as exc: assert "50" in str(exc)
     else: raise AssertionError("split accepted a non-50 catalog")
+
+def test_git_revision_uses_valid_archive_marker_and_rejects_invalid_or_missing_metadata(tmp_path):
+    commit = "70ff46a" + "0" * 33
+    (tmp_path / "DEPLOYED_COMMIT").write_text(commit + "\n", encoding="utf-8")
+    assert _git_revision(tmp_path) == commit
+
+    (tmp_path / "DEPLOYED_COMMIT").write_text("not-a-full-commit\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="40-character lowercase hexadecimal"):
+        _git_revision(tmp_path)
+
+    (tmp_path / "DEPLOYED_COMMIT").unlink()
+    with pytest.raises(subprocess.CalledProcessError):
+        _git_revision(tmp_path)
+
 
 def test_formaltrain_schedule_keeps_episode_across_rollout_cuts():
     records, resets=formal_rollout_schedule(horizon=5,rollouts=3,updates=3)
