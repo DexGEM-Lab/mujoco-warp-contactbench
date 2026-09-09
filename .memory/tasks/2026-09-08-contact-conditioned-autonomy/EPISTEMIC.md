@@ -1,37 +1,42 @@
 # Current model
 
-The immediate bottleneck is host-side per-step geometry/contact work, not reward or policy design. The current accepted semantics remain frozen: all 28 actions use the measured-state rate map, 120 Hz control drives four 480 Hz substeps, physical hand/object dynamics and canonical device contact reduction provide state, and existing v2 reward terms/weights remain the comparison baseline.
+The v3.1 538-D route was an incompatible experiment, not a base for the
+accepted v4 contract: it built cache geometry through native `MjData` and
+`mj_geomDistance`, omitted `delta_ref`, substituted origin-only relative
+motion, read post-integration derived state without a final forward, and mixed
+all-contact with paired-contact semantics. Any normalizer/checkpoint from that
+route is invalid for v4.
 
-The direct implementation route is a homogeneous cube2 batch in `sim/manorl/autonomy_batch.py`. Offline MuJoCo witnesses store both rigid-body-local endpoints and signed distance; runtime transforms those fixed points with actual MJX body poses. This removes runtime nearest-surface queries while preserving demonstrated correspondence as a separately versioned v3 geometry meaning. Full observation/reward/control state is JAX-resident; Torch uses DLPack on CUDA, with only compact validity/done telemetry copied for bookkeeping. Masked reset is applied per completed row before its next actor action and recomputes derived poses on device.
+The active source is `manorl.autonomy.*.v4`: seven raw blocks (119/109/123/
+352/192/50/12 = 957) and 829 after a fixed PointNet code. The model input has
+no trajectory identity. Reference cache geometry (`signed_gap`, proximity,
+confidence, valid) is immutable demonstration content; runtime anchor error is
+`delta_actual^O - delta_ref^O`, which is zero at exact replay even when the
+reference pair has positive gap or penetration. The actual block carries the
+all-object contact resultant, including table context; each geometry region
+carries only the canonical hand→object paired force. This separation is the
+relevant physical intervention because object support and grasp counterparty
+are different causes.
 
-Evidence: focused command-map, witness, observation, and additive-reward tests pass; a synthetic one-world MJX-Warp smoke produced `(1,538)` observations and finite valid transitions. The pinned cube2 package is absent from this linked worktree, so real package training and throughput remain operator work. No competence or speed claim is justified yet. The next discriminating evidence is a real package B=1 parity check, then operator B=64/256 and 4096/8192 transition throughput, compile/warmup, peak memory, reset/validity counts, and declared host-transfer scope.
+The cache compiler uses N=1 Warp FK (`mjx.make_data`, `mjx.forward`,
+`impl="warp"`) plus compiled collision geom metadata and exact cube2 box
+geometry. No native state/step/forward/distance API is in its production path.
+The device state distinguishes origins, COMs and point velocities using
+`xpos/xipos/subtree_com/cvel`; anchor derivative includes the co-rotating
+`-omega_O×delta` term. The fused runtime does four Warp steps then one Warp
+forward before extracting all post-action features/reward, so the transition
+is same-time.
 
-Correction evidence: cb426c6's O(B²) constraint allocation, O(B*T) reference replication, unconditional reset/observe, and altered v2 fields were concrete blockers. Commit 44827f4 uses global nacon scaling with fixed per-world njmax, T-only device tables and index gathers, device-conditional reset before next action, actual qvel/relative motion/reference FK/backward target velocity, and M2 confidence/release/drop/divergence semantics. Real package N=1 GPU command parity is 1.39e-08 max error; 20 focused tests pass. Server scale and policy sampling measurements remain operator work.
+Evidence [OPS 2026-09-10T00:00:00Z]: seven independent formula tests pass, and
+the real pinned cube2_02_2833 N=1 CPU runtime resets to finite raw `(1,957)` /
+encoded `(1,829)` and returns a finite valid post-action reward `1.8973923`.
+This proves only the contract path starts and steps; it says nothing about
+learning, grasp, lift, scale, or generalization. Training is stopped by user.
 
-The next bottleneck after runtime11dc250 is no longer a missing PPO boundary. The v3 batched route records the terminal next observation before masked `prepare_action`, so canonical PPO GAE receives physical terminal state while each next actor call receives only reset rows. CUDA DLPack carries all rollout tensors; per-update telemetry is reduced on device. A N=1 pinned-package CUDA update and frozen evaluation completed, establishing the integration contract but neither learning competence nor large-batch rate. The operative priority remains long 8192×32 runs and reset/load validation; do not redesign v2 terms, geometry, control, or initiation before that evidence.
-
-The prior scale uncertainty about full-horizon runtime resets is resolved: parent-owned Server1 GPU2 soak on unchanged runtime11dc250 passed 9,011,200 transitions at B=8192 with 16,384 resets, all valid/finite reductions, 55,542.7 TPS and 8,424 MiB peak. The remaining scale question is specifically the PPO adapter/persistence/compact-telemetry composition, not physical runtime reset capacity or runtime design.
-
-The pending B=8192 PPO launch defects were tensor-shape and accounting defects at the host boundary, not runtime physics defects: runtime valid is globally reduced, while prior code treated it as B-wide; metrics mixed a cumulative axis with update-window sums; and completed episode state was discarded before reduction. The corrected trainer explicitly separates policy steps, environment transitions, and update-window transitions, preserves terminal GAE order and per-row resets, and emits compact current-transition device reductions. Local GPU N=1 confirms this changed boundary; the parent B=8192 runtime soak remains the sole runtime-capacity evidence.
-
-The 67,108,864-transition Server1 PPO run and full-start 538-step evaluation failed to produce contact or lift. Its clipping/log-probability explanation is ruled out: the actual immutable deployment/final checkpoint with installed GaussianMixin gave exact unchanged-policy log-probability identity despite 78.8574% clipped rows. The confirmed error is observational: for unique `(T,28)` tables, the builder divided phase index by `reference_q.shape[1]-1 = 27`, then clipped the observation, saturating phase for most of T=539. The corrected v3.1 ABI uses the existing horizon T (`i / max(T-1,1)`) with unchanged width and rejects phase-bug v3 checkpoint metadata absent an explicit legacy reader. This repair has no evidence yet of resolving the learning failure; the discriminating next action is a same-budget, from-scratch phase-only rerun. [OPS 2026-09-09T00:45:00Z; primary `.memory/local/contact-conditioned-autonomy/learning-diagnosis-correction.md`]
-
-The phase-fixed PPO failure establishes that correcting phase encoding alone did not provide usable approach/contact behavior. A bounded alternative is now supported: the unchanged physical rate-map can execute diagnostic pursuit with real contact, and the same actor MLP can imitate those pre-action observation/action pairs. On the single TRAIN reference, offline fitting cut action MSE by 99.1% and a frozen all-neural full-start rollout attained 0.09799 m wrist RMSE versus the phase-fixed PPO's 0.1798 m, with 242 force-positive frames. This supports teacher-imitation initialization as a PPO starting distribution, not task competence: there is no lift criterion, no held-out result, and no evidence that the neural contact force is stable or useful. Provenance and metrics: OPS 2026-09-09T09:58:00Z.
-
-The measured first-update critic pathway is now isolated by an optional separate value trunk. With `--separate-critic`, value loss can reach only `value_net` and `value`; policy loss reaches only the original BC surfaces (`net`, `mean`, `log_std`). A shared BC checkpoint warms this form by exact actor-state loading followed by a deterministic `value_net <- net` copy, making the initial policy and value outputs equal to the shared baseline before the first optimizer step. Frozen checkpoints encode architecture and fail closed across shared/separate layouts; the sole explicit conversion is weights-only shared-BC into separate critic, recorded in checkpoint provenance. Focused CPU tests establish these graph and persistence properties. This removes one verified early BC-destruction mechanism, while actor-only drift in the probe remains live and means no grasp or retention outcome is implied.
-
-The current intervention is a fixed-config optimizer continuation, not a
-mechanism change. The completed shared 67M checkpoint has usable model/Adam/CPU
-RNG state at update 256 but no resume surface. Resuming those states preserves
-the learning trajectory across update boundaries; resetting full-start
-environments is the explicit boundary because no MJX state was serialized. The
-next evidence is whether 1792 additional unchanged updates change physical
-full-start contact/lift metrics, not whether a separate critic, PPO, reward,
-observation, geometry, controller, or initialization improves them.
-
-
-The update-295→296 failure has a concrete sampling-density mechanism distinct from the previously falsified unchanged-policy identity claim. The deployed `GaussianMixin` samples from a Normal then clips the sample before scoring it. For an unchanged policy this is self-consistent, so old/new log probabilities agree exactly. Across a policy update, however, the clipped value at ±1 represents all raw tail mass but is scored as one Gaussian density point; a small mean change far from the bound changes that density by hundreds of log units. The observed update-288 distribution (means [-9.77, 6.83], std min .31, 83.8% clipped, some clipped samples 28.3 std from their mean) provides the physical regime where this becomes catastrophic.
-
-The corrected batch contract retains raw Normal samples and their original log probabilities in PPO; the adapter clips only the tensor passed into the unchanged rate map/runtime. Therefore a fixed Gaussian RNG sequence yields bitwise-identical physical commands to legacy clipped sampling, while PPO ratios refer to valid raw densities. `AutonomyActorCritic` preserves clipped sampling for legacy non-batch paths; frozen evaluation still clips mean actions. New checkpoints explicitly encode this mapping. Legacy optimizer checkpoints may resume model/Adam/RNG exactly at their existing update boundary because rollout memory is not persisted; their continuation metadata documents that only future rollout likelihood collection changes.
-
-A post-update finite guard now checks all model parameters, recursive Adam state, and exposed native PPO metrics before a callback or success checkpoint write. A non-finite state produces an explicit sibling diagnostic and raises while retaining the latest prior named finite checkpoint. Focused saturated-Gaussian and real N=1 physical PPO evidence support the implementation. It is a numerical stability correction, not evidence of grasp learning or a reason to change fixed reward/control/PPO/LR configuration.
+Live boundary: the pinned fast reducer intentionally supports only pyramidal
+`condim=3` and fails closed for capacity/API/dimension drift. General
+cone/dimension support requires bundled Warp `contact_force` parity before it
+can be activated. Reference hand primitive sampling is deterministic and uses
+collision geoms, but should receive an independent exact sampled-mesh/primitive
+review before training is considered. The next review should inspect that
+collision sampling and direct per-contact helper parity, not start an optimizer.

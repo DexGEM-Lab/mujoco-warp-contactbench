@@ -94,3 +94,7 @@ old checkpoint CUDA RNG absence cannot be represented as bit-exact continuation.
 ## Raw action likelihood repair (2026-09-09)
 
 Fixed-config optimizer continuation retains the shared critic OFF, reward, controller, clock, PPO objective, learning rate, rollout shape and long-window intent. The only numerical correction is the batched PPO action contract: retain the raw Normal sample and its raw Gaussian log-probability in PPO memory; pass a clipped copy only to physical execution. This preserves commands for identical samples while removing the invalid boundary-density likelihood. Optimizer resume from the update-288 legacy checkpoint restores the same weights/Adam/RNG at the update boundary and records the future raw-likelihood correction in checkpoint metadata. Every update must detect non-finite model/optimizer/metric state before successful checkpointing, preserve named finite snapshots, write a diagnostic, and raise.
+
+## v4 implementation boundary (2026-09-10)
+
+Training remains stopped. The active implementation contract is the pinned cube2 `manorl.autonomy.*.v4` seven-block 957/829 Warp-only vertical slice. v3.1/538-D checkpoint and cache contracts are rejected. N=1 CPU physics is the only runtime validation authorized in this implementation checkpoint; no trainer, server, scale, or W&B execution follows from it.

@@ -1,150 +1,121 @@
-"""Versioned contracts for the physical autonomous cube2 diagnostic path."""
+"""Authoritative contracts for contact-conditioned autonomy v4.
+
+The v4 ABI intentionally rejects every v2/v3 checkpoint: those observations
+reused names for different physical quantities and cannot be normalized safely.
+"""
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 
-AUTONOMY_VERSION: Final = "manorl.autonomy.v2"
-OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v2"
-ACTION_CONTRACT_ID: Final = "manorl.autonomy.action.v2"
-REWARD_CONTRACT_ID: Final = "manorl.autonomy.reward.v2"
-CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v2"
-# v3 is a separate ABI: fixed offline collision witnesses are part of the
-# observation/reward contract and cannot be loaded with a v2 normalizer.
-# v3.1 corrects the phase coordinate for unique (T, 28) reference tables.
-# Width and every non-phase observation field are unchanged, but checkpoints
-# trained with v3's saturated phase must not share this normalizer ABI.
-AUTONOMY_V3_VERSION: Final = "manorl.autonomy.v3.1"
-OBSERVATION_V3_CONTRACT_ID: Final = "manorl.autonomy.observation.v3.1"
-ACTION_V3_CONTRACT_ID: Final = ACTION_CONTRACT_ID  # bit-equivalent measured-state map
-REWARD_V3_CONTRACT_ID: Final = "manorl.autonomy.reward.v3"
-CHECKPOINT_V3_FORMAT: Final = "manorl.autonomy.ppo.v3.1"
-# PPO actions are samples from an unbounded Normal. The runtime clips a copy
-# only at the physical-control boundary; PPO stores and scores the raw sample.
-# This avoids treating the clipped boundary point as Gaussian density mass.
+AUTONOMY_VERSION: Final = "manorl.autonomy.v4"
+OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v4"
+ACTION_CONTRACT_ID: Final = "manorl.autonomy.action.v4"
+REWARD_CONTRACT_ID: Final = "manorl.autonomy.reward.v4"
+CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v4"
+CACHE_CONTRACT_ID: Final = "manorl.autonomy.reference_cache.v4"
+# The old name remains an import-only alias; it names the v4 cache and never
+# makes the old native witness compiler valid.
+WITNESS_TABLE_CONTRACT_ID: Final = CACHE_CONTRACT_ID
 POLICY_SAMPLING_CONTRACT_ID: Final = "manorl.autonomy.policy_sampling.raw_normal.v1"
 POLICY_SAMPLING_CONTRACT: Final[dict[str, str]] = {
     "id": POLICY_SAMPLING_CONTRACT_ID,
     "ppo_taken_actions": "raw_normal_sample",
-    "physical_action": "clip(raw_normal_sample, action_space_low, action_space_high)",
-    "evaluation_action": "clip(policy_mean, action_space_low, action_space_high)",
+    "physical_action": "clip(raw_normal_sample, -1, 1)",
+    "evaluation_action": "clip(policy_mean, -1, 1)",
 }
-LEGACY_PHASE_BUG_OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v3"
-LEGACY_PHASE_BUG_CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v3"
-WITNESS_TABLE_CONTRACT_ID: Final = "manorl.autonomy.reference_witness.v1"
-OBSERVATION_FIELDS: Final[tuple[tuple[str, int], ...]] = (
-    ("measured_qpos_normalized", 28), ("measured_qvel", 28),
-    ("object_position", 3), ("object_linear_velocity", 3),
-    ("hand_object_relative", 3), ("reference_q_current", 28),
-    ("reference_q_next", 28), ("reference_q_velocity", 28),
-    ("reference_object_relative", 3), ("reference_object_future_delta", 3),
-    ("previous_command_normalized", 28), ("action_identity_one_hot", 50),
-    ("object_geometry", 12), ("measured_keypoint_relative", 48),
-    ("surface_proximity", 16), ("surface_anchor_local", 48),
-    ("contact_phase_confidence", 2), ("reference_surface_proximity", 16),
-    ("reference_surface_anchor_local", 48), ("reference_contact_confidence", 16),
-    ("measured_hand_object_force", 48), ("supporting_object_net_force", 3),
-    ("relative_contact_motion", 48),
+ACTION_DIM: Final = 28
+RAW_OBSERVATION_DIM: Final = 957
+ENCODED_OBSERVATION_DIM: Final = 829
+# The public actor consumes the encoded representation. Raw 957 is retained
+# as a first-class ABI for PointNet and independent formula tests.
+OBSERVATION_DIM: Final = ENCODED_OBSERVATION_DIM
+RAW_OBSERVATION_FIELDS: Final[tuple[tuple[str, int], ...]] = (
+    ("autonomous_actual", 119), ("autonomous_reference", 109),
+    ("autonomous_future", 123), ("autonomous_geometry", 352),
+    ("object_point_cloud_raw", 192), ("action_types", 50),
+    ("object_geometry", 12),
 )
-OBSERVATION_DIM: Final[int] = sum(width for _, width in OBSERVATION_FIELDS)
-ACTION_DIM: Final[int] = 28
+ENCODED_OBSERVATION_FIELDS: Final[tuple[tuple[str, int], ...]] = (
+    ("autonomous_actual", 119), ("autonomous_reference", 109),
+    ("autonomous_future", 123), ("autonomous_geometry", 352),
+    ("object_pointnet", 64), ("action_types", 50), ("object_geometry", 12),
+)
+
+def _slices(fields: tuple[tuple[str, int], ...]) -> dict[str, slice]:
+    at = 0; result = {}
+    for name, width in fields:
+        result[name] = slice(at, at + width); at += width
+    return result
+
+def raw_observation_slices() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS)
+def encoded_observation_slices() -> dict[str, slice]: return _slices(ENCODED_OBSERVATION_FIELDS)
+# Compatibility name is deliberately v4 encoded, never the old 538 layout.
+def observation_slices() -> dict[str, slice]: return encoded_observation_slices()
 
 @dataclass(frozen=True)
 class AutonomousActionContract:
     version: str = ACTION_CONTRACT_ID
     dof: int = ACTION_DIM
-    normalized_range: tuple[float, float] = (-1.0, 1.0)
     command_mode: str = "rate_limited_measured_state"
-    rate_units: str = "actuator_units_per_second"
-    all_dofs_policy_owned_from_step0: bool = True
     reference_enters_command_map: bool = False
     def __post_init__(self) -> None:
-        if self.version != ACTION_CONTRACT_ID or self.dof != ACTION_DIM:
-            raise ValueError("unsupported autonomous action contract")
-        if self.command_mode != "rate_limited_measured_state" or self.rate_units != "actuator_units_per_second":
-            raise ValueError("autonomous actions require measured-state per-second rate semantics")
-        if not self.all_dofs_policy_owned_from_step0 or self.reference_enters_command_map:
-            raise ValueError("all DOFs must be policy-owned and references excluded from command map")
+        if self.version != ACTION_CONTRACT_ID or self.dof != ACTION_DIM or self.command_mode != "rate_limited_measured_state" or self.reference_enters_command_map:
+            raise ValueError("v4 commands require 28 policy-owned measured-state rate control")
 
 @dataclass(frozen=True)
 class AutonomousObservationContract:
     version: str = OBSERVATION_CONTRACT_ID
-    dimension: int = OBSERVATION_DIM
-    fields: tuple[tuple[str, int], ...] = OBSERVATION_FIELDS
-    includes_surface_intent: bool = True
-    includes_reference_surface_intent: bool = True
-    includes_actual_velocity: bool = True
-    includes_previous_command: bool = True
-    includes_action_identity: bool = True
-    includes_contact_wrench: bool = True
+    raw_dimension: int = RAW_OBSERVATION_DIM
+    encoded_dimension: int = ENCODED_OBSERVATION_DIM
+    pointnet_input_points: int = 64
+    pointnet_embedding: int = 64
+    quaternion: str = "xyzw; R columns ex, ey"
     def __post_init__(self) -> None:
-        if self.version != OBSERVATION_CONTRACT_ID or self.dimension != OBSERVATION_DIM or self.dimension != sum(w for _, w in self.fields):
-            raise ValueError("autonomous observation contract drifted")
-        if not all((self.includes_surface_intent, self.includes_reference_surface_intent, self.includes_actual_velocity, self.includes_previous_command, self.includes_action_identity, self.includes_contact_wrench)):
-            raise ValueError("surface intent, references, velocity, command, identity and force fields are mandatory")
+        if (self.version != OBSERVATION_CONTRACT_ID or self.raw_dimension != sum(x[1] for x in RAW_OBSERVATION_FIELDS)
+                or self.encoded_dimension != sum(x[1] for x in ENCODED_OBSERVATION_FIELDS)
+                or (self.pointnet_input_points, self.pointnet_embedding) != (64, 64)):
+            raise ValueError("v4 seven-block observation ABI drifted")
 
 @dataclass(frozen=True)
 class AutonomousRewardContract:
     version: str = REWARD_CONTRACT_ID
-    dense_terms: tuple[str, ...] = ("object_motion", "reference_hand_object_relationship", "contact_anchor_correspondence", "measured_contact", "slip_proxy", "release", "action_smoothness", "finger_configuration", "object_orientation")
-    pre_grasp_dense: bool = True
-    object_move_gate: bool = False
-    stability_is_slip_relative: bool = True
+    post_action: bool = True
+    force_magnitude_reward: bool = False
     def __post_init__(self) -> None:
-        if self.version != REWARD_CONTRACT_ID or not self.pre_grasp_dense or self.object_move_gate or not self.stability_is_slip_relative:
-            raise ValueError("autonomous reward must be additive, pre-grasp dense and slip-relative")
+        if self.version != REWARD_CONTRACT_ID or not self.post_action or self.force_magnitude_reward:
+            raise ValueError("v4 reward is post-action and never rewards force magnitude")
 
 ACTION_CONTRACT = AutonomousActionContract()
 OBSERVATION_CONTRACT = AutonomousObservationContract()
 REWARD_CONTRACT = AutonomousRewardContract()
 
-
-def validate_v3_checkpoint_metadata(metadata: dict[str, object]) -> None:
-    """Accept only the phase-corrected v3.1 normalizer/checkpoint ABI.
-
-    The v3 observation phase used the 28-DOF width as its denominator for
-    unique reference tables. Loading its normalizer would silently preserve the
-    saturated coordinate, so it requires an explicit legacy reader instead.
-    """
-    if metadata.get("checkpoint_format") == CHECKPOINT_FORMAT or metadata.get("observation_contract") == OBSERVATION_CONTRACT_ID:
-        raise ValueError("v2 autonomy checkpoint/normalizer requires explicit migration before v3.1 loading")
-    if (metadata.get("checkpoint_format") == LEGACY_PHASE_BUG_CHECKPOINT_FORMAT
-            or metadata.get("observation_contract") == LEGACY_PHASE_BUG_OBSERVATION_CONTRACT_ID):
-        raise ValueError("v3 phase-bug checkpoint/normalizer requires an explicit legacy reader")
-    required = {"checkpoint_format": CHECKPOINT_V3_FORMAT, "observation_contract": OBSERVATION_V3_CONTRACT_ID, "reward_contract": REWARD_V3_CONTRACT_ID}
+def validate_v4_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    required = {"checkpoint_format": CHECKPOINT_FORMAT, "observation_contract": OBSERVATION_CONTRACT_ID,
+                "reward_contract": REWARD_CONTRACT_ID, "action_contract": ACTION_CONTRACT_ID}
     for name, expected in required.items():
         if metadata.get(name) != expected:
-            raise ValueError(f"v3.1 checkpoint metadata {name} must be {expected!r}")
-    sampling = metadata.get("policy_sampling_contract")
-    if sampling is not None and sampling != POLICY_SAMPLING_CONTRACT:
-        raise ValueError("checkpoint has an incompatible policy sampling contract")
+            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
+    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
+        raise ValueError("incompatible v4 policy sampling contract")
 
-def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1.0 / 120.0, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
-    """Reference-independent rate map in actuator-units/second.
-
-    ``max_tracking_error`` is a physical servo envelope around measured qpos,
-    not a reference-relative clamp; load-induced tracking error therefore stays
-    visible to the controller while integrated target wind-up is bounded.
-    """
-    previous, normalized, lo, hi, rate = map(lambda x: np.asarray(x, dtype=np.float64), (previous_command, action, lower, upper, rate_per_second))
-    if any(x.shape != (ACTION_DIM,) for x in (previous, normalized, lo, hi, rate)):
-        raise ValueError("autonomous command vectors must all have shape (28,)")
-    if not all(np.all(np.isfinite(x)) for x in (previous, normalized, lo, hi, rate)) or control_timestep <= 0 or not np.isfinite(control_timestep):
-        raise ValueError("autonomous command vectors and timestep must be finite")
-    if np.any(hi <= lo) or np.any(rate <= 0) or np.any(normalized < -1) or np.any(normalized > 1):
-        raise ValueError("physical limits/rates must be ordered and action normalized")
-    command = previous + normalized * rate * float(control_timestep)
+def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1 / 120, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
+    previous, raw, lo, hi, rate = (np.asarray(x, dtype=np.float64) for x in (previous_command, action, lower, upper, rate_per_second))
+    if any(x.shape != (ACTION_DIM,) for x in (previous, raw, lo, hi, rate)) or not np.all(np.isfinite(np.stack((previous, raw, lo, hi, rate))) or rate <= 0) or np.any(hi <= lo):
+        raise ValueError("v4 command requires finite 28D ordered limits and rates")
+    command = previous + np.clip(raw, -1., 1.) * rate * control_timestep
     if measured_qpos is not None:
         measured = np.asarray(measured_qpos, dtype=np.float64)
-        bound = np.asarray(max_tracking_error if max_tracking_error is not None else np.maximum(.25 * (hi - lo), rate * control_timestep * 4.0), dtype=np.float64)
-        if measured.shape != (ACTION_DIM,) or bound.shape != (ACTION_DIM,) or not np.all(np.isfinite(measured)) or np.any(bound <= 0):
-            raise ValueError("measured state and tracking envelope must be finite (28,)")
-        command = np.clip(command, measured - bound, measured + bound)
+        error = np.asarray(max_tracking_error if max_tracking_error is not None else rate * control_timestep * 4., dtype=np.float64)
+        if measured.shape != (ACTION_DIM,) or error.shape != (ACTION_DIM,) or np.any(error <= 0): raise ValueError("invalid measured-state envelope")
+        command = np.clip(command, measured - error, measured + error)
     return np.clip(command, lo, hi)
 
-def observation_slices() -> dict[str, slice]:
-    start, result = 0, {}
-    for name, width in OBSERVATION_FIELDS:
-        result[name] = slice(start, start + width); start += width
-    return result
+# Explicitly named aliases make accidental imports of old checkpoint IDs fail.
+AUTONOMY_V3_VERSION = "REJECTED_BY_V4"
+OBSERVATION_V3_CONTRACT_ID = "REJECTED_BY_V4"
+REWARD_V3_CONTRACT_ID = "REJECTED_BY_V4"
+CHECKPOINT_V3_FORMAT = "REJECTED_BY_V4"
+ACTION_V3_CONTRACT_ID = "REJECTED_BY_V4"
+def validate_v3_checkpoint_metadata(metadata: dict[str, object]) -> None: raise ValueError("v3.1/538-D checkpoints are incompatible with v4")
