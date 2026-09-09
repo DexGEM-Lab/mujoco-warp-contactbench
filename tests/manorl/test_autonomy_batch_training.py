@@ -10,6 +10,11 @@ import torch
 
 from sim.manorl.autonomy_batch_training import load_frozen_v3, run_batched_ppo
 from sim.manorl.autonomy_contracts import ACTION_DIM, ACTION_V3_CONTRACT_ID, CHECKPOINT_V3_FORMAT, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
+from sim.manorl.autonomy_imitation import (
+    fit_policy_mean, imitation_checkpoint_payload, teacher_command_pursuit_action,
+    validate_teacher_train_identity,
+)
+from sim.manorl.autonomy_training import AutonomyActorCritic
 
 
 class FakeBatchedAdapter:
@@ -125,3 +130,65 @@ def test_v3_loader_strictly_rejects_v2_metadata(tmp_path: Path):
     model = torch.nn.Linear(1, 1)
     with pytest.raises(ValueError, match="v2"):
         load_frozen_v3(path, model)
+
+
+def test_pretrain_rejects_holdout_identity():
+    with pytest.raises(ValueError, match="known TRAIN"):
+        validate_teacher_train_identity("cube2_02_9999", [0], 1)
+
+
+def test_teacher_targets_are_clipped_rate_increments():
+    rate = torch.ones(ACTION_DIM).numpy()
+    action = teacher_command_pursuit_action(
+        aligned_reference_q_next=torch.full((ACTION_DIM,), 3.).numpy(),
+        previous_command=torch.zeros(ACTION_DIM).numpy(), rate_per_second=rate,
+        control_timestep=.5,
+    )
+    assert action.shape == (ACTION_DIM,)
+    assert (action == 1.).all()
+    # The reference only supplies the target action. The measured-state map
+    # remains reference-independent once this action has been chosen.
+    from sim.manorl.autonomy_contracts import rate_limited_command
+    kwargs = dict(previous_command=torch.zeros(ACTION_DIM).numpy(), action=action,
+                  lower=-torch.ones(ACTION_DIM).numpy() * 10, upper=torch.ones(ACTION_DIM).numpy() * 10,
+                  rate_per_second=rate, measured_qpos=torch.zeros(ACTION_DIM).numpy(),
+                  max_tracking_error=torch.ones(ACTION_DIM).numpy() * 10, control_timestep=.5)
+    torch.testing.assert_close(torch.as_tensor(rate_limited_command(**kwargs)), torch.full((ACTION_DIM,), .5, dtype=torch.float64))
+
+
+def test_imitation_checkpoint_loads_and_warmstarts_without_optimizer_resume(tmp_path: Path):
+    space = gym.spaces.Box(-5., 5., shape=(538,), dtype=float)
+    action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=float)
+    source = AutonomyActorCritic(space, action_space, device="cpu")
+    checkpoint = tmp_path / "imitation.pt"
+    provenance = {"package_digest": "package", "identity_split": {"digest": "split"}, "witness_digest": "witness"}
+    torch.save(imitation_checkpoint_payload(model=source, config={}, provenance=provenance,
+                                            teacher_config={}, fit_metrics={}), checkpoint)
+    target = AutonomyActorCritic(space, action_space, device="cpu")
+    load_frozen_v3(checkpoint, target, expected_provenance=provenance)
+    for got, expected in zip(target.parameters(), source.parameters()):
+        torch.testing.assert_close(got, expected)
+
+
+def test_ppo_warmstart_validates_and_uses_fresh_optimizer(tmp_path: Path):
+    adapter = FakeBatchedAdapter()
+    source = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device="cpu")
+    provenance = {"package_digest": "package", "identity_split": {"digest": "split"}, "witness_digest": "witness"}
+    checkpoint = tmp_path / "init.pt"
+    torch.save(imitation_checkpoint_payload(model=source, config={}, provenance=provenance,
+                                            teacher_config={}, fit_metrics={}), checkpoint)
+    _, agent, _ = run_batched_ppo(adapter, updates=1, rollouts=1, learning_epochs=1, mini_batches=1,
+                                  init_checkpoint=checkpoint, provenance={**provenance, "ppo": {"rollouts": 1}})
+    assert agent.optimizer.state  # populated only by this new PPO update
+
+
+def test_actor_mean_fit_reduces_teacher_error():
+    torch.manual_seed(0)
+    space = gym.spaces.Box(-5., 5., shape=(4,), dtype=float)
+    action_space = gym.spaces.Box(-1., 1., shape=(ACTION_DIM,), dtype=float)
+    model = AutonomyActorCritic(space, action_space, device="cpu")
+    observations = torch.randn(16, 4).numpy().astype("float32")
+    targets = torch.zeros((16, ACTION_DIM)).numpy()
+    metrics = fit_policy_mean(model, {"observations": observations, "teacher_actions": targets},
+                              gradient_steps=30, batch_size=16, learning_rate=1e-2, loss_name="mse")
+    assert metrics["final_policy_teacher_mse"] < metrics["initial_policy_teacher_mse"]

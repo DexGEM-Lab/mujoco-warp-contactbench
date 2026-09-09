@@ -11,6 +11,10 @@ from sim.manorl.autonomy import Cube2AutonomousMJX, PACKAGE_DEFAULT
 from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, ACTION_V3_CONTRACT_ID, OBSERVATION_V3_CONTRACT_ID, REWARD_V3_CONTRACT_ID
 from sim.manorl.autonomy_training import AutonomyVectorEnv, BatchedAutonomyAdapter, build_runtime, identity_split, seed_everything, TRAINING_CONTRACT_ID
 from sim.manorl.autonomy_batch_training import load_frozen_v3, run_batched_ppo
+from sim.manorl.autonomy_imitation import (
+    TEACHER_CONTRACT_ID, collect_real_teacher_rollout, fit_policy_mean,
+    imitation_checkpoint_payload, save_dataset, validate_teacher_train_identity,
+)
 from sim.manorl.autonomy_telemetry import TelemetryAccumulator, configure_wandb_axis, log_update
 from sim.manorl.trajectory_package import load_trajectory_package
 
@@ -133,6 +137,67 @@ def _git_revision(path: Path) -> str:
     return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
 
 
+def _batch_provenance(args, catalog, split, adapter):
+    return {"source": "tools/train_manorl_autonomy.py", "source_commit": _git_revision(_ROOT),
+            "asset_pin": _git_revision(_ROOT / "assets/dexstream_digital_assets"),
+            "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
+            "catalog_digest": catalog.catalog_digest, "identity_split": split,
+            "witness_digest": adapter.runtime.witness.digest,
+            "clock": {"policy_fps": adapter.runtime.clock.policy_fps, "physics_fps": adapter.runtime.clock.physics_fps, "substeps": adapter.runtime.clock.physics_substeps_per_control},
+            "v3_contract": {"action": ACTION_V3_CONTRACT_ID, "observation": OBSERVATION_V3_CONTRACT_ID, "reward": REWARD_V3_CONTRACT_ID}}
+
+
+def pretrain(args):
+    """Collect a bounded real teacher rollout then initialize the existing actor."""
+    seed_everything(args.seed)
+    catalog = _catalog(args.package); split = identity_split(catalog, seed=args.split_seed)
+    trajectory = catalog.trajectories[args.identity_index]
+    validate_teacher_train_identity(trajectory.identity.identity, split["train_indices"], args.identity_index)
+    if args.num_envs != 1:
+        raise ValueError("pretrain collects exactly one full-start physical teacher rollout")
+    adapter = BatchedAutonomyAdapter(trajectory, num_envs=1, device=args.device, seed=args.seed,
+                                     persistent_ccd_workspace=args.persistentworkspace,
+                                     ccd_contacts_per_world=args.ccd_contacts_per_world)
+    provenance = _batch_provenance(args, catalog, split, adapter)
+    config = {k: v for k, v in vars(args).items() if k != "fn"}
+    metadata = {**provenance, "config": config, "identity": trajectory.identity.identity,
+                "training_mode": "imitation initialization", "teacher_contract": TEACHER_CONTRACT_ID}
+    run = _wandb_start(args, metadata)
+    try:
+        dataset, teacher_metrics = collect_real_teacher_rollout(adapter)
+        from sim.manorl.autonomy_training import AutonomyActorCritic
+        model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=str(adapter.device))
+        fit_metrics = fit_policy_mean(model, dataset, gradient_steps=args.gradient_steps, batch_size=args.batch_size,
+                                      learning_rate=args.lr, loss_name=args.loss, seed=args.seed, device=adapter.device)
+        output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
+        dataset_path, checkpoint_path, metrics_path = output / "teacher_dataset.npz", output / "imitation_init.pt", output / "fit_metrics.json"
+        save_dataset(dataset_path, dataset)
+        teacher_config = {"rate_per_second": np.asarray(adapter.runtime.rate).tolist(),
+                          "control_timestep": adapter.runtime.clock.control_timestep,
+                          "target": "clip((aligned_ref_q[t+1]-previous_command)/(rate_per_second*dt),-1,1)",
+                          "collection": "full-start, pre-action observations, unchanged fused physical runtime"}
+        payload = imitation_checkpoint_payload(model=model, config=config, provenance=provenance,
+                                               teacher_config=teacher_config,
+                                               fit_metrics={**teacher_metrics, **fit_metrics})
+        torch.save(payload, checkpoint_path)
+        metrics = {"format": "manorl.autonomy.teacher-imitation.v1", "identity": trajectory.identity.identity,
+                   "split_role": "train", "dataset": str(dataset_path), "checkpoint": str(checkpoint_path),
+                   "teacher": teacher_metrics, "fit": fit_metrics, "provenance": provenance,
+                   "teacher_config": teacher_config}
+        metrics_path.write_text(json.dumps(metrics, indent=2, default=_jsonable) + "\n")
+        if run is not None:
+            run.log({**{f"teacher/{k}": v for k, v in teacher_metrics.items()},
+                     **{f"imitation/{k}": v for k, v in fit_metrics.items()}})
+        print(json.dumps({"dataset": str(dataset_path), "checkpoint": str(checkpoint_path), "metrics": str(metrics_path),
+                          "frames": teacher_metrics["frames"], "policy_teacher_mse": fit_metrics["final_policy_teacher_mse"]}), flush=True)
+    except BaseException:
+        if run is not None: run.finish(exit_code=1)
+        raise
+    else:
+        if run is not None: run.finish(exit_code=0)
+    return 0
+
+
 def batchtrain(args):
     """Launch direct DLPack batched v3 runtime training with canonical PPO."""
     seed_everything(args.seed)
@@ -146,13 +211,7 @@ def batchtrain(args):
                                      persistent_ccd_workspace=args.persistentworkspace,
                                      ccd_contacts_per_world=args.ccd_contacts_per_world)
     config = {k: v for k, v in vars(args).items() if k != "fn"}
-    provenance = {"source": "tools/train_manorl_autonomy.py", "source_commit": _git_revision(_ROOT),
-                  "asset_pin": _git_revision(_ROOT / "assets/dexstream_digital_assets"),
-                  "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
-                  "catalog_digest": catalog.catalog_digest, "identity_split": split,
-                  "witness_digest": adapter.runtime.witness.digest,
-                  "clock": {"policy_fps": adapter.runtime.clock.policy_fps, "physics_fps": adapter.runtime.clock.physics_fps, "substeps": adapter.runtime.clock.physics_substeps_per_control},
-                  "v3_contract": {"action": ACTION_V3_CONTRACT_ID, "observation": OBSERVATION_V3_CONTRACT_ID, "reward": REWARD_V3_CONTRACT_ID},
+    provenance = {**_batch_provenance(args, catalog, split, adapter),
                   "ppo": {"learning_epochs": args.learning_epochs, "mini_batches": args.mini_batches, "rollouts": args.rollouts}}
     metadata = {**provenance, "config": config, "identity": trajectory.identity.identity}
     run = _wandb_start(args, metadata)
@@ -165,7 +224,7 @@ def batchtrain(args):
         run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
             checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
-            on_update=publish)
+            init_checkpoint=args.init_checkpoint, on_update=publish)
     except BaseException:
         if run is not None: run.finish(exit_code=1)
         raise
@@ -208,10 +267,15 @@ def batchevaluate(args):
                       "termination_reason": int(np.asarray(adapter.runtime.last_reason[0]))})
         observations = adapter.prepare_action()
         if bool(done.all().detach().cpu()): break
+    wrist_errors = [np.linalg.norm(np.asarray(row["actual_q"][:3]) - np.asarray(row["reference_q"][:3])) for row in trace]
+    max_forces = [float(np.linalg.norm(np.asarray(row["contact_force"]), axis=-1).max()) for row in trace]
     out = {"format": "manorl.autonomy.batch-eval.v3", "checkpoint": str(args.checkpoint), "global_policy_step": payload["global_policy_step"], "identity": trajectory.identity.identity,
-           "num_envs": args.num_envs, "steps": len(trace), "return": np.asarray(total.detach().cpu()).reshape(-1).tolist(), "trace": trace}
+           "num_envs": args.num_envs, "steps": len(trace), "return": np.asarray(total.detach().cpu()).reshape(-1).tolist(),
+           "metrics": {"wrist_rmse_m": float(np.sqrt(np.mean(np.square(wrist_errors)))) if wrist_errors else None,
+                       "hand_object_contact_frames_force_gt_0p02N": int(np.count_nonzero(np.asarray(max_forces) > .02)),
+                       "max_hand_object_force_N": float(max(max_forces, default=0.0))}, "trace": trace}
     Path(args.trace).parent.mkdir(parents=True, exist_ok=True); Path(args.trace).write_text(json.dumps(out, indent=2) + "\n")
-    print(json.dumps({"trace": args.trace, "steps": len(trace), "return": out["return"]}), flush=True)
+    print(json.dumps({"trace": args.trace, "steps": len(trace), "return": out["return"], "metrics": out["metrics"]}), flush=True)
     return 0
 
 
@@ -233,7 +297,8 @@ def evaluate(args):
 def main():
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="mode",required=True); common=argparse.ArgumentParser(add_help=False); common.add_argument("--package",default=str(PACKAGE_DEFAULT)); common.add_argument("--device",choices=("cpu","gpu"),default="cpu"); common.add_argument("--seed",type=int,default=0); common.add_argument("--split-seed",type=int,default=0); common.add_argument("--identity-index",type=int,default=0); common.add_argument("--setting",choices=("contact-conditioned","state-only"),default="contact-conditioned")
     t=sub.add_parser("formaltrain",parents=[common]); t.add_argument("--updates",type=int,default=1); t.add_argument("--num-envs",type=int,default=1); t.add_argument("--rollouts",type=int,default=2); t.add_argument("--total-transitions",type=int,default=None); t.add_argument("--learning-epochs",type=int,default=1); t.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/cube2_02_formalppo.pt"); t.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); t.add_argument("--wandb-project",default=None); t.add_argument("--wandb-entity",default=None); t.add_argument("--wandb-mode",default=None); t.set_defaults(fn=formaltrain)
-    b=sub.add_parser("batchtrain",parents=[common]); b.add_argument("--num-envs",type=int,default=8192); b.add_argument("--rollouts",type=int,default=32); b.add_argument("--updates",type=int,default=256); b.add_argument("--total-transitions",type=int,default=None); b.add_argument("--learning-epochs",type=int,default=4); b.add_argument("--mini-batches",type=int,default=16); b.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--ccd-contacts-per-world",type=int,default=None); b.add_argument("--checkpoint-interval",type=int,default=16); b.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3.pt"); b.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--wandb-project",default=None); b.add_argument("--wandb-entity",default=None); b.add_argument("--wandb-mode",default=None); b.set_defaults(fn=batchtrain)
+    pt=sub.add_parser("pretrain",parents=[common]); pt.add_argument("--num-envs",type=int,default=1); pt.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=False); pt.add_argument("--ccd-contacts-per-world",type=int,default=None); pt.add_argument("--gradient-steps",type=int,default=2000); pt.add_argument("--batch-size",type=int,default=128); pt.add_argument("--lr",type=float,default=1e-3); pt.add_argument("--loss",choices=("mse","huber"),default="huber"); pt.add_argument("--output-dir",default="outputs/manorl/contact_conditioned_autonomy/teacher-init"); pt.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); pt.add_argument("--wandb-project",default=None); pt.add_argument("--wandb-entity",default=None); pt.add_argument("--wandb-mode",default=None); pt.set_defaults(fn=pretrain)
+    b=sub.add_parser("batchtrain",parents=[common]); b.add_argument("--num-envs",type=int,default=8192); b.add_argument("--rollouts",type=int,default=32); b.add_argument("--updates",type=int,default=256); b.add_argument("--total-transitions",type=int,default=None); b.add_argument("--learning-epochs",type=int,default=4); b.add_argument("--mini-batches",type=int,default=16); b.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--ccd-contacts-per-world",type=int,default=None); b.add_argument("--checkpoint-interval",type=int,default=16); b.add_argument("--checkpoint",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3.pt"); b.add_argument("--init-checkpoint",default=None,help="strict v3.1 provenance-checked actor weights-only PPO warm start"); b.add_argument("--wandb",action=argparse.BooleanOptionalAction,default=True); b.add_argument("--wandb-project",default=None); b.add_argument("--wandb-entity",default=None); b.add_argument("--wandb-mode",default=None); b.set_defaults(fn=batchtrain)
     be=sub.add_parser("batchevaluate",parents=[common]); be.add_argument("--num-envs",type=int,default=1); be.add_argument("--persistentworkspace",action=argparse.BooleanOptionalAction,default=True); be.add_argument("--ccd-contacts-per-world",type=int,default=None); be.add_argument("--checkpoint",required=True); be.add_argument("--steps",type=int,default=None); be.add_argument("--trace",default="outputs/manorl/contact_conditioned_autonomy/batchppo-v3-eval.json"); be.set_defaults(fn=batchevaluate)
     e=sub.add_parser("evaluate",parents=[common]); e.add_argument("--checkpoint",required=True); e.add_argument("--steps",type=int,default=8); e.add_argument("--trace",default="outputs/manorl/contact_conditioned_autonomy/formalppo_eval.json"); e.add_argument("--allow-train-eval",action="store_true"); e.set_defaults(fn=evaluate)
     a=p.parse_args(); return a.fn(a)

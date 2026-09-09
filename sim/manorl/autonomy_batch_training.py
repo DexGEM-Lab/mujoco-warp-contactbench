@@ -120,6 +120,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                     mini_batches: int, checkpoint: str | Path | None = None,
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None,
+                    init_checkpoint: str | Path | None = None,
                     on_update: Callable[[dict[str, float]], None] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
     """Run canonical PPO against an adapter exposing direct device tensors.
 
@@ -134,6 +135,15 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         raise ValueError("mini-batches cannot exceed rollout transitions")
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
                                          mini_batches=mini_batches, device=str(adapter.device))
+    # This is a weights-only warm start. The fresh PPO instance owns a new
+    # optimizer; explicitly clearing state prevents a future builder change
+    # from silently turning --init-checkpoint into an optimizer resume.
+    if init_checkpoint is not None:
+        # PPO hyperparameters belong to the new optimization, while package,
+        # split, witness and v3.1 physical contracts must agree exactly.
+        warmstart_provenance = {key: value for key, value in (provenance or {}).items() if key != "ppo"}
+        load_frozen_v3(init_checkpoint, model, map_location=adapter.device, expected_provenance=warmstart_provenance)
+        agent.optimizer.state.clear()
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()
     device = observations.device
