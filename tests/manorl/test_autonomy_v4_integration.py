@@ -3,8 +3,10 @@ from __future__ import annotations
 import subprocess, sys
 from pathlib import Path
 import pytest, torch, gymnasium as gym
+import jax.numpy as jp
+from skrl.agents.torch.ppo.ppo import compute_gae
 from sim.manorl.autonomy_contracts import RAW_OBSERVATION_DIM,ENCODED_OBSERVATION_DIM,ACTION_DIM,CHECKPOINT_FORMAT,OBSERVATION_CONTRACT_ID,ACTION_CONTRACT_ID,REWARD_CONTRACT_ID,validate_v4_checkpoint_metadata
-from sim.manorl.autonomy_training import AutonomyActorCritic
+from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter
 
 def _model(*, separate_critic=False):
     return AutonomyActorCritic(gym.spaces.Box(-1.,1.,shape=(RAW_OBSERVATION_DIM,)),gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,)),device='cpu',separate_critic=separate_critic)
@@ -21,6 +23,31 @@ def test_v4_checkpoint_roundtrip_restores_pointnet_and_rejects_old_contract():
     validate_v4_checkpoint_metadata(payload); restored=_model(); restored.load_state_dict(payload['model'],strict=True)
     for a,b in zip(model.pointnet.parameters(),restored.pointnet.parameters()): assert torch.equal(a,b)
     with pytest.raises(ValueError): validate_v4_checkpoint_metadata({'checkpoint_format':'manorl.autonomy.ppo.v3.1'})
+
+
+def test_installed_compute_gae_standardizes_advantages():
+    returns, advantages = compute_gae(
+        rewards=torch.tensor([[[1.]], [[2.]], [[4.]], [[8.]]]),
+        terminated=torch.zeros((4,1,1), dtype=torch.bool),
+        truncated=torch.zeros((4,1,1), dtype=torch.bool),
+        values=torch.zeros((4,1,1)), last_values=torch.ones((1,1)),
+    )
+    assert torch.isfinite(returns).all()
+    torch.testing.assert_close(advantages.mean(), torch.tensor(0.), rtol=0, atol=1e-6)
+    torch.testing.assert_close(advantages.std(), torch.tensor(1.), rtol=0, atol=1e-6)
+
+
+def test_compact_summary_preserves_signed_object_origin_z_sum():
+    adapter=object.__new__(BatchedAutonomyAdapter)
+    adapter.device_name="cpu"; adapter._device=torch.device("cpu")
+    adapter.runtime=type("Runtime",(),{
+        "jp":jp, "indices":jp.array([0,0]), "length":4,
+        "last_physical":type("Physical",(),{"object_origin":jp.array([[0.,0.,-.25],[0.,0.,.75]])})(),
+        "last_contact":type("Contact",(),{"paired_force_on_object":jp.zeros((2,16,3))})(),
+        "cache":type("Cache",(),{"object_origin":jp.zeros((4,2,3))})(),
+    })()
+    summary=adapter.compact_summary()
+    torch.testing.assert_close(summary["object_motion"], torch.tensor(.5))
 
 
 class _TinyV4Adapter:
@@ -58,7 +85,7 @@ def test_v4_ppo_raw_action_terminal_reset_and_checkpoint_roundtrip(tmp_path, mon
     assert adapter.phase == 0 and rows[0]['terminations']==2.
     assert rows[0]['config/grad_norm_clip'] == .5
     assert rows[0]['config/normalize_observations'] == 0.
-    assert rows[0]['config/normalize_advantages'] == 0.
+    assert rows[0]['config/normalize_advantages'] == 1.
     assert agent.optimizer.state and any(torch.count_nonzero(state['exp_avg']) for state in agent.optimizer.state.values())
     assert any(not torch.equal(before[name], value) for name,value in model.pointnet.named_parameters())
     restored=_model(); payload=training.load_frozen_v4(checkpoint,restored,expected_provenance={'package_digest':'p'})

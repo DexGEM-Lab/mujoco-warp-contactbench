@@ -217,8 +217,9 @@ of W&B and defines W&B's common `transitions` axis before logging. W&B config
 also records resolved PPO values rather than only CLI flags: the PPO builder
 uses one installed-default-plus-v4-override factory, while each update records
 the instantiated agent's effective grad clip, Adam, GAE/discount,
-clipping/loss, observation/value/advantage normalization, mixed-precision,
-rollout, epoch, and minibatch values.
+clipping/loss, observation/value preprocessor status, unconditional GAE
+advantage standardization, mixed-precision, rollout, epoch, and minibatch
+values.
 
 A separate critic still shares PointNet with the actor. Its loss values alone
 therefore do not identify which gradient path dominates; telemetry preserves

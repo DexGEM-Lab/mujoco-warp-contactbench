@@ -88,7 +88,8 @@ def _resolved_telemetry_config(adapter, args):
     # into the PPO builder. Per-update config/* fields record the live agent.
     ppo = v4_ppo_config(rollouts=args.rollouts, learning_epochs=args.learning_epochs, mini_batches=args.mini_batches)
     ppo.update({"normalize_observations": False, "normalize_values": False,
-                "normalize_advantages": False, "optimizer": "Adam",
+                # skrl 2.1.0 compute_gae standardizes advantages unconditionally.
+                "normalize_advantages": True, "optimizer": "Adam",
                 "adam_betas": [0.9, 0.999], "adam_eps": 1e-8,
                 "rollout_batch_samples": args.rollouts * adapter.num_envs})
     return {"ppo": ppo,

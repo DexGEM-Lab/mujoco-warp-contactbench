@@ -54,14 +54,14 @@ class BatchedAutonomyAdapter:
     def compact_summary(self):
         """Legacy compact fields from already-cached post-transition physics.
 
-        ``object_motion`` historically means the sum of absolute world-origin Z,
+        ``object_motion`` historically means the signed sum of world-origin Z,
         not a lift delta.  Do not call ``telemetry_snapshot`` here: collection
         already captures that richer snapshot once per transition.
         """
         jp=self.runtime.jp; physical=self.runtime.last_physical; contact=self.runtime.last_contact
         index=jp.minimum(self.runtime.indices,self.runtime.length-1)
         target_object=jp.asarray(self.runtime.cache.object_origin)[index]
-        return {"object_motion": self._to_torch(jp.abs(physical.object_origin[:,2])).sum(),
+        return {"object_motion": self._to_torch(physical.object_origin[:,2]).sum(),
                 "contact_force": self._to_torch(jp.linalg.norm(contact.paired_force_on_object,axis=-1).sum(axis=-1)).sum(),
                 "path": self._to_torch(jp.linalg.norm(physical.object_origin-target_object,axis=-1)).sum()}
 
@@ -175,7 +175,9 @@ def resolved_v4_ppo_config(agent) -> dict[str, Any]:
             "ratio_clip":cfg.ratio_clip,"value_clip":cfg.value_clip,"entropy_loss_scale":cfg.entropy_loss_scale,
             "value_loss_scale":cfg.value_loss_scale,"mixed_precision":cfg.mixed_precision,
             "normalize_observations":cfg.observation_preprocessor is not None,
-            "normalize_values":cfg.value_preprocessor is not None,"normalize_advantages":False,
+            "normalize_values":cfg.value_preprocessor is not None,
+            # skrl 2.1.0 compute_gae standardizes advantages unconditionally.
+            "normalize_advantages":True,
             "grad_norm_clip":cfg.grad_norm_clip,"optimizer":type(agent.optimizer).__name__,
             "adam_betas":list(optimizer["betas"]),"adam_eps":optimizer["eps"],
             "learning_starts":cfg.learning_starts,"time_limit_bootstrap":cfg.time_limit_bootstrap,
