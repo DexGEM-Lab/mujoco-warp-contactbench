@@ -1,0 +1,109 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row0_normal_timing_grip0.0_normal",
+  "active_object": "bowl",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 0,
+    "uuid": "7430f40d-9999-4a3c-a1e0-d7fffb760c5b",
+    "frames": 711
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "edit": {
+    "translation": [
+      0.006,
+      0.012,
+      0
+    ],
+    "rotation": [
+      -0.05442330549922339,
+      -0.07908953938506766,
+      -2.886899369793743
+    ]
+  },
+  "initial_hand": [
+    0.0344621017575264,
+    -0.1209714412689209,
+    0.15183973918234278,
+    -0.0943460538983345,
+    0.029203498736023903,
+    1.6687328815460205,
+    0.09248562157154083,
+    0.15241660177707672,
+    -0.14288266003131866,
+    0.0,
+    0.11389680206775665,
+    0.25768178701400757,
+    -0.135351300239563,
+    0.3677600026130676,
+    -0.18147769570350647,
+    0.09210766106843948,
+    -0.1451961249113083,
+    -0.03977357968688011,
+    0.34822991490364075,
+    0.39958256483078003,
+    -0.06049499288201332,
+    0.06227172166109085,
+    0.287577748298645,
+    0.5411331653594971,
+    -0.6389403939247131,
+    0.5480456352233887,
+    -0.055208444595336914,
+    0.16341222822666168
+  ],
+  "command_track": {
+    "path": "row00_commands.npz",
+    "sha256": "d64e7a6de81e1bff6d9fe53680c8e49551241dbfefeb45f50010861357c29495",
+    "frames": 1334
+  },
+  "scope": "Single source row0 task repair. Object initial XY+6/+12mm and axisymmetric yaw alignment; translated verified lifting primitive, held alignment, 3-second transport, leveling, placement, finger release and retreat. Authored duration25.05s differs from the source window. All objects remain unactuated free bodies.",
+  "normal_timing": {
+    "baseline_run_name": "bowl-stove-to-table",
+    "baseline_frames": 2505,
+    "normal_frames": 1334,
+    "removed_constant_holds": [
+      {
+        "original_start": 500,
+        "original_stop_exclusive": 1386,
+        "removed_frames": 856
+      },
+      {
+        "original_start": 1684,
+        "original_stop_exclusive": 1786,
+        "removed_frames": 72
+      },
+      {
+        "original_start": 1934,
+        "original_stop_exclusive": 2036,
+        "removed_frames": 72
+      },
+      {
+        "original_start": 2304,
+        "original_stop_exclusive": 2505,
+        "removed_frames": 171
+      }
+    ],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 13.34
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "9": 0.0,
+      "13": 0.0,
+      "14": 0.0
+    },
+    "onset_in_baseline": 220,
+    "release_in_baseline": [
+      2040,
+      2110
+    ],
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "audit_tail_frames": 0
+}

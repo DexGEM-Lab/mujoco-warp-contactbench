@@ -26,7 +26,7 @@ for e in entries:
   if not matches:raise FileNotFoundError(f'no hash-matched command asset for row{e["row"]}')
   assets[e['row']]=matches[0]
 a.output.mkdir(parents=True,exist_ok=False)
-for n in ['recordings','patches','videos','previews','tools']:(a.output/n).mkdir()
+for n in ['recordings','patches','videos','previews','tools','stability_tests']:(a.output/n).mkdir()
 for name in ['replay_repaired_capture.py','replay_pose_edits.py','export_repaired_motion.py']:shutil.copyfile(a.first_bundle/'tools'/name,a.output/'tools'/name)
 columns=[];catalog=[]
 for e in entries:
@@ -35,6 +35,19 @@ for e in entries:
   filename=key+'_commands.npz';shutil.copyfile(assets[row],a.output/'patches'/filename);recipe['command_track']['path']=filename
  (a.output/'patches'/(key+'.json')).write_text(json.dumps(recipe,indent=2)+'\n')
  manifest['patch']=recipe;manifest['original_recipe_sha256']=hashlib.sha256(json.dumps(original_recipe,sort_keys=True).encode()).hexdigest();manifest['publication_note']='Command asset relative path normalized only; source, edit and hashed bytes unchanged.'
+ if 'audit_run' in manifest:
+  audit_source=Path(manifest['audit_run']);audit_out=a.output/'stability_tests'/key;audit_out.mkdir()
+  audit_manifest=json.load(open(audit_source/'manifest.json'));audit_recipe=copy.deepcopy(audit_manifest['patch']);record=audit_recipe['command_track'];match=None
+  for root in a.command_roots:
+   for candidate in root.rglob(Path(record['path']).name):
+    if candidate.is_file() and hashlib.sha256(candidate.read_bytes()).hexdigest()==record['sha256']:match=candidate;break
+   if match is not None:break
+  if match is None:raise FileNotFoundError(f'no audit target asset row{row}')
+  shutil.copyfile(match,audit_out/'commands.npz');audit_recipe['command_track']['path']='commands.npz'
+  (audit_out/'patch.json').write_text(json.dumps(audit_recipe,indent=2)+'\n');audit_manifest['patch']=audit_recipe
+  (audit_out/'manifest.json').write_text(json.dumps(audit_manifest,indent=2)+'\n')
+  for filename in ['trajectory.npz','result.json','validation.json']:shutil.copyfile(audit_source/filename,audit_out/filename)
+  manifest['audit_run']='stability_tests/'+key
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  for n in ['trajectory.npz','result.json']:shutil.copyfile(run/n,out/n)
  v=copy.deepcopy(e['validation']);(out/'validation.json').write_text(json.dumps(v,indent=2)+'\n')
@@ -44,7 +57,7 @@ for e in entries:
  for i,object_state in enumerate(record['objects']):
   np.testing.assert_array_equal(object_state['pos'],t['scene_object_pos'][:,i]);np.testing.assert_array_equal(object_state['rot_aa'],t['scene_object_rot_aa'][:,i])
  np.testing.assert_array_equal(record['hands'][0]['command_target_dof'],t['ctrl'])
- catalog.append({'row':row,'source_uuid':e['uuid'],'gesture':e['gesture'],'status':'accepted','patch':'patches/'+key+'.json','recording':'recordings/'+key,'video':'videos/'+key+'.mp4','preview':'previews/'+key+'.jpg','post_padding':manifest['post_padding'],'frames':len(t['ctrl']),'validation':v})
+ catalog.append({'row':row,'source_uuid':e['uuid'],'gesture':e['gesture'],'status':'accepted','patch':'patches/'+key+'.json','recording':'recordings/'+key,'video':'videos/'+key+'.mp4','preview':'previews/'+key+'.jpg','post_padding':manifest['post_padding'],'frames':len(t['ctrl']),'validation':v,'stability_test':manifest.get('audit_run'),'normal_timing':recipe.get('normal_timing'),'grip_preload':recipe.get('grip_preload')})
  print('published',row,flush=True)
 merged=pa.concat_tables(columns);lance.write_dataset(merged,a.output/'repaired_all59.lance',mode='create');ds=lance.dataset(a.output/'repaired_all59.lance',version=1)
 if ds.count_rows()!=59:raise RuntimeError('aggregate row count changed')

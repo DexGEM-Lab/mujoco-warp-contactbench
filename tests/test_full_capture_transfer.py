@@ -58,6 +58,20 @@ def test_short_settling_is_not_removed():
     assert len(kept)==len(commands) and removed==[]
 
 
+def test_final_normal_catalog_covers_all59_without_audit_tail():
+    root=Path(__file__).resolve().parents[1]/'patches/final_normal'
+    catalog=json.loads((root/'catalog.json').read_text())
+    assert [entry['row'] for entry in catalog['rows']]==list(range(59))
+    assert len({entry['source_uuid'] for entry in catalog['rows']})==59
+    assert sum(entry['normal_frames'] for entry in catalog['rows'])==65000
+    for entry in catalog['rows']:
+        patch=json.loads((root/entry['patch']).read_text())
+        assert patch['audit_tail_frames']==0
+        assert patch['source']['uuid']==entry['source_uuid']
+        assert patch['command_track']['frames']==entry['normal_frames']
+        assert patch['normal_timing']['normal_frames']==entry['normal_frames']
+
+
 def test_recorded_command_assets_are_finite_and_source_bound():
     root=Path(__file__).resolve().parents[1]/'patches'
     checked=0

@@ -1,0 +1,187 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row19_normal_timing_grip0.0_normal",
+  "active_object": "mayonnaisebottle",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 19,
+    "uuid": "c674fb54-7064-4be9-8cf8-acf5b3fa94fd",
+    "frames": 951
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "edit": {
+    "name": "bottle_open_approach_leveled_pour_retreat",
+    "translation": [
+      0,
+      0,
+      0
+    ],
+    "finger_targets": {
+      "j1_thumb_cmc_abd": 0.20607098808677984,
+      "j1_thumb_cmc_flex": 0.6573356559356712,
+      "j1_thumb_cmc_twist": -0.6106566619469832,
+      "j1_thumb_mcp_flex": 0.0028698221644856622,
+      "j1_thumb_mcp_abd": -0.07440851322481194,
+      "j1_thumb_ip": 0.0010819513952655374,
+      "j2_index_mcp_abd": 0.10886548535549281,
+      "j2_index_mcp_flex": 0.9005344301385485,
+      "j2_index_pip": 0.22960570412665487,
+      "j2_index_dip": 1.4600162093305204e-07,
+      "j3_middle_mcp_abd": -0.5239968306644124,
+      "j3_middle_mcp_flex": 0.708017702620698,
+      "j3_middle_pip": 0.7215036597312362,
+      "j3_middle_dip": 0.014649793125973629,
+      "j4_ring_mcp_abd": -0.2366228450675731,
+      "j4_ring_mcp_flex": 0.41147473263438494,
+      "j4_ring_pip": 0.9717951233211798,
+      "j4_ring_dip": 0.0695232348748405,
+      "j5_pinky_mcp_abd": -0.49283859321181805,
+      "j5_pinky_mcp_flex": 0.44643980717581605,
+      "j5_pinky_pip": 0.4600316744187213,
+      "j5_pinky_dip": 0.8628182548934012
+    },
+    "object_relative_grasp": {
+      "translation": [
+        0.11099988552102356,
+        -0.04766595397962019,
+        -0.007815653989063955
+      ],
+      "rotation_xyzw": [
+        0.2431172801044449,
+        0.4816394651422802,
+        0.7171962735189866,
+        0.4410747317434475
+      ]
+    },
+    "grasp_approach_start_offset": -140,
+    "grasp_approach_end_offset": -30,
+    "close_start_offset": -45,
+    "close_end_offset": 15,
+    "release_at_end": true,
+    "hand_offsets": {
+      "j1_thumb_cmc_flex": 0.15,
+      "j2_index_mcp_flex": 0.15,
+      "j3_middle_mcp_flex": 0.15,
+      "j4_ring_mcp_flex": 0.15,
+      "j5_pinky_mcp_flex": 0.15
+    },
+    "acquisition": {
+      "start_step": 10,
+      "pregrasp_step": 90,
+      "arrive_step": 135,
+      "closed_step": 195,
+      "clearance_object_local": [
+        0.065,
+        0,
+        0.01
+      ],
+      "open_offsets": {
+        "j1_thumb_cmc_flex": -0.35,
+        "j2_index_mcp_flex": -0.55,
+        "j3_middle_mcp_flex": -0.55,
+        "j4_ring_mcp_flex": -0.55,
+        "j5_pinky_mcp_flex": -0.55,
+        "j2_index_pip": -0.2,
+        "j3_middle_pip": -0.3,
+        "j4_ring_pip": -0.3,
+        "j5_pinky_pip": -0.3
+      }
+    },
+    "stages": [
+      {
+        "start_step": 310,
+        "end_step": 390,
+        "wrist_rotation_world": [
+          0.11945210859896073,
+          -0.48755818165921144,
+          -0.1623689347007582
+        ],
+        "pivot_from_object": [
+          -0.05169416642828252,
+          -0.04929075532809257,
+          -0.056666472138370255
+        ]
+      },
+      {
+        "start_step": 435,
+        "end_step": 515,
+        "wrist_rotation_world": [
+          -0.11945210859896073,
+          0.48755818165921144,
+          0.1623689347007582
+        ],
+        "pivot_from_object": [
+          -0.05169416642828252,
+          -0.04929075532809257,
+          -0.056666472138370255
+        ]
+      }
+    ]
+  },
+  "scope": "Single recorded bottle lift, tilt over bowl and return. No fluid simulation.",
+  "initial_hand": [
+    0.2680557072162628,
+    -0.37229979038238525,
+    0.1752923651705048,
+    -0.2045421302318573,
+    0.11168654263019562,
+    1.4483036994934082,
+    0.016182560473680496,
+    0.03058663196861744,
+    -0.028603143990039825,
+    0.0,
+    0.11910166591405869,
+    0.22197189927101135,
+    -0.02271614782512188,
+    0.1917860060930252,
+    -0.18141353130340576,
+    0.09207247942686081,
+    -0.1442057341337204,
+    -0.08613385260105133,
+    0.1097719743847847,
+    0.23121978342533112,
+    -0.1058511808514595,
+    0.012167844921350479,
+    0.045711588114500046,
+    0.3727244436740875,
+    -0.616991400718689,
+    0.2670123875141144,
+    -0.05513051152229309,
+    0.16338489949703217
+  ],
+  "normal_timing": {
+    "baseline_run_name": "bottle-pour",
+    "baseline_frames": 819,
+    "normal_frames": 819,
+    "removed_constant_holds": [],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 8.19
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "7": 0.0,
+      "13": 0.0,
+      "17": 0.0,
+      "21": 0.0,
+      "25": 0.0
+    },
+    "onset_in_baseline": 180,
+    "release_in_baseline": [
+      580,
+      650
+    ],
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "command_track": {
+    "path": "row19_commands.npz",
+    "sha256": "7325511d2fc1c463fbfe6837d8f1d67d99c3db0453cec6b758472570a848028e",
+    "frames": 819
+  },
+  "audit_tail_frames": 0
+}

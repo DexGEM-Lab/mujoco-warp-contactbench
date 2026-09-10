@@ -21,6 +21,29 @@ changing mass, Coulomb friction coefficients, gravity, or actuator gains. It is
 local to the replay recipe, not a change to project-wide defaults. Successful
 replay under the old default solver is not claimed.
 
+## Normal motion versus stability test
+
+The initial long-test dataset accidentally carried the held-bowl donor's ten-second
+verification pause into moving-bowl tasks. Final normal patches remove only long
+constant-command intervals, keep a short 0.3 s settling allowance, and preserve
+all moving targets. These shorter streams were physically reexecuted. The
+ordinary exported trajectory is the exact prefix of that new run; a separate
+200-frame constant-target continuation verifies stability and is never counted
+in normal video/data duration. Terminal contact/support is checked at the normal
+endpoint as well as after the extra test.
+
+Normal row0/36 motions are 13.34 s instead of about25 s; row49 is5.30 s instead
+of13.85 s. This removes test idling, not every conservative motion transition;
+it does not promise the original capture speed. All59normal motions total650s.
+`patches/final_normal/catalog.json` binds all59source UUIDs and target assets.
+
+Additional closing pressure is row-specific. Row32 uses0.025–0.04rad selected
+closure offsets. Row39 closes the middle MCP by0.27rad while coordinating its
+PIP/DIP by-0.185rad, establishing a previously missing support contact. Uniform
+extra closing on the pitcher template was rejected because it can alter handle
+exit geometry. Other rows retain already-effective targets. Mass, friction
+coefficients and actuator gains remain unchanged.
+
 ## Evaluation
 
 The registry has one entry per source UUID and never equates generated files with
@@ -56,6 +79,11 @@ outcomes, not bitwise state reproduction, define replay success.
 - `build_repair_registry.py`: source-complete status and selected-run registry.
 - `transfer_nearest_container_success.py`: preserve a nearby accepted container
   contact primitive, correcting scene alignment and recipient/destination offsets.
+- `prepare_normal_timing.py`: constant-command wait removal and bounded contact
+  preload candidates, generating distinct normal and audit command streams.
+- `select_normal_results.py`: accepts physically rerun normal prefixes only if
+  their own terminal contacts and the separate continuation pass; does not merely
+  cut the old video.
 - `render_repair_registry.py`: previews/videos of selected measured motions.
 - `publish_full_repair.py`: accepts only a registry covering all59UUIDs, checks
   command hashes and output value round trips, writes a new NAS bundle.

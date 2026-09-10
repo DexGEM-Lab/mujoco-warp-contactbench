@@ -1,0 +1,155 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row49_normal_timing_grip0.0_normal",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 49,
+    "uuid": "ef83b5f0-8e5c-4e6c-9a3b-37faec809f5b",
+    "frames": 351
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "edit": {
+    "name": "bowl49_level_after_acquisition",
+    "translation": [
+      0.006,
+      0.012,
+      0
+    ],
+    "finger_targets": {
+      "j1_thumb_cmc_abd": -0.22530505628057645,
+      "j1_thumb_cmc_flex": 0.5757653693735006,
+      "j1_thumb_cmc_twist": -0.45031319644589635,
+      "j1_thumb_mcp_flex": 0.41633603936141544,
+      "j1_thumb_mcp_abd": 0.2957301619510986,
+      "j1_thumb_ip": 0.16270365976852807,
+      "j2_index_mcp_abd": 0.348450848759606,
+      "j2_index_mcp_flex": 0.8040590280408066,
+      "j2_index_pip": 0.6436200402426724,
+      "j2_index_dip": 0.6505195620253734,
+      "j3_middle_mcp_abd": -0.5239993951723417,
+      "j3_middle_mcp_flex": 1.1163313204066103,
+      "j3_middle_pip": 0.010602921586851584,
+      "j3_middle_dip": 0.3695041477895727,
+      "j4_ring_mcp_abd": -0.2674959469958751,
+      "j4_ring_mcp_flex": 0.9449804074493398,
+      "j4_ring_pip": 0.5954204341661093,
+      "j4_ring_dip": 0.5708994343660275,
+      "j5_pinky_mcp_abd": -3.6869333426104944,
+      "j5_pinky_mcp_flex": -0.7305480241775513,
+      "j5_pinky_pip": 2.3912062644958496,
+      "j5_pinky_dip": 1.745316982269287
+    },
+    "object_relative_grasp": {
+      "translation": [
+        -0.004103327516728443,
+        0.10433311125725117,
+        0.09639316312840253
+      ],
+      "rotation_xyzw": [
+        -0.33117178194152325,
+        0.1454019455494343,
+        0.9131473748894026,
+        -0.18800371488007492
+      ]
+    },
+    "grasp_approach_start_offset": -140,
+    "grasp_approach_end_offset": -35,
+    "close_start_offset": -30,
+    "close_end_offset": 20,
+    "hand_offsets": {
+      "j2_index_mcp_flex": 0.6,
+      "j3_middle_mcp_flex": 0.6,
+      "j1_thumb_mcp_flex": 0.3
+    },
+    "stages": [
+      {
+        "start_step": 310,
+        "end_step": 500,
+        "wrist_rotation_world": [
+          -0.058619079989445086,
+          -0.29256805231112687,
+          -0.014324510829435625
+        ],
+        "pivot_from_object": [
+          0.07,
+          0.0,
+          0.005
+        ]
+      }
+    ]
+  },
+  "scope": "One recorded bowl lift-and-hold demonstration. Local wrist/finger command repair and explicit contact solver profile; masses, geometric assets, friction coefficients, gravity and actuator gains unchanged.",
+  "evidence": {
+    "source_hand_with_same_solver": "fails to acquire bowl",
+    "repaired_hand_with_default_solver": "lifts but later slips",
+    "repaired_hand_with_recorded_solver": "Lift and extra ten-second hold, bowl tilt reduced to approximately5deg in precursor replay"
+  },
+  "limits": "Does not establish success for the other 58 recordings; bowl path deviates from capture and must be inspected from saved actual object motion.",
+  "active_object": "bowl",
+  "initial_hand": [
+    0.022396109998226166,
+    -0.07251742482185364,
+    0.1522772368888269,
+    -0.0943460538983345,
+    0.029203498736023903,
+    1.6687328815460205,
+    0.09248562157154083,
+    0.15241660177707672,
+    -0.14288266003131866,
+    0.0,
+    0.11389680206775665,
+    0.25768178701400757,
+    -0.135351300239563,
+    0.3677600026130676,
+    -0.18147769570350647,
+    0.09210766106843948,
+    -0.1451961249113083,
+    -0.03977357968688011,
+    0.34822991490364075,
+    0.39958256483078003,
+    -0.06049499288201332,
+    0.06227172166109085,
+    0.287577748298645,
+    0.5411331653594971,
+    -0.6389403939247131,
+    0.5480456352233887,
+    -0.055208444595336914,
+    0.16341222822666168
+  ],
+  "normal_timing": {
+    "baseline_run_name": "bowl-hold",
+    "baseline_frames": 1385,
+    "normal_frames": 530,
+    "removed_constant_holds": [
+      {
+        "original_start": 500,
+        "original_stop_exclusive": 1385,
+        "removed_frames": 855
+      }
+    ],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 5.3
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "9": 0.0,
+      "13": 0.0,
+      "14": 0.0
+    },
+    "onset_in_baseline": 220,
+    "release_in_baseline": null,
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "command_track": {
+    "path": "row49_commands.npz",
+    "sha256": "821926f90f19730b537192dee555fb509997cf9b2b0f5c280c8861d5b46eccb9",
+    "frames": 530
+  },
+  "audit_tail_frames": 0
+}
