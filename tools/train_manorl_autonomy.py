@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 from sim.manorl.autonomy_batch_training import inspect_v4_warmstart, load_frozen_v4, run_batched_ppo
+from sim.manorl.autonomy_telemetry import configure_wandb_axis
 from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata
 from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything
 from sim.manorl.trajectory_package import load_trajectory_package
@@ -74,9 +75,24 @@ def _provenance(catalog, split, adapter):
 def _wandb(args, metadata):
     if not args.wandb: return None
     import wandb
-    return wandb.init(project=args.wandb_project or os.environ.get("WANDB_PROJECT", "mujoco-mano"),
+    run = wandb.init(project=args.wandb_project or os.environ.get("WANDB_PROJECT", "mujoco-mano"),
                       entity=args.wandb_entity or os.environ.get("WANDB_ENTITY", "sunjay45711-dexerto"),
                       config=metadata, mode=args.wandb_mode or os.environ.get("WANDB_MODE", "online"), reinit=True)
+    configure_wandb_axis(run)
+    return run
+
+
+def _resolved_telemetry_config(adapter, args):
+    return {"ppo": {"discount_factor": .99, "gae_lambda": .95, "learning_rate": 3e-4,
+                     "ratio_clip": .2, "value_clip": .2, "entropy_loss_scale": .001,
+                     "value_loss_scale": .5, "mixed_precision": False, "normalize_observations": False,
+                     "grad_clip": None},
+            "runtime": {"num_envs": adapter.num_envs, "raw_observation_dim": adapter.observation_dim,
+                        "action_dim": adapter.action_dim, "control_timestep": adapter.runtime.cache.control_timestep,
+                        "physics_substeps": 4},
+            "architecture": actor_critic_architecture(separate_critic=args.separate_critic),
+            "thresholds": {"loaded_force_N": .02, "airborne_clearance_m": .005,
+                           "severe_reason_bits": {"reference_complete": 1, "deviation": 2, "fallen": 4, "nonfinite": 8}}}
 
 
 def train(args):
@@ -109,11 +125,17 @@ def train(args):
     lineage = {"separate_critic": bool(args.separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
                "warmstart_transfer_mode": transfer_mode, "mode": mode}
     config.update(lineage); provenance.update(lineage)
-    metadata = {"training_contract": "manorl.autonomy.training.v4.single_reference", "config": config, "provenance": provenance}
+    metadata = {"training_contract": "manorl.autonomy.training.v4.single_reference", "config": config,
+                "resolved": _resolved_telemetry_config(adapter, args), "provenance": provenance}
     run = _wandb(args, metadata)
     try:
+        metrics_path = Path(args.checkpoint).with_suffix(Path(args.checkpoint).suffix + ".metrics.jsonl")
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
         def publish(row):
             print(json.dumps(row), flush=True)
+            # Local provenance stays available when W&B is offline/unavailable.
+            with metrics_path.open("a") as stream:
+                stream.write(json.dumps(_jsonable(row), sort_keys=True) + "\\n")
             if run is not None: run.log(row, step=int(row["transitions"]))
         _, _, rows = run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
@@ -125,7 +147,7 @@ def train(args):
         raise
     else:
         if run is not None: run.finish(exit_code=0)
-    print(json.dumps({"checkpoint": args.checkpoint, "updates": len(rows), "cache_hash": provenance["cache_hash_recorded_not_compared"]}), flush=True)
+    print(json.dumps({"checkpoint": args.checkpoint, "metrics": str(Path(args.checkpoint).with_suffix(Path(args.checkpoint).suffix + ".metrics.jsonl")), "updates": len(rows), "cache_hash": provenance["cache_hash_recorded_not_compared"]}), flush=True)
 
 
 def _checkpoint_separate_critic(payload):
@@ -149,7 +171,7 @@ def evaluate(args):
                 "catalog_digest": catalog.catalog_digest, "identity_split": split,
                 "identity": trajectory.identity.identity}
     payload = load_frozen_v4(args.checkpoint, model, map_location=adapter.device, expected_provenance=expected)
-    observations, _ = adapter.reset(); total = 0.0; trace = []; natural_first = None
+    observations, _ = adapter.reset(); total = 0.0; trace = []; natural_first = None; artifact = {"actual_object_position": [], "reference_object_position": [], "actual_palm_position": [], "reference_palm_position": [], "actual_qpos": [], "reference_qpos_raw": [], "reference_qpos_feasible": [], "reward_terms": [], "paired_force_on_object": [], "object_all_force": [], "bottom_clearance": [], "reason_code": []}
     limit = args.steps if args.steps is not None else adapter.runtime.length - 1
     for policy_step in range(limit):
         with torch.no_grad():
@@ -159,10 +181,19 @@ def evaluate(args):
         natural_done = bool(np.asarray(adapter.runtime.last_reward.done)[0])
         if natural_done and natural_first is None:
             natural_first = {"policy_step": policy_step, "reason_code": int(np.asarray(adapter.runtime.last_reason)[0])}
+        i = min(int(np.asarray(adapter.runtime.indices)[0]), adapter.runtime.length - 1)
+        physical, contact, diagnostics, cache = adapter.runtime.last_physical, adapter.runtime.last_contact, adapter.runtime.last_reward, adapter.runtime.cache
+        reason_code = int(np.asarray(adapter.runtime.last_reason)[0])
+        clearance = float(np.asarray(physical.object_bottom)[0] - cache.table_height)
+        terms = [float(np.asarray(getattr(diagnostics, name))[0]) for name in ("object_position", "object_rotation", "object_velocity", "hand_relative", "fingers", "geometry", "action", "survival", "severe")]
         trace.append({"policy_step": policy_step, "reward": float(reward[0, 0].cpu()),
                       "natural_done": natural_done, "runtime_done": bool(done[0, 0].cpu()),
-                      "reason_code": int(np.asarray(adapter.runtime.last_reason)[0]),
+                      "reason_code": reason_code, "bottom_clearance_m": clearance,
                       "cache_hash": adapter.runtime.cache.content_hash})
+        artifact["actual_object_position"].append(np.asarray(physical.object_origin)[0]); artifact["reference_object_position"].append(np.asarray(cache.object_origin)[i])
+        artifact["actual_palm_position"].append(np.asarray(physical.palm_origin)[0]); artifact["reference_palm_position"].append(np.asarray(cache.palm_origin)[i])
+        artifact["actual_qpos"].append(np.asarray(physical.q_raw)[0]); artifact["reference_qpos_raw"].append(np.asarray(cache.q_raw)[i]); artifact["reference_qpos_feasible"].append(np.asarray(cache.q_feasible)[i])
+        artifact["reward_terms"].append(terms); artifact["paired_force_on_object"].append(np.asarray(contact.paired_force_on_object)[0]); artifact["object_all_force"].append(np.asarray(contact.object_all_force)[0]); artifact["bottom_clearance"].append(clearance); artifact["reason_code"].append(reason_code)
         if natural_done and not args.full_horizon_diagnostic: break
         observations = next_obs if args.full_horizon_diagnostic else adapter.prepare_action()
     result = {"format": "manorl.autonomy.frozen_evaluation.v4", "checkpoint": str(args.checkpoint),
@@ -170,9 +201,12 @@ def evaluate(args):
               "return": total, "natural_first_termination": natural_first,
               "full_horizon_diagnostic": bool(args.full_horizon_diagnostic),
               "diagnostic_boundary": "natural termination recorded; continued after it" if args.full_horizon_diagnostic else "stopped at natural first termination",
+              "natural_prefix_steps": len(trace) if natural_first is None else natural_first["policy_step"] + 1,
               "provenance": {"checkpoint": payload["provenance"], "evaluation_cache_hash_recorded_not_compared": adapter.runtime.cache.content_hash}, "trace": trace}
     trace_path = Path(args.trace); trace_path.parent.mkdir(parents=True, exist_ok=True); trace_path.write_text(json.dumps(result, indent=2, default=_jsonable) + "\n")
-    print(json.dumps({"trace": str(trace_path), "steps": len(trace), "return": total, "natural_first_termination": natural_first}), flush=True)
+    artifact_path = Path(args.artifact) if args.artifact else trace_path.with_suffix(".npz")
+    artifact_path.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(artifact_path, **{name: np.asarray(values) for name, values in artifact.items()}, natural_prefix_steps=np.asarray(result["natural_prefix_steps"]), full_horizon_diagnostic=np.asarray(args.full_horizon_diagnostic))
+    print(json.dumps({"trace": str(trace_path), "artifact": str(artifact_path), "steps": len(trace), "return": total, "natural_first_termination": natural_first}), flush=True)
 
 
 def inspect(args):
@@ -197,8 +231,8 @@ def build_parser():
     train_parser.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
     train_parser.add_argument("--separate-critic", action="store_true", help="use an independent value trunk; shared remains the default")
     train_parser.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True); train_parser.add_argument("--wandb-project"); train_parser.add_argument("--wandb-entity"); train_parser.add_argument("--wandb-mode"); train_parser.set_defaults(fn=train)
-    eval_parser = subs.add_parser("evaluate", parents=[common]); eval_parser.add_argument("--checkpoint", required=True); eval_parser.add_argument("--steps", type=int); eval_parser.add_argument("--full-horizon-diagnostic", action="store_true")
-    eval_parser.add_argument("--trace", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_eval.json"); eval_parser.set_defaults(fn=evaluate)
+    eval_parser = subs.add_parser("evaluate", parents=[common]); eval_parser.set_defaults(num_envs=1); eval_parser.add_argument("--checkpoint", required=True); eval_parser.add_argument("--steps", type=int); eval_parser.add_argument("--full-horizon-diagnostic", action="store_true")
+    eval_parser.add_argument("--trace", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_eval.json"); eval_parser.add_argument("--artifact", help="compressed physical frozen-evaluation trace (.npz); defaults beside --trace"); eval_parser.set_defaults(fn=evaluate)
     inspect_parser = subs.add_parser("inspect", parents=[common]); inspect_parser.set_defaults(fn=inspect)
     return parser
 

@@ -174,6 +174,45 @@ clipped means, and reports the natural first termination. Its optional
 `--full-horizon-diagnostic` continues after that boundary only while preserving
 `natural_first_termination` and an explicit diagnostic-boundary label.
 
+## v4 telemetry and frozen physical artifacts
+
+`train` reduces cached **post-transition** `last_reward`, `last_physical`, and
+`last_contact` before `prepare_action()` can reset completed rows. The
+`autonomy_v4_telemetry` accumulator keeps reward-component returns, episode
+lengths, maximum bottom clearance, and loaded-contact frame counts per
+environment across PPO rollout cuts; it emits episode return statistics only
+when at least one physical episode completed. The named reward stream is
+`reward/object_position`, `object_rotation`, `object_velocity`,
+`hand_relative`, `fingers`, `geometry`, `action`, `survival`, `severe`, and
+`total`. `total` is the finite v4 reward sum, including `severe` exactly once.
+
+Physical keys distinguish the object-wide resultant (which can contain table
+support) from the paired hand-region force and COM torque. Loaded contact means
+paired force over 0.02 N; airborne means the actual lowest collision vertex is
+more than 5 mm above the table. Active tangential-slip means use only regions
+with a paired contact. Object clearance is actual bottom minus table; origin
+lift is explicitly an origin delta and is not a clearance claim. Completion
+reason bits are independently counted (`reference_complete=1`, `deviation=2`,
+`fallen=4`, `nonfinite=8`); a pure bit-1 horizon is recorded as
+`termination/horizon_only` and never classified as grasp success.
+
+Raw-policy action magnitude, physical-clipping fraction, executed norm, and
+measured command-envelope/antiwindup fractions are logged separately. Native
+RlGamesPPO losses/KL/std/lr remain named under their existing keys. Stats that
+the PPO implementation does not expose directly (sample clip fraction,
+gradient norm before clipping, advantage/return/explained variance) are absent
+rather than inferred. On CUDA, the per-transition reductions and episode
+accounting remain device tensors; only one compact scalar row leaves the device
+per update. `train` appends that row to `<checkpoint>.metrics.jsonl` regardless
+of W&B and defines W&B's common `transitions` axis before logging.
+
+`evaluate` defaults to one environment and writes its JSON summary plus a
+compressed `.npz` beside `--trace` (or `--artifact`). The NPZ contains actual
+and reference object/palm positions, actual/raw/feasible qpos, all nine reward
+terms, paired and object-all forces, bottom clearance, reason codes, and the
+natural-prefix length. It preserves a natural terminal prefix separately from
+any diagnostic continuation.
+
 The fast contact reducer now asserts the static pyramidal cone, requires
 ownership-disjoint geoms in real models, rejects unsupported cones, and skips
 live contacts with inactive `efc_address=-1` without allowing masked NaN

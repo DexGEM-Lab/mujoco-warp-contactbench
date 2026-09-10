@@ -24,6 +24,7 @@ from sim.manorl.autonomy_contracts import (
     POLICY_SAMPLING_CONTRACT, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata,
 )
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
+from sim.manorl.autonomy_v4_telemetry import V4TelemetryAccumulator
 from sim.manorl.autonomy_training import build_batched_runtime
 
 
@@ -229,6 +230,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     episode_length = torch.zeros_like(episode_return)
     rows: list[dict[str, float]] = []
     policy_steps = 0
+    telemetry = V4TelemetryAccumulator(adapter.num_envs, adapter.device) if hasattr(adapter, "telemetry_snapshot") else None
     for update in range(1, updates + 1):
         _sync(adapter.device); sampled = time.perf_counter()
         reward_sum = torch.zeros((), device=adapter.device); done_count = torch.zeros((), device=adapter.device)
@@ -253,6 +255,9 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
             completed_length += torch.where(terminated, episode_length, torch.zeros_like(episode_length)).sum(); completed_count += terminated.sum()
             episode_return = torch.where(terminated, torch.zeros_like(episode_return), episode_return)
             episode_length = torch.where(terminated, torch.zeros_like(episode_length), episode_length)
+            if telemetry is not None:
+                # Captures cached t+1 reward/physical/contact facts before reset.
+                telemetry.add(adapter.telemetry_snapshot(actions))
             for name, value in adapter.compact_summary().items(): summaries[name] += value
             # Must happen after record_transition: reset source is runtime.last_done.
             observations = adapter.prepare_action(); policy_steps += 1
@@ -268,7 +273,10 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                "physics/window_object_z_mean": float(summaries["object_motion"].cpu()) / count,
                "physics/window_contact_force_mean": float(summaries["contact_force"].cpu()) / count,
                "physics/window_path_error_mean": float(summaries["path"].cpu()) / count}
-        if float(completed_count.cpu()):
+        if telemetry is not None:
+            # Scalar egress occurs once/update; episode state inside telemetry spans rollout cuts.
+            row.update(telemetry.reduce(update=update, transitions=int(transitions)))
+        elif float(completed_count.cpu()):
             row.update({"episodes/completed_count": float(completed_count.cpu()),
                         "episodes/return_mean": float(completed_return.cpu() / completed_count.cpu()),
                         "episodes/length_mean": float(completed_length.cpu() / completed_count.cpu())})

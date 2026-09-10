@@ -174,6 +174,7 @@ def test_v4_public_cli_lists_and_parses_warmstart_and_separate_critic():
     assert defaults.warmstart is None and defaults.separate_critic is False
     selected=cli.parse_args(['train','--warmstart','teacher.pt','--separate-critic'])
     assert selected.warmstart=='teacher.pt' and selected.separate_critic is True
+    assert cli.parse_args(['evaluate','--checkpoint','frozen.pt']).num_envs == 1
 
 
 def test_frozen_separate_critic_architecture_is_selected_and_strictly_loaded(tmp_path):

@@ -51,13 +51,45 @@ class BatchedAutonomyAdapter:
         return self._to_torch(self.runtime.reset(mask)),{"num_envs":self.num_envs,"contract":"manorl.autonomy.v4"}
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
     def compact_summary(self):
-        """Current-transition reductions, captured before terminal rows reset."""
-        jp=self.runtime.jp; index=jp.minimum(self.runtime.indices,self.runtime.length-1)
-        return {
-            "object_motion":self._to_torch(jp.sum(self.runtime.last_physical.object_origin[:,2])),
-            "contact_force":self._to_torch(jp.sum(jp.linalg.norm(self.runtime.last_contact.paired_force_on_object,axis=-1))),
-            "path":self._to_torch(jp.sum(jp.linalg.norm(self.runtime.last_physical.object_origin-self.runtime.cache.object_origin[index],axis=1))),
+        """Legacy compact fields retained for existing callers."""
+        sample=self.telemetry_snapshot(self._last_raw_actions)
+        return {"object_motion": sample["origin_lift_delta"].sum(),
+                "contact_force": sample["paired_force_norm"].sum(),
+                "path": torch.linalg.vector_norm(sample["position_error_abs"], dim=1).sum()}
+
+    def telemetry_snapshot(self, raw_actions):
+        """Post-transition physical/reward facts, still resident on the runtime device."""
+        jp=self.runtime.jp; physical=self.runtime.last_physical; contact=self.runtime.last_contact; reward=self.runtime.last_reward
+        index=jp.minimum(self.runtime.indices,self.runtime.length-1); cache=self.runtime.cache
+        target_object=jp.asarray(cache.object_origin)[index]; target_palm=jp.asarray(cache.palm_origin)[index]
+        target_raw=jp.asarray(cache.q_raw)[index]; target_feasible=jp.asarray(cache.q_feasible)[index]
+        paired_norm=jp.linalg.norm(contact.paired_force_on_object,axis=-1); loaded=paired_norm>.02
+        action=jp.asarray(raw_actions); executed=jp.clip(action,-1.,1.)
+        terms=jp.stack((reward.object_position,reward.object_rotation,reward.object_velocity,reward.hand_relative,
+                        reward.fingers,reward.geometry,reward.action,reward.survival,reward.severe),axis=1)
+        snapshot={
+            "reward_terms":terms, "reward_total":reward.total, "reason":reward.reason, "valid":reward.valid,
+            "position_error_abs":jp.abs(physical.object_origin-target_object),
+            "object_rotation_error_rad": 2*jp.arccos(jp.clip(jp.abs(jp.sum(physical.object_quat_xyzw*jp.asarray(cache.object_quat_xyzw)[index],axis=-1)),0.,1.)),
+            "palm_position_error":jp.linalg.norm(physical.palm_origin-target_palm,axis=-1),
+            "finger_raw_error":jp.sqrt(jp.mean((physical.q_raw[:,6:]-target_raw[:,6:])**2,axis=-1)),
+            "finger_feasible_error":jp.sqrt(jp.mean((physical.q_raw[:,6:]-target_feasible[:,6:])**2,axis=-1)),
+            "bottom_clearance":physical.object_bottom-cache.table_height,
+            "reference_bottom_clearance":jp.asarray(cache.reference_bottom)[index]-cache.table_height,
+            "origin_lift_delta":physical.object_origin[:,2]-jp.asarray(cache.object_origin)[0,2],
+            "paired_loaded":loaded, "paired_active":contact.paired_count>0,
+            "paired_contact_count":contact.paired_count.sum(axis=-1), "paired_force_norm":paired_norm.sum(axis=-1),
+            "object_all_force_norm":jp.linalg.norm(contact.object_all_force,axis=-1),
+            "paired_torque_com_norm":jp.linalg.norm(contact.paired_torque_com,axis=-1),
+            "tangential_slip":jp.linalg.norm(contact.tangential_slip,axis=-1),
+            "airborne":physical.object_bottom > cache.table_height+.005,
+            "action_raw_abs":jp.mean(jp.abs(action),axis=-1), "action_executed_norm":jp.linalg.norm(executed,axis=-1),
+            "action_clipped":jp.mean((jp.abs(action)>1.).astype(jp.float32),axis=-1),
+            "command_envelope_utilization":jp.mean(jp.abs(physical.command_error),axis=-1),
+            "antiwindup_active":jp.any(jp.abs(physical.command_error)>=1.,axis=-1),
+            "reference_progress":index/jp.asarray(max(1,self.runtime.length-1),jp.float32),
         }
+        return {name:self._to_torch(value) for name,value in snapshot.items()}
     def step(self,actions):
         # Preserve raw Gaussian actions for likelihood; physical boundary clips.
         if not isinstance(actions,torch.Tensor): actions=torch.as_tensor(actions,dtype=torch.float32,device=self._device)
@@ -68,6 +100,7 @@ class BatchedAutonomyAdapter:
             jax_actions=torch_to_jax_cuda(physical)
         else: jax_actions=np.asarray(physical.detach(),np.float32)
         obs,reward,done,info=self.runtime.step(jax_actions)
+        self._last_raw_actions = actions.detach()
         return self._to_torch(obs),self._to_torch(reward).reshape(self.num_envs,1),self._to_torch(done).reshape(self.num_envs,1).bool(),info
 
 def actor_critic_architecture(*, separate_critic: bool = False) -> dict[str, Any]:
