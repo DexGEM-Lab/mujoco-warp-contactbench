@@ -7,6 +7,7 @@ Terminal next observations are recorded before ``prepare_action`` resets exactly
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -73,6 +74,7 @@ def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, 
         "model": model.state_dict(), "model_architecture": model.checkpoint_architecture(),
         "optimizer": agent.optimizer.state_dict(), "normalizer": None,
         "policy_steps": int(policy_steps), "environment_transitions": int(environment_transitions),
+        "update": int(policy_steps) // config["rollouts"],
         "config": config, "provenance": provenance,
         "torch_rng": torch.get_rng_state(), "numpy_rng": np.random.get_state(),
         "python_rng": random.getstate(),
@@ -187,6 +189,149 @@ def load_frozen_v4(path: str | Path, model: torch.nn.Module, *, map_location: st
     return payload
 
 
+# Only orchestration/budget and lineage may change on optimizer continuation.
+_RESUME_MUTABLE_CONFIG = {
+    "updates", "total_transitions", "checkpoint", "checkpoint_interval",
+    "wandb", "wandb_project", "wandb_entity", "wandb_mode", "wandb_run_id",
+    "source_commit", "warmstart", "warmstart_checkpoint", "warmstart_transfer_mode",
+    "mode", "resume_checkpoint", "resume",
+}
+_RESUME_DIAGNOSTIC_PROVENANCE = {
+    "source_commit", "cache_hash_recorded_not_compared", "warmstart_checkpoint",
+    "warmstart_transfer_mode", "mode", "resume_checkpoint", "resume",
+}
+_RESUME_REQUIRED_PROVENANCE = {
+    "asset_pin", "package_digest", "manifest_sha256", "catalog_digest",
+    "identity_split", "contracts", "identity", "clock",
+}
+
+
+def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch.optim.Optimizer, *,
+                      expected_config: dict[str, Any], expected_provenance: dict[str, Any],
+                      updates: int, cuda_device_count: int | None = None) -> dict[str, Any]:
+    """Validate on CPU without changing the model, optimizer or global RNG.
+
+    CUDA count is the number of *logical visible* devices at the training target.
+    None permits CPU-only artifact inspection; a CUDA runtime must pass its count.
+    Checkpoints are trusted local Torch artifacts, not untrusted pickle inputs.
+    """
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    validate_v4_checkpoint_metadata(payload)
+    if payload.get("policy_sampling_contract") != POLICY_SAMPLING_CONTRACT:
+        raise ValueError("resume requires the raw Normal sampling contract")
+    if payload.get("model_architecture") != model.checkpoint_architecture():
+        raise ValueError("resume checkpoint/model architecture mismatch")
+    if "normalizer" not in payload or payload["normalizer"] is not None:
+        raise ValueError("resume supports only normalizer=null")
+    source_config = payload.get("config", {})
+    required_config = {"num_envs", "rollouts", "learning_epochs", "mini_batches", "learning_rate", "separate_critic", "seed", "device"}
+    if not required_config <= source_config.keys() or not required_config <= expected_config.keys():
+        raise ValueError("resume config is missing fixed training fields")
+    fixed = lambda config: {k: v for k, v in config.items() if k not in _RESUME_MUTABLE_CONFIG}
+    if fixed(source_config) != fixed(expected_config):
+        changed = sorted(k for k in fixed(source_config).keys() | fixed(expected_config).keys()
+                         if fixed(source_config).get(k) != fixed(expected_config).get(k))
+        raise ValueError(f"resume config mismatch: {changed}")
+    source_provenance = payload.get("provenance", {})
+    if not _RESUME_REQUIRED_PROVENANCE <= source_provenance.keys() or not _RESUME_REQUIRED_PROVENANCE <= expected_provenance.keys():
+        raise ValueError("resume provenance is missing physical/package fields")
+    physical = lambda p: {k: v for k, v in p.items() if k not in _RESUME_DIAGNOSTIC_PROVENANCE}
+    if physical(source_provenance) != physical(expected_provenance):
+        raise ValueError("resume physical/package provenance mismatch")
+    policy_steps = payload.get("policy_steps")
+    rollouts, num_envs = source_config["rollouts"], source_config["num_envs"]
+    if type(rollouts) is not int or rollouts < 1 or type(num_envs) is not int or num_envs < 1:
+        raise ValueError("resume rollout/num-envs must be positive integers")
+    if type(policy_steps) is not int or policy_steps <= 0 or policy_steps % rollouts:
+        raise ValueError("resume policy_steps must be a positive integer multiple of rollouts")
+    transitions = payload.get("environment_transitions")
+    if type(transitions) is not int or transitions != policy_steps * num_envs:
+        raise ValueError("resume environment_transitions mismatch")
+    if type(updates) is not int or updates <= policy_steps // rollouts:
+        raise ValueError("resume total updates must be greater than completed updates")
+    if expected_config.get("total_transitions") not in (None, updates * rollouts * num_envs):
+        raise ValueError("resume total-transitions mismatch")
+    state = payload.get("model")
+    target = model.state_dict()
+    if not isinstance(state, dict) or state.keys() != target.keys():
+        raise ValueError("resume model state keys mismatch")
+    for name, value in state.items():
+        if not isinstance(value, torch.Tensor) or value.shape != target[name].shape or value.dtype != target[name].dtype:
+            raise ValueError(f"resume model tensor mismatch: {name}")
+    saved_optimizer = payload.get("optimizer")
+    if not isinstance(saved_optimizer, dict) or not isinstance(saved_optimizer.get("state"), dict):
+        raise ValueError("resume requires a complete PPO Adam optimizer")
+    groups = saved_optimizer.get("param_groups", [])
+    if len(groups) != len(optimizer.param_groups):
+        raise ValueError("resume optimizer group topology mismatch")
+    ids = []
+    for saved, live in zip(groups, optimizer.param_groups):
+        if len(saved.get("params", [])) != len(live["params"]):
+            raise ValueError("resume optimizer parameter count mismatch (partial teacher optimizer)")
+        if {k: v for k, v in saved.items() if k != "params"} != {k: v for k, v in live.items() if k != "params"}:
+            raise ValueError("resume optimizer hyperparameters/LR mismatch")
+        ids.extend(saved["params"])
+        for param_id, param in zip(saved["params"], live["params"]):
+            adam = saved_optimizer["state"].get(param_id, {})
+            required = {"step", "exp_avg", "exp_avg_sq"} | ({"max_exp_avg_sq"} if saved["amsgrad"] else set())
+            if adam.keys() != required:
+                raise ValueError("resume requires complete Adam state for every PPO parameter")
+            for key, tensor in adam.items():
+                shape = torch.Size([]) if key == "step" else param.shape
+                if not isinstance(tensor, torch.Tensor) or tensor.shape != shape:
+                    raise ValueError(f"resume optimizer tensor shape mismatch: {param_id}.{key}")
+                if key != "step" and tensor.dtype != param.dtype:
+                    raise ValueError("resume optimizer tensor dtype mismatch")
+            if adam["step"].item() <= 0 or adam["step"].item() % 1:
+                raise ValueError("resume Adam step must be a positive integer")
+    if len(set(ids)) != len(ids) or set(ids) != saved_optimizer["state"].keys():
+        raise ValueError("resume optimizer state topology mismatch")
+    if {id(p) for g in optimizer.param_groups for p in g["params"]} != {id(p) for p in model.parameters() if p.requires_grad}:
+        raise ValueError("resume target optimizer must own every trainable model parameter")
+    if _finite_paths(state, "model") or _finite_paths(saved_optimizer, "optimizer"):
+        raise ValueError("resume non-finite model/optimizer state")
+    try:
+        torch.Generator(device="cpu").set_state(payload["torch_rng"])
+        np.random.RandomState().set_state(payload["numpy_rng"])
+        random.Random().setstate(payload["python_rng"])
+        cuda_rng = payload["cuda_rng"]
+        if cuda_rng is not None:
+            if not isinstance(cuda_rng, list): raise ValueError("CUDA RNG must be a list")
+            for tensor in cuda_rng:
+                if not isinstance(tensor, torch.Tensor) or tensor.dtype != torch.uint8 or tensor.ndim != 1 or tensor.numel() == 0:
+                    raise ValueError("invalid CUDA RNG byte tensor")
+        if cuda_device_count is not None:
+            if cuda_device_count < 1 or not isinstance(cuda_rng, list) or len(cuda_rng) != cuda_device_count:
+                raise ValueError("CUDA RNG logical device count mismatch")
+            if torch.cuda.is_available():
+                for index, tensor in enumerate(cuda_rng):
+                    torch.Generator(device=f"cuda:{index}").set_state(tensor)
+    except (KeyError, TypeError, RuntimeError, ValueError) as error:
+        raise ValueError(f"resume RNG state invalid: {error}") from error
+    return payload
+
+
+def resume_lineage(path: str | Path, payload: dict[str, Any]) -> dict[str, Any]:
+    with Path(path).open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {"resume_checkpoint": str(Path(path).expanduser().resolve()), "mode": "ppo_resume",
+            "resume": {"sha256": digest, "source_commit": payload["provenance"].get("source_commit"),
+                       "previous_policy_steps": payload["policy_steps"],
+                       "previous_environment_transitions": payload["environment_transitions"],
+                       "previous_updates": payload["policy_steps"] // payload["config"]["rollouts"],
+                       "physics_restart": "full_start_new_episodes",
+                       "source_config": payload["config"], "source_provenance": payload["provenance"]}}
+
+
+def restore_v4_rng(payload: dict[str, Any], *, device: torch.device) -> None:
+    # Called only after model/Adam construction and fresh physical reset.
+    random.setstate(payload["python_rng"])
+    np.random.set_state(payload["numpy_rng"])
+    torch.set_rng_state(payload["torch_rng"])
+    if device.type == "cuda":
+        torch.cuda.set_rng_state_all(payload["cuda_rng"])
+
+
 def _sync(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -197,6 +342,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None, separate_critic: bool = False,
                     warmstart: str | Path | None = None,
+                    resume_checkpoint: str | Path | None = None,
                     expected_warmstart_provenance: dict[str, Any] | None = None,
                     on_update: Callable[[dict[str, float]], None] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
     """Execute canonical PPO with finite-horizon terminal bootstrapping.
@@ -206,6 +352,8 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     observation; true terminations do not bootstrap and reset afterward.
     """
     validate_learning_rate(learning_rate)
+    if warmstart is not None and resume_checkpoint is not None:
+        raise ValueError("warmstart and resume-checkpoint are mutually exclusive")
     if min(updates, rollouts, learning_epochs, mini_batches) < 1:
         raise ValueError("updates, rollouts, learning_epochs and mini_batches must be positive")
     if rollouts * adapter.num_envs < mini_batches:
@@ -213,6 +361,9 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
                                          mini_batches=mini_batches, device=str(adapter.device), separate_critic=separate_critic, learning_rate=learning_rate)
     config, provenance = dict(config or {}), dict(provenance or {})
+    actual_device = "gpu" if adapter.device.type == "cuda" else "cpu"
+    if resume_checkpoint is not None and config.get("device", actual_device) != actual_device:
+        raise ValueError("resume runtime device differs from fixed config; use inspect_v4_resume for CPU diagnostics")
     warmstart_checkpoint = str(Path(warmstart).expanduser().resolve()) if warmstart is not None else None
     transfer_mode = None
     # The PPO agent and its full actor/value Adam are always new. A warm-start
@@ -224,6 +375,21 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     lineage = {"separate_critic": bool(separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
                "warmstart_transfer_mode": transfer_mode,
                "mode": "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"}
+    config.update({"updates": updates, "rollouts": rollouts, "num_envs": adapter.num_envs,
+                   "learning_epochs": learning_epochs, "mini_batches": mini_batches,
+                   "learning_rate": learning_rate, "separate_critic": bool(separate_critic)})
+    config.setdefault("seed", 0)
+    config.setdefault("device", "gpu" if adapter.device.type == "cuda" else "cpu")
+    resumed = None
+    if resume_checkpoint is not None:
+        resumed = inspect_v4_resume(resume_checkpoint, model, agent.optimizer,
+            expected_config=config, expected_provenance=provenance, updates=updates,
+            cuda_device_count=torch.cuda.device_count() if adapter.device.type == "cuda" else None)
+        model.load_state_dict(resumed["model"], strict=True)
+        agent.optimizer.load_state_dict(resumed["optimizer"])
+        lineage = {key: resumed["provenance"][key] for key in ("warmstart_checkpoint", "warmstart_transfer_mode")
+                   if key in resumed["provenance"]}
+        lineage.update(resume_lineage(resume_checkpoint, resumed))
     config.update(lineage); provenance.update(lineage)
     config["learning_rate"] = agent.optimizer.param_groups[0]["lr"]
     agent.enable_training_mode(True, apply_to_models=True)
@@ -231,9 +397,11 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     episode_return = torch.zeros((adapter.num_envs, 1), device=adapter.device)
     episode_length = torch.zeros_like(episode_return)
     rows: list[dict[str, float]] = []
-    policy_steps = 0
+    policy_steps = resumed["policy_steps"] if resumed is not None else 0
     telemetry = V4TelemetryAccumulator(adapter.num_envs, adapter.device) if hasattr(adapter, "telemetry_snapshot") else None
-    for update in range(1, updates + 1):
+    if resumed is not None:
+        restore_v4_rng(resumed, device=adapter.device)
+    for update in range(policy_steps // rollouts + 1, updates + 1):
         _sync(adapter.device); sampled = time.perf_counter()
         reward_sum = torch.zeros((), device=adapter.device); done_count = torch.zeros((), device=adapter.device)
         valid = torch.ones((), dtype=torch.bool, device=adapter.device)

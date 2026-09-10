@@ -254,3 +254,54 @@ ownership-disjoint geoms in real models, rejects unsupported cones, and skips
 live contacts with inactive `efc_address=-1` without allowing masked NaN
 positions into a lever arm. General cone/helper parity and real slip diagnostics
 are still separate work.
+
+## Continuing a v4 PPO run
+
+`train --resume-checkpoint CHECKPOINT --updates TOTAL` restores exact model,
+full Adam and Python/NumPy/Torch/CUDA sampling RNG at a completed rollout
+boundary. `TOTAL` is cumulative, not additional: resuming update512 to4096
+runs updates513–4096 (3584 additional; 268,435,456 total B2048×32 transitions).
+Use the same package path, identity/split seed, device, environment/rollout
+counts, PPO epochs/minibatches/LR, critic architecture and runtime settings.
+Defaults do not inherit from the checkpoint: any fixed CLI drift is rejected.
+`--warmstart` and `--resume-checkpoint` are mutually exclusive. Teacher Adam,
+missing/partial optimizer state, non-finite tensors, architecture conversion,
+non-null normalizers and old ABI contracts cannot enter resume.
+
+After the previous writer has exited successfully, an operator can extend its
+run using the original fixed arguments, replacing the initialization/budget:
+
+```bash
+# Keep the original --package, --identity and all other fixed arguments.
+python tools/train_manorl_autonomy.py train \
+  --package "$ORIGINAL_PACKAGE" --identity cube2_02_2833 \
+  --device gpu --num-envs 2048 --rollouts 32 \
+  --learning-epochs 4 --mini-batches 16 --learning-rate 3e-5 --separate-critic \
+  --persistentworkspace --ccd-contacts-per-world 121 --seed 0 --split-seed 0 \
+  --resume-checkpoint "$COMPLETED_CHECKPOINT" --updates 4096 \
+  --total-transitions 268435456 --checkpoint "$NEW_OUTPUT" \
+  --wandb-run-id "$EXISTING_RUN_ID"
+```
+
+W&B requires an explicit `--wandb-run-id` or `WANDB_RUN_ID` and online
+`resume="must"`; it cannot silently create a new resumed run. The previous ID
+is equality-checked when saved in the checkpoint. Older checkpoints need the
+operator-supplied ID. Previous configuration and provenance remain in resume
+lineage; the new budget is updated with `allow_val_change=True`. The operator
+must ensure there is only one writer. CPU tests may explicitly use `--no-wandb`.
+
+Physics state is not checkpointed. Every continuation declares
+`physics_restart="full_start_new_episodes"`; episode returns, lengths and
+telemetry accumulators reset. RNG is restored after runtime reset, just before
+the first action. This preserves optimizer/sampling progress but does not
+continue an unfinished physical trajectory bit-exactly. Rows, W&B history,
+checkpoint suffixes and agent timesteps use cumulative counters; only new
+updates are returned. Resume lineage includes source SHA256/commit, previous
+counts and warm-start history. The summary distinguishes `start_update`,
+`completed_updates` and `additional_updates`.
+
+`inspect_v4_resume` loads tensors on CPU and validates model/Adam/config and
+physical provenance without constructing physics or rollout storage. This
+supports inspecting a GPU checkpoint on CPU; actual training retains the fixed
+device, and CUDA resume requires the saved logical visible-device RNG count.
+Only trusted local Torch checkpoint files are supported.

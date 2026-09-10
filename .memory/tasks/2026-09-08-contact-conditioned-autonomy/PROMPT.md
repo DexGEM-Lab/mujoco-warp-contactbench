@@ -103,7 +103,7 @@ The active implementation contract is the pinned cube2 `manorl.autonomy.*.v4` se
 
 Restore the smallest usable public v4 `train`/frozen `evaluate` route for TRAIN identity `cube2_02_2833`. Reuse mature RlGamesPPO GAE/clip/Normal/Adam logic rather than reimplementing returns. PPO memory must retain raw 957 observations and raw Normal actions; PointNet remains registered/trainable and checkpointed. Reset is driven by `runtime.last_done`; terminal observation/reward is stored before reset and finite-horizon bootstrap remains correct. Frozen evaluation begins at reference frame 0 and reports natural termination; its optional full-horizon diagnostic labels continuation after that boundary.
 
-Authorized runtime evidence is exactly one local CPU N=1 two-update integration test and a short frozen load/evaluate pass. The previous long-training stop remains: no server, remote, long GPU, W&B/network training, or reward/physics/clock/geometry tuning follows from this implementation. Real CLI training defaults W&B enabled; the local test may explicitly disable it. The B4096 GPU public surface exposes num-envs, persistent workspace, CCD121 and current njmax512 allocation contract. Cache float hashes are recorded separately and do not block compatible package/asset/source/ABI evaluation.
+That restoration worker's runtime evidence was bounded to one local CPU N=1 two-update integration test and a short frozen load/evaluate pass. The restriction was implementation-local; the current user-authorized long-training objective and parent-owned GPU continuation are specified below. Real CLI training defaults W&B enabled; the local test may explicitly disable it. The B4096 GPU public surface exposes num-envs, persistent workspace, CCD121 and current njmax512 allocation contract. Cache float hashes are recorded separately and do not block compatible package/asset/source/ABI evaluation.
 
 ## v4 learning-rate follow-up (latest bounded scope)
 
@@ -115,3 +115,9 @@ B2048 run has no lift; fixed-data N=1 attribution identifies actor-update drift,
 not critic dominance, and motivates `3e-5`. The user authorizes a future GPU1
 B2048 run; launching it remains parent-owned and outside this implementation.
 The overall empirical autonomy objective remains unchanged.
+
+## v4 cumulative optimizer continuation (current implementation scope)
+
+The user requests more RL training. The parent targets cumulative 4096 PPO updates at fixed B2048×32, learning rate 3e-5, four epochs and 16 minibatches. The running immutable update512 job is parent-owned and must not be interrupted by this worker. This slice implements persisted continuation only; deployment, process handoff, W&B writer exclusivity and empirical evaluation remain parent-owned.
+
+Add mutually exclusive `--resume-checkpoint`/`--warmstart`; resume restores exact v4 model, full Adam, RNG and cumulative counters. `--updates` is the total target, strictly greater than completed updates. Reject fixed config/architecture/physical/package/ABI drift, partial teacher optimizers, non-finite state and unfinished rollout progress before W&B initialization. Physics and episode telemetry restart at full-start new episodes, explicitly recorded; ongoing trajectories are not bit-exactly resumed. Require an explicit existing W&B run ID with `resume=must` and preserve previous configuration/warm-start lineage. Validation uses CPU fake adapters with real RlGamesPPO, W&B stubs and the parent's local immutable old-format checkpoint. No remote, GPU, real physics or network work is assigned to this worker.

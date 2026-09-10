@@ -2,10 +2,25 @@
 
 The overarching objective remains empirical autonomous grasp/lift/transport
 replication. The B2048 W&B run `bd9dd2d7` completed 33,554,432 transitions
-without lift. The current bounded implementation exposes a positive finite
-PPO learning rate without changing the default `3e-4` or PPO/physics semantics.
-The user authorized a future GPU1 B2048 follow-up; this worker runs only CPU
-fake-adapter tests, with no physics, GPU, remote, or W&B activity.
+without lift. The user requests longer RL training; the parent targets cumulative
+4096 PPO updates at fixed B2048×32, LR 3e-5, four epochs and 16 minibatches.
+The active update512 lower-LR job and its handoff are parent-owned. This worker
+implements continuation and tests it on CPU fake adapters without launching
+physics, GPU, remote or W&B jobs.
+
+The v4 resume contract preserves exact model/full Adam, sampling RNG and
+cumulative policy-step/transition counts. Fixed config, full architecture,
+physical/package/ABI provenance and finite complete optimizer state are checked
+before creating a W&B writer. Physical Warp state is absent from checkpoints:
+resume starts full-start new episodes and resets episode/telemetry accumulators.
+RNG restoration occurs after that reset, immediately before the first action.
+An explicit reset-boundary fixture reproduces the uninterrupted next samples,
+model and Adam exactly; this does not establish bit-exact ongoing physical
+trajectory continuation. CPU inspection of the actual old update192 artifact
+validates all 29 Adam states (step 12288), policy_steps 6144 and 12,582,912
+transitions for target4096. W&B resumes only an explicit existing ID with
+`resume=must`; the parent must prevent overlapping writers. Evidence: OPS entry
+“v4 persisted optimizer continuation”.
 
 v4 raw state is 957-D. The registered PointNet converts only the raw cloud to
 the 829-D actor/value feature inside `AutonomyActorCritic`; PPO memory retains

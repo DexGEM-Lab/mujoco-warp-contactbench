@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 import numpy as np
 import torch
 
-from sim.manorl.autonomy_batch_training import inspect_v4_warmstart, load_frozen_v4, run_batched_ppo
+from sim.manorl.autonomy_batch_training import inspect_v4_resume, inspect_v4_warmstart, load_frozen_v4, resume_lineage, run_batched_ppo
 from sim.manorl.autonomy_telemetry import configure_wandb_axis
 from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata
 from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything, v4_ppo_config, validate_learning_rate
@@ -76,10 +76,25 @@ def _provenance(catalog, split, adapter):
 def _wandb(args, metadata):
     if not args.wandb: return None
     import wandb
+    run_id = args.wandb_run_id or os.environ.get("WANDB_RUN_ID")
+    mode = args.wandb_mode or os.environ.get("WANDB_MODE", "online")
+    if args.resume_checkpoint and (not run_id or mode != "online"):
+        raise ValueError("W&B resume requires explicit --wandb-run-id/WANDB_RUN_ID and online mode")
+    options = {"id": run_id} if run_id else {}
+    if args.resume_checkpoint:
+        options["resume"] = "must"
     run = wandb.init(project=args.wandb_project or os.environ.get("WANDB_PROJECT", "mujoco-mano"),
                       entity=args.wandb_entity or os.environ.get("WANDB_ENTITY", "sunjay45711-dexerto"),
-                      config=metadata, mode=args.wandb_mode or os.environ.get("WANDB_MODE", "online"), reinit=True)
-    configure_wandb_axis(run)
+                      config=None if args.resume_checkpoint else metadata, mode=mode, reinit=True, **options)
+    try:
+        metadata["config"]["wandb_run_id"] = run.id
+        # Resume without an init-time config conflict, preserving the checkpoint's
+        # previous configuration in lineage before publishing the new total budget.
+        run.config.update(metadata, allow_val_change=True)
+        configure_wandb_axis(run)
+    except BaseException:
+        run.finish(exit_code=1)
+        raise
     return run
 
 
@@ -131,7 +146,30 @@ def train(args):
         )
     lineage = {"separate_critic": bool(args.separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
                "warmstart_transfer_mode": transfer_mode, "mode": mode}
+    completed_updates = 0
+    if args.resume_checkpoint:
+        # Metadata and every model/Adam tensor are validated before creating a
+        # W&B writer. A CPU model suffices; no B*rollout memory is allocated here.
+        validation_model = AutonomyActorCritic(adapter.observation_space, adapter.action_space,
+                                               device="cpu", separate_critic=args.separate_critic)
+        validation_optimizer = torch.optim.Adam(validation_model.parameters(), lr=args.learning_rate)
+        payload = inspect_v4_resume(args.resume_checkpoint, validation_model, validation_optimizer,
+            expected_config=config, expected_provenance=provenance, updates=args.updates,
+            cuda_device_count=torch.cuda.device_count() if args.device == "gpu" else None)
+        completed_updates = payload["policy_steps"] // args.rollouts
+        run_id = args.wandb_run_id or os.environ.get("WANDB_RUN_ID")
+        if args.wandb:
+            if not run_id:
+                raise ValueError("W&B resume requires explicit --wandb-run-id or WANDB_RUN_ID")
+            previous_id = payload["config"].get("wandb_run_id")
+            if previous_id is not None and previous_id != run_id:
+                raise ValueError("W&B resume run ID differs from checkpoint")
+        lineage = {key: payload["provenance"][key] for key in ("warmstart_checkpoint", "warmstart_transfer_mode")
+                   if key in payload["provenance"]}
+        lineage.update(resume_lineage(args.resume_checkpoint, payload))
+        del validation_model, validation_optimizer, payload
     config.update(lineage); provenance.update(lineage)
+    config["wandb_run_id"] = args.wandb_run_id or os.environ.get("WANDB_RUN_ID")
     metadata = {"training_contract": "manorl.autonomy.training.v4.single_reference", "config": config,
                 "resolved": _resolved_telemetry_config(adapter, args), "provenance": provenance}
     run = _wandb(args, metadata)
@@ -148,13 +186,14 @@ def train(args):
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, learning_rate=args.learning_rate, checkpoint=args.checkpoint,
             checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
             separate_critic=args.separate_critic, warmstart=warmstart_checkpoint,
+            resume_checkpoint=args.resume_checkpoint,
             expected_warmstart_provenance=warmstart_expected, on_update=publish)
     except BaseException:
         if run is not None: run.finish(exit_code=1)
         raise
     else:
         if run is not None: run.finish(exit_code=0)
-    print(json.dumps({"checkpoint": args.checkpoint, "metrics": str(Path(args.checkpoint).with_suffix(Path(args.checkpoint).suffix + ".metrics.jsonl")), "updates": len(rows), "cache_hash": provenance["cache_hash_recorded_not_compared"]}), flush=True)
+    print(json.dumps({"checkpoint": args.checkpoint, "metrics": str(Path(args.checkpoint).with_suffix(Path(args.checkpoint).suffix + ".metrics.jsonl")), "updates": args.updates, "start_update": completed_updates, "completed_updates": completed_updates + len(rows), "additional_updates": len(rows), "cache_hash": provenance["cache_hash_recorded_not_compared"]}), flush=True)
 
 
 def _checkpoint_separate_critic(payload):
@@ -243,7 +282,10 @@ def build_parser():
     train_parser.add_argument("--learning-epochs", type=int, default=4); train_parser.add_argument("--mini-batches", type=int, default=16); train_parser.add_argument("--total-transitions", type=int)
     train_parser.add_argument("--checkpoint", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt"); train_parser.add_argument("--checkpoint-interval", type=int, default=16)
     train_parser.add_argument("--learning-rate", type=float, default=3e-4, help="finite positive PPO Adam learning rate (default: 3e-4)")
-    train_parser.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
+    initialization = train_parser.add_mutually_exclusive_group()
+    initialization.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
+    initialization.add_argument("--resume-checkpoint", help="restore v4 model/Adam/RNG; --updates is the TOTAL cumulative target, with fresh full-start episodes")
+    train_parser.add_argument("--wandb-run-id", help="existing W&B run ID; required explicitly or via WANDB_RUN_ID on resume")
     train_parser.add_argument("--separate-critic", action="store_true", help="use an independent value trunk; shared remains the default")
     train_parser.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True); train_parser.add_argument("--wandb-project"); train_parser.add_argument("--wandb-entity"); train_parser.add_argument("--wandb-mode"); train_parser.set_defaults(fn=train)
     eval_parser = subs.add_parser("evaluate", parents=[common]); eval_parser.set_defaults(num_envs=1); eval_parser.add_argument("--checkpoint", required=True); eval_parser.add_argument("--steps", type=int); eval_parser.add_argument("--full-horizon-diagnostic", action="store_true")

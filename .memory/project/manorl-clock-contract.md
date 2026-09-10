@@ -37,3 +37,10 @@ an explicit reset. This first learner is intentionally not a vectorization or
 generalization claim. Final autonomy acceptance requires a frozen checkpoint to
 consume a new held-out reference without per-reference retraining, manual masks,
 or special reward; max lift plus endpoint pose is insufficient.
+
+## v4 optimizer continuation boundary
+Autonomy v4 optimizer resume equality-gates physical clock, asset/package/ABI
+provenance and fixed training configuration. Warp physical state is not saved:
+continuation declares `full_start_new_episodes`, resets episode telemetry, and
+restores sampling RNG after reset. Cumulative PPO counters and Adam continue.
+See `docs/manorl_autonomy_v4.md` → “Continuing a v4 PPO run”.
