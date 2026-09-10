@@ -1,0 +1,143 @@
+{
+  "active_object": "pitcherbase",
+  "command_track": {
+    "frames": 1430,
+    "path": "guangxue_pitcher06_row34_receiver_commands.npz",
+    "sha256": "aad6cfbc2503fa4f351ace6746fd801a3ad5d69c3613b82862bf10e9ea108fb9"
+  },
+  "edit": {
+    "close_end_offset": 33,
+    "close_start_offset": 16,
+    "finger_targets": {
+      "j1_thumb_cmc_abd": 0.24736149609088898,
+      "j1_thumb_cmc_flex": 0.252755343914032,
+      "j1_thumb_cmc_twist": -0.29019200801849365,
+      "j1_thumb_ip": 0.8531080484390259,
+      "j1_thumb_mcp_abd": 0.1361905336380005,
+      "j1_thumb_mcp_flex": 0.7217270731925964,
+      "j2_index_dip": 0.7012192010879517,
+      "j2_index_mcp_abd": -0.3490000069141388,
+      "j2_index_mcp_flex": 0.9864653944969177,
+      "j2_index_pip": 0.7206457853317261,
+      "j3_middle_dip": 0.9588416218757629,
+      "j3_middle_mcp_abd": -0.5239999890327454,
+      "j3_middle_mcp_flex": 0.749738335609436,
+      "j3_middle_pip": 1.148301601409912,
+      "j4_ring_dip": 1.1316452026367188,
+      "j4_ring_mcp_abd": -0.5239999890327454,
+      "j4_ring_mcp_flex": 0.710446834564209,
+      "j4_ring_pip": 1.1673884391784668,
+      "j5_pinky_dip": 0.6913226246833801,
+      "j5_pinky_mcp_abd": -0.6980000138282776,
+      "j5_pinky_mcp_flex": 0.9729115962982178,
+      "j5_pinky_pip": 0.6754765510559082
+    },
+    "grasp_approach_end_offset": 33,
+    "grasp_approach_start_offset": 16,
+    "name": "pitcher_preserve_acquired_contact_then_lift",
+    "object_relative_grasp": {
+      "rotation_xyzw": [
+        0.23020300871355406,
+        0.5277803730265248,
+        0.744659227411916,
+        0.33754568232684906
+      ],
+      "translation": [
+        0.15831826430272644,
+        -0.031274794018104415,
+        0.03756924772663962
+      ]
+    },
+    "release_at_end": true,
+    "release_end_step": 776,
+    "release_start_step": 714,
+    "stages": [
+      {
+        "end_step": 294,
+        "start_step": 218,
+        "wrist_translation_world": [
+          0,
+          0,
+          0.1434
+        ]
+      },
+      {
+        "end_step": 732,
+        "start_step": 658,
+        "wrist_translation_world": [
+          0,
+          0,
+          -0.1434
+        ]
+      }
+    ],
+    "translation": [
+      0,
+      0,
+      0
+    ],
+    "wrist_release_end_step": 776,
+    "wrist_release_start_step": 714
+  },
+  "name": "guangxue_pitcher06_row34_receiver_template_v1",
+  "schema": "direct_capture_repair.v1",
+  "scope": "Receiver-bound pitcher frozen command residual: receiver reference/object path plus phase-resampled donor compensation and safe release primitive. CPU preparation only; physics outcome untested.",
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "frames": 1192,
+    "row": 34,
+    "uuid": "62c28422-d938-4e31-bb01-45792bffd8c2",
+    "version": 5
+  },
+  "template_transfer": {
+    "command_transfer": {
+      "canonical_dof_order": "ARTx,ARTy,ARTz,ARRx,ARRy,ARRz followed by 22 named finger axes; no qpos reordering",
+      "donor_command_frames": 1430,
+      "donor_command_sha256": "f84c5bc492ae552101a554eee436be7413a209a7093a941867f12b4cc316e0d0",
+      "method": "donor_frozen_command_minus_donor_reference_residual_added_to_receiver_reference",
+      "preserved_receiver_command_prefix": [
+        0,
+        39
+      ],
+      "release": "donor residual after mapped receiver endpoint is retained against the receiver endpoint reference, preserving the verified thumb-clear then sideways handle exit primitive"
+    },
+    "donor_movement_end_step": 823,
+    "kind": "pitcher",
+    "orientation": {
+      "candidate_approach_cosines": {
+        "donor_initial_alignment": 0.9613715208808878,
+        "receiver_local_alignment": 0.9989923730987452
+      },
+      "donor_initial_yaw_rad": -0.643855132983072,
+      "receiver_initial_inverse_donor_initial_xyzw": [
+        0.00012695501576157585,
+        -0.00039419618563249536,
+        0.13890661970541726,
+        0.9903053970840541
+      ],
+      "receiver_initial_yaw_rad": -0.9226045199708333,
+      "receiver_observed_approach_world": [
+        0.08012214303016663,
+        -0.16516758501529694,
+        0.03809539973735809
+      ],
+      "strategy": "receiver_local_alignment"
+    },
+    "phase_mapping": "step = round(donor_step * receiver_movement_end / donor_movement_end)",
+    "preserved_reference_prefix": [
+      0,
+      39
+    ],
+    "receiver_movement_end_step": 732,
+    "receiver_row": 34,
+    "recipe_contact_phase_anchor": [
+      0,
+      195
+    ],
+    "template_row": 31
+  }
+}
