@@ -83,6 +83,7 @@ def test_v4_ppo_raw_action_terminal_reset_and_checkpoint_roundtrip(tmp_path, mon
     torch.testing.assert_close(adapter.physical[0],torch.clamp(adapter.seen[0],-1.,1.))
     # terminal t+1 was observed before prepare_action returned frame zero.
     assert adapter.phase == 0 and rows[0]['terminations']==2.
+    assert rows[0]['config/learning_rate'] == 3e-4
     assert rows[0]['config/grad_norm_clip'] == .5
     assert rows[0]['config/normalize_observations'] == 0.
     assert rows[0]['config/normalize_advantages'] == 1.
@@ -223,3 +224,81 @@ def test_frozen_separate_critic_architecture_is_selected_and_strictly_loaded(tmp
     for name,value in source.state_dict().items(): assert torch.equal(value,target.state_dict()[name])
     with pytest.raises(ValueError,match='architecture'):
         training.load_frozen_v4(path,_model(),expected_provenance={'package_digest':'p'})
+
+
+def test_v4_learning_rate_defaults_and_model_only_warmstart(tmp_path):
+    import sim.manorl.autonomy_batch_training as training
+    from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config, v4_ppo_config
+    from tools import train_manorl_autonomy as cli
+    adapter = _TinyV4Adapter()
+    assert cli.parse_args(['train']).learning_rate == 3e-4
+    default_cfg = v4_ppo_config(rollouts=2, learning_epochs=1, mini_batches=1)
+    assert default_cfg['learning_rate'] == 3e-4
+    assert v4_ppo_config(rollouts=2, learning_epochs=1, mini_batches=1, learning_rate=3e-5) == {
+        **default_cfg, 'learning_rate': 3e-5}
+    _, default_agent = build_batched_runtime(adapter, rollouts=2, learning_epochs=1, mini_batches=1, device='cpu')
+    assert default_agent.optimizer.param_groups[0]['lr'] == 3e-4
+    teacher = _v4_payload(_model(), {})
+    teacher['optimizer'] = {'param_groups': [{'lr': .1}], 'state': {'ignored': True}}
+    teacher['config'] = {'learning_rate': .1}
+    source = tmp_path / 'teacher.pt'; torch.save(teacher, source)
+    checkpoint = tmp_path / 'low-lr.pt'
+    _, agent, rows = training.run_batched_ppo(
+        adapter, updates=1, rollouts=2, learning_epochs=1, mini_batches=1,
+        learning_rate=3e-5, warmstart=source, checkpoint=checkpoint,
+        config={'learning_rate': .1},
+    )
+    assert isinstance(agent.optimizer, torch.optim.Adam)
+    assert all(group['lr'] == 3e-5 for group in agent.optimizer.param_groups)
+    assert resolved_v4_ppo_config(agent)['learning_rate'] == 3e-5
+    assert rows[0]['config/learning_rate'] == 3e-5
+    payload = torch.load(checkpoint, weights_only=False)
+    assert payload['config']['learning_rate'] == 3e-5
+    assert payload['optimizer']['param_groups'][0]['lr'] == 3e-5
+    assert payload['config']['mode'] == 'ppo_warmstart'
+
+
+@pytest.mark.parametrize('value', [0., -1., float('nan'), float('inf'), -float('inf')])
+def test_v4_invalid_learning_rate_rejected_before_data_or_builder(value, monkeypatch):
+    import sim.manorl.autonomy_batch_training as training
+    import sim.manorl.autonomy_training as runtime
+    from tools import train_manorl_autonomy as cli
+    def forbidden(*args, **kwargs):
+        pytest.fail('invalid learning rate reached data, physics or model construction')
+    monkeypatch.setattr(cli, '_catalog_and_trajectory', forbidden)
+    monkeypatch.setattr(cli, '_adapter', forbidden)
+    monkeypatch.setattr(training, 'build_batched_runtime', forbidden)
+    monkeypatch.setattr(runtime, 'RandomMemory', forbidden)
+    with pytest.raises(ValueError, match='learning-rate must be finite and positive'):
+        cli.train(cli.parse_args(['train', f'--learning-rate={value}']))
+    with pytest.raises(ValueError, match='learning-rate must be finite and positive'):
+        training.run_batched_ppo(None, updates=1, rollouts=2, learning_epochs=1, mini_batches=1, learning_rate=value)
+    with pytest.raises(ValueError, match='learning-rate must be finite and positive'):
+        runtime.build_batched_runtime(None, rollouts=2, learning_epochs=1, mini_batches=1, device='cpu', learning_rate=value)
+
+
+def test_v4_cli_threads_learning_rate_to_ppo_and_wandb_config(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from tools import train_manorl_autonomy as cli
+    args = cli.parse_args(['train', '--learning-rate', '3e-5', '--checkpoint', str(tmp_path / 'ppo.pt')])
+    trajectory = object(); catalog = SimpleNamespace(trajectories=[trajectory])
+    adapter = SimpleNamespace(num_envs=args.num_envs, observation_dim=RAW_OBSERVATION_DIM, action_dim=ACTION_DIM,
+                              runtime=SimpleNamespace(cache=SimpleNamespace(control_timestep=1/120)))
+    provenance = {key: {} for key in ('asset_pin', 'package_digest', 'manifest_sha256', 'catalog_digest',
+                                     'identity_split', 'contracts', 'identity')}
+    provenance.update(clock={'control_timestep':1/120, 'physics_timestep':1/480, 'physics_substeps':4},
+                      cache_hash_recorded_not_compared='fake')
+    monkeypatch.setattr(cli, '_catalog_and_trajectory', lambda args: (catalog, trajectory))
+    monkeypatch.setattr(cli, 'identity_split', lambda *args, **kwargs: {'train_indices':[0]})
+    monkeypatch.setattr(cli, '_adapter', lambda *args: adapter)
+    monkeypatch.setattr(cli, '_provenance', lambda *args: provenance)
+    observed = {}
+    def wandb(args, metadata): observed['metadata'] = metadata
+    def run(adapter, **kwargs): observed['kwargs'] = kwargs; return None, None, []
+    monkeypatch.setattr(cli, '_wandb', wandb)
+    monkeypatch.setattr(cli, 'run_batched_ppo', run)
+    cli.train(args)
+    assert observed['kwargs']['learning_rate'] == 3e-5
+    assert observed['kwargs']['config']['learning_rate'] == 3e-5
+    assert observed['metadata']['resolved']['ppo']['learning_rate'] == 3e-5
+    assert observed['metadata']['config']['learning_rate'] == 3e-5

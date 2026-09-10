@@ -104,3 +104,14 @@ The active implementation contract is the pinned cube2 `manorl.autonomy.*.v4` se
 Restore the smallest usable public v4 `train`/frozen `evaluate` route for TRAIN identity `cube2_02_2833`. Reuse mature RlGamesPPO GAE/clip/Normal/Adam logic rather than reimplementing returns. PPO memory must retain raw 957 observations and raw Normal actions; PointNet remains registered/trainable and checkpointed. Reset is driven by `runtime.last_done`; terminal observation/reward is stored before reset and finite-horizon bootstrap remains correct. Frozen evaluation begins at reference frame 0 and reports natural termination; its optional full-horizon diagnostic labels continuation after that boundary.
 
 Authorized runtime evidence is exactly one local CPU N=1 two-update integration test and a short frozen load/evaluate pass. The previous long-training stop remains: no server, remote, long GPU, W&B/network training, or reward/physics/clock/geometry tuning follows from this implementation. Real CLI training defaults W&B enabled; the local test may explicitly disable it. The B4096 GPU public surface exposes num-envs, persistent workspace, CCD121 and current njmax512 allocation contract. Cache float hashes are recorded separately and do not block compatible package/asset/source/ABI evaluation.
+
+## v4 learning-rate follow-up (latest bounded scope)
+
+Expose optional `train --learning-rate` (finite, positive; default `3e-4`) through
+the canonical PPO builder and metadata, with model-only warm-start preserving
+the selected fresh-Adam rate. No algorithm, reward, physics, normalizer, model,
+or other logging changes. Validate with CPU fake adapters only. The completed
+B2048 run has no lift; fixed-data N=1 attribution identifies actor-update drift,
+not critic dominance, and motivates `3e-5`. The user authorizes a future GPU1
+B2048 run; launching it remains parent-owned and outside this implementation.
+The overall empirical autonomy objective remains unchanged.

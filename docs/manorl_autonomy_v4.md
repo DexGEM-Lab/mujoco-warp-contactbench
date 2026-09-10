@@ -169,6 +169,21 @@ python tools/train_manorl_autonomy.py evaluate --device cpu --num-envs 1 \
   --no-persistentworkspace --checkpoint /tmp/cube2-v4-warmstart-smoke.pt --steps 4
 ```
 
+`train --learning-rate` selects a finite positive Adam step size; the default
+remains `3e-4`. Model-only warm-start preserves the requested fresh-optimizer
+rate. Checkpoint config, W&B resolved config, and per-update `config/learning_rate`
+record it. The fixed N=1 first-update attribution motivates this lower-rate
+B2048 follow-up; it does not establish lift success:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python tools/train_manorl_autonomy.py train \
+  --device gpu --num-envs 2048 --persistentworkspace --ccd-contacts-per-world 121 \
+  --updates 512 --rollouts 32 --learning-epochs 4 --mini-batches 16 \
+  --total-transitions 33554432 --checkpoint-interval 64 --learning-rate 3e-5 \
+  --warmstart "$TEACHER" --separate-critic --seed 0 --split-seed 0 --wandb \
+  --checkpoint outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_lr3e-5.pt
+```
+
 Frozen evaluation always resets at reference frame 0, follows deterministic
 clipped means, and reports the natural first termination. Its optional
 `--full-horizon-diagnostic` continues after that boundary only while preserving

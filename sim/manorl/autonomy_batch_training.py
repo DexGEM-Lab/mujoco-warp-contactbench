@@ -25,7 +25,7 @@ from sim.manorl.autonomy_contracts import (
 )
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
 from sim.manorl.autonomy_v4_telemetry import V4TelemetryAccumulator
-from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config
+from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config, validate_learning_rate
 
 
 def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
@@ -193,7 +193,7 @@ def _sync(device: torch.device) -> None:
 
 
 def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epochs: int,
-                    mini_batches: int, checkpoint: str | Path | None = None,
+                    mini_batches: int, learning_rate: float = 3e-4, checkpoint: str | Path | None = None,
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None, separate_critic: bool = False,
                     warmstart: str | Path | None = None,
@@ -205,12 +205,13 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     retain it as false, so RlGamesPPO bootstraps from the recorded terminal-next
     observation; true terminations do not bootstrap and reset afterward.
     """
+    validate_learning_rate(learning_rate)
     if min(updates, rollouts, learning_epochs, mini_batches) < 1:
         raise ValueError("updates, rollouts, learning_epochs and mini_batches must be positive")
     if rollouts * adapter.num_envs < mini_batches:
         raise ValueError("mini-batches cannot exceed rollout transitions")
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
-                                         mini_batches=mini_batches, device=str(adapter.device), separate_critic=separate_critic)
+                                         mini_batches=mini_batches, device=str(adapter.device), separate_critic=separate_critic, learning_rate=learning_rate)
     config, provenance = dict(config or {}), dict(provenance or {})
     warmstart_checkpoint = str(Path(warmstart).expanduser().resolve()) if warmstart is not None else None
     transfer_mode = None
@@ -224,6 +225,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                "warmstart_transfer_mode": transfer_mode,
                "mode": "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"}
     config.update(lineage); provenance.update(lineage)
+    config["learning_rate"] = agent.optimizer.param_groups[0]["lr"]
     agent.enable_training_mode(True, apply_to_models=True)
     observations, _ = adapter.reset()
     episode_return = torch.zeros((adapter.num_envs, 1), device=adapter.device)

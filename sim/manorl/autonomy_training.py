@@ -4,7 +4,7 @@ PPO memory stores raw 957 observations. PointNet is an ordinary registered Torch
 module and builds the 829 actor/value feature inside the model.
 """
 from __future__ import annotations
-import hashlib,json,random
+import hashlib,json,math,random
 from typing import Any
 import gymnasium as gym
 import numpy as np
@@ -157,12 +157,17 @@ class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
         if role=="value": return self.value((self.value_net or self.net)(features)),{}
         raise ValueError("role must be policy or value")
 
-def v4_ppo_config(*, rollouts:int, learning_epochs:int, mini_batches:int) -> dict[str, Any]:
+def validate_learning_rate(learning_rate: float) -> None:
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("learning-rate must be finite and positive")
+
+def v4_ppo_config(*, rollouts:int, learning_epochs:int, mini_batches:int, learning_rate:float=3e-4) -> dict[str, Any]:
     """Installed PPO defaults plus the unchanged v4 overrides, in one source."""
+    validate_learning_rate(learning_rate)
     defaults=PPO_CFG()
     return {"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":mini_batches,
             "discount_factor":defaults.discount_factor,"gae_lambda":defaults.gae_lambda,
-            "learning_rate":3e-4,"ratio_clip":defaults.ratio_clip,"value_clip":defaults.value_clip,
+            "learning_rate":learning_rate,"ratio_clip":defaults.ratio_clip,"value_clip":defaults.value_clip,
             "entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":defaults.learning_starts,
             "grad_norm_clip":defaults.grad_norm_clip,"time_limit_bootstrap":True,
             "experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
@@ -184,11 +189,11 @@ def resolved_v4_ppo_config(agent) -> dict[str, Any]:
             "learning_epochs":cfg.learning_epochs,"mini_batches":cfg.mini_batches,"rollouts":cfg.rollouts}
 
 
-def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False):
+def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False, learning_rate:float=3e-4):
     """Canonical RlGamesPPO over raw-957 storage and the v4 PointNet model."""
+    cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches,learning_rate=learning_rate)
     memory=RandomMemory(memory_size=rollouts,num_envs=adapter.num_envs,device=device)
     model=AutonomyActorCritic(adapter.observation_space,adapter.action_space,device=device,separate_critic=separate_critic,clip_actions=False)
-    cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches)
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
                      observation_space=adapter.observation_space,state_space=None,
                      action_space=adapter.action_space,device=device,cfg=cfg)

@@ -1,12 +1,11 @@
 # Current model
 
 The overarching objective remains empirical autonomous grasp/lift/transport
-replication. The active bounded implementation slice is v4 telemetry for the
-runnable single-reference PPO/frozen-evaluation path on pinned
-`cube2_02_2833`, validated by N=1 CPU two-update physics. This slice exposes
-post-transition reward/contact/physical/action evidence and frozen trace
-artifacts; it does not authorize mutation of the immutable Server1 run, remote
-activity, long training, or W&B/network publication.
+replication. The B2048 W&B run `bd9dd2d7` completed 33,554,432 transitions
+without lift. The current bounded implementation exposes a positive finite
+PPO learning rate without changing the default `3e-4` or PPO/physics semantics.
+The user authorized a future GPU1 B2048 follow-up; this worker runs only CPU
+fake-adapter tests, with no physics, GPU, remote, or W&B activity.
 
 v4 raw state is 957-D. The registered PointNet converts only the raw cloud to
 the 829-D actor/value feature inside `AutonomyActorCritic`; PPO memory retains
@@ -53,8 +52,14 @@ actor/value Adam is constructed before the weights load. The teacher's
 recorded but excluded from the equality gate; control/physics timestep and
 substeps remain equality-gated.
 
-No physical PPO training was launched in the warm-start implementation slice.
-The next meaningful intervention is the parent-approved real GPU/W&B run using
-this teacher initialization. Actual single-trajectory competence remains
-unresolved until frozen physical evaluation demonstrates stable contact/lift
-through the trajectory rather than reason-2 termination.
+The fixed-data N=1 first-32-control diagnostic reproduces the canonical real
+RlGamesPPO update exactly (injected-versus-canonical maximum parameter delta
+zero). Late-phase KL is 0.085064 for the full update, 0.086622 actor-only, and
+3.739e-6 value-only. Actor updates, rather than critic dominance, explain this
+measured drift. Reducing only the step size to `3e-5` lowers late-phase KL to
+0.000847 on the same update. This is a one-update sensitivity result, not a
+historical B2048 replay or proof of grasp: physical evaluation still fails
+without lift. The next intervention is the otherwise fixed B2048 lower-LR
+follow-up from the same model-only teacher initialization. Actual trajectory
+competence requires frozen physical contact/lift/transport evidence. Provenance:
+OPS entry “v4 learning-rate interface and fixed-data attribution”.
