@@ -1,0 +1,115 @@
+{
+  "donor_bundle": "/mnt/nas-222-project/mocap_v2/lance_datasets/dexgem_vla_demo_guangxue_astra_repair_5samples_20260910",
+  "receivers": [
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row20_receiver_template_v1.json",
+      "row": 20
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row21_receiver_template_v1.json",
+      "row": 21
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row22_receiver_template_v1.json",
+      "row": 22
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row23_receiver_template_v1.json",
+      "row": 23
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row24_receiver_template_v1.json",
+      "row": 24
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row25_receiver_template_v1.json",
+      "row": 25
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row26_receiver_template_v1.json",
+      "row": 26
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row27_receiver_template_v1.json",
+      "row": 27
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row28_receiver_template_v1.json",
+      "row": 28
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row29_receiver_template_v1.json",
+      "row": 29
+    },
+    {
+      "command_track": null,
+      "object": "mayonnaisebottle",
+      "patch": "guangxue_bottle05_row30_receiver_template_v1.json",
+      "row": 30
+    },
+    {
+      "command_track": "guangxue_pitcher06_row32_receiver_commands.npz",
+      "object": "pitcherbase",
+      "patch": "guangxue_pitcher06_row32_receiver_template_v1.json",
+      "row": 32
+    },
+    {
+      "command_track": "guangxue_pitcher06_row33_receiver_commands.npz",
+      "object": "pitcherbase",
+      "patch": "guangxue_pitcher06_row33_receiver_template_v1.json",
+      "row": 33
+    },
+    {
+      "command_track": "guangxue_pitcher06_row34_receiver_commands.npz",
+      "object": "pitcherbase",
+      "patch": "guangxue_pitcher06_row34_receiver_template_v1.json",
+      "row": 34
+    },
+    {
+      "command_track": "guangxue_pitcher06_row35_receiver_commands.npz",
+      "object": "pitcherbase",
+      "patch": "guangxue_pitcher06_row35_receiver_template_v1.json",
+      "row": 35
+    },
+    {
+      "command_track": "guangxue_pitcher06_row37_receiver_commands.npz",
+      "object": "pitcherbase",
+      "patch": "guangxue_pitcher06_row37_receiver_template_v1.json",
+      "row": 37
+    },
+    {
+      "command_track": "guangxue_pitcher06_row38_receiver_commands.npz",
+      "object": "pitcherbase",
+      "patch": "guangxue_pitcher06_row38_receiver_template_v1.json",
+      "row": 38
+    },
+    {
+      "command_track": "guangxue_pitcher06_row39_receiver_commands.npz",
+      "object": "pitcherbase",
+      "patch": "guangxue_pitcher06_row39_receiver_template_v1.json",
+      "row": 39
+    }
+  ],
+  "schema": "container_receiver_inventory.v1",
+  "source": "/mnt/nas-222-project/mocap_v2/lance_datasets/dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance"
+}
