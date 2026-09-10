@@ -128,7 +128,7 @@
       "anchor_frame": 1040,
       "bowl_clearance_lift_m": 0.0,
       "evidence_sha256": "3040b774085bf466cd08abd8272d73589a439d4b19ef3f43321fc9218ba57ee2",
-      "evidence_trajectory": "/home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/case-direct-replay-trajectory-repair--second-batch/outputs/full_repair/containers_pass2/row37/trajectory.npz",
+      "evidence_trajectory": "outputs/full_repair/containers_pass2/row37/trajectory.npz",
       "finger_release_policy": "thumb joints [6:12] open before index/middle/ring/pinky joints [12:28]",
       "level_object_about_measured_grasp": false,
       "observed_active_pos_m": [

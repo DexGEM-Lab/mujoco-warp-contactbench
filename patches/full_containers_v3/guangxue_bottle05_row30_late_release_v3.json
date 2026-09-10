@@ -128,7 +128,7 @@
       "anchor_frame": 625,
       "bowl_clearance_lift_m": 0.0,
       "evidence_sha256": "6c1bf0a3337d9251b09b00eb9433d305c027f01966063fa152140091b1499ecc",
-      "evidence_trajectory": "/home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/case-direct-replay-trajectory-repair--second-batch/outputs/full_repair/containers_pass2/row30/trajectory.npz",
+      "evidence_trajectory": "outputs/full_repair/containers_pass2/row30/trajectory.npz",
       "finger_release_policy": "simultaneous bottle opening",
       "level_object_about_measured_grasp": false,
       "observed_active_pos_m": [

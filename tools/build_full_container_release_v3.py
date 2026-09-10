@@ -20,7 +20,6 @@ from scipy.spatial.transform import Rotation
 
 ROOT = Path(__file__).resolve().parents[1]
 V2 = ROOT / "patches/full_containers_v2"
-DEFAULT_EVIDENCE = Path("/home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/case-direct-replay-trajectory-repair--second-batch/outputs/full_repair/containers_pass2")
 DEFAULT_OUTPUT = ROOT / "patches/full_containers_v3"
 ROWS = (26, 29, 30, 35, 37, 38)
 # First command changed; all preceding commands must remain v2-identical.
@@ -229,7 +228,7 @@ def validate(output: Path, v2dir: Path) -> dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--evidence", type=Path, default=DEFAULT_EVIDENCE)
+    p.add_argument("--evidence", type=Path, help="Directory of measured pass-2 replay records")
     p.add_argument("--v2", type=Path, default=V2)
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     p.add_argument("--check", action="store_true")
@@ -237,6 +236,8 @@ def main() -> None:
     if a.check:
         print(json.dumps(validate(a.output, a.v2), sort_keys=True))
         return
+    if a.evidence is None:
+        p.error("--evidence is required when generating release corrections")
     if a.output.exists() and any(a.output.iterdir()):
         raise ValueError(f"refusing nonempty output: {a.output}")
     a.output.mkdir(parents=True, exist_ok=True)
