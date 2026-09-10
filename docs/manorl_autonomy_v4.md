@@ -204,7 +204,15 @@ gradient norm before clipping, advantage/return/explained variance) are absent
 rather than inferred. On CUDA, the per-transition reductions and episode
 accounting remain device tensors; only one compact scalar row leaves the device
 per update. `train` appends that row to `<checkpoint>.metrics.jsonl` regardless
-of W&B and defines W&B's common `transitions` axis before logging.
+of W&B and defines W&B's common `transitions` axis before logging. W&B config
+also records resolved PPO values rather than only CLI flags: the inherited
+`grad_norm_clip=0.5`, Adam settings, GAE/discount, clipping/loss scales,
+normalization/mixed-precision state, rollout size, epochs, minibatches, and
+resulting rollout batch size.
+
+A separate critic still shares PointNet with the actor. Its loss values alone
+therefore do not identify which gradient path dominates; telemetry preserves
+those losses as observations and does not change the PPO algorithm in response.
 
 `evaluate` defaults to one environment and writes its JSON summary plus a
 compressed `.npz` beside `--trace` (or `--artifact`). The NPZ contains actual

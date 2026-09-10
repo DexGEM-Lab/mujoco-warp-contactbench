@@ -86,7 +86,10 @@ def _resolved_telemetry_config(adapter, args):
     return {"ppo": {"discount_factor": .99, "gae_lambda": .95, "learning_rate": 3e-4,
                      "ratio_clip": .2, "value_clip": .2, "entropy_loss_scale": .001,
                      "value_loss_scale": .5, "mixed_precision": False, "normalize_observations": False,
-                     "grad_clip": None},
+                     "grad_norm_clip": .5, "optimizer": "Adam", "adam_betas": [0.9, 0.999],
+                     "adam_eps": 1e-8, "learning_starts": 0, "time_limit_bootstrap": True,
+                     "learning_epochs": args.learning_epochs, "mini_batches": args.mini_batches,
+                     "rollouts": args.rollouts, "rollout_batch_samples": args.rollouts * adapter.num_envs},
             "runtime": {"num_envs": adapter.num_envs, "raw_observation_dim": adapter.observation_dim,
                         "action_dim": adapter.action_dim, "control_timestep": adapter.runtime.cache.control_timestep,
                         "physics_substeps": 4},
@@ -135,7 +138,7 @@ def train(args):
             print(json.dumps(row), flush=True)
             # Local provenance stays available when W&B is offline/unavailable.
             with metrics_path.open("a") as stream:
-                stream.write(json.dumps(_jsonable(row), sort_keys=True) + "\\n")
+                stream.write(json.dumps(_jsonable(row), sort_keys=True) + "\n")
             if run is not None: run.log(row, step=int(row["transitions"]))
         _, _, rows = run_batched_ppo(adapter, updates=args.updates, rollouts=args.rollouts,
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, checkpoint=args.checkpoint,
