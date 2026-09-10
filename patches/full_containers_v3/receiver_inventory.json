@@ -1,0 +1,71 @@
+{
+  "repairs": [
+    {
+      "active_object": "mayonnaisebottle",
+      "command_sha256": "6631c17fee0263553de0fc6f32c317f30da1e030390dd17e03e6459232df4b11",
+      "command_track": "guangxue_bottle05_row26_late_release_commands_v3.npz",
+      "patch": "guangxue_bottle05_row26_late_release_v3.json",
+      "prefix_end_exclusive": 610,
+      "row": 26,
+      "uuid": "5cf6e865-2367-4d16-9808-17e57f22a3c3"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_sha256": "f83a4646162c5930e130666deb7ab5f33648ecf750fcbd52b96e176b07a953a7",
+      "command_track": "guangxue_bottle05_row29_late_release_commands_v3.npz",
+      "patch": "guangxue_bottle05_row29_late_release_v3.json",
+      "prefix_end_exclusive": 440,
+      "row": 29,
+      "uuid": "b2ac9fc6-a563-451e-b7ef-7b96fb42c0d1"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_sha256": "8245e18f227236e922dfe3799ab1231dee0c96b44e5c3d22b1a016b955ac5233",
+      "command_track": "guangxue_bottle05_row30_late_release_commands_v3.npz",
+      "patch": "guangxue_bottle05_row30_late_release_v3.json",
+      "prefix_end_exclusive": 625,
+      "row": 30,
+      "uuid": "c3ae6d55-f4bb-4d9b-a1f8-4a8514b299e0"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_sha256": "55a26ed226a69f67952b7988540a1d6f9be1cb1c8f7e308129eb1b832a84324b",
+      "command_track": "guangxue_pitcher06_row35_late_release_commands_v3.npz",
+      "patch": "guangxue_pitcher06_row35_late_release_v3.json",
+      "prefix_end_exclusive": 600,
+      "row": 35,
+      "uuid": "3a092ccd-8f52-4012-86d9-d49ea9b77db8"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_sha256": "8c245c44d5623befedde29dc60fb94dd0409836615a87d32f353633532f05eb5",
+      "command_track": "guangxue_pitcher06_row37_late_release_commands_v3.npz",
+      "patch": "guangxue_pitcher06_row37_late_release_v3.json",
+      "prefix_end_exclusive": 1040,
+      "row": 37,
+      "uuid": "8adc6fcc-7bf4-4d80-a26c-fda9d77f98a7"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_sha256": "39a617a7165038cbae1f6278ee49dc36fb8220286360b68b30eacdbd010cdb7b",
+      "command_track": "guangxue_pitcher06_row38_late_release_commands_v3.npz",
+      "patch": "guangxue_pitcher06_row38_late_release_v3.json",
+      "prefix_end_exclusive": 430,
+      "row": 38,
+      "uuid": "2d4d8c9d-fa8f-4a05-82f6-0a0b968b1f9d"
+    },
+    {
+      "center_distance_m": 0.05602524057030678,
+      "evidence_sha256": "2b59d9eb4476014d5aca7df7d0e4d090f6169de423a757852ce8ce0613dda346",
+      "kind": "metric_review_no_command_candidate",
+      "max_tilt_deg": 54.34576723842088,
+      "nearest_center_frame": 533,
+      "pitcher_above_bowl_m": 0.11455291509628296,
+      "report": "row33_tilt_over_bowl_metric_review.json",
+      "row": 33,
+      "tilt_deg": 54.102862174093346
+    }
+  ],
+  "schema": "container_late_release_inventory.v3",
+  "source": "v2 command assets plus measured pass2 physical traces"
+}
