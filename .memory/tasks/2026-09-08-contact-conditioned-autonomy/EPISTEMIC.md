@@ -1,10 +1,12 @@
 # Current model
 
-The active bounded objective is no longer empirical autonomy replication. It is
-a runnable, contract-correct v4 single-reference PPO/frozen-evaluation path for
-pinned `cube2_02_2833`, validated by N=1 CPU two-update physics. Long training,
-server jobs, remote activity, and W&B/network runs remain stopped pending the
-parent launch decision.
+The overarching objective remains empirical autonomous grasp/lift/transport
+replication. The active bounded implementation slice is v4 telemetry for the
+runnable single-reference PPO/frozen-evaluation path on pinned
+`cube2_02_2833`, validated by N=1 CPU two-update physics. This slice exposes
+post-transition reward/contact/physical/action evidence and frozen trace
+artifacts; it does not authorize mutation of the immutable Server1 run, remote
+activity, long training, or W&B/network publication.
 
 v4 raw state is 957-D. The registered PointNet converts only the raw cloud to
 the 829-D actor/value feature inside `AutonomyActorCritic`; PPO memory retains
