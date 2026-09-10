@@ -226,6 +226,19 @@ JAX_PLATFORMS=cuda python -m sim.manorl.view_environment \
   --object cube1 --gesture 01 --num-envs 1 --render-env 0 --no-loop
 ```
 
+### Direct human-capture trajectory repair
+
+All 59 September 9 Guangxue source trajectories now have explicit, policy-free
+normal-motion repairs: see [`docs/full_capture_repair.md`](docs/full_capture_repair.md)
+and `patches/final_normal/catalog.json`. The initial five examples remain documented
+in [`docs/direct_capture_repair.md`](docs/direct_capture_repair.md).
+Repairs retain free-body physics and record the local contact-solver profile,
+source UUID/version, repaired hand targets and measured object motion. Normal
+motion excludes the diagnostic long-hold intervals; stability tests are separate.
+Use `tools/replay_repaired_capture.py` with a versioned repair patch for live
+reproduction. Generated actual-motion Lance exports have their own explicit
+contract and are not interchangeable with unmodified human-capture inputs.
+
 ### Direct Lance target-DOF replay
 
 `tools/replay_manorl_target_dof.py` reads one explicit synthetic Lance

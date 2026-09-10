@@ -1,0 +1,14 @@
+{
+  "conclusion": "The pitcher center reaches 5.6cm from the bowl center while elevated 10.2cm and tilted 54.1deg; its spout-side volume is consequently over the bowl even though the evaluator requires 25 frames strictly above 55deg. No fake command correction is supplied.",
+  "kind": "metric_review_no_command_candidate",
+  "observation": {
+    "center_distance_m": 0.05602524057030678,
+    "evidence_sha256": "2b59d9eb4476014d5aca7df7d0e4d090f6169de423a757852ce8ce0613dda346",
+    "max_tilt_deg": 54.34576723842088,
+    "nearest_center_frame": 533,
+    "pitcher_above_bowl_m": 0.11455291509628296,
+    "tilt_deg": 54.102862174093346
+  },
+  "recommendation": "review tilt_over_bowl threshold/boundary against spout geometry; retain accepted physical outcome (upright, released, supported, near goal).",
+  "row": 33
+}

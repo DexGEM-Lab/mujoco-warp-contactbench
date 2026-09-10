@@ -1,0 +1,133 @@
+{
+  "donor_bundle": "/mnt/nas-222-project/mocap_v2/lance_datasets/dexgem_vla_demo_guangxue_astra_repair_5samples_20260910",
+  "receivers": [
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row20_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row20_contact_primitive_transfer_v2.json",
+      "row": 20,
+      "uuid": "e77d0884-bd8c-42d3-9c00-d197918f56a5"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row21_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row21_contact_primitive_transfer_v2.json",
+      "row": 21,
+      "uuid": "bacf8ead-5385-44ab-b599-c6a305e7686e"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row22_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row22_contact_primitive_transfer_v2.json",
+      "row": 22,
+      "uuid": "e42c7971-5c87-47f2-925d-59a2b42b98c6"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row23_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row23_contact_primitive_transfer_v2.json",
+      "row": 23,
+      "uuid": "1ed6a04b-6f9e-4e94-8b7a-c3b75d687f5a"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row24_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row24_contact_primitive_transfer_v2.json",
+      "row": 24,
+      "uuid": "44dc6b6f-44d5-406e-b0b2-9c5000d87485"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row25_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row25_contact_primitive_transfer_v2.json",
+      "row": 25,
+      "uuid": "53d9daa6-548d-4d84-bc61-7d1d53b9ac30"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row26_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row26_contact_primitive_transfer_v2.json",
+      "row": 26,
+      "uuid": "5cf6e865-2367-4d16-9808-17e57f22a3c3"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row27_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row27_contact_primitive_transfer_v2.json",
+      "row": 27,
+      "uuid": "6bd1d519-36d0-4fe5-b817-93e29d30c68f"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row28_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row28_contact_primitive_transfer_v2.json",
+      "row": 28,
+      "uuid": "8ce897dc-1b4a-47d8-9129-4674f85153d2"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row29_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row29_contact_primitive_transfer_v2.json",
+      "row": 29,
+      "uuid": "b2ac9fc6-a563-451e-b7ef-7b96fb42c0d1"
+    },
+    {
+      "active_object": "mayonnaisebottle",
+      "command_track": "guangxue_bottle05_row30_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_bottle05_row30_contact_primitive_transfer_v2.json",
+      "row": 30,
+      "uuid": "c3ae6d55-f4bb-4d9b-a1f8-4a8514b299e0"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_track": "guangxue_pitcher06_row32_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_pitcher06_row32_contact_primitive_transfer_v2.json",
+      "row": 32,
+      "uuid": "b939895a-4bdd-404e-8fc6-226698ebd8b3"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_track": "guangxue_pitcher06_row33_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_pitcher06_row33_contact_primitive_transfer_v2.json",
+      "row": 33,
+      "uuid": "f4702c31-b2fe-4238-8b56-812755193884"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_track": "guangxue_pitcher06_row34_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_pitcher06_row34_contact_primitive_transfer_v2.json",
+      "row": 34,
+      "uuid": "62c28422-d938-4e31-bb01-45792bffd8c2"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_track": "guangxue_pitcher06_row35_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_pitcher06_row35_contact_primitive_transfer_v2.json",
+      "row": 35,
+      "uuid": "3a092ccd-8f52-4012-86d9-d49ea9b77db8"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_track": "guangxue_pitcher06_row37_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_pitcher06_row37_contact_primitive_transfer_v2.json",
+      "row": 37,
+      "uuid": "8adc6fcc-7bf4-4d80-a26c-fda9d77f98a7"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_track": "guangxue_pitcher06_row38_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_pitcher06_row38_contact_primitive_transfer_v2.json",
+      "row": 38,
+      "uuid": "2d4d8c9d-fa8f-4a05-82f6-0a0b968b1f9d"
+    },
+    {
+      "active_object": "pitcherbase",
+      "command_track": "guangxue_pitcher06_row39_contact_primitive_commands_v2.npz",
+      "patch": "guangxue_pitcher06_row39_contact_primitive_transfer_v2.json",
+      "row": 39,
+      "uuid": "411a3ed1-0446-4129-93f9-08935b99e923"
+    }
+  ],
+  "schema": "container_contact_primitive_inventory.v2",
+  "source": "/mnt/nas-222-project/mocap_v2/lance_datasets/dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance"
+}

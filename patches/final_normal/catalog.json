@@ -1,0 +1,1363 @@
+{
+  "schema": "full_capture_normal_patches.v1",
+  "source_dataset": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+  "source_version": 5,
+  "rows": [
+    {
+      "row": 0,
+      "source_uuid": "7430f40d-9999-4a3c-a1e0-d7fffb760c5b",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row00.json",
+      "normal_frames": 1334,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2040,
+          2110
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 1,
+      "source_uuid": "c530d6cb-7da1-4d26-890b-b6b26f60a8a4",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row01.json",
+      "normal_frames": 1335,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2060,
+          2130
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 2,
+      "source_uuid": "05532a5f-ea20-4427-a2bb-afa10ea2fa88",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row02.json",
+      "normal_frames": 1336,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          1160,
+          1230
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 3,
+      "source_uuid": "534c440e-808c-47cb-b9a3-938eb8677fd7",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row03.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 4,
+      "source_uuid": "fafa662c-dafa-481b-a5ae-c52892568426",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row04.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2020,
+          2090
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 5,
+      "source_uuid": "315c6593-652f-4a35-8158-9f6550c2fcf0",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row05.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2020,
+          2090
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 6,
+      "source_uuid": "c7b1e858-ce78-41ef-a5a2-b5bc2119d215",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row06.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2060,
+          2130
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 7,
+      "source_uuid": "7e3d4d9a-3ed6-437a-8fd4-5b8fc4436d5f",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row07.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2060,
+          2130
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 8,
+      "source_uuid": "2a79df74-03f1-486d-9b1a-77b23b4e350c",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row08.json",
+      "normal_frames": 1336,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          1160,
+          1230
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 9,
+      "source_uuid": "2a82a4fc-debb-49b7-a4aa-013976631593",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row09.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2020,
+          2090
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 10,
+      "source_uuid": "51d751ec-5d75-45e6-886e-3b2312677472",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row10.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2060,
+          2130
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 11,
+      "source_uuid": "036bf721-cfaa-4e83-aba7-f23aca0858ff",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row11.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2040,
+          2110
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 12,
+      "source_uuid": "d4ad21f7-171f-43ab-a17c-169cbedd0233",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row12.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2060,
+          2130
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 13,
+      "source_uuid": "2cb49ad1-a608-477a-91bd-c302fd369452",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row13.json",
+      "normal_frames": 1336,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          1160,
+          1230
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 14,
+      "source_uuid": "65b02da8-f0ac-4530-83ba-3f18a5ac0546",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row14.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 15,
+      "source_uuid": "82c403e8-05ce-4dcd-8a76-b909e433887e",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row15.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2020,
+          2090
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 16,
+      "source_uuid": "dd545b62-b8f0-44bf-92c0-7ea6154d4f2f",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row16.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2020,
+          2090
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 17,
+      "source_uuid": "0217765b-fc0a-4f1d-8755-dc23623cbe4d",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row17.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2020,
+          2090
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 18,
+      "source_uuid": "13dda956-0ee8-482e-a265-807374f9f416",
+      "gesture": "003-bowl-cuboid1-从电磁炉顶面拿起碗",
+      "patch": "row18.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2040,
+          2110
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 19,
+      "source_uuid": "c674fb54-7064-4be9-8cf8-acf5b3fa94fd",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row19.json",
+      "normal_frames": 819,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          580,
+          650
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 20,
+      "source_uuid": "e77d0884-bd8c-42d3-9c00-d197918f56a5",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row20.json",
+      "normal_frames": 889,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          640,
+          710
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 21,
+      "source_uuid": "bacf8ead-5385-44ab-b599-c6a305e7686e",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row21.json",
+      "normal_frames": 840,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          600,
+          670
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 22,
+      "source_uuid": "e42c7971-5c87-47f2-925d-59a2b42b98c6",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row22.json",
+      "normal_frames": 848,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 200,
+        "release_in_baseline": [
+          640,
+          710
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 23,
+      "source_uuid": "1ed6a04b-6f9e-4e94-8b7a-c3b75d687f5a",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row23.json",
+      "normal_frames": 908,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          640,
+          710
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 24,
+      "source_uuid": "44dc6b6f-44d5-406e-b0b2-9c5000d87485",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row24.json",
+      "normal_frames": 839,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          600,
+          670
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 25,
+      "source_uuid": "53d9daa6-548d-4d84-bc61-7d1d53b9ac30",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row25.json",
+      "normal_frames": 858,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          620,
+          690
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 26,
+      "source_uuid": "5cf6e865-2367-4d16-9808-17e57f22a3c3",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row26.json",
+      "normal_frames": 1066,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          660,
+          730
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 27,
+      "source_uuid": "6bd1d519-36d0-4fe5-b817-93e29d30c68f",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row27.json",
+      "normal_frames": 874,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          620,
+          690
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 28,
+      "source_uuid": "8ce897dc-1b4a-47d8-9129-4674f85153d2",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row28.json",
+      "normal_frames": 855,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          640,
+          710
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 29,
+      "source_uuid": "b2ac9fc6-a563-451e-b7ef-7b96fb42c0d1",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row29.json",
+      "normal_frames": 1066,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          880,
+          950
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 30,
+      "source_uuid": "c3ae6d55-f4bb-4d9b-a1f8-4a8514b299e0",
+      "gesture": "005-mayonnaisebottle-bowl-拿起番茄酱瓶",
+      "patch": "row30.json",
+      "normal_frames": 889,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "7": 0.0,
+          "13": 0.0,
+          "17": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": [
+          660,
+          730
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 31,
+      "source_uuid": "e9281436-2f98-4adb-880b-8f9f80c5e041",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row31.json",
+      "normal_frames": 1218,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 160,
+        "release_in_baseline": [
+          940,
+          1010
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 32,
+      "source_uuid": "b939895a-4bdd-404e-8fc6-226698ebd8b3",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row32.json",
+      "normal_frames": 1203,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.5,
+        "joint_index_offsets_rad": {
+          "9": 0.04,
+          "13": 0.04,
+          "21": 0.025,
+          "25": 0.025
+        },
+        "onset_in_baseline": 160,
+        "release_in_baseline": [
+          920,
+          990
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 33,
+      "source_uuid": "f4702c31-b2fe-4238-8b56-812755193884",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row33.json",
+      "normal_frames": 1296,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 160,
+        "release_in_baseline": [
+          920,
+          990
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 34,
+      "source_uuid": "62c28422-d938-4e31-bb01-45792bffd8c2",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row34.json",
+      "normal_frames": 1170,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 140,
+        "release_in_baseline": [
+          920,
+          990
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 35,
+      "source_uuid": "3a092ccd-8f52-4012-86d9-d49ea9b77db8",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row35.json",
+      "normal_frames": 1296,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 160,
+        "release_in_baseline": [
+          960,
+          1030
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 36,
+      "source_uuid": "f4c8d0d4-d28e-4419-915f-eb32fced5fc4",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row36.json",
+      "normal_frames": 1334,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2040,
+          2110
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 37,
+      "source_uuid": "8adc6fcc-7bf4-4d80-a26c-fda9d77f98a7",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row37.json",
+      "normal_frames": 1166,
+      "post_padding": 180,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "21": 0.0,
+          "25": 0.0
+        },
+        "onset_in_baseline": 160,
+        "release_in_baseline": [
+          1060,
+          1130
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 38,
+      "source_uuid": "2d4d8c9d-fa8f-4a05-82f6-0a0b968b1f9d",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row38.json",
+      "normal_frames": 1166,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "method": "no extra closure beyond verified donor37 grasp"
+      }
+    },
+    {
+      "row": 39,
+      "source_uuid": "411a3ed1-0446-4129-93f9-08935b99e923",
+      "gesture": "006-pitcherbase-bowl-拿起水壶",
+      "patch": "row39.json",
+      "normal_frames": 1166,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 1.0,
+        "method": "middle contact-point target fit; MCP closing plus distal uncurl to close measured10mm gap",
+        "joint_indices": [
+          17,
+          18,
+          19
+        ],
+        "delta_rad": [
+          0.27,
+          -0.185,
+          -0.185
+        ],
+        "onset": [
+          180,
+          240
+        ],
+        "release": [
+          866,
+          966
+        ]
+      }
+    },
+    {
+      "row": 40,
+      "source_uuid": "1c5afd45-1488-4991-92f0-c5ae05bb7bc1",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row40.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 41,
+      "source_uuid": "9d7e3787-2a2f-47df-a235-f479854c053a",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row41.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 42,
+      "source_uuid": "0f22e85b-c7ff-4bb9-8810-423e405d2653",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row42.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 43,
+      "source_uuid": "261579cb-b186-4839-806d-6e93daeba2b0",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row43.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 44,
+      "source_uuid": "e033b765-27d3-4abc-bc21-421cd37d9468",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row44.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 45,
+      "source_uuid": "32dc50d8-479d-475a-a6e4-db46fe3c6ece",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row45.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2040,
+          2110
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 46,
+      "source_uuid": "150319ac-36da-47fe-9405-55209333994c",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row46.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 47,
+      "source_uuid": "4d7443fa-4349-46a9-9ccc-60616e842146",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row47.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2080,
+          2150
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 48,
+      "source_uuid": "24f010a2-f133-4ce0-b89a-143d601e8924",
+      "gesture": "007-bowl-cuboid1-从身前台面拿起碗",
+      "patch": "row48.json",
+      "normal_frames": 1334,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": [
+          2040,
+          2110
+        ],
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 49,
+      "source_uuid": "ef83b5f0-8e5c-4e6c-9a3b-37faec809f5b",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row49.json",
+      "normal_frames": 530,
+      "post_padding": 1000,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 220,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 50,
+      "source_uuid": "d128f8d4-c838-4147-be3f-bcca428545d6",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row50.json",
+      "normal_frames": 538,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 51,
+      "source_uuid": "d33bd448-76b4-44a8-9d20-e973bc6e9065",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row51.json",
+      "normal_frames": 730,
+      "post_padding": 700,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 52,
+      "source_uuid": "f10cfa9c-d499-424c-9e3c-b25e1f05b378",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row52.json",
+      "normal_frames": 484,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 53,
+      "source_uuid": "f827a88b-a3e2-4315-a321-c00f47352df4",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row53.json",
+      "normal_frames": 748,
+      "post_padding": 700,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 200,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 54,
+      "source_uuid": "9a90a920-ca8f-4698-8bf5-98d892083500",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row54.json",
+      "normal_frames": 507,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 55,
+      "source_uuid": "e17ee9c0-83f9-463a-99c7-a9e3e3f813c6",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row55.json",
+      "normal_frames": 726,
+      "post_padding": 700,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 56,
+      "source_uuid": "577e65ba-a692-45a2-9183-50702a76617b",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row56.json",
+      "normal_frames": 652,
+      "post_padding": 700,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 57,
+      "source_uuid": "95f8d175-cae9-40c7-bdf4-9c1b7f34713a",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row57.json",
+      "normal_frames": 464,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    },
+    {
+      "row": 58,
+      "source_uuid": "278df0a4-b4f9-46f3-842b-8625f154dcd0",
+      "gesture": "009-bowl-cuboid1-从电磁炉顶面拿起碗并悬空保持",
+      "patch": "row58.json",
+      "normal_frames": 496,
+      "post_padding": 500,
+      "status": "physically_reexecuted_normal_motion",
+      "grip_preload": {
+        "scale": 0.0,
+        "joint_index_offsets_rad": {
+          "9": 0.0,
+          "13": 0.0,
+          "14": 0.0
+        },
+        "onset_in_baseline": 180,
+        "release_in_baseline": null,
+        "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+      }
+    }
+  ],
+  "frames": 65000
+}

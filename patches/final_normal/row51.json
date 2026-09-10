@@ -1,0 +1,206 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row51_normal_timing_grip0.0_normal",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 51,
+    "uuid": "d33bd448-76b4-44a8-9d20-e973bc6e9065",
+    "frames": 441
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "active_object": "bowl",
+  "transfer": {
+    "donor_patch": "guangxue_bowl09_row49_v3.json",
+    "donor_source": {
+      "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+      "version": 5,
+      "row": 49,
+      "uuid": "ef83b5f0-8e5c-4e6c-9a3b-37faec809f5b",
+      "frames": 351
+    },
+    "coordinate_correction": "R_receiver_initial^-1 * R_donor_initial applied to donor object-relative grasp",
+    "receiver_from_donor_rotation_xyzw": [
+      0.001380553717519507,
+      0.002671896850353994,
+      0.12956667798191113,
+      0.9915661505897557
+    ],
+    "timing": {
+      "receiver_movement_steps": [
+        180,
+        414
+      ],
+      "prefix_preserved_through_step": 100,
+      "grasp_blend_steps": [
+        100,
+        160
+      ],
+      "finger_close_steps": [
+        135,
+        165
+      ],
+      "late_leveling_steps": [
+        329,
+        530
+      ],
+      "late_leveling_mapping": "donor lift fraction to receiver lift start; donor hold-tail duration after receiver movement end"
+    },
+    "posthold_leveling": {
+      "measured_tilt_deg": 24.665199468921024,
+      "start_step": 550,
+      "end_step": 700,
+      "method": "shortest rotation of measured object up axis to world Z about measured fingertip contact centroid; hand only"
+    }
+  },
+  "edit": {
+    "name": "donor49_contact_template_receiver_timing",
+    "translation": [
+      0.006,
+      0.012,
+      0
+    ],
+    "finger_targets": {
+      "j1_thumb_cmc_abd": -0.22530505628057645,
+      "j1_thumb_cmc_flex": 0.5757653693735006,
+      "j1_thumb_cmc_twist": -0.45031319644589635,
+      "j1_thumb_mcp_flex": 0.41633603936141544,
+      "j1_thumb_mcp_abd": 0.2957301619510986,
+      "j1_thumb_ip": 0.16270365976852807,
+      "j2_index_mcp_abd": 0.348450848759606,
+      "j2_index_mcp_flex": 0.8040590280408066,
+      "j2_index_pip": 0.6436200402426724,
+      "j2_index_dip": 0.6505195620253734,
+      "j3_middle_mcp_abd": -0.5239993951723417,
+      "j3_middle_mcp_flex": 1.1163313204066103,
+      "j3_middle_pip": 0.010602921586851584,
+      "j3_middle_dip": 0.3695041477895727,
+      "j4_ring_mcp_abd": -0.2674959469958751,
+      "j4_ring_mcp_flex": 0.9449804074493398,
+      "j4_ring_pip": 0.5954204341661093,
+      "j4_ring_dip": 0.5708994343660275,
+      "j5_pinky_mcp_abd": -3.6869333426104944,
+      "j5_pinky_mcp_flex": -0.7305480241775513,
+      "j5_pinky_pip": 2.3912062644958496,
+      "j5_pinky_dip": 1.745316982269287
+    },
+    "object_relative_grasp": {
+      "translation": [
+        -0.030227654640103168,
+        0.09957818608538332,
+        0.09676957708975349
+      ],
+      "rotation_xyzw": [
+        -0.3450376896932622,
+        0.0995038442725111,
+        0.8821726026925141,
+        -0.30466289029818444
+      ]
+    },
+    "grasp_approach_start_offset": -80,
+    "grasp_approach_end_offset": -20,
+    "close_start_offset": -45,
+    "close_end_offset": -15,
+    "hand_offsets": {
+      "j2_index_mcp_flex": 0.6,
+      "j3_middle_mcp_flex": 0.6,
+      "j1_thumb_mcp_flex": 0.3
+    },
+    "stages": [
+      {
+        "start_step": 329,
+        "end_step": 530,
+        "wrist_rotation_world": [
+          -0.058619079989445086,
+          -0.29256805231112687,
+          -0.014324510829435625
+        ],
+        "pivot_from_object": [
+          0.07,
+          0.0,
+          0.005
+        ]
+      },
+      {
+        "start_step": 550,
+        "end_step": 700,
+        "wrist_rotation_world": [
+          0.4024196258072391,
+          0.1529024964696545,
+          -0.0
+        ],
+        "pivot_from_object": [
+          0.04133172811823296,
+          0.0007924234659812956,
+          -0.029162503065692624
+        ]
+      }
+    ]
+  },
+  "scope": "Receiver-bound first-pass donor49 bowl contact-template transfer. Source hand prefix and source object pose/timing remain reference data; only the bounded hand contact transition and phase-mapped late leveling are edited. Object poses are never forced during replay.",
+  "initial_hand": [
+    0.01422578189522028,
+    -0.10502353310585022,
+    0.1301894618787479,
+    -0.1958276331424713,
+    0.19470158219337463,
+    1.5554640293121338,
+    0.03215804323554039,
+    0.1255350410938263,
+    -0.09486572444438934,
+    0.0,
+    0.1362583488225937,
+    0.3018668293952942,
+    -0.0366380400955677,
+    0.4038940370082855,
+    -0.18142569065093994,
+    0.09210223704576492,
+    -0.10486379265785217,
+    -0.033426109701395035,
+    0.3617542088031769,
+    0.40900301933288574,
+    -0.02848440408706665,
+    0.08864008635282516,
+    0.3304070830345154,
+    0.570751428604126,
+    -0.6963121891021729,
+    0.5953904986381531,
+    -0.05520178750157356,
+    0.16338662803173065
+  ],
+  "normal_timing": {
+    "baseline_run_name": "level_row51",
+    "baseline_frames": 1115,
+    "normal_frames": 730,
+    "removed_constant_holds": [
+      {
+        "original_start": 700,
+        "original_stop_exclusive": 1115,
+        "removed_frames": 385
+      }
+    ],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 7.3
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "9": 0.0,
+      "13": 0.0,
+      "14": 0.0
+    },
+    "onset_in_baseline": 180,
+    "release_in_baseline": null,
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "command_track": {
+    "path": "row51_commands.npz",
+    "sha256": "9624c676a0cf17985823ecf663d262bbd935f5bfb1da7823c30fba522011dc86",
+    "frames": 730
+  },
+  "audit_tail_frames": 0
+}

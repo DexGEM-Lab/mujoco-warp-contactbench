@@ -1,0 +1,96 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row38_nearest_verified_contact_v4",
+  "active_object": "pitcherbase",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 38,
+    "uuid": "2d4d8c9d-fa8f-4a05-82f6-0a0b968b1f9d",
+    "frames": 1183
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "edit": {
+    "translation": [
+      0.0,
+      0.0,
+      2.8503328625029134e-05
+    ],
+    "rotation": [
+      0.0002796707856200859,
+      -0.0007136898996763716,
+      -2.8636783126620476e-06
+    ]
+  },
+  "initial_hand": [
+    0.09357266193506295,
+    -0.09542809430326726,
+    0.17217125814558065,
+    0.6345330983581035,
+    0.2873678541518625,
+    0.31305812543541395,
+    0.2277052104473114,
+    0.3018698990345001,
+    -0.2982580363750458,
+    -1.2248605685272196e-07,
+    0.07294421643018723,
+    0.1787789911031723,
+    0.0590754896402359,
+    0.40916889905929565,
+    -0.1611640900373459,
+    0.09212189167737961,
+    -0.18690268695354462,
+    -0.02724486030638218,
+    0.4284694790840149,
+    0.45716407895088196,
+    -0.09530538320541382,
+    0.1901884824037552,
+    0.3386360704898834,
+    0.5748729705810547,
+    -0.8388588428497314,
+    0.6471067667007446,
+    -0.049033794552087784,
+    0.16340984404087067
+  ],
+  "command_track": {
+    "path": "row38_commands.npz",
+    "sha256": "a2af99edb3cdb563b9b01cc7e7b7be5bec8bc74dbe466b6c05582f8cb634454d",
+    "frames": 1166
+  },
+  "transfer": {
+    "donor_source_row": 37,
+    "score": 0.1790747332236472,
+    "yaw_alignment_rad": -0.07823227132412836,
+    "recipient_bowl_warp_m": [
+      0.07208755694247304,
+      -0.017177350363636767,
+      0.0
+    ],
+    "recipient_goal_warp_m": [
+      0.057938699046763076,
+      0.07797682573875594,
+      0.0
+    ],
+    "active_initial_tilt_corrected": true,
+    "source_noncontact_replaced": true,
+    "timing": "verified donor contact primitive; monotonic receiver phase mapping"
+  },
+  "scope": "Receiver-conditioned contact task repair, not original-timing motion denoising. Original static tilt is aligned to donor rest geometry; masses/mu/gains unchanged.",
+  "normal_timing": {
+    "baseline_run_name": "normal_donor37_to38",
+    "baseline_frames": 1166,
+    "normal_frames": 1166,
+    "normal_duration_s": 11.66,
+    "removed_constant_holds": [],
+    "source_timing_exact": false,
+    "method": "receiver-conditioned verified short donor37 primitive, no long test holds"
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "method": "no extra closure beyond verified donor37 grasp"
+  },
+  "audit_tail_frames": 0
+}

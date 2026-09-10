@@ -1,0 +1,185 @@
+{
+  "active_object": "mayonnaisebottle",
+  "command_track": {
+    "frames": 739,
+    "path": "guangxue_bottle05_row29_contact_primitive_commands_v2.npz",
+    "sha256": "792d808f515940afbb0a86d5fb0c5fe61919dec986fd899fc1a15def6094416c"
+  },
+  "contact_primitive_transfer": {
+    "command_sha256_before_npz": "4955318d5901c65067ccff3360b7726f29ff2de80b39462d74f341564c61126b",
+    "donor_movement_end_step": 638,
+    "donor_recipe_path": "patches/guangxue_bottle05_row19_v2.json",
+    "donor_source": {
+      "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+      "frames": 951,
+      "row": 19,
+      "uuid": "c674fb54-7064-4be9-8cf8-acf5b3fa94fd",
+      "version": 5
+    },
+    "donor_trace": {
+      "actual_command": "trajectory.npz:ctrl",
+      "actual_hand_state": "trajectory.npz:qpos[0,:28]",
+      "frames": 819,
+      "path": "/mnt/nas-222-project/mocap_v2/lance_datasets/dexgem_vla_demo_guangxue_astra_repair_5samples_20260910/recordings/bottle-pour/trajectory.npz",
+      "sha256": "50e84c5a310cf8a78e9e08bde8af89fe7a67e8a4a2043da0c71d34a1cc2c8ea0"
+    },
+    "final_placement_warp": {
+      "blend": "cosine",
+      "end_step": 558,
+      "receiver_final_captured_active_pos_m": [
+        -0.018727600574493408,
+        0.2545729875564575,
+        0.10062211498618391
+      ],
+      "start_step": 485,
+      "transformed_donor_actual_end_pos_m": [
+        0.006487156465284666,
+        0.27150842841424233,
+        0.10265456631779936
+      ],
+      "translation_m": [
+        -0.025214757039778074,
+        -0.01693544085778481,
+        -0.002032451331615448
+      ]
+    },
+    "finger_policy": "donor finger targets are copied as the retimed recorded scalar sequence; no receiver residual, geometric transform, or joint-space addition is applied",
+    "frame_map": {
+      "donor_trace_index_sha256": "48023d2973484e2130536b470ac0f1f054b66e6218028497b7eafa271d7482c8",
+      "receiver_command_to_donor_trace_time": "donor_t=receiver_t*donor_end/receiver_end through movement end; donor tail then runs one-for-one",
+      "receiver_reference_index_sha256": "93e13d8ed7e131e14bad2c2104d728dded6b4bb927f99aaeb59cb1ba7cea8152"
+    },
+    "global_yaw_xyz": {
+      "donor_active_actual_initial_pos_m": [
+        0.04237790033221245,
+        0.26654401421546936,
+        0.10085507482290268
+      ],
+      "receiver_active_physical_initial_pos_m": [
+        -0.0031727098394185305,
+        0.26778900623321533,
+        0.10148071244359282
+      ],
+      "translation_m": [
+        -0.11469432969523702,
+        0.022015683320826013,
+        0.0006256376206901365
+      ],
+      "yaw_rad": -0.26830414650239065
+    },
+    "initial_active_tilt_correction": {
+      "donor_actual_xyzw": [
+        -0.012399403071602639,
+        -0.006145291344031971,
+        -0.3238440671909468,
+        0.9460092548928845
+      ],
+      "policy": "receiver active object qpos is retained; roll/pitch mismatch is corrected in wrist orientation only to preserve floor support",
+      "receiver_physical_xyzw": [
+        -0.012884602719819378,
+        -0.006185191039406902,
+        -0.4474631143088711,
+        0.8941881746911914
+      ],
+      "rotation_xyzw": [
+        -0.0005832504947176602,
+        -0.0016688592356714608,
+        0.0,
+        0.999998437362635
+      ]
+    },
+    "initial_state_hashes": {
+      "donor_actual_initial_hand_sha256": "f197ea66d09685f37e922215bd3ffa7beca2660b14565250b5d485cabff2d8b7",
+      "donor_actual_initial_qpos_sha256": "a9603c481da9cc5c0163a30bc0770eb74670f7cf704e339fb0d45a2d3d9cc270",
+      "receiver_replaced_initial_hand_sha256": "5c28087dd491d13237e029b479337c59988fc07faaad63b37d15c28fcd887d81",
+      "transformed_initial_hand_sha256": "b9ea88314dbd5a6d23f5a15c8b7e0ec245c8df8a2d5f871706a59329049c04aa"
+    },
+    "method": "actual_donor_full_command_track_yaw_xyz_transfer_with_phase_retiming",
+    "pour_bowl_warp": {
+      "blend": "cosine approach-to-peak and cosine inverse-return",
+      "donor_actual_phases": {
+        "approach_start": 257,
+        "pour_peak": 452,
+        "return_end": 555
+      },
+      "receiver_passive_bowl_initial_pos_m": [
+        -0.14000700414180756,
+        -0.22556599974632263,
+        0.04226921617985037
+      ],
+      "receiver_retimed_phases": {
+        "approach_start": 225,
+        "pour_peak": 395,
+        "return_end": 485
+      },
+      "transformed_donor_passive_initial_pos_m": [
+        -0.28283808169268976,
+        -0.1402982587970454,
+        0.04146970927715567
+      ],
+      "translation_m": [
+        0.1428310775508822,
+        -0.08526774094927722,
+        0.0007995069026947021
+      ]
+    },
+    "receiver_movement_end_step": 558
+  },
+  "edit": {
+    "name": "v2_full_contact_primitive_command_track",
+    "release_at_end": true,
+    "translation": [
+      0,
+      0,
+      0
+    ]
+  },
+  "initial_hand": [
+    0.04507561807676774,
+    -0.40802429120448236,
+    0.17591981336474682,
+    -0.16912973947521903,
+    0.1583894330654816,
+    1.1816054072433637,
+    0.016230620443820953,
+    0.030697818845510483,
+    -0.02860971726477146,
+    -2.2467546045845666e-08,
+    0.11910171806812286,
+    0.22197189927101135,
+    -0.02271614782512188,
+    0.19178476929664612,
+    -0.16111421585083008,
+    0.09207215160131454,
+    -0.1441173106431961,
+    -0.08601763844490051,
+    0.10977192223072052,
+    0.23121978342533112,
+    -0.10581585019826889,
+    0.012182128615677357,
+    0.04571152478456497,
+    0.3727244436740875,
+    -0.6169440746307373,
+    0.26698899269104004,
+    -0.04897718504071236,
+    0.1633847951889038
+  ],
+  "name": "guangxue_bottle05_row29_contact_primitive_transfer_v2",
+  "scene_initialization": {
+    "active_and_passive_object_poses": "receiver source physical poses are retained by replay; no object position/orientation override, force, mass, or passive-object edit",
+    "replaced_receiver_approach": "entire receiver hand approach and subsequent noncontact motion is replaced by the transformed validated donor command primitive"
+  },
+  "schema": "direct_capture_repair.v1",
+  "scope": "CPU-prepared v2 contact-primitive transfer. It records a candidate command asset only; physical grasp, lift, pour, release, and placement require parent GPU replay.",
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "frames": 922,
+    "row": 29,
+    "uuid": "b2ac9fc6-a563-451e-b7ef-7b96fb42c0d1",
+    "version": 5
+  }
+}

@@ -1,0 +1,234 @@
+{
+  "active_object": "pitcherbase",
+  "command_track": {
+    "frames": 1323,
+    "path": "guangxue_pitcher06_row35_late_release_commands_v3.npz",
+    "sha256": "55a26ed226a69f67952b7988540a1d6f9be1cb1c8f7e308129eb1b832a84324b"
+  },
+  "contact_primitive_transfer": {
+    "command_sha256_before_npz": "939cad10133993cb99df42b4e141de4c0f5a14a51a6abb141ff5bec4feab53cb",
+    "donor_movement_end_step": 823,
+    "donor_recipe_path": "patches/guangxue_pitcher06_row31_v1.json",
+    "donor_source": {
+      "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+      "frames": 1353,
+      "row": 31,
+      "uuid": "e9281436-2f98-4adb-880b-8f9f80c5e041",
+      "version": 5
+    },
+    "donor_trace": {
+      "actual_command": "trajectory.npz:ctrl",
+      "actual_hand_state": "trajectory.npz:qpos[0,:28]",
+      "frames": 1430,
+      "path": "/mnt/nas-222-project/mocap_v2/lance_datasets/dexgem_vla_demo_guangxue_astra_repair_5samples_20260910/recordings/pitcher-pour/trajectory.npz",
+      "sha256": "8c1fd6942256d03e0f0771c6a585b828dfe8c7c27a5bf2b34e4a3b265b64187c"
+    },
+    "final_placement_warp": {
+      "blend": "cosine",
+      "end_step": 716,
+      "receiver_final_captured_active_pos_m": [
+        0.3674609959125519,
+        0.2869569957256317,
+        0.135670098625396
+      ],
+      "start_step": 633,
+      "transformed_donor_actual_end_pos_m": [
+        0.3292000863160133,
+        0.2278553287886183,
+        0.13849504586336445
+      ],
+      "translation_m": [
+        0.038260909596538606,
+        0.05910166693701341,
+        -0.002824947237968445
+      ]
+    },
+    "finger_policy": "donor finger targets are copied as the retimed recorded scalar sequence; no receiver residual, geometric transform, or joint-space addition is applied",
+    "frame_map": {
+      "donor_trace_index_sha256": "f1c8951d7abe3660851c36917d3470412aacdf43d9c68054f705433c9626d70f",
+      "receiver_command_to_donor_trace_time": "donor_t=receiver_t*donor_end/receiver_end through movement end; donor tail then runs one-for-one",
+      "receiver_reference_index_sha256": "ea1a497456035cc0b7fa2e3307b8fe869dc9ace3dd77070ecb06ed493911ed56"
+    },
+    "global_yaw_xyz": {
+      "donor_active_actual_initial_pos_m": [
+        0.3053149878978729,
+        0.31382298469543457,
+        0.13438041508197784
+      ],
+      "receiver_active_physical_initial_pos_m": [
+        0.32652199268341064,
+        0.2885589897632599,
+        0.13520309623358082
+      ],
+      "translation_m": [
+        -0.008800916411147552,
+        0.007026302150272445,
+        0.0008226811516029442
+      ],
+      "yaw_rad": -0.10072146641003998
+    },
+    "initial_active_tilt_correction": {
+      "donor_actual_xyzw": [
+        -0.009410833313117772,
+        -0.005658021845475361,
+        -0.3164331121321072,
+        0.9485512682778607
+      ],
+      "policy": "receiver active object qpos is retained; roll/pitch mismatch is corrected in wrist orientation only to preserve floor support",
+      "receiver_physical_xyzw": [
+        -0.010730997251173126,
+        -0.00846851714211481,
+        -0.36378990102289327,
+        0.9313807158349171
+      ],
+      "rotation_xyzw": [
+        -0.0021731361574691874,
+        -0.002684983138745097,
+        0.0,
+        0.9999940341545972
+      ]
+    },
+    "initial_state_hashes": {
+      "donor_actual_initial_hand_sha256": "7c0b888fd493eb16b3552260f6a8e17973ca55a847fafd9c029737b216671731",
+      "donor_actual_initial_qpos_sha256": "a05ab7bcb4ed00fa5e598f8a711bc46c2ccaaee8ffe07a2a6232eefa146bda9f",
+      "receiver_replaced_initial_hand_sha256": "6bb35ffb3186951bff554b7e84bde51b2c689200ee63d18ef284e06292bd33e3",
+      "transformed_initial_hand_sha256": "88cd40d15aa176d6554e919a22172198a13b86491a3f4d412767c626b2d2d12d"
+    },
+    "method": "v3_v2_prefix_preserving_measured_late_placement_release",
+    "pour_bowl_warp": {
+      "blend": "cosine approach-to-peak and cosine inverse-return",
+      "donor_actual_phases": {
+        "approach_start": 324,
+        "pour_peak": 598,
+        "return_end": 728
+      },
+      "receiver_passive_bowl_initial_pos_m": [
+        -0.10758599638938904,
+        -0.2136709988117218,
+        0.040540601276133764
+      ],
+      "receiver_retimed_phases": {
+        "approach_start": 282,
+        "pour_peak": 520,
+        "return_end": 633
+      },
+      "transformed_donor_passive_initial_pos_m": [
+        -0.13460592950586436,
+        -0.180772633136085,
+        0.04007799472687074
+      ],
+      "translation_m": [
+        0.027019933116475325,
+        -0.03289836567563681,
+        0.0004626065492630213
+      ]
+    },
+    "receiver_movement_end_step": 716,
+    "v3_late_repair": {
+      "anchor_frame": 600,
+      "bowl_clearance_lift_m": 0.0,
+      "evidence_sha256": "f9be6e4986b413220865ac384056dd3ae571e4e2306a81699e5586fc00e24c16",
+      "evidence_trajectory": "outputs/full_repair/containers_pass2/row35/trajectory.npz",
+      "finger_release_policy": "thumb joints [6:12] open before index/middle/ring/pinky joints [12:28]",
+      "level_object_about_measured_grasp": true,
+      "observed_active_pos_m": [
+        0.20377594232559204,
+        0.09799563884735107,
+        0.22402259707450867
+      ],
+      "observed_active_rotvec_rad": [
+        -0.24313205223248466,
+        -0.0902211247033004,
+        -1.3910590635354445
+      ],
+      "observed_hand_to_object_m": [
+        0.0784657895565033,
+        -0.17788846790790558,
+        0.059619754552841187
+      ],
+      "prefix_ctrl_sha256": "5b8ea480402a96ea8472485cb1fcd2d192765e5d59c251555f13e0eec6791626",
+      "prefix_end_exclusive": 600,
+      "reason": "pitcher remained hand-supported at a tilted placement and fell after delayed release",
+      "receiver_goal_object_pos_m": [
+        0.3674609959125519,
+        0.2869569957256317,
+        0.13567009862539597
+      ],
+      "release_end_frame": 765,
+      "release_start_frame": 720,
+      "retreat_policy": "measured pitcher handle +object-local-Y withdrawal after thumb-first opening",
+      "retreat_world_m": [
+        0.14204131964758016,
+        0.035562401477578526,
+        0.04194733738774707
+      ],
+      "scene_object_names": [
+        "bowl",
+        "pitcherbase"
+      ],
+      "scene_object_qpos_addresses": [
+        28,
+        35
+      ],
+      "settle_end_frame": 690,
+      "withdraw_end_frame": 835
+    }
+  },
+  "edit": {
+    "name": "v3_measured_late_placement_release",
+    "release_at_end": true,
+    "translation": [
+      0,
+      0,
+      0
+    ]
+  },
+  "initial_hand": [
+    0.294434091186244,
+    -0.1437404684670885,
+    0.17217222150442432,
+    0.42814939554960746,
+    0.559841721204374,
+    0.7911005365610364,
+    0.2277052104473114,
+    0.3018698990345001,
+    -0.2982580363750458,
+    -1.2248605685272196e-07,
+    0.07294421643018723,
+    0.1787789911031723,
+    0.0590754896402359,
+    0.40916889905929565,
+    -0.1611640900373459,
+    0.09212189167737961,
+    -0.18690268695354462,
+    -0.02724486030638218,
+    0.4284694790840149,
+    0.45716407895088196,
+    -0.09530538320541382,
+    0.1901884824037552,
+    0.3386360704898834,
+    0.5748729705810547,
+    -0.8388588428497314,
+    0.6471067667007446,
+    -0.049033794552087784,
+    0.16340984404087067
+  ],
+  "name": "guangxue_pitcher06_row35_late_release_v3",
+  "scene_initialization": {
+    "active_and_passive_object_poses": "receiver source physical poses are retained by replay; no object position/orientation override, force, mass, or passive-object edit",
+    "replaced_receiver_approach": "entire receiver hand approach and subsequent noncontact motion is replaced by the transformed validated donor command primitive"
+  },
+  "schema": "direct_capture_repair.v1",
+  "scope": "CPU-prepared v2 contact-primitive transfer. It records a candidate command asset only; physical grasp, lift, pour, release, and placement require parent GPU replay.",
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "frames": 1192,
+    "row": 35,
+    "uuid": "3a092ccd-8f52-4012-86d9-d49ea9b77db8",
+    "version": 5
+  }
+}

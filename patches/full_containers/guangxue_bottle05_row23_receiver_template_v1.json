@@ -1,0 +1,162 @@
+{
+  "active_object": "mayonnaisebottle",
+  "edit": {
+    "acquisition": {
+      "arrive_step": 154,
+      "clearance_object_local": [
+        0.065,
+        0,
+        0.01
+      ],
+      "closed_step": 222,
+      "open_offsets": {
+        "j1_thumb_cmc_flex": -0.35,
+        "j2_index_mcp_flex": -0.55,
+        "j2_index_pip": -0.2,
+        "j3_middle_mcp_flex": -0.55,
+        "j3_middle_pip": -0.3,
+        "j4_ring_mcp_flex": -0.55,
+        "j4_ring_pip": -0.3,
+        "j5_pinky_mcp_flex": -0.55,
+        "j5_pinky_pip": -0.3
+      },
+      "pregrasp_step": 103,
+      "start_step": 11
+    },
+    "close_end_offset": 42,
+    "close_start_offset": -26,
+    "finger_targets": {
+      "j1_thumb_cmc_abd": 0.20607098808677984,
+      "j1_thumb_cmc_flex": 0.6573356559356712,
+      "j1_thumb_cmc_twist": -0.6106566619469832,
+      "j1_thumb_ip": 0.0010819513952655374,
+      "j1_thumb_mcp_abd": -0.07440851322481194,
+      "j1_thumb_mcp_flex": 0.0028698221644856622,
+      "j2_index_dip": 1.4600162093305204e-07,
+      "j2_index_mcp_abd": 0.10886548535549281,
+      "j2_index_mcp_flex": 0.9005344301385485,
+      "j2_index_pip": 0.22960570412665487,
+      "j3_middle_dip": 0.014649793125973629,
+      "j3_middle_mcp_abd": -0.5239968306644124,
+      "j3_middle_mcp_flex": 0.708017702620698,
+      "j3_middle_pip": 0.7215036597312362,
+      "j4_ring_dip": 0.0695232348748405,
+      "j4_ring_mcp_abd": -0.2366228450675731,
+      "j4_ring_mcp_flex": 0.41147473263438494,
+      "j4_ring_pip": 0.9717951233211798,
+      "j5_pinky_dip": 0.8628182548934012,
+      "j5_pinky_mcp_abd": -0.49283859321181805,
+      "j5_pinky_mcp_flex": 0.44643980717581605,
+      "j5_pinky_pip": 0.4600316744187213
+    },
+    "grasp_approach_end_offset": -9,
+    "grasp_approach_start_offset": -134,
+    "hand_offsets": {
+      "j1_thumb_cmc_flex": 0.15,
+      "j2_index_mcp_flex": 0.15,
+      "j3_middle_mcp_flex": 0.15,
+      "j4_ring_mcp_flex": 0.15,
+      "j5_pinky_mcp_flex": 0.15
+    },
+    "name": "bottle_open_approach_leveled_pour_retreat",
+    "object_relative_grasp": {
+      "rotation_xyzw": [
+        -0.36572438112464145,
+        0.39373751340973967,
+        0.6712282955374964,
+        -0.5105575607654249
+      ],
+      "translation": [
+        -0.050947896480114024,
+        0.1096370028715431,
+        -0.006175892432776067
+      ]
+    },
+    "release_at_end": true,
+    "release_end_step": 784,
+    "release_start_step": 704,
+    "stages": [
+      {
+        "end_step": 444,
+        "pivot_from_object": [
+          -0.05169416642828252,
+          -0.04929075532809257,
+          -0.056666472138370255
+        ],
+        "start_step": 353,
+        "wrist_rotation_world": [
+          0.11945210859896073,
+          -0.48755818165921144,
+          -0.1623689347007582
+        ]
+      },
+      {
+        "end_step": 587,
+        "pivot_from_object": [
+          -0.05169416642828252,
+          -0.04929075532809257,
+          -0.056666472138370255
+        ],
+        "start_step": 496,
+        "wrist_rotation_world": [
+          -0.11945210859896073,
+          0.48755818165921144,
+          0.1623689347007582
+        ]
+      }
+    ],
+    "translation": [
+      0,
+      0,
+      0
+    ],
+    "wrist_release_end_step": 784,
+    "wrist_release_start_step": 704
+  },
+  "name": "guangxue_bottle05_row23_receiver_template_v1",
+  "schema": "direct_capture_repair.v1",
+  "scope": "Receiver-bound bottle contact template: mapped open acquisition, donor-relative grasp/level correction, and explicit release; receiver object path and noncontact prefix are retained. CPU preparation only; physics outcome untested.",
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "frames": 1192,
+    "row": 23,
+    "uuid": "1ed6a04b-6f9e-4e94-8b7a-c3b75d687f5a",
+    "version": 5
+  },
+  "template_transfer": {
+    "donor_movement_end_step": 638,
+    "kind": "bottle",
+    "orientation": {
+      "candidate_approach_cosines": {
+        "donor_initial_alignment": 0.9035946608137028,
+        "receiver_local_alignment": -0.8887832347024244
+      },
+      "donor_initial_yaw_rad": -0.6594534190848236,
+      "receiver_initial_inverse_donor_initial_xyzw": [
+        0.0037165421024070657,
+        -0.005911022221909567,
+        0.9341035090403461,
+        0.3569340016440089
+      ],
+      "receiver_initial_yaw_rad": -3.0712854050239247,
+      "receiver_observed_approach_world": [
+        0.08846670389175415,
+        -0.0713554173707962,
+        -0.03061063587665558
+      ],
+      "strategy": "donor_initial_alignment"
+    },
+    "phase_mapping": "step = round(donor_step * receiver_movement_end / donor_movement_end)",
+    "preserved_reference_prefix": [
+      0,
+      10
+    ],
+    "receiver_movement_end_step": 727,
+    "receiver_row": 23,
+    "template_row": 19
+  }
+}
