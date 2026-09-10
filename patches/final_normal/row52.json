@@ -1,0 +1,186 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row52_normal_timing_grip0.0_normal",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 52,
+    "uuid": "f10cfa9c-d499-424c-9e3c-b25e1f05b378",
+    "frames": 411
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "active_object": "bowl",
+  "transfer": {
+    "donor_patch": "guangxue_bowl09_row49_v3.json",
+    "donor_source": {
+      "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+      "version": 5,
+      "row": 49,
+      "uuid": "ef83b5f0-8e5c-4e6c-9a3b-37faec809f5b",
+      "frames": 351
+    },
+    "coordinate_correction": "R_receiver_initial^-1 * R_donor_initial applied to donor object-relative grasp",
+    "receiver_from_donor_rotation_xyzw": [
+      -0.0068665319312438845,
+      -0.004684675224254404,
+      -0.40955872969298174,
+      -0.9122458832406708
+    ],
+    "timing": {
+      "receiver_movement_steps": [
+        180,
+        338
+      ],
+      "prefix_preserved_through_step": 100,
+      "grasp_blend_steps": [
+        100,
+        160
+      ],
+      "finger_close_steps": [
+        135,
+        165
+      ],
+      "late_leveling_steps": [
+        281,
+        454
+      ],
+      "late_leveling_mapping": "donor lift fraction to receiver lift start; donor hold-tail duration after receiver movement end"
+    }
+  },
+  "edit": {
+    "name": "donor49_contact_template_receiver_timing",
+    "translation": [
+      0.006,
+      0.012,
+      0
+    ],
+    "finger_targets": {
+      "j1_thumb_cmc_abd": -0.22530505628057645,
+      "j1_thumb_cmc_flex": 0.5757653693735006,
+      "j1_thumb_cmc_twist": -0.45031319644589635,
+      "j1_thumb_mcp_flex": 0.41633603936141544,
+      "j1_thumb_mcp_abd": 0.2957301619510986,
+      "j1_thumb_ip": 0.16270365976852807,
+      "j2_index_mcp_abd": 0.348450848759606,
+      "j2_index_mcp_flex": 0.8040590280408066,
+      "j2_index_pip": 0.6436200402426724,
+      "j2_index_dip": 0.6505195620253734,
+      "j3_middle_mcp_abd": -0.5239993951723417,
+      "j3_middle_mcp_flex": 1.1163313204066103,
+      "j3_middle_pip": 0.010602921586851584,
+      "j3_middle_dip": 0.3695041477895727,
+      "j4_ring_mcp_abd": -0.2674959469958751,
+      "j4_ring_mcp_flex": 0.9449804074493398,
+      "j4_ring_pip": 0.5954204341661093,
+      "j4_ring_dip": 0.5708994343660275,
+      "j5_pinky_mcp_abd": -3.6869333426104944,
+      "j5_pinky_mcp_flex": -0.7305480241775513,
+      "j5_pinky_pip": 2.3912062644958496,
+      "j5_pinky_dip": 1.745316982269287
+    },
+    "object_relative_grasp": {
+      "translation": [
+        -0.07931532645445999,
+        0.06541780661074473,
+        0.09809927047072246
+      ],
+      "rotation_xyzw": [
+        0.3586738654639253,
+        0.010142860032251871,
+        -0.7585662102348518,
+        0.5439002530919312
+      ]
+    },
+    "grasp_approach_start_offset": -80,
+    "grasp_approach_end_offset": -20,
+    "close_start_offset": -45,
+    "close_end_offset": -15,
+    "hand_offsets": {
+      "j2_index_mcp_flex": 0.6,
+      "j3_middle_mcp_flex": 0.6,
+      "j1_thumb_mcp_flex": 0.3
+    },
+    "stages": [
+      {
+        "start_step": 281,
+        "end_step": 454,
+        "wrist_rotation_world": [
+          -0.058619079989445086,
+          -0.29256805231112687,
+          -0.014324510829435625
+        ],
+        "pivot_from_object": [
+          0.07,
+          0.0,
+          0.005
+        ]
+      }
+    ]
+  },
+  "scope": "Receiver-bound first-pass donor49 bowl contact-template transfer. Source hand prefix and source object pose/timing remain reference data; only the bounded hand contact transition and phase-mapped late leveling are edited. Object poses are never forced during replay.",
+  "initial_hand": [
+    -0.006592826452106237,
+    -0.11136500537395477,
+    0.1363292803062196,
+    -0.22094190120697021,
+    0.10990091413259506,
+    1.5971643924713135,
+    0.03470368683338165,
+    0.14361731708049774,
+    -0.10624312609434128,
+    0.0,
+    0.13292688131332397,
+    0.3008679449558258,
+    -0.016287628561258316,
+    0.49986353516578674,
+    -0.18145141005516052,
+    0.09211833775043488,
+    -0.08679288625717163,
+    -0.01816043071448803,
+    0.4070013761520386,
+    0.4408801198005676,
+    0.25753021240234375,
+    0.7483494281768799,
+    -0.6335552930831909,
+    -0.0713004618883133,
+    -1.0400010347366333,
+    -0.2401701956987381,
+    1.5176479816436768,
+    1.2333314418792725
+  ],
+  "normal_timing": {
+    "baseline_run_name": "row52",
+    "baseline_frames": 839,
+    "normal_frames": 484,
+    "removed_constant_holds": [
+      {
+        "original_start": 454,
+        "original_stop_exclusive": 839,
+        "removed_frames": 355
+      }
+    ],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 4.84
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "9": 0.0,
+      "13": 0.0,
+      "14": 0.0
+    },
+    "onset_in_baseline": 180,
+    "release_in_baseline": null,
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "command_track": {
+    "path": "row52_commands.npz",
+    "sha256": "48af5aa9a7b235ec3c3486acec5992ae90dc4fe69e1aa2c3fadba078d16d534d",
+    "frames": 484
+  },
+  "audit_tail_frames": 0
+}

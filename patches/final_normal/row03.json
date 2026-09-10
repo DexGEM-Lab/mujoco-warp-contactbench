@@ -1,0 +1,132 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row3_normal_timing_grip0.0_normal",
+  "active_object": "bowl",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 3,
+    "uuid": "534c440e-808c-47cb-b9a3-938eb8677fd7",
+    "frames": 781
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "edit": {
+    "translation": [
+      0.006000000000000005,
+      0.01200000000000001,
+      0.0
+    ],
+    "rotation": [
+      0.008942519488128764,
+      0.028497226148182096,
+      2.446176803806731
+    ]
+  },
+  "command_track": {
+    "path": "row03_commands.npz",
+    "sha256": "be91d623dda59ec794d08bf57babd8a3033381ccb78c20c9ac76b5c7fb2ae24f",
+    "frames": 1334
+  },
+  "transfer": {
+    "donor_row": 0,
+    "prefix_preserved_through_step": 60,
+    "approach_blend_steps": [
+      60,
+      140
+    ],
+    "carry_steps": [
+      1385,
+      1685
+    ],
+    "receiver_source_movement_steps": [
+      180,
+      375
+    ],
+    "retimed": true,
+    "source_goal_world": [
+      -0.10630900138616561,
+      -0.24756201553344725,
+      0.039356377731963335
+    ],
+    "receiver_lateral_path_applied": true
+  },
+  "scope": "Contact-template candidate. Source noncontact prefix preserved, grasp/carry/level/release primitive transferred to receiver initial scene and receiver lateral path/end goal. Explicit retiming. Requires physical validation.",
+  "initial_hand": [
+    -0.2667388916015625,
+    -0.18685230612754822,
+    0.22350662649790876,
+    0.12671628594398499,
+    0.34775808453559875,
+    2.54693341255188,
+    -0.8762314915657043,
+    0.1824944168329239,
+    0.08907315135002136,
+    0.0,
+    0.06208833307027817,
+    0.09085725992918015,
+    -2.3470706939697266,
+    -0.10397793352603912,
+    -0.18133501708507538,
+    0.0922059640288353,
+    -2.0670084953308105,
+    0.24340146780014038,
+    -0.20355306565761566,
+    0.014789336360991001,
+    -1.8432592153549194,
+    0.8905375599861145,
+    -0.2610228657722473,
+    0.16424107551574707,
+    -2.080864191055298,
+    1.043840765953064,
+    -0.26041823625564575,
+    0.01783289946615696
+  ],
+  "normal_timing": {
+    "baseline_run_name": "row3",
+    "baseline_frames": 2505,
+    "normal_frames": 1334,
+    "removed_constant_holds": [
+      {
+        "original_start": 500,
+        "original_stop_exclusive": 1386,
+        "removed_frames": 856
+      },
+      {
+        "original_start": 1684,
+        "original_stop_exclusive": 1786,
+        "removed_frames": 72
+      },
+      {
+        "original_start": 1934,
+        "original_stop_exclusive": 2036,
+        "removed_frames": 72
+      },
+      {
+        "original_start": 2304,
+        "original_stop_exclusive": 2505,
+        "removed_frames": 171
+      }
+    ],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 13.34
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "9": 0.0,
+      "13": 0.0,
+      "14": 0.0
+    },
+    "onset_in_baseline": 220,
+    "release_in_baseline": [
+      2080,
+      2150
+    ],
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "audit_tail_frames": 0
+}

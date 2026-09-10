@@ -1,0 +1,223 @@
+{
+  "active_object": "mayonnaisebottle",
+  "edit": {
+    "acquisition": {
+      "arrive_step": 141,
+      "clearance_object_local": [
+        0.065,
+        0,
+        0.01
+      ],
+      "closed_step": 204,
+      "open_offsets": {
+        "j1_thumb_cmc_flex": -0.35,
+        "j2_index_mcp_flex": -0.55,
+        "j2_index_pip": -0.2,
+        "j3_middle_mcp_flex": -0.55,
+        "j3_middle_pip": -0.3,
+        "j4_ring_mcp_flex": -0.55,
+        "j4_ring_pip": -0.3,
+        "j5_pinky_mcp_flex": -0.55,
+        "j5_pinky_pip": -0.3
+      },
+      "pregrasp_step": 94,
+      "start_step": 10
+    },
+    "close_end_offset": 24,
+    "close_start_offset": -39,
+    "finger_targets": {
+      "j1_thumb_cmc_abd": 0.20607098808677984,
+      "j1_thumb_cmc_flex": 0.6573356559356712,
+      "j1_thumb_cmc_twist": -0.6106566619469832,
+      "j1_thumb_ip": 0.0010819513952655374,
+      "j1_thumb_mcp_abd": -0.07440851322481194,
+      "j1_thumb_mcp_flex": 0.0028698221644856622,
+      "j2_index_dip": 1.4600162093305204e-07,
+      "j2_index_mcp_abd": 0.10886548535549281,
+      "j2_index_mcp_flex": 0.9005344301385485,
+      "j2_index_pip": 0.22960570412665487,
+      "j3_middle_dip": 0.014649793125973629,
+      "j3_middle_mcp_abd": -0.5239968306644124,
+      "j3_middle_mcp_flex": 0.708017702620698,
+      "j3_middle_pip": 0.7215036597312362,
+      "j4_ring_dip": 0.0695232348748405,
+      "j4_ring_mcp_abd": -0.2366228450675731,
+      "j4_ring_mcp_flex": 0.41147473263438494,
+      "j4_ring_pip": 0.9717951233211798,
+      "j5_pinky_dip": 0.8628182548934012,
+      "j5_pinky_mcp_abd": -0.49283859321181805,
+      "j5_pinky_mcp_flex": 0.44643980717581605,
+      "j5_pinky_pip": 0.4600316744187213
+    },
+    "grasp_approach_end_offset": -23,
+    "grasp_approach_start_offset": -138,
+    "hand_offsets": {
+      "j1_thumb_cmc_flex": 0.15,
+      "j2_index_mcp_flex": 0.15,
+      "j3_middle_mcp_flex": 0.15,
+      "j4_ring_mcp_flex": 0.15,
+      "j5_pinky_mcp_flex": 0.15
+    },
+    "name": "bottle_open_approach_leveled_pour_retreat",
+    "object_relative_grasp": {
+      "rotation_xyzw": [
+        0.2431172801044449,
+        0.4816394651422802,
+        0.7171962735189866,
+        0.4410747317434475
+      ],
+      "translation": [
+        0.11099988552102356,
+        -0.04766595397962019,
+        -0.007815653989063955
+      ]
+    },
+    "release_at_end": true,
+    "release_end_step": 719,
+    "release_start_step": 646,
+    "stages": [
+      {
+        "end_step": 408,
+        "pivot_from_object": [
+          -0.05169416642828252,
+          -0.04929075532809257,
+          -0.056666472138370255
+        ],
+        "start_step": 324,
+        "wrist_rotation_world": [
+          0.11945210859896073,
+          -0.48755818165921144,
+          -0.1623689347007582
+        ]
+      },
+      {
+        "end_step": 538,
+        "pivot_from_object": [
+          -0.05169416642828252,
+          -0.04929075532809257,
+          -0.056666472138370255
+        ],
+        "start_step": 455,
+        "wrist_rotation_world": [
+          -0.11945210859896073,
+          0.48755818165921144,
+          0.1623689347007582
+        ]
+      }
+    ],
+    "translation": [
+      0,
+      0,
+      0
+    ],
+    "wrist_release_end_step": 719,
+    "wrist_release_start_step": 646
+  },
+  "name": "row22_normal_timing_grip0.0_normal",
+  "schema": "direct_capture_repair.v1",
+  "scope": "Receiver-bound bottle contact template: mapped open acquisition, donor-relative grasp/level correction, and explicit release; receiver object path and noncontact prefix are retained. CPU preparation only; physics outcome untested.",
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "frames": 1222,
+    "row": 22,
+    "uuid": "e42c7971-5c87-47f2-925d-59a2b42b98c6",
+    "version": 5
+  },
+  "template_transfer": {
+    "donor_movement_end_step": 638,
+    "kind": "bottle",
+    "orientation": {
+      "candidate_approach_cosines": {
+        "donor_initial_alignment": 0.9908648851275774,
+        "receiver_local_alignment": 0.9916444008037695
+      },
+      "donor_initial_yaw_rad": -0.6594534190848236,
+      "receiver_initial_inverse_donor_initial_xyzw": [
+        -0.000899764704054844,
+        0.0007841754083674808,
+        0.015344163759826104,
+        0.9998815590513298
+      ],
+      "receiver_initial_yaw_rad": -0.6901157639725387,
+      "receiver_observed_approach_world": [
+        0.05354868620634079,
+        -0.10818971693515778,
+        -0.020270749926567078
+      ],
+      "strategy": "receiver_local_alignment"
+    },
+    "phase_mapping": "step = round(donor_step * receiver_movement_end / donor_movement_end)",
+    "preserved_reference_prefix": [
+      0,
+      9
+    ],
+    "receiver_movement_end_step": 667,
+    "receiver_row": 22,
+    "template_row": 19
+  },
+  "initial_hand": [
+    0.28493866324424744,
+    -0.24468563497066498,
+    0.14221638211246662,
+    -0.04838566109538078,
+    0.6237899661064148,
+    1.3527679443359375,
+    0.2571667730808258,
+    0.2772429585456848,
+    -0.3075944185256958,
+    0.0,
+    0.06889582425355911,
+    0.14147044718265533,
+    0.013654200360178947,
+    0.34107261896133423,
+    -0.18147489428520203,
+    0.09213969111442566,
+    -0.16379031538963318,
+    0.006672209594398737,
+    0.2686954140663147,
+    0.34398746490478516,
+    -0.18711407482624054,
+    0.39393672347068787,
+    -0.12449532747268677,
+    0.2523890435695648,
+    -0.7960799336433411,
+    0.539668083190918,
+    -0.05524789169430733,
+    0.16339188814163208
+  ],
+  "normal_timing": {
+    "baseline_run_name": "row22",
+    "baseline_frames": 848,
+    "normal_frames": 848,
+    "removed_constant_holds": [],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 8.48
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "7": 0.0,
+      "13": 0.0,
+      "17": 0.0,
+      "21": 0.0,
+      "25": 0.0
+    },
+    "onset_in_baseline": 200,
+    "release_in_baseline": [
+      640,
+      710
+    ],
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "command_track": {
+    "path": "row22_commands.npz",
+    "sha256": "54e3c7d8194221fcab01f2aa66ce5e32de1e31d69d15b41317537fe1a0b4706f",
+    "frames": 848
+  },
+  "audit_tail_frames": 0
+}

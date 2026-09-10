@@ -1,0 +1,129 @@
+{
+  "schema": "direct_capture_repair.v1",
+  "name": "row29_normal_timing_grip0.0_normal",
+  "active_object": "mayonnaisebottle",
+  "source": {
+    "dataset_name": "dexgem_vla_demo_guangxue_cma2lance_20260909_060700.lance",
+    "version": 5,
+    "row": 29,
+    "uuid": "b2ac9fc6-a563-451e-b7ef-7b96fb42c0d1",
+    "frames": 922
+  },
+  "solver": {
+    "cone": "elliptic",
+    "impratio": 100.0
+  },
+  "edit": {
+    "translation": [
+      0.0,
+      0.0,
+      -2.4708744316107034e-05
+    ],
+    "rotation": [
+      0.000789288840978522,
+      0.0009341820532333005,
+      1.5992843254083417e-05
+    ]
+  },
+  "initial_hand": [
+    0.04507561807676769,
+    -0.40802429120448247,
+    0.17589510462043073,
+    -0.16790725363005166,
+    0.15831881001084946,
+    1.1815953754534787,
+    0.016230620443820953,
+    0.030697818845510483,
+    -0.02860971726477146,
+    -2.2467546045845666e-08,
+    0.11910171806812286,
+    0.22197189927101135,
+    -0.02271614782512188,
+    0.19178476929664612,
+    -0.16111421585083008,
+    0.09207215160131454,
+    -0.1441173106431961,
+    -0.08601763844490051,
+    0.10977192223072052,
+    0.23121978342533112,
+    -0.10581585019826889,
+    0.012182128615677357,
+    0.04571152478456497,
+    0.3727244436740875,
+    -0.6169440746307373,
+    0.26698899269104004,
+    -0.04897718504071236,
+    0.1633847951889038
+  ],
+  "command_track": {
+    "path": "row29_commands.npz",
+    "sha256": "dd409ac08c881ba218920e368d71fef497371c9510c63dbd047fc3fe28f1be65",
+    "frames": 1066
+  },
+  "transfer": {
+    "donor_source_row": 20,
+    "score": 0.11490285232676002,
+    "yaw_alignment_rad": -0.04648044571302401,
+    "recipient_bowl_warp_m": [
+      0.07380525859181294,
+      -0.012309583334008167,
+      0.0
+    ],
+    "recipient_goal_warp_m": [
+      -0.02367105465453094,
+      0.026362297328221457,
+      0.0
+    ],
+    "active_initial_tilt_corrected": true,
+    "source_noncontact_replaced": true,
+    "timing": "verified donor contact primitive; monotonic receiver phase mapping"
+  },
+  "scope": "Receiver-conditioned contact task repair, not original-timing motion denoising. Original static tilt is aligned to donor rest geometry; masses/mu/gains unchanged.",
+  "late_repair": {
+    "prefix_end": 650,
+    "mechanism": "supported bottle was driven away by continuing loaded wrist target; unload at actual hand pose, fully open then retreat",
+    "retimed": true
+  },
+  "normal_timing": {
+    "baseline_run_name": "row29",
+    "baseline_frames": 1341,
+    "normal_frames": 1066,
+    "removed_constant_holds": [
+      {
+        "original_start": 650,
+        "original_stop_exclusive": 732,
+        "removed_frames": 52
+      },
+      {
+        "original_start": 880,
+        "original_stop_exclusive": 962,
+        "removed_frames": 52
+      },
+      {
+        "original_start": 1140,
+        "original_stop_exclusive": 1341,
+        "removed_frames": 171
+      }
+    ],
+    "moving_targets_unchanged_before_grip": true,
+    "source_timing_exact": false,
+    "normal_duration_s": 10.66
+  },
+  "grip_preload": {
+    "scale": 0.0,
+    "joint_index_offsets_rad": {
+      "7": 0.0,
+      "13": 0.0,
+      "17": 0.0,
+      "21": 0.0,
+      "25": 0.0
+    },
+    "onset_in_baseline": 180,
+    "release_in_baseline": [
+      880,
+      950
+    ],
+    "mechanism": "additional position-target closure after sustained opposing contact; zero before contact/after release; actual actuator clamping unchanged"
+  },
+  "audit_tail_frames": 0
+}
