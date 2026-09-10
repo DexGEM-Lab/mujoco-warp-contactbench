@@ -172,6 +172,21 @@ def test_config_drift_fails_closed(source, key, value):
         inspect(path, payload, model, agent, config={**payload['config'], key: value})
 
 
+def test_recorded_critic_lineage_may_be_absent_from_expected_provenance(source):
+    path, payload, model, agent = source
+    expected_provenance = payload['provenance'].copy()
+    expected_provenance.pop('separate_critic')
+    inspect(path, payload, model, agent, provenance=expected_provenance)
+
+
+def test_recorded_critic_lineage_does_not_weaken_fixed_config_gate(source):
+    path, payload, model, agent = source
+    expected_config = payload['config'].copy()
+    expected_config['separate_critic'] = False
+    with pytest.raises(ValueError, match='config mismatch'):
+        inspect(path, payload, model, agent, config=expected_config)
+
+
 @pytest.mark.parametrize('key', ['asset_pin', 'package_digest', 'manifest_sha256', 'catalog_digest', 'identity_split', 'contracts', 'identity', 'clock'])
 def test_physical_provenance_drift_rejected(source, key):
     path, payload, model, agent = source

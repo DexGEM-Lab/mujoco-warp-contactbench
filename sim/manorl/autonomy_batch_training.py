@@ -197,8 +197,8 @@ _RESUME_MUTABLE_CONFIG = {
     "mode", "resume_checkpoint", "resume",
 }
 _RESUME_DIAGNOSTIC_PROVENANCE = {
-    "source_commit", "cache_hash_recorded_not_compared", "warmstart_checkpoint",
-    "warmstart_transfer_mode", "mode", "resume_checkpoint", "resume",
+    "source_commit", "cache_hash_recorded_not_compared", "separate_critic",
+    "warmstart_checkpoint", "warmstart_transfer_mode", "mode", "resume_checkpoint", "resume",
 }
 _RESUME_REQUIRED_PROVENANCE = {
     "asset_pin", "package_digest", "manifest_sha256", "catalog_digest",
