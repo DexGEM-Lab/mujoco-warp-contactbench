@@ -34,6 +34,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--donor-patch", type=Path, default=DEFAULT_DONOR_PATCH)
     p.add_argument("--replay-tool", type=Path, default=DEFAULT_REPLAY)
     p.add_argument("--python", type=Path, default=Path(sys.executable))
+    p.add_argument("--source-root", type=Path, help="Materialized simulation checkout for replay imports")
     p.add_argument("--post-padding", type=int, default=500,
                    help="100 Hz held tail; 500 is five seconds")
     return p
@@ -164,7 +165,8 @@ def run(args) -> None:
     patches = generate(args)
     args.output_root.mkdir(parents=True, exist_ok=False)
     env = os.environ.copy()
-    env["PYTHONPATH"] = "/home/jay/dexrobot/FromSSH/manoRL_mujoco" + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    if args.source_root is not None:
+        env["PYTHONPATH"] = str(args.source_root.resolve()) + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     for patch in patches:
         row = json.loads(patch.read_text())["source"]["row"]
