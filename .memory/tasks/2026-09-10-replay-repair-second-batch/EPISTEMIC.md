@@ -52,5 +52,8 @@ normal/audit prefixes, exact65000frameaccounting, no moving-target loss, separat
 validation exists, including first5carryovers, without modifying original bundle.
 First critic failed by accidentally decoding source video columns; corrected
 read-only runs used localNPZonly. Empty case submodules are not asset drift; use
-primary materialized source for imports. Final package command checks, source
-UUIDroundtrip and user replay entrypoint are completing. Audit trail: OPS.md.
+primary materialized source for imports. Final published package passed all59
+source-UUID/data-value/video-duration checks, and source+patch normal GUI replays
+for0and39completed with exit0. Full source tools/commands integrated through the
+parent feature; original global simulation/actuator code remains unchanged.
+No live training or perpetual replay remains for this task. Audit trail: OPS.md.
