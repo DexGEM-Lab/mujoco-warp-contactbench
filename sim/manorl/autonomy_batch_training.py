@@ -25,7 +25,7 @@ from sim.manorl.autonomy_contracts import (
 )
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
 from sim.manorl.autonomy_v4_telemetry import V4TelemetryAccumulator
-from sim.manorl.autonomy_training import build_batched_runtime
+from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config
 
 
 def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
@@ -280,6 +280,10 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
             row.update({"episodes/completed_count": float(completed_count.cpu()),
                         "episodes/return_mean": float(completed_return.cpu() / completed_count.cpu()),
                         "episodes/length_mean": float(completed_length.cpu() / completed_count.cpu())})
+        # This derives the effective values from the instantiated PPO/Adam,
+        # rather than restating library defaults in telemetry configuration.
+        row.update({f"config/{name}": value for name, value in resolved_v4_ppo_config(agent).items()
+                    if isinstance(value, (bool, float, int))})
         row.update(latest_ppo_metrics(agent)); _assert_finite(model=model, agent=agent, row=row, checkpoint=None if checkpoint is None else Path(checkpoint), update=update)
         rows.append(row)
         if checkpoint is not None and update % checkpoint_interval == 0:

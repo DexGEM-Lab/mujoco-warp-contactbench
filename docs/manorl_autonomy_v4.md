@@ -197,18 +197,28 @@ reason bits are independently counted (`reference_complete=1`, `deviation=2`,
 `termination/horizon_only` and never classified as grasp success.
 
 Raw-policy action magnitude, physical-clipping fraction, executed norm, and
-measured command-envelope/antiwindup fractions are logged separately. Native
+measured command-envelope/antiwindup fractions are logged separately. Raw
+magnitude uses the sum of absolute action elements divided by its explicit
+28-elements-per-world denominator; `action/raw_abs_max` is the true largest
+element, not a maximum of environment means. The contact reducer emits
+per-region tangential velocity as `[B,16,3]`; telemetry takes its L2 norm once
+to form the `[B,16]` active-slip scalar. Invalid reward rows are excluded with
+`where(valid, residual, 0)`, so a `NaN * 0` cannot contaminate reconciliation.
+Native
 RlGamesPPO losses/KL/std/lr remain named under their existing keys. Stats that
 the PPO implementation does not expose directly (sample clip fraction,
 gradient norm before clipping, advantage/return/explained variance) are absent
 rather than inferred. On CUDA, the per-transition reductions and episode
-accounting remain device tensors; only one compact scalar row leaves the device
-per update. `train` appends that row to `<checkpoint>.metrics.jsonl` regardless
+accounting remain device tensors; completed episodes use fixed-size masked
+count/sum/min/max aggregates rather than boolean gathers, and raw Torch actions
+never take a NumPy conversion while constructing telemetry. Only one compact
+scalar row leaves the device per update. `train` appends that row to `<checkpoint>.metrics.jsonl` regardless
 of W&B and defines W&B's common `transitions` axis before logging. W&B config
-also records resolved PPO values rather than only CLI flags: the inherited
-`grad_norm_clip=0.5`, Adam settings, GAE/discount, clipping/loss scales,
-normalization/mixed-precision state, rollout size, epochs, minibatches, and
-resulting rollout batch size.
+also records resolved PPO values rather than only CLI flags: the PPO builder
+uses one installed-default-plus-v4-override factory, while each update records
+the instantiated agent's effective grad clip, Adam, GAE/discount,
+clipping/loss, observation/value/advantage normalization, mixed-precision,
+rollout, epoch, and minibatch values.
 
 A separate critic still shares PointNet with the actor. Its loss values alone
 therefore do not identify which gradient path dominates; telemetry preserves
@@ -217,9 +227,11 @@ those losses as observations and does not change the PPO algorithm in response.
 `evaluate` defaults to one environment and writes its JSON summary plus a
 compressed `.npz` beside `--trace` (or `--artifact`). The NPZ contains actual
 and reference object/palm positions, actual/raw/feasible qpos, all nine reward
-terms, paired and object-all forces, bottom clearance, reason codes, and the
-natural-prefix length. It preserves a natural terminal prefix separately from
-any diagnostic continuation.
+terms with their `reward_term_names` labels, paired and object-all forces,
+bottom clearance, reason codes, and the natural-prefix length. Each JSON trace
+row records measured `finite` and runtime `valid` status. Evaluation rejects
+anything other than one environment and positive explicit step counts. It
+preserves a natural terminal prefix separately from any diagnostic continuation.
 
 The fast contact reducer now asserts the static pyramidal cone, requires
 ownership-disjoint geoms in real models, rejects unsupported cones, and skips

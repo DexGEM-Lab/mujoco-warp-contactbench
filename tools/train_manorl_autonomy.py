@@ -18,7 +18,8 @@ import torch
 from sim.manorl.autonomy_batch_training import inspect_v4_warmstart, load_frozen_v4, run_batched_ppo
 from sim.manorl.autonomy_telemetry import configure_wandb_axis
 from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata
-from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything
+from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything, v4_ppo_config
+from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES
 from sim.manorl.trajectory_package import load_trajectory_package
 
 DEFAULT_PACKAGE = "/home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180"
@@ -83,13 +84,14 @@ def _wandb(args, metadata):
 
 
 def _resolved_telemetry_config(adapter, args):
-    return {"ppo": {"discount_factor": .99, "gae_lambda": .95, "learning_rate": 3e-4,
-                     "ratio_clip": .2, "value_clip": .2, "entropy_loss_scale": .001,
-                     "value_loss_scale": .5, "mixed_precision": False, "normalize_observations": False,
-                     "grad_norm_clip": .5, "optimizer": "Adam", "adam_betas": [0.9, 0.999],
-                     "adam_eps": 1e-8, "learning_starts": 0, "time_limit_bootstrap": True,
-                     "learning_epochs": args.learning_epochs, "mini_batches": args.mini_batches,
-                     "rollouts": args.rollouts, "rollout_batch_samples": args.rollouts * adapter.num_envs},
+    # Keep W&B metadata tied to the same default-plus-override factory passed
+    # into the PPO builder. Per-update config/* fields record the live agent.
+    ppo = v4_ppo_config(rollouts=args.rollouts, learning_epochs=args.learning_epochs, mini_batches=args.mini_batches)
+    ppo.update({"normalize_observations": False, "normalize_values": False,
+                "normalize_advantages": False, "optimizer": "Adam",
+                "adam_betas": [0.9, 0.999], "adam_eps": 1e-8,
+                "rollout_batch_samples": args.rollouts * adapter.num_envs})
+    return {"ppo": ppo,
             "runtime": {"num_envs": adapter.num_envs, "raw_observation_dim": adapter.observation_dim,
                         "action_dim": adapter.action_dim, "control_timestep": adapter.runtime.cache.control_timestep,
                         "physics_substeps": 4},
@@ -162,6 +164,8 @@ def _checkpoint_separate_critic(payload):
 
 
 def evaluate(args):
+    if args.num_envs != 1: raise ValueError("frozen v4 evaluate requires --num-envs 1")
+    if args.steps is not None and args.steps <= 0: raise ValueError("--steps must be positive")
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     separate_critic = _checkpoint_separate_critic(payload)
@@ -180,7 +184,7 @@ def evaluate(args):
         with torch.no_grad():
             mean, _ = model.compute({"observations": observations}, role="policy")
             action = torch.clamp(mean, -1., 1.)
-        next_obs, reward, done, info = adapter.step(action); total += float(reward[0, 0].cpu())
+        next_obs, reward, done, info = adapter.step(action); reward_value = float(reward[0, 0].cpu()); total += reward_value
         natural_done = bool(np.asarray(adapter.runtime.last_reward.done)[0])
         if natural_done and natural_first is None:
             natural_first = {"policy_step": policy_step, "reason_code": int(np.asarray(adapter.runtime.last_reason)[0])}
@@ -189,7 +193,12 @@ def evaluate(args):
         reason_code = int(np.asarray(adapter.runtime.last_reason)[0])
         clearance = float(np.asarray(physical.object_bottom)[0] - cache.table_height)
         terms = [float(np.asarray(getattr(diagnostics, name))[0]) for name in ("object_position", "object_rotation", "object_velocity", "hand_relative", "fingers", "geometry", "action", "survival", "severe")]
-        trace.append({"policy_step": policy_step, "reward": float(reward[0, 0].cpu()),
+        runtime_valid = bool(np.asarray(info["valid"])[0])
+        finite = bool(np.isfinite(reward_value) and np.isfinite(clearance)
+                      and np.isfinite(np.asarray(physical.object_origin)[0]).all()
+                      and np.isfinite(np.asarray(terms)).all())
+        trace.append({"policy_step": policy_step, "reward": reward_value,
+                      "finite": finite, "valid": runtime_valid,
                       "natural_done": natural_done, "runtime_done": bool(done[0, 0].cpu()),
                       "reason_code": reason_code, "bottom_clearance_m": clearance,
                       "cache_hash": adapter.runtime.cache.content_hash})
@@ -208,7 +217,7 @@ def evaluate(args):
               "provenance": {"checkpoint": payload["provenance"], "evaluation_cache_hash_recorded_not_compared": adapter.runtime.cache.content_hash}, "trace": trace}
     trace_path = Path(args.trace); trace_path.parent.mkdir(parents=True, exist_ok=True); trace_path.write_text(json.dumps(result, indent=2, default=_jsonable) + "\n")
     artifact_path = Path(args.artifact) if args.artifact else trace_path.with_suffix(".npz")
-    artifact_path.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(artifact_path, **{name: np.asarray(values) for name, values in artifact.items()}, natural_prefix_steps=np.asarray(result["natural_prefix_steps"]), full_horizon_diagnostic=np.asarray(args.full_horizon_diagnostic))
+    artifact_path.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(artifact_path, **{name: np.asarray(values) for name, values in artifact.items()}, reward_term_names=np.asarray(REWARD_NAMES), natural_prefix_steps=np.asarray(result["natural_prefix_steps"]), full_horizon_diagnostic=np.asarray(args.full_horizon_diagnostic))
     print(json.dumps({"trace": str(trace_path), "artifact": str(artifact_path), "steps": len(trace), "return": total, "natural_first_termination": natural_first}), flush=True)
 
 

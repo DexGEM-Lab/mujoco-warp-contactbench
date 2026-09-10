@@ -15,6 +15,7 @@ from skrl.models.torch.gaussian import GaussianMixin
 from skrl.models.torch.deterministic import DeterministicMixin
 from skrl.memories.torch import RandomMemory
 from sim.manorl.rl_games_ppo import RlGamesPPO
+from skrl.agents.torch.ppo.ppo import PPO_CFG
 from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM
 from sim.manorl.model import PointNetEncoder
 from sim.manorl.trajectory_package import TrajectoryCatalog
@@ -51,11 +52,18 @@ class BatchedAutonomyAdapter:
         return self._to_torch(self.runtime.reset(mask)),{"num_envs":self.num_envs,"contract":"manorl.autonomy.v4"}
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
     def compact_summary(self):
-        """Legacy compact fields retained for existing callers."""
-        sample=self.telemetry_snapshot(self._last_raw_actions)
-        return {"object_motion": sample["origin_lift_delta"].sum(),
-                "contact_force": sample["paired_force_norm"].sum(),
-                "path": torch.linalg.vector_norm(sample["position_error_abs"], dim=1).sum()}
+        """Legacy compact fields from already-cached post-transition physics.
+
+        ``object_motion`` historically means the sum of absolute world-origin Z,
+        not a lift delta.  Do not call ``telemetry_snapshot`` here: collection
+        already captures that richer snapshot once per transition.
+        """
+        jp=self.runtime.jp; physical=self.runtime.last_physical; contact=self.runtime.last_contact
+        index=jp.minimum(self.runtime.indices,self.runtime.length-1)
+        target_object=jp.asarray(self.runtime.cache.object_origin)[index]
+        return {"object_motion": self._to_torch(jp.abs(physical.object_origin[:,2])).sum(),
+                "contact_force": self._to_torch(jp.linalg.norm(contact.paired_force_on_object,axis=-1).sum(axis=-1)).sum(),
+                "path": self._to_torch(jp.linalg.norm(physical.object_origin-target_object,axis=-1)).sum()}
 
     def telemetry_snapshot(self, raw_actions):
         """Post-transition physical/reward facts, still resident on the runtime device."""
@@ -64,7 +72,12 @@ class BatchedAutonomyAdapter:
         target_object=jp.asarray(cache.object_origin)[index]; target_palm=jp.asarray(cache.palm_origin)[index]
         target_raw=jp.asarray(cache.q_raw)[index]; target_feasible=jp.asarray(cache.q_feasible)[index]
         paired_norm=jp.linalg.norm(contact.paired_force_on_object,axis=-1); loaded=paired_norm>.02
-        action=jp.asarray(raw_actions); executed=jp.clip(action,-1.,1.)
+        if raw_actions.shape != (self.num_envs, ACTION_DIM):
+            raise ValueError("v4 raw actions must be (num_envs,28)")
+        # Raw Normal samples stay in Torch: jp.asarray(CUDA Tensor) would take
+        # NumPy's host path. Only physical execution crosses JAX/Torch via DLPack.
+        raw_action_abs=raw_actions.detach().abs()
+        executed=torch.clamp(raw_actions.detach(),-1.,1.)
         terms=jp.stack((reward.object_position,reward.object_rotation,reward.object_velocity,reward.hand_relative,
                         reward.fingers,reward.geometry,reward.action,reward.survival,reward.severe),axis=1)
         snapshot={
@@ -81,15 +94,20 @@ class BatchedAutonomyAdapter:
             "paired_contact_count":contact.paired_count.sum(axis=-1), "paired_force_norm":paired_norm.sum(axis=-1),
             "object_all_force_norm":jp.linalg.norm(contact.object_all_force,axis=-1),
             "paired_torque_com_norm":jp.linalg.norm(contact.paired_torque_com,axis=-1),
+            # Contact reduction owns a [B,16,3] tangential velocity; this L2
+            # produces exactly one scalar slip speed per hand region.
             "tangential_slip":jp.linalg.norm(contact.tangential_slip,axis=-1),
             "airborne":physical.object_bottom > cache.table_height+.005,
-            "action_raw_abs":jp.mean(jp.abs(action),axis=-1), "action_executed_norm":jp.linalg.norm(executed,axis=-1),
-            "action_clipped":jp.mean((jp.abs(action)>1.).astype(jp.float32),axis=-1),
+            "action_raw_abs_sum":raw_action_abs.sum(dim=-1), "action_raw_abs_max":raw_action_abs.amax(dim=-1),
+            "action_raw_abs_denominator":torch.full((self.num_envs,), ACTION_DIM, dtype=raw_actions.dtype, device=raw_actions.device),
+            "action_executed_norm":torch.linalg.vector_norm(executed,dim=-1),
+            "action_clipped":(raw_action_abs>1.).to(raw_actions.dtype).sum(dim=-1),
+            "action_denominator":torch.full((self.num_envs,), ACTION_DIM, dtype=raw_actions.dtype, device=raw_actions.device),
             "command_envelope_utilization":jp.mean(jp.abs(physical.command_error),axis=-1),
             "antiwindup_active":jp.any(jp.abs(physical.command_error)>=1.,axis=-1),
             "reference_progress":index/jp.asarray(max(1,self.runtime.length-1),jp.float32),
         }
-        return {name:self._to_torch(value) for name,value in snapshot.items()}
+        return {name:value if isinstance(value,torch.Tensor) else self._to_torch(value) for name,value in snapshot.items()}
     def step(self,actions):
         # Preserve raw Gaussian actions for likelihood; physical boundary clips.
         if not isinstance(actions,torch.Tensor): actions=torch.as_tensor(actions,dtype=torch.float32,device=self._device)
@@ -139,14 +157,36 @@ class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
         if role=="value": return self.value((self.value_net or self.net)(features)),{}
         raise ValueError("role must be policy or value")
 
+def v4_ppo_config(*, rollouts:int, learning_epochs:int, mini_batches:int) -> dict[str, Any]:
+    """Installed PPO defaults plus the unchanged v4 overrides, in one source."""
+    defaults=PPO_CFG()
+    return {"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":mini_batches,
+            "discount_factor":defaults.discount_factor,"gae_lambda":defaults.gae_lambda,
+            "learning_rate":3e-4,"ratio_clip":defaults.ratio_clip,"value_clip":defaults.value_clip,
+            "entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":defaults.learning_starts,
+            "grad_norm_clip":defaults.grad_norm_clip,"time_limit_bootstrap":True,
+            "experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
+
+
+def resolved_v4_ppo_config(agent) -> dict[str, Any]:
+    """Report the instantiated agent rather than a parallel config literal."""
+    cfg=agent.cfg; optimizer=agent.optimizer.param_groups[0]
+    return {"discount_factor":cfg.discount_factor,"gae_lambda":cfg.gae_lambda,"learning_rate":optimizer["lr"],
+            "ratio_clip":cfg.ratio_clip,"value_clip":cfg.value_clip,"entropy_loss_scale":cfg.entropy_loss_scale,
+            "value_loss_scale":cfg.value_loss_scale,"mixed_precision":cfg.mixed_precision,
+            "normalize_observations":cfg.observation_preprocessor is not None,
+            "normalize_values":cfg.value_preprocessor is not None,"normalize_advantages":False,
+            "grad_norm_clip":cfg.grad_norm_clip,"optimizer":type(agent.optimizer).__name__,
+            "adam_betas":list(optimizer["betas"]),"adam_eps":optimizer["eps"],
+            "learning_starts":cfg.learning_starts,"time_limit_bootstrap":cfg.time_limit_bootstrap,
+            "learning_epochs":cfg.learning_epochs,"mini_batches":cfg.mini_batches,"rollouts":cfg.rollouts}
+
+
 def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False):
     """Canonical RlGamesPPO over raw-957 storage and the v4 PointNet model."""
     memory=RandomMemory(memory_size=rollouts,num_envs=adapter.num_envs,device=device)
     model=AutonomyActorCritic(adapter.observation_space,adapter.action_space,device=device,separate_critic=separate_critic,clip_actions=False)
-    cfg={"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":mini_batches,
-         "discount_factor":.99,"gae_lambda":.95,"learning_rate":3e-4,"ratio_clip":.2,
-         "value_clip":.2,"entropy_loss_scale":.001,"value_loss_scale":.5,"learning_starts":0,
-         "time_limit_bootstrap":True,"experiment":{"write_interval":0,"checkpoint_interval":0},"mixed_precision":False}
+    cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches)
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
                      observation_space=adapter.observation_space,state_space=None,
                      action_space=adapter.action_space,device=device,cfg=cfg)

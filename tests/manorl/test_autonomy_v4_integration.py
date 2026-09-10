@@ -56,6 +56,9 @@ def test_v4_ppo_raw_action_terminal_reset_and_checkpoint_roundtrip(tmp_path, mon
     torch.testing.assert_close(adapter.physical[0],torch.clamp(adapter.seen[0],-1.,1.))
     # terminal t+1 was observed before prepare_action returned frame zero.
     assert adapter.phase == 0 and rows[0]['terminations']==2.
+    assert rows[0]['config/grad_norm_clip'] == .5
+    assert rows[0]['config/normalize_observations'] == 0.
+    assert rows[0]['config/normalize_advantages'] == 0.
     assert agent.optimizer.state and any(torch.count_nonzero(state['exp_avg']) for state in agent.optimizer.state.values())
     assert any(not torch.equal(before[name], value) for name,value in model.pointnet.named_parameters())
     restored=_model(); payload=training.load_frozen_v4(checkpoint,restored,expected_provenance={'package_digest':'p'})
@@ -175,6 +178,10 @@ def test_v4_public_cli_lists_and_parses_warmstart_and_separate_critic():
     selected=cli.parse_args(['train','--warmstart','teacher.pt','--separate-critic'])
     assert selected.warmstart=='teacher.pt' and selected.separate_critic is True
     assert cli.parse_args(['evaluate','--checkpoint','frozen.pt']).num_envs == 1
+    with pytest.raises(ValueError, match='num-envs 1'):
+        cli.evaluate(cli.parse_args(['evaluate','--checkpoint','frozen.pt','--num-envs','2']))
+    with pytest.raises(ValueError, match='steps must be positive'):
+        cli.evaluate(cli.parse_args(['evaluate','--checkpoint','frozen.pt','--steps','0']))
 
 
 def test_frozen_separate_critic_architecture_is_selected_and_strictly_loaded(tmp_path):
