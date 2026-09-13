@@ -132,3 +132,19 @@ stay unchanged. Validate directional/parity tests and all v4/batch regressions;
 run exactly one local CPU N1 teacher pursuit on cube2_02_2833 through all 538
 diagnostic frames plus a natural-terminal reset run. Compare the historical
 hard-envelope baseline. No training, servers, W&B or reference-repo edits.
+
+## v4 online teacher anchor (current bounded scope)
+
+Add optional training-only analytical chase labels at each pre-step runtime state,
+with +0.2 rad on flexion joints [7,9,10,13,14,15,17,18,19,21,22,23,25,26,27]
+from next-frame index200, target clipping to joint limits and rate-normalized
+command error clipping. After canonical PPO, apply beta*MSE mean-only supervision
+through the same Adam, clip gradient norm0.5, and make two full randomized
+minibatch passes by default. Beta0 must make no teacher calls or extra optimizer
+steps. Preserve policy-only physical execution and frozen evaluation, raw Normal
+PPO, architecture, observations, reward and clock. Persist the complete recipe
+and preserve disabled old checkpoint resume. Validate synthetic boundary/gradient/
+metadata tests plus exactly two CPU N1 updates of16 rollouts per beta0/beta1 arm
+from the squeeze-BC warmstart, identical seed, no W&B/network/GPU/server work.
+Document and atomically commit this intermediate learning intervention; parent
+owns deployment and subsequent full-task physical learning judgment.

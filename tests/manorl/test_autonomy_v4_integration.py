@@ -280,7 +280,8 @@ def test_v4_invalid_learning_rate_rejected_before_data_or_builder(value, monkeyp
 def test_v4_cli_threads_learning_rate_to_ppo_and_wandb_config(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from tools import train_manorl_autonomy as cli
-    args = cli.parse_args(['train', '--learning-rate', '3e-5', '--checkpoint', str(tmp_path / 'ppo.pt')])
+    args = cli.parse_args(['train', '--learning-rate', '3e-5', '--teacher-anchor-beta', '1',
+                           '--teacher-anchor-passes', '3', '--checkpoint', str(tmp_path / 'ppo.pt')])
     trajectory = object(); catalog = SimpleNamespace(trajectories=[trajectory])
     adapter = SimpleNamespace(num_envs=args.num_envs, observation_dim=RAW_OBSERVATION_DIM, action_dim=ACTION_DIM,
                               runtime=SimpleNamespace(cache=SimpleNamespace(control_timestep=1/120)))
@@ -302,3 +303,9 @@ def test_v4_cli_threads_learning_rate_to_ppo_and_wandb_config(tmp_path, monkeypa
     assert observed['kwargs']['config']['learning_rate'] == 3e-5
     assert observed['metadata']['resolved']['ppo']['learning_rate'] == 3e-5
     assert observed['metadata']['config']['learning_rate'] == 3e-5
+    assert observed['kwargs']['teacher_anchor_beta'] == 1.
+    assert observed['kwargs']['teacher_anchor_passes'] == 3
+    anchor = observed['metadata']['resolved']['teacher_anchor']
+    assert anchor['beta'] == 1. and anchor['passes'] == 3
+    assert anchor == observed['metadata']['provenance']['teacher_anchor']
+    assert anchor == observed['metadata']['config']['teacher_anchor']

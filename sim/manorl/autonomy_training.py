@@ -24,6 +24,21 @@ RESERVED_TRAIN_IDENTITIES=("cube2_02_2833","cube2_02_2835","cube2_02_2837")
 SPLIT_CONTRACT_ID="manorl.autonomy.identity_split.v1"
 TRAINING_CONTRACT_ID="manorl.autonomy.training.v4.disabled"
 ACTOR_CRITIC_ARCHITECTURE_ID="manorl.autonomy.actor_critic.v4.pointnet"
+TEACHER_FLEX_JOINTS = (7, 9, 10, 13, 14, 15, 17, 18, 19, 21, 22, 23, 25, 26, 27)
+TEACHER_SQUEEZE_RAD = 0.2
+TEACHER_SQUEEZE_START = 200
+
+
+def teacher_anchor_metadata(beta: float = 0.0, passes: int = 2) -> dict[str, Any]:
+    """Training supervision only; these targets never enter physical execution."""
+    if not math.isfinite(beta) or beta < 0:
+        raise ValueError("teacher-anchor-beta must be finite and nonnegative")
+    if beta > 0 and (type(passes) is not int or passes < 1):
+        raise ValueError("teacher-anchor-passes must be a positive integer when beta > 0")
+    return {"beta": beta, "passes": passes, "squeeze_rad": TEACHER_SQUEEZE_RAD,
+            "squeeze_start": TEACHER_SQUEEZE_START, "flex_joints": list(TEACHER_FLEX_JOINTS),
+            "role": "training_supervision_only"}
+
 
 def identity_split(catalog: TrajectoryCatalog, *, seed:int=0)->dict[str,Any]:
     identities=tuple(t.identity.identity for t in catalog.trajectories); missing=[x for x in RESERVED_TRAIN_IDENTITIES if x not in identities]
@@ -51,6 +66,17 @@ class BatchedAutonomyAdapter:
     def reset(self,*,mask=None):
         return self._to_torch(self.runtime.reset(mask)),{"num_envs":self.num_envs,"contract":"manorl.autonomy.v4"}
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
+    def teacher_actions(self, squeeze_rad=TEACHER_SQUEEZE_RAD, squeeze_start=TEACHER_SQUEEZE_START):
+        """Analytical chase labels at the current pre-action state, never controls."""
+        runtime = self.runtime; jp = runtime.jp
+        index = jp.minimum(runtime.indices + 1, runtime.length - 1)
+        squeeze = jp.zeros((ACTION_DIM,), dtype=jp.float32).at[jp.asarray(TEACHER_FLEX_JOINTS)].set(squeeze_rad)
+        target = jp.asarray(runtime.cache.q_feasible)[index] + (index >= squeeze_start)[:, None] * squeeze
+        target = jp.clip(target, jp.asarray(runtime.lower), jp.asarray(runtime.upper))
+        actions = jp.clip((target - runtime.previous_command) /
+                          (jp.asarray(runtime.rate) * runtime.cache.control_timestep), -1., 1.)
+        return self._to_torch(actions)
+
     def compact_summary(self):
         """Legacy compact fields from already-cached post-transition physics.
 

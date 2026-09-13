@@ -18,7 +18,7 @@ import torch
 from sim.manorl.autonomy_batch_training import inspect_v4_resume, inspect_v4_warmstart, load_frozen_v4, resume_lineage, run_batched_ppo
 from sim.manorl.autonomy_telemetry import configure_wandb_axis
 from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata
-from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything, v4_ppo_config, validate_learning_rate
+from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything, v4_ppo_config, validate_learning_rate, teacher_anchor_metadata
 from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES
 from sim.manorl.trajectory_package import load_trajectory_package
 
@@ -107,7 +107,7 @@ def _resolved_telemetry_config(adapter, args):
                 "normalize_advantages": True, "optimizer": "Adam",
                 "adam_betas": [0.9, 0.999], "adam_eps": 1e-8,
                 "rollout_batch_samples": args.rollouts * adapter.num_envs})
-    return {"ppo": ppo,
+    return {"teacher_anchor": teacher_anchor_metadata(args.teacher_anchor_beta, args.teacher_anchor_passes), "ppo": ppo,
             "runtime": {"num_envs": adapter.num_envs, "raw_observation_dim": adapter.observation_dim,
                         "action_dim": adapter.action_dim, "control_timestep": adapter.runtime.cache.control_timestep,
                         "physics_substeps": 4},
@@ -118,6 +118,7 @@ def _resolved_telemetry_config(adapter, args):
 
 def train(args):
     validate_learning_rate(args.learning_rate)
+    anchor = teacher_anchor_metadata(args.teacher_anchor_beta, args.teacher_anchor_passes)
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args); split = identity_split(catalog, seed=args.split_seed)
     identity_index = next(i for i, row in enumerate(catalog.trajectories) if row is trajectory)
     if identity_index not in split["train_indices"]: raise ValueError("train identity must be in the deterministic TRAIN split")
@@ -127,6 +128,7 @@ def train(args):
     warmstart_checkpoint = str(Path(args.warmstart).expanduser().resolve()) if args.warmstart else None
     mode = "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"
     config = {key: value for key, value in vars(args).items() if key not in {"fn", "wandb"}}
+    config["teacher_anchor"] = anchor; provenance["teacher_anchor"] = anchor
     warmstart_expected = {
         key: provenance[key] for key in (
             "asset_pin", "package_digest", "manifest_sha256", "catalog_digest",
@@ -186,6 +188,7 @@ def train(args):
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, learning_rate=args.learning_rate, checkpoint=args.checkpoint,
             checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
             separate_critic=args.separate_critic, warmstart=warmstart_checkpoint,
+            teacher_anchor_beta=args.teacher_anchor_beta, teacher_anchor_passes=args.teacher_anchor_passes,
             resume_checkpoint=args.resume_checkpoint,
             expected_warmstart_provenance=warmstart_expected, on_update=publish)
     except BaseException:
@@ -282,6 +285,8 @@ def build_parser():
     train_parser.add_argument("--learning-epochs", type=int, default=4); train_parser.add_argument("--mini-batches", type=int, default=16); train_parser.add_argument("--total-transitions", type=int)
     train_parser.add_argument("--checkpoint", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt"); train_parser.add_argument("--checkpoint-interval", type=int, default=16)
     train_parser.add_argument("--learning-rate", type=float, default=3e-4, help="finite positive PPO Adam learning rate (default: 3e-4)")
+    train_parser.add_argument("--teacher-anchor-beta", type=float, default=0.0, help="optional post-PPO teacher-action MSE weight; training supervision only")
+    train_parser.add_argument("--teacher-anchor-passes", type=int, default=2, help="full teacher-label minibatch passes after each PPO update")
     initialization = train_parser.add_mutually_exclusive_group()
     initialization.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
     initialization.add_argument("--resume-checkpoint", help="restore v4 model/Adam/RNG; --updates is the TOTAL cumulative target, with fresh full-start episodes")

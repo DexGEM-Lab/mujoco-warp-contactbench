@@ -1,5 +1,34 @@
 # Current model
 
+The active bounded intervention is optional online teacher-action anchoring after
+PPO. Parent evidence establishes that feasible-q chase plus +0.2rad finger squeeze
+from frame200 can sustain the object (538 completed,129 airborne), while BC and
+unanchored PPO lose closed-loop fidelity. This localizes a useful intervention to
+supervision on states the learner actually visits; it does not establish that
+this intervention solves the whole trajectory.
+
+The new CPU N1 discriminator supports that narrow mechanism: after two16-step
+updates from the squeeze-BC warmstart at seed0/LR3e-4/separate critic, beta1/two
+passes reduces mean-teacher MSE on identical control-rollout physical observations
+from0.6698881984 to0.4651518166 (30.56%). Both arms are finite and valid. Only
+32 approach frames were sampled, so neither gated squeeze nor grasp was tested.
+Full-start frozen policy-only contact/lift/transport remains the decisive next
+measurement for any trained candidate. Evidence: OPS “Optional online
+teacher-anchor PPO”; artifact metrics.json in feature teacher-anchor-ppo outputs.
+
+Teacher labels use the current previous command and next-frame feasible-q,
+joint-limit clipping and physical rate/control_dt; they never execute. Anchor
+passes update PointNet/trunk/mean through the same Adam after PPO, and None
+gradients prevent value-only/log_std momentum updates. Raw Normal PPO collection,
+reward, observation, architecture and physical execution remain unchanged.
+Beta0 makes no label calls or extra steps. Old missing anchor metadata means
+disabled defaults on resume; enabled continuation preserves the recipe and RNG.
+117 focused tests include actual label arithmetic, full sample coverage, critic
+isolation, metadata and old/enabled continuation. Docs are canonical at
+`docs/manorl_autonomy_v4.md` → “Optional online teacher-action anchor”.
+
+## Earlier physical and persistence evidence
+
 The v4 command map now uses directional anti-windup: preserve previous servo
 command under push-back, block only outward delta at/beyond the margin, allow
 reverse delta, then clip joint limits. The measured-state hard re-anchoring

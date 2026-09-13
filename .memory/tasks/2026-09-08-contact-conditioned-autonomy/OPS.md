@@ -224,3 +224,39 @@ or server operation occurred. Artifacts: feature outputs/manorl/
 contact_conditioned_autonomy/antiwindup-directional/{teacher-physics-fixed.json,
 teacher-physics-fixed-rows.json,teacher-physics-fixed-natural-rows.json,
 evaluate_teacher_physics_fixed.py,teacher.log,tests.log,legacy-focused-tests.log}.
+
+## 2026-09-13T04:48:10.143364+00:00 — Optional online teacher-anchor PPO
+
+Parent-approved evidence: chase plus +0.2rad gated finger squeeze completes538
+with129 airborne frames and tolerates action noise0.05; squeeze-BC closed-loop
+drifts despite low training loss, and its PPO continuation lost lift. These are
+parent-reported observations, not reproduced by this implementation worker.
+Prediction: supervising the mean on pre-step states visited by PPO will reduce
+policy-teacher error after two updates relative to an identically seeded control.
+Implemented training-only runtime labels and separate post-PPO same-Adam mean
+steps with full random minibatch passes; no physical/reference execution change.
+Explicit None gradients isolate value-only and log_std momentum. Metadata gates
+resume while absent legacy fields normalize to disabled defaults.
+
+Primary-venv CPU command with PYTHONPATH=. OMP_NUM_THREADS=1 MKL_NUM_THREADS=1:
+python -m pytest -q tests/manorl/test_autonomy_teacher_anchor.py
+tests/manorl/test_autonomy_v4*.py tests/manorl/test_autonomy_batch_training.py
+tests/manorl/test_autonomy_batch.py:117 passed in24.99s. Initial subset:73 passed.
+New tests independently exercise gate/last-frame/joint clipping/current command,
+PointNet/trunk/mean gradients versus value-only Adam momentum, disabled exact
+seeded trajectory/model/optimizer counts, pre-step label count, CLI propagation,
+legacy resume and enabled deterministic resume. No broad unrelated suite run.
+
+CPU N1 discriminator used one runtime reset between arms, seed0, two updates of16
+rollouts, one PPO epoch/minibatch, LR3e-4, separate critic, squeeze-BC model-only
+warmstart, beta0 versus beta1/two anchor passes. Both arms completed32 physical
+transitions, model/Adam/metrics finite, valid=1 each update. Both frozen means
+were measured on the same32 pre-step beta0 physical observations and labels:
+beta0 MSE0.6698881984; beta1 MSE0.4651518166 (30.5628% reduction). Own-rollout
+beta1 MSE0.4371310174 is separately labeled, not the matched comparison.
+Beta1 recorded16 labels and2 anchor optimizer steps per update. First rollout
+reward means differ by4.77e-7 after full-start reset (CPU numerical scale).
+This32-frame approach prefix does not test the frame200 squeeze or grasp.
+Artifacts: outputs/manorl/contact_conditioned_autonomy/teacher-anchor-ppo/
+metrics.json, discriminate.py, physics.log, tests-final.log, beta0.pt/beta1.pt
+and their final snapshots. No GPU/server/network/W&B or foreign process touched.

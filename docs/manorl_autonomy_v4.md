@@ -316,3 +316,41 @@ physical provenance without constructing physics or rollout storage. This
 supports inspecting a GPU checkpoint on CPU; actual training retains the fixed
 device, and CUDA resume requires the saved logical visible-device RNG count.
 Only trusted local Torch checkpoint files are supported.
+
+## Optional online teacher-action anchor (training supervision)
+
+`train --teacher-anchor-beta 1 --teacher-anchor-passes 2` adds mean-action
+supervision **after** each canonical PPO update, using the same Adam. The default
+beta is zero: no teacher queries, label collection, random permutations or extra
+optimizer steps occur. Frozen `evaluate` remains policy-only.
+
+Labels are computed at each rollout's pre-action observation, from that world's
+current previous servo command. With `next = min(index + 1, last_frame)`, the
+joint-limited target is `q_feasible[next]` plus 0.2 rad on flexion joints
+`[7,9,10,13,14,15,17,18,19,21,22,23,25,26,27]` when `next >= 200`. The label is
+`clip((target - previous_command) / (rate * control_dt), -1, 1)`. This label
+never enters the physics step; only the policy's sampled action executes.
+
+Each anchor pass randomly partitions all `rollouts * num_envs` stored pairs into
+`mini_batches` batches, retaining remainder samples. It minimizes
+`beta * mean((policy_mean - teacher_action)^2)` with independent zero-grad,
+backward, gradient-norm clipping at 0.5, and Adam step. PointNet, policy trunk and
+mean head receive gradients. Value-only parameters and `log_std` have `None`
+gradients, preventing their existing Adam momentum from updating them during the
+anchor. Shared features may still change value predictions. PPO's raw Normal
+likelihood, rollout memory, GAE, rewards and control map are unchanged.
+
+Checkpoint config/provenance and resolved telemetry store beta, passes and the
+complete squeeze recipe under `teacher_anchor`. Update telemetry exposes
+`config/teacher_anchor_beta`, `config/teacher_anchor_passes`, squeeze constants,
+`teacher_anchor/samples`, `teacher_anchor/rollout_steps`, and optimizer-step
+counts. `teacher_anchor/mse` is the sample-weighted **pre-minibatch-update** MSE
+across all anchor passes, not a frozen post-update evaluation score.
+Old checkpoints without anchor fields resume with the disabled defaults;
+optimizer resume requires an unchanged anchor configuration. To introduce an
+anchor to an existing policy, use model-only `--warmstart`, not fixed-config
+`--resume-checkpoint`.
+
+This is an opt-in training intervention for closed-loop drift. An approach-prefix
+MSE improvement alone does not demonstrate physical grasp or contact fidelity;
+acceptance of a learned policy still requires full-start policy-only evaluation.

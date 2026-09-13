@@ -44,3 +44,11 @@ provenance and fixed training configuration. Warp physical state is not saved:
 continuation declares `full_start_new_episodes`, resets episode telemetry, and
 restores sampling RNG after reset. Cumulative PPO counters and Adam continue.
 See `docs/manorl_autonomy_v4.md` → “Continuing a v4 PPO run”.
+
+## v4 teacher supervision boundary
+Optional online teacher-action anchoring is post-PPO training supervision only;
+pre-step runtime labels cannot enter the physical adapter's execution path.
+Anchor-only Adam steps must clear gradients to `None` so value-only momentum
+cannot move critic parameters. Checkpoints record the complete teacher recipe;
+old absent metadata means disabled anchoring. See `docs/manorl_autonomy_v4.md`
+→ “Optional online teacher-action anchor”.

@@ -26,7 +26,7 @@ from sim.manorl.autonomy_contracts import (
 )
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
 from sim.manorl.autonomy_v4_telemetry import V4TelemetryAccumulator
-from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config, validate_learning_rate
+from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config, validate_learning_rate, teacher_anchor_metadata
 
 
 def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
@@ -227,6 +227,15 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
     required_config = {"num_envs", "rollouts", "learning_epochs", "mini_batches", "learning_rate", "separate_critic", "seed", "device"}
     if not required_config <= source_config.keys() or not required_config <= expected_config.keys():
         raise ValueError("resume config is missing fixed training fields")
+    # Absent anchor metadata in pre-feature checkpoints means the disabled path.
+    def with_anchor_defaults(config):
+        config = dict(config)
+        config.setdefault("teacher_anchor_beta", 0.0)
+        config.setdefault("teacher_anchor_passes", 2)
+        config.setdefault("teacher_anchor", teacher_anchor_metadata())
+        return config
+    source_config = with_anchor_defaults(source_config)
+    expected_config = with_anchor_defaults(expected_config)
     fixed = lambda config: {k: v for k, v in config.items() if k not in _RESUME_MUTABLE_CONFIG}
     if fixed(source_config) != fixed(expected_config):
         changed = sorted(k for k in fixed(source_config).keys() | fixed(expected_config).keys()
@@ -235,6 +244,8 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
     source_provenance = payload.get("provenance", {})
     if not _RESUME_REQUIRED_PROVENANCE <= source_provenance.keys() or not _RESUME_REQUIRED_PROVENANCE <= expected_provenance.keys():
         raise ValueError("resume provenance is missing physical/package fields")
+    source_provenance = {"teacher_anchor": teacher_anchor_metadata(), **source_provenance}
+    expected_provenance = {"teacher_anchor": teacher_anchor_metadata(), **expected_provenance}
     physical = lambda p: {k: v for k, v in p.items() if k not in _RESUME_DIAGNOSTIC_PROVENANCE}
     if physical(source_provenance) != physical(expected_provenance):
         raise ValueError("resume physical/package provenance mismatch")
@@ -337,10 +348,35 @@ def _sync(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
+def _apply_teacher_anchor(model, optimizer, pairs, *, beta: float, passes: int, mini_batches: int):
+    """Separate mean-only Adam steps after PPO, covering every collected sample."""
+    observations = torch.cat([observation for observation, _ in pairs])
+    targets = torch.cat([teacher for _, teacher in pairs])
+    count = observations.shape[0]
+    mse_sum = torch.zeros((), device=observations.device)
+    for _ in range(passes):
+        indices = torch.randperm(count, device=observations.device)
+        for batch in torch.tensor_split(indices, mini_batches):
+            mean, _ = model.compute({"observations": observations[batch]}, role="policy")
+            mse = torch.nn.functional.mse_loss(mean, targets[batch])
+            # None gradients are essential: Adam must not move value-only/log_std
+            # parameters using momentum left over from the preceding PPO update.
+            optimizer.zero_grad(set_to_none=True)
+            (beta * mse).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            optimizer.step()
+            mse_sum += mse.detach() * batch.numel()
+    mse = float((mse_sum / (count * passes)).cpu())
+    return {"teacher_anchor/mse": mse, "teacher_anchor/loss": beta * mse,
+            "teacher_anchor/samples": float(count), "teacher_anchor/rollout_steps": float(len(pairs)),
+            "teacher_anchor/optimizer_steps": float(passes * mini_batches)}
+
+
 def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epochs: int,
                     mini_batches: int, learning_rate: float = 3e-4, checkpoint: str | Path | None = None,
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None, separate_critic: bool = False,
+                    teacher_anchor_beta: float = 0.0, teacher_anchor_passes: int = 2,
                     warmstart: str | Path | None = None,
                     resume_checkpoint: str | Path | None = None,
                     expected_warmstart_provenance: dict[str, Any] | None = None,
@@ -352,6 +388,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     observation; true terminations do not bootstrap and reset afterward.
     """
     validate_learning_rate(learning_rate)
+    anchor = teacher_anchor_metadata(teacher_anchor_beta, teacher_anchor_passes)
     if warmstart is not None and resume_checkpoint is not None:
         raise ValueError("warmstart and resume-checkpoint are mutually exclusive")
     if min(updates, rollouts, learning_epochs, mini_batches) < 1:
@@ -378,6 +415,9 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     config.update({"updates": updates, "rollouts": rollouts, "num_envs": adapter.num_envs,
                    "learning_epochs": learning_epochs, "mini_batches": mini_batches,
                    "learning_rate": learning_rate, "separate_critic": bool(separate_critic)})
+    config.update({"teacher_anchor_beta": teacher_anchor_beta, "teacher_anchor_passes": teacher_anchor_passes,
+                   "teacher_anchor": anchor})
+    provenance["teacher_anchor"] = anchor
     config.setdefault("seed", 0)
     config.setdefault("device", "gpu" if adapter.device.type == "cuda" else "cpu")
     resumed = None
@@ -408,8 +448,11 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         completed_return = torch.zeros((), device=adapter.device); completed_length = torch.zeros((), device=adapter.device)
         completed_count = torch.zeros((), device=adapter.device)
         summaries = {name: torch.zeros((), device=adapter.device) for name in ("object_motion", "contact_force", "path")}
+        teacher_pairs = [] if teacher_anchor_beta > 0 else None
         for _ in range(rollouts):
             with torch.no_grad():
+                if teacher_pairs is not None:
+                    teacher_pairs.append((observations.detach().clone(), adapter.teacher_actions().detach().clone()))
                 # This action is the unmodified Normal sample used by PPO likelihood.
                 actions, _ = agent.act(observations, None, timestep=policy_steps, timesteps=updates * rollouts)
             terminal_next, rewards, terminated, info = adapter.step(actions)
@@ -433,7 +476,13 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
             observations = adapter.prepare_action(); policy_steps += 1
         _sync(adapter.device); sample_seconds = time.perf_counter() - sampled
         if not bool(valid.cpu()): raise RuntimeError("invalid v4 physics/contact reduction; checkpoint withheld")
-        optimized = time.perf_counter(); agent.update(timestep=policy_steps, timesteps=updates * rollouts); _sync(adapter.device)
+        optimized = time.perf_counter(); agent.update(timestep=policy_steps, timesteps=updates * rollouts)
+        anchor_metrics = {}
+        if teacher_pairs is not None:
+            anchor_metrics = _apply_teacher_anchor(model, agent.optimizer, teacher_pairs,
+                beta=teacher_anchor_beta, passes=teacher_anchor_passes, mini_batches=mini_batches)
+            del teacher_pairs
+        _sync(adapter.device)
         optimize_seconds = time.perf_counter() - optimized
         count = float(adapter.num_envs * rollouts); transitions = policy_steps * adapter.num_envs
         row = {"update": float(update), "policy_steps": float(policy_steps), "transitions": float(transitions),
@@ -454,6 +503,11 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         # rather than restating library defaults in telemetry configuration.
         row.update({f"config/{name}": value for name, value in resolved_v4_ppo_config(agent).items()
                     if isinstance(value, (bool, float, int))})
+        row.update(anchor_metrics)
+        row.update({"config/teacher_anchor_beta": teacher_anchor_beta,
+                    "config/teacher_anchor_passes": teacher_anchor_passes,
+                    "config/teacher_squeeze_rad": anchor["squeeze_rad"],
+                    "config/teacher_squeeze_start": anchor["squeeze_start"]})
         row.update(latest_ppo_metrics(agent)); _assert_finite(model=model, agent=agent, row=row, checkpoint=None if checkpoint is None else Path(checkpoint), update=update)
         rows.append(row)
         if checkpoint is not None and update % checkpoint_interval == 0:
