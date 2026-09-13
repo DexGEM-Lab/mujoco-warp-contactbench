@@ -12,10 +12,10 @@ def test_m2_clock_is_canonical_120hz_and_rate_units_per_second():
     command = rate_limited_command(previous, action, -limits, limits, np.full(ACTION_DIM, 12.), control_timestep=clock.control_timestep)
     np.testing.assert_allclose(command, .05)
 
-def test_reference_independent_command_map_preserves_load_error_envelope():
+def test_reference_independent_command_map_preserves_loaded_command():
     previous = np.zeros(ACTION_DIM); action = np.ones(ACTION_DIM); limits = np.full(ACTION_DIM, 1.)
     command = rate_limited_command(previous, action, -limits, limits, np.full(ACTION_DIM, 120.), measured_qpos=np.full(ACTION_DIM, -.4), control_timestep=1/120, max_tracking_error=np.full(ACTION_DIM, .2))
-    np.testing.assert_allclose(command, -.2)
+    np.testing.assert_allclose(command, previous)
 
 def test_surface_intent_uses_collision_surface_and_confidence():
     surface=np.asarray([[-.05,0,0],[.05,0,0],[0,.05,0],[0,0,.05]])

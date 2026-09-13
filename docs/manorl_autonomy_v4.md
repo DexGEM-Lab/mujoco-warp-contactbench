@@ -55,7 +55,18 @@ from its collision extents; no mystery zero vector is used.
 ## State/reward timing
 
 Each action maps only `(actual q, previous command, clipped actor action)` to
-its servo command. It takes four `mjx.step` calls and then exactly one
+its servo command. Directional anti-windup integrates
+`delta = clip(action, -1, 1) * dofRate * control_dt` from the previous command.
+With `error = previous_command - actual_q`, it zeros delta only where
+`abs(error) >= antiwindupError` and `error * delta > 0`. At or beyond the
+margin, outward integration stops while reverse motion remains available.
+The target is never re-anchored to measured q; existing load-bearing servo
+error is preserved even if contact pushes q farther away. A step starting
+inside the margin can cross it; only final joint limits clip the target.
+The resolved rate/margin arrays and 120 Hz control / 480 Hz physics clock are
+unchanged. Existing v4 checkpoint formats remain loadable; their subsequent
+execution uses this corrected map, so old physical trajectories need not replay.
+It takes four `mjx.step` calls and then exactly one
 `mjx.forward` before extracting q, origins, COMs, velocities and contacts.
 The object COM/origin and anchor-point formulas use `xipos`, `subtree_com` and
 `cvel`; anchor velocity includes the required co-rotating `-omega_O×delta` term.

@@ -1,5 +1,22 @@
 # Current model
 
+The v4 command map now uses directional anti-windup: preserve previous servo
+command under push-back, block only outward delta at/beyond the margin, allow
+reverse delta, then clip joint limits. The measured-state hard re-anchoring
+mechanism was real, but fixing it alone did not produce lift in the identical
+cube2_02_2833 teacher pursuit. The 538-frame CPU N1 rollout still naturally
+terminates at228/reason2 with33 loaded-contact frames and0 airborne>5mm frames;
+full diagnostic has200 loaded frames and peak bottom clearance only0.204mm.
+An independently reset natural run confirms228/reason2. At228 the object is
+at z0.02354m while its target is0.12422m and paired contact has disappeared.
+The remaining question is why feasible-q pursuit loses load-bearing contact
+before the desired rise; this A/B does not establish exact-reference
+infeasibility or neural learned competence. Evidence: OPS “Directional
+anti-windup validation and negative A/B”. Existing v4 checkpoint formats remain
+unchanged, but their future physical execution uses the corrected command map;
+old physical traces need not reproduce. No new training is launched by this
+bounded implementation.
+
 The overarching objective remains empirical autonomous grasp/lift/transport
 replication. The B2048 W&B run `bd9dd2d7` completed 33,554,432 transitions
 without lift. The user requests longer RL training; the parent targets cumulative

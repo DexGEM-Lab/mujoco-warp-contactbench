@@ -101,12 +101,14 @@ def validate_v4_checkpoint_metadata(metadata: dict[str, object]) -> None:
 
 def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1 / 120, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
     previous, raw, lo, hi, rate = (np.asarray(x, dtype=np.float64) for x in (previous_command, action, lower, upper, rate_per_second))
-    if any(x.shape != (ACTION_DIM,) for x in (previous, raw, lo, hi, rate)) or not np.all(np.isfinite(np.stack((previous, raw, lo, hi, rate))) or rate <= 0) or np.any(hi <= lo):
+    if any(x.shape != (ACTION_DIM,) for x in (previous, raw, lo, hi, rate)) or not np.all(np.isfinite(np.stack((previous, raw, lo, hi, rate)))) or np.any(rate <= 0) or np.any(hi <= lo):
         raise ValueError("v4 command requires finite 28D ordered limits and rates")
-    command = previous + np.clip(raw, -1., 1.) * rate * control_timestep
+    delta = np.clip(raw, -1., 1.) * rate * control_timestep
     if measured_qpos is not None:
         measured = np.asarray(measured_qpos, dtype=np.float64)
-        error = np.asarray(max_tracking_error if max_tracking_error is not None else rate * control_timestep * 4., dtype=np.float64)
-        if measured.shape != (ACTION_DIM,) or error.shape != (ACTION_DIM,) or np.any(error <= 0): raise ValueError("invalid measured-state envelope")
-        command = np.clip(command, measured - error, measured + error)
-    return np.clip(command, lo, hi)
+        margin = np.asarray(max_tracking_error if max_tracking_error is not None else rate * control_timestep * 4., dtype=np.float64)
+        if measured.shape != (ACTION_DIM,) or margin.shape != (ACTION_DIM,) or np.any(margin <= 0): raise ValueError("invalid measured-state envelope")
+        error = previous - measured
+        # Preserve load-bearing servo error; only block further outward motion.
+        delta = np.where((np.abs(error) >= margin) & (error * delta > 0), 0., delta)
+    return np.clip(previous + delta, lo, hi)

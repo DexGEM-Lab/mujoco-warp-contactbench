@@ -121,3 +121,14 @@ The overall empirical autonomy objective remains unchanged.
 The user requests more RL training. The parent targets cumulative 4096 PPO updates at fixed B2048×32, learning rate 3e-5, four epochs and 16 minibatches. The running immutable update512 job is parent-owned and must not be interrupted by this worker. This slice implements persisted continuation only; deployment, process handoff, W&B writer exclusivity and empirical evaluation remain parent-owned.
 
 Add mutually exclusive `--resume-checkpoint`/`--warmstart`; resume restores exact v4 model, full Adam, RNG and cumulative counters. `--updates` is the total target, strictly greater than completed updates. Reject fixed config/architecture/physical/package/ABI drift, partial teacher optimizers, non-finite state and unfinished rollout progress before W&B initialization. Physics and episode telemetry restart at full-start new episodes, explicitly recorded; ongoing trajectories are not bit-exactly resumed. Require an explicit existing W&B run ID with `resume=must` and preserve previous configuration/warm-start lineage. Validation uses CPU fake adapters with real RlGamesPPO, W&B stubs and the parent's local immutable old-format checkpoint. No remote, GPU, real physics or network work is assigned to this worker.
+
+## v4 directional anti-windup correction (current bounded scope)
+
+User approved directional delta blocking in both the JAX runtime and public
+NumPy helper: block only outward integration at/beyond the measured servo-error
+margin; retain previous targets and reverse authority, then clip joint limits.
+Rates, margins, four-substep clock, rewards, observations and checkpoint formats
+stay unchanged. Validate directional/parity tests and all v4/batch regressions;
+run exactly one local CPU N1 teacher pursuit on cube2_02_2833 through all 538
+diagnostic frames plus a natural-terminal reset run. Compare the historical
+hard-envelope baseline. No training, servers, W&B or reference-repo edits.

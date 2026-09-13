@@ -222,11 +222,14 @@ class BatchedAutonomyRuntime:
         physical = self._physical(data, previous)
 
         def command_for_action(_):
-            candidate = previous + self.jp.clip(action, -1, 1) * self.jp.asarray(self.rate)[None] * self.cache.control_timestep
-            return self.jp.clip(
-                self.jp.clip(candidate, physical.q_raw - self.jp.asarray(self.envelope), physical.q_raw + self.jp.asarray(self.envelope)),
-                self.jp.asarray(self.lower), self.jp.asarray(self.upper),
+            delta = self.jp.clip(action, -1, 1) * self.jp.asarray(self.rate)[None] * self.cache.control_timestep
+            error = previous - physical.q_raw
+            # Do not re-anchor a loaded servo target to measured q.
+            delta = self.jp.where(
+                (self.jp.abs(error) >= self.jp.asarray(self.envelope)) & (error * delta > 0),
+                0., delta,
             )
+            return self.jp.clip(previous + delta, self.jp.asarray(self.lower), self.jp.asarray(self.upper))
 
         command = jax.lax.cond(execute, command_for_action, lambda _: previous, operand=None)
         stepped = data.replace(ctrl=command)

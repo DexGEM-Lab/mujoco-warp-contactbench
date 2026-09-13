@@ -184,3 +184,43 @@ Prediction: at the same explicit reset boundary, saved full Adam and RNG should 
 Focused command: PYTHONPATH=. OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 primary-venv/python -m pytest -q tests/manorl/test_autonomy_v4_resume.py tests/manorl/test_autonomy_v4_integration.py tests/manorl/test_autonomy_batch_training.py tests/manorl/test_autonomy_v4_telemetry.py. Result: 66 passed. py_compile and git diff --check passed. Tests cover partial22-versus29 teacher optimizer, missing Adam, model/Adam shapes/non-finites, ABI/sampling/architecture, null normalizer, counter/budget errors, config/physical provenance drift, CLI conflict, writer preflight and explicit W&B identity. Installed Config.update signature supports allow_val_change.
 
 CPU-only real artifact evidence: parent-provided immutable old4bb update192 checkpoint passed inspect_v4_resume for cumulative4096 at B2048×32, 4 epochs/16 minibatches/LR3e-5/separate critic, with config device still gpu. All29 full Adam states loaded onto CPU; retained Adam step12288, policy_steps6144, environment_transitions12582912; one CUDA RNG entry. No B2048 runtime was allocated and no remote, GPU, physical training or network writer was used. The artifact validates old-format loader compatibility, not GPU execution or empirical learning. EPISTEMIC records the explicit physical restart limitation; parent retains responsibility for waiting for successful update512 pipeline completion before the single-writer handoff.
+
+## 2026-09-13T02:48:32Z — Directional anti-windup intervention, prediction
+Clean starting HEAD aaf611ac488eba1603303c99aed62048a70d9b51. Changed only the v4
+command map and public helper to block outward delta at/beyond the resolved
+margin and retain the command under push-back. Also repaired the helper's
+pre-existing array-truth validation parentheses, which prevented valid calls.
+Focused 17 directional/parity tests pass. Prediction: preserving load-bearing
+servo error may turn contact into lift; confirmation requires >5 mm bottom
+clearance with sustained loaded contact, not contact counts alone. Baseline
+teacher: terminal228/reason2, preterminal33 contacts/loaded, zero airborne,
+max clearance -2.765667159e-5 m; full538 has204 contacts/loaded, zero airborne,
+max +5.883525591e-5 m. Fixed rollout preserves the original teacher formula and
+all physical settings; adds saved per-frame traces and a reset natural run.
+
+## 2026-09-13T02:52:29.048473+00:00 — Directional anti-windup validation and negative A/B
+
+Primary-venv CPU tests: test_autonomy_v4*.py plus test_autonomy_batch.py passed
+103 tests in24.65s; selected test_autonomy.py command_map/rate_units passed
+2 tests (5 deselected). The 17 new tests exercise the actual jitted transition
+command branch and NumPy parity, both signs, exact margin, push-back, reverse,
+zero hold, inside/crossing margin, clipping, and nonexecution preservation.
+
+Local CPU N1 teacher pursuit used the original formula and package identity,
+full538 diagnostic followed by full-start natural-terminal reset. Fixed
+preterminal:33 contact/loaded,0 airborne>5mm, max clearance -2.766971011e-5m;
+terminal228/reason2. Full:200 contact/loaded,0 airborne>5mm, max clearance
+0.000203637290m. Natural run:228 frames,33 contact/loaded,0 airborne,
+max clearance -2.769019920e-5m, terminal228/reason2. Longest loaded-airborne
+sequence=0. Preterminal maximum clearance differs between the diagnostic and
+natural reset runs by less than0.03micrometre.
+
+Raw rows show contact starts at183, but terminal228 has no paired contacts:
+object z0.023539625 versus reference0.124215175m. The maximum diagnostic
+clearance is only0.204mm at436 (loaded), not a lift. Thus preserving servo error
+is not sufficient to recover this teacher lift, and is not confirmed as the
+dominant reason-2 cause. No reward/control weakening, training, network, GPU
+or server operation occurred. Artifacts: feature outputs/manorl/
+contact_conditioned_autonomy/antiwindup-directional/{teacher-physics-fixed.json,
+teacher-physics-fixed-rows.json,teacher-physics-fixed-natural-rows.json,
+evaluate_teacher_physics_fixed.py,teacher.log,tests.log,legacy-focused-tests.log}.
