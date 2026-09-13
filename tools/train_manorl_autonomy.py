@@ -217,10 +217,13 @@ def evaluate(args):
     adapter = _adapter(args, trajectory, full_horizon_diagnostic=args.full_horizon_diagnostic)
     model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=adapter.device,
                                 separate_critic=separate_critic)
+    # Identity is a conditioning input, not a compatibility contract: a frozen
+    # checkpoint must accept references it was not trained on.  Compatibility
+    # remains gated by asset/package/ABI/split; the identity itself is recorded
+    # in the result provenance only.
     expected = {"asset_pin": _git_revision(ROOT / "assets/dexstream_digital_assets"),
                 "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
-                "catalog_digest": catalog.catalog_digest, "identity_split": split,
-                "identity": trajectory.identity.identity}
+                "catalog_digest": catalog.catalog_digest, "identity_split": split}
     payload = load_frozen_v4(args.checkpoint, model, map_location=adapter.device, expected_provenance=expected)
     observations, _ = adapter.reset(); total = 0.0; trace = []; natural_first = None; artifact = {"actual_object_position": [], "reference_object_position": [], "actual_palm_position": [], "reference_palm_position": [], "actual_qpos": [], "reference_qpos_raw": [], "reference_qpos_feasible": [], "reward_terms": [], "paired_force_on_object": [], "object_all_force": [], "bottom_clearance": [], "reason_code": []}
     limit = args.steps if args.steps is not None else adapter.runtime.length - 1
