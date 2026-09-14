@@ -234,6 +234,8 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
         config.setdefault("teacher_anchor_beta", 0.0)
         config.setdefault("teacher_anchor_passes", 2)
         config.setdefault("teacher_anchor", teacher_anchor_metadata())
+        if config["teacher_anchor_beta"] == 0:
+            config["teacher_anchor"] = teacher_anchor_metadata(0., config["teacher_anchor_passes"])
         return config
     source_config = with_anchor_defaults(source_config)
     expected_config = with_anchor_defaults(expected_config)
@@ -247,6 +249,11 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
         raise ValueError("resume provenance is missing physical/package fields")
     source_provenance = {"teacher_anchor": teacher_anchor_metadata(), **source_provenance}
     expected_provenance = {"teacher_anchor": teacher_anchor_metadata(), **expected_provenance}
+    # A disabled anchor has no executed supervision recipe to preserve. Enabled
+    # frame-gated checkpoints must reject intent-gated optimizer continuation.
+    for provenance in (source_provenance, expected_provenance):
+        if provenance["teacher_anchor"].get("beta") == 0:
+            provenance["teacher_anchor"] = teacher_anchor_metadata(0., provenance["teacher_anchor"].get("passes", 2))
     physical = lambda p: {k: v for k, v in p.items() if k not in _RESUME_DIAGNOSTIC_PROVENANCE}
     if physical(source_provenance) != physical(expected_provenance):
         raise ValueError("resume physical/package provenance mismatch")
@@ -508,7 +515,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         row.update({"config/teacher_anchor_beta": teacher_anchor_beta,
                     "config/teacher_anchor_passes": teacher_anchor_passes,
                     "config/teacher_squeeze_rad": anchor["squeeze_rad"],
-                    "config/teacher_squeeze_start": anchor["squeeze_start"]})
+                    "config/teacher_contact_intent_threshold": anchor["contact_intent_threshold"]})
         row.update(latest_ppo_metrics(agent)); _assert_finite(model=model, agent=agent, row=row, checkpoint=None if checkpoint is None else Path(checkpoint), update=update)
         rows.append(row)
         if checkpoint is not None and update % checkpoint_interval == 0:

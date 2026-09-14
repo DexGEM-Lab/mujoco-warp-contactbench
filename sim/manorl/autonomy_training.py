@@ -28,7 +28,7 @@ ACTOR_CRITIC_ARCHITECTURE_ID="manorl.autonomy.actor_critic.v4.pointnet"
 
 TEACHER_FLEX_JOINTS = (7, 9, 10, 13, 14, 15, 17, 18, 19, 21, 22, 23, 25, 26, 27)
 TEACHER_SQUEEZE_RAD = 0.2
-TEACHER_SQUEEZE_START = 200
+TEACHER_CONTACT_INTENT_THRESHOLD = 0.5
 
 
 def teacher_anchor_metadata(beta: float = 0.0, passes: int = 2) -> dict[str, Any]:
@@ -38,7 +38,9 @@ def teacher_anchor_metadata(beta: float = 0.0, passes: int = 2) -> dict[str, Any
     if beta > 0 and (type(passes) is not int or passes < 1):
         raise ValueError("teacher-anchor-passes must be a positive integer when beta > 0")
     return {"beta": beta, "passes": passes, "squeeze_rad": TEACHER_SQUEEZE_RAD,
-            "squeeze_start": TEACHER_SQUEEZE_START, "flex_joints": list(TEACHER_FLEX_JOINTS),
+            "gate": "current_reference_max_proximity_confidence_valid",
+            "contact_intent_threshold": TEACHER_CONTACT_INTENT_THRESHOLD,
+            "gate_comparison": ">=", "flex_joints": list(TEACHER_FLEX_JOINTS),
             "role": "training_supervision_only"}
 
 
@@ -68,13 +70,16 @@ class BatchedAutonomyAdapter:
     def reset(self,*,mask=None):
         return self._to_torch(self.runtime.reset(mask)),{"num_envs":self.num_envs,"contract":"manorl.autonomy.v4"}
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
-    def teacher_actions(self, squeeze_rad=TEACHER_SQUEEZE_RAD, squeeze_start=TEACHER_SQUEEZE_START):
+    def teacher_actions(self, squeeze_rad=TEACHER_SQUEEZE_RAD, contact_intent_threshold=TEACHER_CONTACT_INTENT_THRESHOLD):
         """Analytical chase labels at the current pre-action state, never controls."""
         runtime = self.runtime; jp = runtime.jp
         index = _gather(runtime.cache, runtime.indices, 1, getattr(runtime, "env_ref", None))
-        frame = jp.minimum(runtime.indices + 1, reference_lengths(runtime.cache, getattr(runtime, "env_ref", None)) - 1)
+        current = _gather(runtime.cache, runtime.indices, env_ref=getattr(runtime, "env_ref", None))
+        intent = jp.max(jp.asarray(runtime.cache.proximity)[current] *
+                        jp.asarray(runtime.cache.confidence)[current] *
+                        jp.asarray(runtime.cache.valid)[current], axis=-1)
         squeeze = jp.zeros((ACTION_DIM,), dtype=jp.float32).at[jp.asarray(TEACHER_FLEX_JOINTS)].set(squeeze_rad)
-        target = jp.asarray(runtime.cache.q_feasible)[index] + (frame >= squeeze_start)[:, None] * squeeze
+        target = jp.asarray(runtime.cache.q_feasible)[index] + (intent >= contact_intent_threshold)[:, None] * squeeze
         target = jp.clip(target, jp.asarray(runtime.lower), jp.asarray(runtime.upper))
         actions = jp.clip((target - runtime.previous_command) /
                           (jp.asarray(runtime.rate) * runtime.cache.control_timestep), -1., 1.)

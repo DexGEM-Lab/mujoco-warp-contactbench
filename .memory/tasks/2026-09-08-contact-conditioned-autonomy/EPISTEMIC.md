@@ -16,6 +16,25 @@ ABI is unchanged; ordered assignment is added to provenance and equality-gated
 on optimizer resume. CUDA-scale startup memory/throughput and all40 physical
 training are unmeasured. Canonical contract: docs/manorl_autonomy_v4.md.
 
+## Intent gate physical evidence
+
+Current-frame max regional proximity*confidence*valid>=0.5 activates first at
+frame162 on2833. The unchanged chase/+0.2rad recipe naturally completes538/538
+with reason1,230 loaded-contact frames and130 airborne>5mm frames, all130 loaded;
+maximum lowest-point clearance0.168939m, all states valid. Thus contact-intent
+activation preserves the physical teacher's load-bearing mechanism despite
+removing its identity-specific frame200 gate. Old reported baseline129 airborne
+is parent evidence; this worker's130 is from saved natural-terminal rows.
+This is analytical teacher feasibility, not learned multi-reference competence.
+Full-start frozen policy evaluation on the five held-out references remains the
+next decisive learned test after training. Evidence: OPS intent-gated validation;
+physics-teacher.json and physics-teacher-rows.json.
+
+Enabled old frame-gated optimizer checkpoints are intentionally rejected under
+intent gating; use model-only warmstart for this changed supervision recipe.
+Missing/explicit disabled old recipes resume disabled. A125-test v4/teacher/batch
+suite and7-test bank/telemetry follow-up pass. No GPU/server/W&B work occurred.
+
 ## Earlier anchor evidence
 
 

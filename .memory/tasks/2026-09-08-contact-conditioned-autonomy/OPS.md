@@ -284,3 +284,35 @@ Artifacts: outputs/manorl/contact_conditioned_autonomy/multi-reference-runtime/
 object poses,8 finite/valid transitions, own-reference raw957 eager equality,
 subset reset env1 restores its own frame0, env0 qpos/qvel/ctrl bitwise unchanged,
 indices[8,0]. Physical clock120/480Hz and4substeps unchanged. See physics-bank.json.
+
+## 2026-09-14T01:59:46Z — Intent-gated teacher intervention
+
+M1 committed a78444c. Replaced next-frame>=200 squeeze activation with current
+assigned-reference max(proximity*confidence*valid)>=0.5. Kept next-frame feasible
+q, same+0.2rad joints/limits/rates and training-only label execution boundary.
+Metadata records gate/threshold/comparison; old disabled recipes normalize to
+disabled, while enabled frame-gated optimizer resumes reject recipe drift.
+Prediction: teacher2833 must naturally complete all538 transitions with loaded
+airborne contact; the threshold may activate at a different frame and disengage
+later, so the old129 airborne count is not assumed. CPU N1 full natural-terminal
+teacher job uses unchanged runtime/control/physics and stores per-frame intent,
+loaded contacts, lowest-point clearance and reasons. No neural training launched.
+
+## 2026-09-14T02:00:39Z — Intent-gated validation
+
+CPU N1 2833 natural-terminal chase fromframe0 completed538/538, reason1,
+all finite/valid. First active current frame162;230 loaded-contact frames;
+130 airborne>5mm frames, all130 loaded; maximum bottom clearance0.168938637m.
+No diagnostic continuation was used. Original frame200 recipe baseline129
+is parent-reported; current130 is direct physical evidence. Per-frame rows and
+recipe/clock saved in physics-teacher.json/physics-teacher-rows.json.
+Focused suite command: primary-venv python -m pytest -q
+ tests/manorl/test_autonomy_teacher_anchor.py tests/manorl/test_autonomy_v4*.py
+ tests/manorl/test_autonomy_batch_training.py tests/manorl/test_autonomy_batch.py
+with PYTHONPATH=. OMP_NUM_THREADS=1 MKL_NUM_THREADS=1:125 passed in34.36s.
+Added telemetry-own-target/progress test afterward; bank suite7 passed. Tests
+exercise exact0.5 boundary, no squeeze before, per-env intent differences,
+disengagement, next-frame/limits/current-command arithmetic, disabled legacy
+resume and enabled gate-drift rejection. No neural training/server/GPU/network
+or W&B job; physical evidence is teacher-only. Exact launch recipe remains
+parent-owned and model-only warmstarts the successful single2833 policy.

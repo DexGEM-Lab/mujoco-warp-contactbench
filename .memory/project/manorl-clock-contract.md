@@ -52,3 +52,11 @@ Anchor-only Adam steps must clear gradients to `None` so value-only momentum
 cannot move critic parameters. Checkpoints record the complete teacher recipe;
 old absent metadata means disabled anchoring. See `docs/manorl_autonomy_v4.md`
 → “Optional online teacher-action anchor”.
+
+## v4 multi-reference supervision boundary
+`--all-train-references` uses fixed round-robin TRAIN assignment; each env's
+reference length drives progress/done and its frame0 state drives subset reset.
+Contact arenas remain global. Teacher labels gate squeeze on the current
+assigned reference's maximum proximity*confidence*valid >=0.5, never frame200.
+Enabled frame-gated anchor checkpoints require model-only transfer to this
+recipe; disabled old recipes still resume disabled. See canonical v4 docs.

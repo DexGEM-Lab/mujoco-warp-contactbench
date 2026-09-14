@@ -15,7 +15,8 @@ def test_teacher_labels_current_command_gate_limits_and_last_frame():
     q = np.zeros((202, 28), np.float32); q[:, 0] = np.arange(202) / 1000
     previous = np.full((4, 28), -.02, np.float32)
     adapter.runtime = SimpleNamespace(jp=jp, indices=jp.array([198,199,200,201]), length=202,
-        cache=SimpleNamespace(q_feasible=jp.asarray(q), control_timestep=.1),
+        cache=SimpleNamespace(q_feasible=jp.asarray(q), control_timestep=.1,
+            proximity=jp.zeros((202,16)).at[199:,0].set(.5), confidence=jp.ones((202,16)), valid=jp.ones((202,16))),
         previous_command=jp.asarray(previous), lower=jp.full(28,-.1), upper=jp.full(28,.15), rate=jp.full(28,2.))
     before = np.asarray(adapter.runtime.previous_command).copy()
     actual = adapter.teacher_actions()
@@ -90,7 +91,7 @@ def test_rollout_pairs_pre_step_and_metadata(tmp_path, monkeypatch):
     assert saved['config']['teacher_anchor_passes']==2
     assert saved['config']['teacher_anchor']==saved['provenance']['teacher_anchor']==teacher_anchor_metadata(1.,2)
     assert all(row['teacher_anchor/samples']==3 and row['teacher_anchor/rollout_steps']==3 for row in rows)
-    assert rows[0]['config/teacher_squeeze_start']==200
+    assert rows[0]['config/teacher_contact_intent_threshold']==.5
 
 
 @pytest.mark.parametrize('beta,passes', [(-1.,2),(float('nan'),2),(float('inf'),2),(1.,0),(1.,1.5)])
@@ -136,3 +137,34 @@ def test_enabled_anchor_optimizer_resume(tmp_path):
     training.run_batched_ppo(LabelAdapter(),updates=1,checkpoint=source,**kwargs)
     resumed,_,_=training.run_batched_ppo(LabelAdapter(),updates=3,resume_checkpoint=source,**kwargs)
     for k,v in full.state_dict().items(): assert torch.equal(v,resumed.state_dict()[k])
+
+
+def test_intent_gate_is_current_frame_thresholded_per_env_and_releases():
+    from dataclasses import replace
+    from sim.manorl.autonomy_v4 import ReferenceBankV4
+    from tests.manorl.test_autonomy_v4 import _cache
+    a=_cache(5); proximity=np.zeros((5,16)); proximity[:,0]=[0.,.4999,.5,.6,0.]
+    a=replace(a,proximity=proximity)
+    b=replace(a,confidence=np.zeros((5,16)))
+    adapter=object.__new__(BatchedAutonomyAdapter); adapter.device_name='cpu'; adapter._device=torch.device('cpu')
+    adapter.runtime=SimpleNamespace(jp=jp,cache=ReferenceBankV4([a,b]),env_ref=jp.array([0,1]),indices=jp.array([0,0]),previous_command=jp.zeros((2,28)),lower=-jp.ones(28),upper=jp.ones(28),rate=jp.full(28,120.))
+    active=[]
+    for frame in range(5):
+        adapter.runtime.indices=jp.array([frame,frame]); target=np.asarray(adapter.teacher_actions())
+        np.testing.assert_array_equal(target[1],np.zeros(28))
+        expected=np.zeros(28); expected[list(TEACHER_FLEX_JOINTS)]=.2 if frame in (2,3) else 0.
+        np.testing.assert_allclose(target[0],expected,atol=1e-7)
+        active.append(bool(target[0,7]>.1))
+    assert active==[False,False,True,True,False]
+
+
+def test_old_explicit_disabled_frame_recipe_resumes_but_enabled_drift_rejects(tmp_path):
+    from tests.manorl.test_autonomy_v4_resume import Adapter,run
+    source=tmp_path/'frame.pt'; run(Adapter(),updates=1,checkpoint=source)
+    payload=torch.load(source,weights_only=False)
+    old={'beta':0.,'passes':2,'squeeze_rad':.2,'squeeze_start':200,'flex_joints':list(TEACHER_FLEX_JOINTS),'role':'training_supervision_only'}
+    payload['config']['teacher_anchor']=old.copy(); payload['provenance']['teacher_anchor']=old.copy();torch.save(payload,source)
+    run(Adapter(),updates=2,resume_checkpoint=source)
+    payload['config']['teacher_anchor_beta']=1.;payload['config']['teacher_anchor']['beta']=1.;payload['provenance']['teacher_anchor']['beta']=1.;torch.save(payload,source)
+    with pytest.raises(ValueError,match='config mismatch'):
+        run(Adapter(),updates=2,resume_checkpoint=source,teacher_anchor_beta=1.)

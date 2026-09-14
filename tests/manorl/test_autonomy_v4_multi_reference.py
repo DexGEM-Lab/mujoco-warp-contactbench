@@ -76,3 +76,19 @@ def test_cli_selects_only_all_40_train_references():
     assert _training_references(args,catalog,rows[0],split)==rows[39::-1]
     args.all_train_references=False
     assert _training_references(args,catalog,rows[0],split) is rows[0]
+
+
+def test_multireference_telemetry_uses_own_targets_and_lengths():
+    import torch
+    from sim.manorl.autonomy_training import BatchedAutonomyAdapter
+    bank=ReferenceBankV4(caches()); refs=j.array([0,1,0]); index=j.array([6,6,12])
+    physical=_state(3); contact=_contact(3); action=j.zeros((3,28))
+    adapter=object.__new__(BatchedAutonomyAdapter); adapter.num_envs=3
+    adapter.runtime=SimpleNamespace(jp=j,cache=bank,env_ref=refs,indices=index,
+        last_physical=physical,last_contact=contact,last_reward=compute_reward(physical,contact,bank,index,action,refs))
+    # Keep JAX values on device exactly as the GPU bridge does; no NumPy path.
+    adapter._to_torch=lambda value:value
+    snapshot=adapter.telemetry_snapshot(torch.zeros((3,28)))
+    np.testing.assert_array_equal(snapshot['reference_progress'],[.25,.5,.5])
+    np.testing.assert_allclose(snapshot['origin_lift_delta'],[0.,-.03,0.],atol=1e-7)
+    np.testing.assert_allclose(snapshot['position_error_abs'],[[0.,0.,0.],[.01,.02,.03],[0.,0.,0.]],atol=1e-7)

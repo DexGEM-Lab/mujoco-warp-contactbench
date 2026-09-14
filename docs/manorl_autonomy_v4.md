@@ -327,7 +327,10 @@ optimizer steps occur. Frozen `evaluate` remains policy-only.
 Labels are computed at each rollout's pre-action observation, from that world's
 current previous servo command. With `next = min(index + 1, last_frame)`, the
 joint-limited target is `q_feasible[next]` plus 0.2 rad on flexion joints
-`[7,9,10,13,14,15,17,18,19,21,22,23,25,26,27]` when `next >= 200`. The label is
+`[7,9,10,13,14,15,17,18,19,21,22,23,25,26,27]` when the current frame's
+`max_regions(proximity * confidence * valid) >= 0.5`. The gate is evaluated
+independently for each assigned reference and turns off when intent falls below
+threshold; there is no frame-number gate or latch. The label is
 `clip((target - previous_command) / (rate * control_dt), -1, 1)`. This label
 never enters the physics step; only the policy's sampled action executes.
 
@@ -347,7 +350,9 @@ complete squeeze recipe under `teacher_anchor`. Update telemetry exposes
 counts. `teacher_anchor/mse` is the sample-weighted **pre-minibatch-update** MSE
 across all anchor passes, not a frozen post-update evaluation score.
 Old checkpoints without anchor fields resume with the disabled defaults;
-optimizer resume requires an unchanged anchor configuration. To introduce an
+disabled explicit old frame-gate recipes also resume disabled. Enabled
+frame-gated checkpoints require model-only transfer to the new intent recipe;
+optimizer resume requires an unchanged enabled anchor configuration. To introduce an
 anchor to an existing policy, use model-only `--warmstart`, not fixed-config
 `--resume-checkpoint`.
 
@@ -376,3 +381,9 @@ identity throughout training. Subset resets restore only qpos/qvel/ctrl for
 finished worlds, then forward the global Warp contact arena. Identity rotation
 and heterogeneous geometry are outside this contract. Reference bank gathering
 and telemetry stay on-device; the CUDA adapter retains DLPack transfer.
+
+
+CPU teacher check on `cube2_02_2833`: intent gating first activates at frame162,
+and natural execution completes538/538 transitions (reason1), with130 frames
+above5mm bottom clearance, all130 carrying loaded hand-object contact. This
+validates the analytical supervision recipe, not learned multi-reference grasp.
