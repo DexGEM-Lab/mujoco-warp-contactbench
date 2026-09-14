@@ -1,4 +1,23 @@
-# Current model
+# Multi-reference runtime milestone
+
+Parent evidence: anchored trained2833 completes with359 loaded-contact and126
+airborne frames; all five held-out identities fail with0 airborne despite up to99
+contacts. The current hypothesis is that single-identity/frame200 supervision
+teaches identity-specific phase behavior. Fixed round-robin all40 TRAIN reference
+conditioning and current-frame contact-intent gating are the next intervention,
+not evidence of learned held-out success.
+
+The new bank preserves per-reference lengths, frame0 hand/object state, own
+reference future/contact observations and same-identity reset. Global contact
+storage remains global. Synthetic per-reference comparisons and CPU N1 bank-one
+versus single physical rollouts have bitwise-equal qpos/raw957/reward/done over8
+steps. CPU two-reference8-step/reset validation is recorded in OPS. Checkpoint
+ABI is unchanged; ordered assignment is added to provenance and equality-gated
+on optimizer resume. CUDA-scale startup memory/throughput and all40 physical
+training are unmeasured. Canonical contract: docs/manorl_autonomy_v4.md.
+
+## Earlier anchor evidence
+
 
 The active bounded intervention is optional online teacher-action anchoring after
 PPO. Parent evidence establishes that feasible-q chase plus +0.2rad finger squeeze

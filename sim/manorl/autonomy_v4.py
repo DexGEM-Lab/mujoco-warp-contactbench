@@ -55,6 +55,53 @@ class ReferenceCacheV4:
         if not np.isfinite(self.table_height) or not np.isfinite(self.control_timestep) or self.control_timestep <= 0 or not np.isfinite(self.duration) or self.duration <= 0: raise ValueError("cache table/clock/duration must be finite")
         if not 1 <= self.action_id <= 50: raise ValueError("action_id must be in [1,50]")
 
+# Time-varying arrays are padded by their final row; gathers still clamp to
+# each reference's own length. Shared geometry/action is validated, never inferred.
+REFERENCE_TIME_FIELDS = (
+    "q_feasible", "q_raw", "object_origin", "object_quat_xyzw", "palm_origin",
+    "palm_quat_xyzw", "object_v_com", "object_w", "palm_v", "palm_w",
+    "region_anchor_hand", "region_anchor_object", "delta_ref", "signed_gap",
+    "proximity", "confidence", "valid", "reference_bottom",
+)
+
+class ReferenceBankV4:
+    """Device-resident [reference,time,...] cache for one geometry/action."""
+    def __init__(self, caches, *, device=None):
+        import jax
+        import jax.numpy as j
+        caches = tuple(caches)
+        if not caches:
+            raise ValueError("reference bank must not be empty")
+        shared = ("object_com_local", "table_height", "control_timestep",
+                  "points_object_local", "object_geometry", "action_id")
+        for name in shared + ("q_lower", "q_upper"):
+            if any(not np.array_equal(getattr(caches[0], name), getattr(c, name)) for c in caches[1:]):
+                raise ValueError(f"reference bank requires shared {name}")
+        put = lambda x: jax.device_put(j.asarray(x), device)
+        lengths = np.asarray([len(c.q_feasible) for c in caches], np.int32)
+        self.lengths = put(lengths)
+        self.max_length = int(lengths.max())
+        self.num_references = len(caches)
+        for name in REFERENCE_TIME_FIELDS:
+            padded = [np.concatenate((getattr(c, name), np.repeat(getattr(c, name)[-1:], self.max_length-n, axis=0))) for c,n in zip(caches,lengths)]
+            setattr(self, name, put(np.stack(padded)))
+        for name in ("q_lower", "q_upper", "duration", "support_shift"):
+            setattr(self, name, put(np.stack([getattr(c,name) for c in caches])))
+        for name in shared:
+            value = getattr(caches[0], name)
+            setattr(self, name, put(value) if isinstance(value,np.ndarray) else value)
+        self.content_hash = hashlib.sha256("\n".join(c.content_hash for c in caches).encode()).hexdigest()
+
+
+def reference_lengths(cache, env_ref=None):
+    import jax.numpy as j
+    return j.asarray(cache.lengths)[env_ref] if isinstance(cache, ReferenceBankV4) else len(cache.q_feasible)
+
+
+def reference_duration(cache, env_ref=None):
+    import jax.numpy as j
+    return j.asarray(cache.duration)[env_ref] if isinstance(cache, ReferenceBankV4) else cache.duration
+
 def _np_quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     q=np.asarray(q,dtype=np.float64); q=q/np.maximum(np.linalg.norm(q,axis=-1,keepdims=True),1e-12)
     u,w=q[...,:3],q[...,3:]
@@ -304,9 +351,12 @@ def anchor_delta_and_velocity(physical: V4Physical, anchor_hand, anchor_object):
     velocity=quat_unrotate(physical.object_quat_xyzw[:,None],vh-vo)-j.cross(omega_o[:,None],delta)
     return ph,po,delta,velocity
 
-def _gather(cache: ReferenceCacheV4, index, offset=0):
+def _gather(cache: ReferenceCacheV4, index, offset=0, env_ref=None):
     import jax.numpy as j
-    i=j.minimum(j.asarray(index)+offset,len(cache.q_feasible)-1)
+    i=j.minimum(j.asarray(index)+offset,reference_lengths(cache, env_ref)-1)
+    if isinstance(cache, ReferenceBankV4):
+        if env_ref is None: raise ValueError("bank gather requires env_ref")
+        return env_ref, i
     return i
 
 def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, addresses, friction, frame, position, constraint_force, ngeom: int, hand_geom_ids, object_geom_ids, object_com, hand_com=None, hand_v_com=None, hand_w=None, object_v_com=None, object_w=None, cone: str = "pyramidal"):
@@ -370,13 +420,15 @@ def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, address
     valid=valid&j.all(j.isfinite(all_force))&j.all(j.isfinite(paired))&j.all(j.isfinite(torque))&j.all(j.isfinite(slip))
     return all_force,paired,torque,counts,slip,valid
 
-def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command):
+def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
     """Build exact seven raw blocks, unclipped, from one same-time physical state."""
     import jax.numpy as j
-    b=physical.q_raw.shape[0]; i=_gather(cache,index); t=max(len(cache.q_feasible)-1,1)
+    b=physical.q_raw.shape[0]; i=_gather(cache,index,env_ref=env_ref); t=j.maximum(reference_lengths(cache,env_ref)-1,1)
     C=lambda x:j.asarray(x)
+    lower=C(cache.q_lower) if env_ref is None else C(cache.q_lower)[env_ref]
+    upper=C(cache.q_upper) if env_ref is None else C(cache.q_upper)[env_ref]
     oq=C(cache.object_quat_xyzw)[i]; op=C(cache.object_origin)[i]; pq=C(cache.palm_quat_xyzw)[i]; pp=C(cache.palm_origin)[i]
-    rq=C(cache.q_feasible)[i]; rq_normalized=j.concatenate((rq[:,:3]/WORLD_POSITION,rq[:,3:6]/j.pi,2*(rq[:,6:]-C(cache.q_lower)[6:])/(C(cache.q_upper)[6:]-C(cache.q_lower)[6:])-1),axis=-1); av=quat_unrotate(physical.object_quat_xyzw,physical.object_v_com)/LINEAR_VELOCITY; aw=quat_unrotate(physical.object_quat_xyzw,physical.object_w)/ANGULAR_VELOCITY
+    rq=C(cache.q_feasible)[i]; rq_normalized=j.concatenate((rq[:,:3]/WORLD_POSITION,rq[:,3:6]/j.pi,2*(rq[:,6:]-lower[...,6:])/(upper[...,6:]-lower[...,6:])-1),axis=-1); av=quat_unrotate(physical.object_quat_xyzw,physical.object_v_com)/LINEAR_VELOCITY; aw=quat_unrotate(physical.object_quat_xyzw,physical.object_w)/ANGULAR_VELOCITY
     palm_rel=quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-physical.object_origin)
     palm_relq=quat_mul(quat_conj(physical.object_quat_xyzw),physical.palm_quat_xyzw)
     ref_rel=quat_unrotate(oq,pp-op); ref_relq=quat_mul(quat_conj(oq),pq)
@@ -387,9 +439,9 @@ def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: Refer
     ref = j.concatenate((rq_normalized[:,6:],ref_rel/RELATIVE_POSITION,rot6(ref_relq),quat_unrotate(oq,C(cache.palm_v)[i])/LINEAR_VELOCITY,quat_unrotate(oq,C(cache.palm_w)[i])/ANGULAR_VELOCITY,op/WORLD_POSITION,ref_obj6,ref_com_v/LINEAR_VELOCITY,ref_w/ANGULAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-pp)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(pq),physical.palm_quat_xyzw)),(physical.q_raw[:,6:]-rq[:,6:])/JOINT_ERROR,quat_unrotate(physical.object_quat_xyzw,physical.object_origin-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),physical.object_quat_xyzw)),quat_unrotate(physical.object_quat_xyzw,physical.object_v_com-ref_com_v)/LINEAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.object_w-ref_w)/ANGULAR_VELOCITY,(palm_rel-ref_rel)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),palm_relq)),j.stack((j.asarray(index)/t,1-j.asarray(index)/t),axis=-1)),axis=-1)
     futures=[]
     for horizon in (6,12,24):
-        fi=_gather(cache,index,horizon); fq=C(cache.q_feasible)[fi]; fop=C(cache.object_origin)[fi]; foq=C(cache.object_quat_xyzw)[fi]; fpp=C(cache.palm_origin)[fi]; fpq=C(cache.palm_quat_xyzw)[fi]
+        fi=_gather(cache,index,horizon,env_ref); fq=C(cache.q_feasible)[fi]; fop=C(cache.object_origin)[fi]; foq=C(cache.object_quat_xyzw)[fi]; fpp=C(cache.palm_origin)[fi]; fpq=C(cache.palm_quat_xyzw)[fi]
         frel=quat_unrotate(foq,fpp-fop); frelq=quat_mul(quat_conj(foq),fpq)
-        valid=((j.asarray(index)+horizon)*cache.control_timestep <= cache.duration+1e-6).astype(j.float32)
+        valid=((j.asarray(index)+horizon)*cache.control_timestep <= reference_duration(cache,env_ref)+1e-6).astype(j.float32)
         futures.append(j.concatenate(((fq[:,6:]-rq[:,6:])/JOINT_ERROR,(frel-ref_rel)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),frelq)),quat_unrotate(oq,fop-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),foq)),valid[:,None]),axis=-1))
     _,_,delta,velocity=anchor_delta_and_velocity(physical,C(cache.region_anchor_hand)[i],C(cache.region_anchor_object)[i])
     error=delta-C(cache.delta_ref)[i]
@@ -413,9 +465,9 @@ def encode_observation(raw, embedding):
 class V4Reward(NamedTuple):
     total: Any; object_position: Any; object_rotation: Any; object_velocity: Any; hand_relative: Any; fingers: Any; geometry: Any; action: Any; survival: Any; severe: Any; done: Any; reason: Any; valid: Any
 
-def compute_reward(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, executed_action):
+def compute_reward(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, executed_action, env_ref=None):
     import jax.numpy as j
-    i=_gather(cache,index); C=lambda x:j.asarray(x); target_p=C(cache.object_origin)[i]; target_q=C(cache.object_quat_xyzw)[i]
+    i=_gather(cache,index,env_ref=env_ref); C=lambda x:j.asarray(x); target_p=C(cache.object_origin)[i]; target_q=C(cache.object_quat_xyzw)[i]
     dp=physical.object_origin-target_p
     pos=.2*j.exp(-40*j.abs(dp[:,0]))+.2*j.exp(-40*j.abs(dp[:,1]))+.8*j.exp(-40*j.abs(dp[:,2]))
     deg=shortest_angle(physical.object_quat_xyzw,target_q)*180/j.pi; rotvalue=j.where(deg<=20,1-.00125*deg**2,j.where(deg<=90,-.00003175*(deg-20)**2-.019206*(deg-20)+.5,-1.)); rot=.4*rotvalue-.1
@@ -425,7 +477,7 @@ def compute_reward(physical: V4Physical, contact: V4Contact, cache: ReferenceCac
     _,_,delta,_=anchor_delta_and_velocity(physical,C(cache.region_anchor_hand)[i],C(cache.region_anchor_object)[i]); e=delta-C(cache.delta_ref)[i]; weight=C(cache.proximity)[i]*C(cache.confidence)[i]*C(cache.valid)[i]; geometry=.2*j.sum(weight*j.exp(-j.sum(e*e,axis=-1)/.01**2),axis=-1)/j.maximum(j.sum(weight,axis=-1),1.)
     action=-.002*j.mean(j.clip(executed_action,-1,1)**2,axis=-1); survival=j.full_like(pos,.001)
     fallen=physical.object_bottom < cache.table_height-.05; deviation=j.linalg.norm(dp,axis=-1)>.10; finite=j.isfinite(pos+rot+vel+hand+fingers+geometry+action)&physical.valid&contact.valid
-    severe=j.where(finite,j.where(fallen|deviation,-25.,0.),-25.); reason=(j.asarray(index)>=len(cache.q_feasible)-1).astype(j.int32)|j.where(deviation,2,0)|j.where(fallen,4,0)|j.where(~finite,8,0)
+    severe=j.where(finite,j.where(fallen|deviation,-25.,0.),-25.); reason=(j.asarray(index)>=reference_lengths(cache,env_ref)-1).astype(j.int32)|j.where(deviation,2,0)|j.where(fallen,4,0)|j.where(~finite,8,0)
     total=j.where(finite,pos+rot+vel+hand+fingers+geometry+action+survival+severe,-25.)
     done=(reason!=0)
     return V4Reward(total,pos,rot,vel,hand,fingers,geometry,action,survival,severe,done,reason,finite)

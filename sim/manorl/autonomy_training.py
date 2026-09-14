@@ -19,11 +19,13 @@ from skrl.agents.torch.ppo.ppo import PPO_CFG
 from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM
 from sim.manorl.model import PointNetEncoder
 from sim.manorl.trajectory_package import TrajectoryCatalog
+from sim.manorl.autonomy_v4 import _gather, reference_lengths
 
 RESERVED_TRAIN_IDENTITIES=("cube2_02_2833","cube2_02_2835","cube2_02_2837")
 SPLIT_CONTRACT_ID="manorl.autonomy.identity_split.v1"
 TRAINING_CONTRACT_ID="manorl.autonomy.training.v4.disabled"
 ACTOR_CRITIC_ARCHITECTURE_ID="manorl.autonomy.actor_critic.v4.pointnet"
+
 TEACHER_FLEX_JOINTS = (7, 9, 10, 13, 14, 15, 17, 18, 19, 21, 22, 23, 25, 26, 27)
 TEACHER_SQUEEZE_RAD = 0.2
 TEACHER_SQUEEZE_START = 200
@@ -69,9 +71,10 @@ class BatchedAutonomyAdapter:
     def teacher_actions(self, squeeze_rad=TEACHER_SQUEEZE_RAD, squeeze_start=TEACHER_SQUEEZE_START):
         """Analytical chase labels at the current pre-action state, never controls."""
         runtime = self.runtime; jp = runtime.jp
-        index = jp.minimum(runtime.indices + 1, runtime.length - 1)
+        index = _gather(runtime.cache, runtime.indices, 1, getattr(runtime, "env_ref", None))
+        frame = jp.minimum(runtime.indices + 1, reference_lengths(runtime.cache, getattr(runtime, "env_ref", None)) - 1)
         squeeze = jp.zeros((ACTION_DIM,), dtype=jp.float32).at[jp.asarray(TEACHER_FLEX_JOINTS)].set(squeeze_rad)
-        target = jp.asarray(runtime.cache.q_feasible)[index] + (index >= squeeze_start)[:, None] * squeeze
+        target = jp.asarray(runtime.cache.q_feasible)[index] + (frame >= squeeze_start)[:, None] * squeeze
         target = jp.clip(target, jp.asarray(runtime.lower), jp.asarray(runtime.upper))
         actions = jp.clip((target - runtime.previous_command) /
                           (jp.asarray(runtime.rate) * runtime.cache.control_timestep), -1., 1.)
@@ -85,7 +88,7 @@ class BatchedAutonomyAdapter:
         already captures that richer snapshot once per transition.
         """
         jp=self.runtime.jp; physical=self.runtime.last_physical; contact=self.runtime.last_contact
-        index=jp.minimum(self.runtime.indices,self.runtime.length-1)
+        index=_gather(self.runtime.cache,self.runtime.indices,env_ref=getattr(self.runtime,"env_ref",None))
         target_object=jp.asarray(self.runtime.cache.object_origin)[index]
         return {"object_motion": self._to_torch(physical.object_origin[:,2]).sum(),
                 "contact_force": self._to_torch(jp.linalg.norm(contact.paired_force_on_object,axis=-1).sum(axis=-1)).sum(),
@@ -94,7 +97,7 @@ class BatchedAutonomyAdapter:
     def telemetry_snapshot(self, raw_actions):
         """Post-transition physical/reward facts, still resident on the runtime device."""
         jp=self.runtime.jp; physical=self.runtime.last_physical; contact=self.runtime.last_contact; reward=self.runtime.last_reward
-        index=jp.minimum(self.runtime.indices,self.runtime.length-1); cache=self.runtime.cache
+        index=_gather(self.runtime.cache,self.runtime.indices,env_ref=getattr(self.runtime,"env_ref",None)); cache=self.runtime.cache
         target_object=jp.asarray(cache.object_origin)[index]; target_palm=jp.asarray(cache.palm_origin)[index]
         target_raw=jp.asarray(cache.q_raw)[index]; target_feasible=jp.asarray(cache.q_feasible)[index]
         paired_norm=jp.linalg.norm(contact.paired_force_on_object,axis=-1); loaded=paired_norm>.02
@@ -115,7 +118,7 @@ class BatchedAutonomyAdapter:
             "finger_feasible_error":jp.sqrt(jp.mean((physical.q_raw[:,6:]-target_feasible[:,6:])**2,axis=-1)),
             "bottom_clearance":physical.object_bottom-cache.table_height,
             "reference_bottom_clearance":jp.asarray(cache.reference_bottom)[index]-cache.table_height,
-            "origin_lift_delta":physical.object_origin[:,2]-jp.asarray(cache.object_origin)[0,2],
+            "origin_lift_delta":physical.object_origin[:,2]-jp.asarray(cache.object_origin)[_gather(cache,jp.zeros_like(self.runtime.indices),env_ref=getattr(self.runtime,"env_ref",None))][:,2],
             "paired_loaded":loaded, "paired_active":contact.paired_count>0,
             "paired_contact_count":contact.paired_count.sum(axis=-1), "paired_force_norm":paired_norm.sum(axis=-1),
             "object_all_force_norm":jp.linalg.norm(contact.object_all_force,axis=-1),
@@ -131,7 +134,7 @@ class BatchedAutonomyAdapter:
             "action_denominator":torch.full((self.num_envs,), ACTION_DIM, dtype=raw_actions.dtype, device=raw_actions.device),
             "command_envelope_utilization":jp.mean(jp.abs(physical.command_error),axis=-1),
             "antiwindup_active":jp.any(jp.abs(physical.command_error)>=1.,axis=-1),
-            "reference_progress":index/jp.asarray(max(1,self.runtime.length-1),jp.float32),
+            "reference_progress":jp.minimum(self.runtime.indices,reference_lengths(cache,getattr(self.runtime,"env_ref",None))-1)/jp.asarray(jp.maximum(1,reference_lengths(cache,getattr(self.runtime,"env_ref",None))-1),jp.float32),
         }
         return {name:value if isinstance(value,torch.Tensor) else self._to_torch(value) for name,value in snapshot.items()}
     def step(self,actions):

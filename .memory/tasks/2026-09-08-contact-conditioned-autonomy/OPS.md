@@ -260,3 +260,27 @@ This32-frame approach prefix does not test the frame200 squeeze or grasp.
 Artifacts: outputs/manorl/contact_conditioned_autonomy/teacher-anchor-ppo/
 metrics.json, discriminate.py, physics.log, tests-final.log, beta0.pt/beta1.pt
 and their final snapshots. No GPU/server/network/W&B or foreign process touched.
+
+## 2026-09-14T01:57:35Z — Multi-reference v4 runtime bank
+
+Started clean at3b9d1d9; asset pin f98da997. Added device bank time fields,
+per-env gathers/length/initialization, same-reference subset resets and all40
+TRAIN CLI selection with ordered assignment provenance. Reference/control,
+reward, raw957, PointNet and checkpoint ABI remain unchanged.
+Focused initial run36 passed/1 failed due to incomplete synthetic cache fixture;
+updated fixture to real cache field dimensions. Broad v4/batch run107 passed/
+16 failed because isolated command fixture omitted new env_ref=None; corrected
+fixture without changing command semantics. Focused recheck42 passed in14.85s.
+CPU N1 bank-one versus single2833 eight-step qpos/raw957/reward/done bitwise
+parity passed. Two-reference smoke reached8 finite/valid steps; evidence script
+first failed slicing global scalar contact.valid, then strict JIT-versus-eager
+observation comparison differed by1.49e-6. Script now compares reference gathers
+with identical eager arithmetic exactly and runtime JIT output at3e-6 tolerance.
+No physical/controller/reward changes were made for these evidence corrections.
+Artifacts: outputs/manorl/contact_conditioned_autonomy/multi-reference-runtime/
+(m1-tests.log, m1-recheck.log, physics-parity.json, physics-bank*.log and scripts).
+
+2026-09-14T01:57:47Z: Two-env2833/2835 CPU smoke passed: distinct initial hand and
+object poses,8 finite/valid transitions, own-reference raw957 eager equality,
+subset reset env1 restores its own frame0, env0 qpos/qvel/ctrl bitwise unchanged,
+indices[8,0]. Physical clock120/480Hz and4substeps unchanged. See physics-bank.json.

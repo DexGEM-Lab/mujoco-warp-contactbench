@@ -33,6 +33,7 @@ def runtime_command(monkeypatch):
     j = jax.numpy
     runtime = BatchedAutonomyRuntime.__new__(BatchedAutonomyRuntime)
     runtime.jp = j
+    runtime.env_ref = None
     runtime.rate, runtime.envelope = DOF_RATE.copy(), ANTIWINDUP_ERROR.copy()
     runtime.lower, runtime.upper = -np.ones(28, np.float32), np.ones(28, np.float32)
     runtime.cache = SimpleNamespace(control_timestep=1 / 120)

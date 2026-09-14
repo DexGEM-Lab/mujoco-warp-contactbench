@@ -148,3 +148,16 @@ metadata tests plus exactly two CPU N1 updates of16 rollouts per beta0/beta1 arm
 from the squeeze-BC warmstart, identical seed, no W&B/network/GPU/server work.
 Document and atomically commit this intermediate learning intervention; parent
 owns deployment and subsequent full-task physical learning judgment.
+
+## Multi-reference runtime and intent-gated anchor (current bounded scope)
+
+Implement fixed round-robin per-environment assignments over all40 TRAIN
+identities from split seed0, shared cube2:02 package/assets, per-reference cache
+length/gathers/initial state and same-reference subset reset. Preserve the
+single-reference route, raw957/PointNet/PPO, reward, clock and global contact
+arena. Replace the frame200 teacher gate with current-frame maximum regional
+proximity*confidence*valid >=0.5, keeping +0.2rad flexion/limits/rates unchanged.
+This scope explicitly permits a local CPU two-env/two-reference smoke in
+addition to N1 full2833 teacher validation. No remote/GPU/W&B/training jobs.
+Deliver two atomic commits plus tests, physical evidence and a parent-only
+Server1 launch command. Learned held-out physical grasp remains the objective.

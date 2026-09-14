@@ -9,7 +9,7 @@ from typing import Any, NamedTuple
 import numpy as np
 from sim.manorl.autonomy_contracts import ACTION_DIM, AUTONOMY_VERSION, OBSERVATION_DIM
 from sim.manorl.autonomy_v4 import (
-    ReferenceCacheV4, V4Contact, compile_reference_cache_v4, extract_v4_physical,
+    ReferenceCacheV4, ReferenceBankV4, V4Contact, compile_reference_cache_v4, extract_v4_physical,
     reduce_pyramidal_contacts_v4, build_raw_observation, compute_reward,
     DOF_RATE, ANTIWINDUP_ERROR,
 )
@@ -79,6 +79,13 @@ class BatchedAutonomyRuntime:
 
         self.jax, self.jp, self.mjx = jax, j, mjx
         self.num_envs, self.device_name, self.seed = num_envs, device, int(seed)
+        trajectories = tuple(trajectory) if isinstance(trajectory, (list, tuple)) else None
+        if trajectories is not None and not trajectories:
+            raise ValueError("reference trajectories must not be empty")
+        if trajectories is not None and any(t.identity.identity.split("_")[:2] != ["cube2", "02"] for t in trajectories):
+            raise ValueError("reference bank runtime requires cube2:02 trajectories")
+        self.trajectories = trajectories
+        trajectory = trajectories[0] if trajectories is not None else trajectory
         self.trajectory, self.full_horizon_diagnostic = trajectory, full_horizon_diagnostic
         self.mujoco, self.model = compile_model_metadata_only(
             object_type="cube2", hand_side="right", physics_timestep=1 / 480
@@ -93,7 +100,13 @@ class BatchedAutonomyRuntime:
         if int(self.model.opt.cone) != int(self.mujoco.mjtCone.mjCONE_PYRAMIDAL):
             raise RuntimeError("v4 supports only pyramidal contact cone")
         self.cache = compile_reference_cache_v4(trajectory, device=device)
-        self.length = len(self.cache.q_feasible)
+        first_cache = self.cache
+        self.env_ref = None
+        if trajectories is not None:
+            self.cache = ReferenceBankV4([first_cache] + [compile_reference_cache_v4(t, device=device) for t in trajectories[1:]], device=self.device)
+            self.env_ref = j.arange(num_envs, dtype=j.int32) % len(trajectories)
+        self.length = len(first_cache.q_feasible) if trajectories is None else self.cache.max_length
+        self.lengths = j.full((num_envs,), self.length, j.int32) if self.env_ref is None else self.cache.lengths[self.env_ref]
         self.lower = np.asarray(self.model.jnt_range[:28, 0], np.float32)
         self.upper = np.asarray(self.model.jnt_range[:28, 1], np.float32)
         self.rate, self.envelope, self.antiwindup = DOF_RATE.copy(), ANTIWINDUP_ERROR.copy(), ANTIWINDUP_ERROR.copy()
@@ -122,16 +135,22 @@ class BatchedAutonomyRuntime:
             make_kwargs["naccdmax"] = self.warp_ccd_naccdmax
         base = mjx.make_data(self.model, **make_kwargs)
         qpos = np.asarray(base.qpos).copy()
-        qpos[:28] = self.cache.q_feasible[0]
-        qpos[self.producer.object_qpos_address:self.producer.object_qpos_address + 3] = self.cache.object_origin[0]
-        qpos[self.producer.object_qpos_address + 3:self.producer.object_qpos_address + 7] = self.cache.object_quat_xyzw[0, (3, 0, 1, 2)]
+        qpos[:28] = first_cache.q_feasible[0]
+        qpos[self.producer.object_qpos_address:self.producer.object_qpos_address + 3] = first_cache.object_origin[0]
+        qpos[self.producer.object_qpos_address + 3:self.producer.object_qpos_address + 7] = first_cache.object_quat_xyzw[0, (3, 0, 1, 2)]
         ctrl = np.asarray(base.ctrl).copy()
-        ctrl[:28] = self.cache.q_feasible[0]
+        ctrl[:28] = first_cache.q_feasible[0]
         self.initial = base.replace(qpos=j.asarray(qpos), qvel=j.zeros_like(base.qvel), ctrl=j.asarray(ctrl))
         self._forward_batch = jax.jit(jax.vmap(lambda row: mjx.forward(self.mjx_model, row)))
         self._step_batch = jax.jit(jax.vmap(lambda row: mjx.step(self.mjx_model, row)))
         self._reset_qpos = j.broadcast_to(self.initial.qpos, (num_envs, self.initial.qpos.shape[0]))
         self._reset_ctrl = j.broadcast_to(self.initial.ctrl, (num_envs, self.initial.ctrl.shape[0]))
+        if self.env_ref is not None:
+            self._reset_qpos = self._reset_qpos.at[:, :28].set(self.cache.q_feasible[self.env_ref, 0])
+            address = self.producer.object_qpos_address
+            self._reset_qpos = self._reset_qpos.at[:, address:address+3].set(self.cache.object_origin[self.env_ref, 0])
+            self._reset_qpos = self._reset_qpos.at[:, address+3:address+7].set(self.cache.object_quat_xyzw[self.env_ref, 0][:, (3,0,1,2)])
+            self._reset_ctrl = self._reset_ctrl.at[:, :28].set(self.cache.q_feasible[self.env_ref, 0])
         self._masked_reset_data_fn = _build_masked_reset_data_fn(
             jax=jax, jp=j, reset_qpos=self._reset_qpos, reset_ctrl=self._reset_ctrl
         )
@@ -143,7 +162,7 @@ class BatchedAutonomyRuntime:
                 data,
             )
         )
-        self.data = self._forward_batch(jax.vmap(lambda _: self.initial)(j.arange(num_envs)))
+        self.data = self._forward_batch(jax.vmap(lambda _: self.initial)(j.arange(num_envs)).replace(qpos=self._reset_qpos, ctrl=self._reset_ctrl))
         self.persistent_ccd_workspace = None
         self.persistent_solver_workspace = None
         if persistent_ccd_workspace:
@@ -165,7 +184,7 @@ class BatchedAutonomyRuntime:
             )
         self.indices = j.zeros((num_envs,), j.int32)
         self.pending_reset = j.zeros((num_envs,), bool)
-        self.previous_command = j.broadcast_to(j.asarray(self.cache.q_feasible[0], j.float32), (num_envs, 28))
+        self.previous_command = self._reset_ctrl[:, :28]
         self.object_vertices = j.asarray(object_collision_vertices("cube2"), j.float32)
         self._transition_fn = jax.jit(self._transition)
         self._refresh(False, j.zeros((num_envs, 28), j.float32))
@@ -214,7 +233,7 @@ class BatchedAutonomyRuntime:
     def _observe(self, data, index, previous):
         physical = self._physical(data, previous)
         contact = self._contact(data, physical)
-        raw = build_raw_observation(physical, contact, self.cache, index, previous)
+        raw = build_raw_observation(physical, contact, self.cache, index, previous, self.env_ref)
         return physical, contact, raw, raw
 
     def _transition(self, data, index, previous, action, execute):
@@ -242,7 +261,7 @@ class BatchedAutonomyRuntime:
         next_data = jax.lax.cond(execute, advance, lambda value: value, stepped)
         next_index = index + self.jp.asarray(execute, self.jp.int32)
         physical_next, contact, raw, observation = self._observe(next_data, next_index, command)
-        reward = compute_reward(physical_next, contact, self.cache, next_index, self.jp.clip(action, -1, 1))
+        reward = compute_reward(physical_next, contact, self.cache, next_index, self.jp.clip(action, -1, 1), self.env_ref)
         valid = physical_next.valid & contact.valid & reward.valid
         return next_data, next_index, command, raw, observation, reward, valid, contact, physical_next
 
@@ -266,7 +285,7 @@ class BatchedAutonomyRuntime:
             raise ValueError("reset mask must be (num_envs,)")
         self.data = self._reset_and_forward(self.data, mask)
         self.indices = self.jp.where(mask, 0, self.indices)
-        initial_command = self.jp.broadcast_to(self.jp.asarray(self.cache.q_feasible[0]), (self.num_envs, 28))
+        initial_command = self._reset_ctrl[:, :28]
         self.previous_command = self.jp.where(mask[:, None], initial_command, self.previous_command)
         # Every raw cache row is rebuilt from one forwarded state; no stale
         # global contact arena is exposed after a subset reset.

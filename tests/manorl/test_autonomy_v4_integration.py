@@ -44,7 +44,7 @@ def test_compact_summary_preserves_signed_object_origin_z_sum():
         "jp":jp, "indices":jp.array([0,0]), "length":4,
         "last_physical":type("Physical",(),{"object_origin":jp.array([[0.,0.,-.25],[0.,0.,.75]])})(),
         "last_contact":type("Contact",(),{"paired_force_on_object":jp.zeros((2,16,3))})(),
-        "cache":type("Cache",(),{"object_origin":jp.zeros((4,2,3))})(),
+        "cache":type("Cache",(),{"object_origin":jp.zeros((4,3)), "q_feasible":jp.zeros((4,28))})(),
     })()
     summary=adapter.compact_summary()
     torch.testing.assert_close(summary["object_motion"], torch.tensor(.5))

@@ -50,6 +50,17 @@ def _catalog_and_trajectory(args):
     return catalog, trajectory
 
 
+def _training_references(args, catalog, trajectory, split):
+    if not getattr(args, "all_train_references", False):
+        return trajectory
+    references = [catalog.trajectories[i] for i in split["train_indices"]]
+    if len(references) != 40:
+        raise ValueError("multi-reference training requires exactly 40 TRAIN identities")
+    if any(t.identity.identity.split('_')[:2] != ["cube2", "02"] for t in references):
+        raise ValueError("multi-reference v4 currently requires shared cube2:02 geometry/action")
+    return references
+
+
 def _adapter(args, trajectory, *, full_horizon_diagnostic=False):
     return BatchedAutonomyAdapter(trajectory, num_envs=args.num_envs, device=args.device, seed=args.seed,
         persistent_ccd_workspace=args.persistentworkspace, ccd_contacts_per_world=args.ccd_contacts_per_world,
@@ -62,7 +73,7 @@ def _provenance(catalog, split, adapter):
     Their float build hash can vary across supported build paths; source/asset/package
     and ABI/clock are the physical compatibility contract.
     """
-    return {"source_commit": _git_revision(ROOT), "asset_pin": _git_revision(ROOT / "assets/dexstream_digital_assets"),
+    result = {"source_commit": _git_revision(ROOT), "asset_pin": _git_revision(ROOT / "assets/dexstream_digital_assets"),
             "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
             "catalog_digest": catalog.catalog_digest, "identity_split": split,
             "contracts": {"checkpoint": CHECKPOINT_FORMAT, "observation": OBSERVATION_CONTRACT_ID,
@@ -71,6 +82,10 @@ def _provenance(catalog, split, adapter):
             "cache_hash_recorded_not_compared": adapter.runtime.cache.content_hash,
             "contact_capacity": adapter.runtime.warp_contact_capacity,
             "constraint_capacity_per_world": adapter.runtime.warp_constraint_capacity}
+    if getattr(adapter.runtime, "trajectories", None) is not None:
+        result["reference_assignment"] = {"mode": "fixed_round_robin_same_reference_reset",
+            "identities": [t.identity.identity for t in adapter.runtime.trajectories]}
+    return result
 
 
 def _wandb(args, metadata):
@@ -124,7 +139,7 @@ def train(args):
     if identity_index not in split["train_indices"]: raise ValueError("train identity must be in the deterministic TRAIN split")
     if args.total_transitions is not None and args.total_transitions != args.updates * args.rollouts * args.num_envs:
         raise ValueError("total-transitions must equal updates * rollouts * num-envs")
-    adapter = _adapter(args, trajectory); provenance = _provenance(catalog, split, adapter)
+    adapter = _adapter(args, _training_references(args, catalog, trajectory, split)); provenance = _provenance(catalog, split, adapter)
     warmstart_checkpoint = str(Path(args.warmstart).expanduser().resolve()) if args.warmstart else None
     mode = "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"
     config = {key: value for key, value in vars(args).items() if key not in {"fn", "wandb"}}
@@ -172,7 +187,7 @@ def train(args):
         del validation_model, validation_optimizer, payload
     config.update(lineage); provenance.update(lineage)
     config["wandb_run_id"] = args.wandb_run_id or os.environ.get("WANDB_RUN_ID")
-    metadata = {"training_contract": "manorl.autonomy.training.v4.single_reference", "config": config,
+    metadata = {"training_contract": "manorl.autonomy.training.v4.multi_reference" if args.all_train_references else "manorl.autonomy.training.v4.single_reference", "config": config,
                 "resolved": _resolved_telemetry_config(adapter, args), "provenance": provenance}
     run = _wandb(args, metadata)
     try:
@@ -288,6 +303,7 @@ def build_parser():
     train_parser.add_argument("--learning-epochs", type=int, default=4); train_parser.add_argument("--mini-batches", type=int, default=16); train_parser.add_argument("--total-transitions", type=int)
     train_parser.add_argument("--checkpoint", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt"); train_parser.add_argument("--checkpoint-interval", type=int, default=16)
     train_parser.add_argument("--learning-rate", type=float, default=3e-4, help="finite positive PPO Adam learning rate (default: 3e-4)")
+    train_parser.add_argument("--all-train-references", action="store_true", help="fixed round-robin assignment over all 40 deterministic TRAIN identities")
     train_parser.add_argument("--teacher-anchor-beta", type=float, default=0.0, help="optional post-PPO teacher-action MSE weight; training supervision only")
     train_parser.add_argument("--teacher-anchor-passes", type=int, default=2, help="full teacher-label minibatch passes after each PPO update")
     initialization = train_parser.add_mutually_exclusive_group()

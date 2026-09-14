@@ -354,3 +354,25 @@ anchor to an existing policy, use model-only `--warmstart`, not fixed-config
 This is an opt-in training intervention for closed-loop drift. An approach-prefix
 MSE improvement alone does not demonstrate physical grasp or contact fidelity;
 acceptance of a learned policy still requires full-start policy-only evaluation.
+
+## Multi-reference TRAIN runtime
+
+`train --all-train-references --split-seed 0` assigns environments round-robin
+in `identity_split(...)["train_indices"]` order over all 40 TRAIN identities.
+This route currently requires one cube2:02 geometry/action. The single-identity
+CLI remains the default, and frozen evaluation still selects one identity.
+The v4 checkpoint, raw957/PointNet/PPO, reward and physical clock are unchanged.
+Model-only warm-start retains the existing identity witness (2833); optimizer
+resume additionally checks the ordered reference assignment in provenance.
+
+The bank stores time-varying cache fields as device `[R,T,...]` arrays, padded
+with the final row only for storage. Each environment clamps gathers and ends
+at its own reference length, including future-validity and progress features.
+Joint limits are stacked per reference; geometry/action constants must agree.
+References are conditions, never additions to executed policy commands.
+
+Each environment starts at its assigned reference frame0 and retains that
+identity throughout training. Subset resets restore only qpos/qvel/ctrl for
+finished worlds, then forward the global Warp contact arena. Identity rotation
+and heterogeneous geometry are outside this contract. Reference bank gathering
+and telemetry stay on-device; the CUDA adapter retains DLPack transfer.
