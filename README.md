@@ -37,7 +37,7 @@ The current pinned source is:
 
 ```text
 assets/dexstream_digital_assets -> git@github.com:DexGEM-Lab/dexstream_digital-assets.git
-  main @ f98da997f316c8a6b4bc2931cabed19e831ef163
+  main @ 778614d09e917deffed0bff3f357aa237efa762d
 ```
 
 `sim/manorl/task_assets/dexstream_manifest.json` records the source commit and

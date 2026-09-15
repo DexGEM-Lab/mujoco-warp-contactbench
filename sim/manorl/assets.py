@@ -253,6 +253,13 @@ def _object_record(object_type: str) -> dict[str, Any]:
     return record
 
 
+def _object_file_records(record: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    return (
+        record["urdf"], record["mjcf"], record["visual"],
+        *record["collisions"], *record["textures"],
+    )
+
+
 def supported_object_types() -> tuple[str, ...]:
     """Return the closed set of object types pinned in the source manifest."""
 
@@ -285,7 +292,7 @@ def object_runtime(object_type: str = OBJECT_TYPE) -> ObjectRuntime:
         raise ValueError(f"invalid DexStream mesh scale for {object_type!r}")
     expected = tuple(
         (_manifest_record_path(item), str(item["sha256"]))
-        for item in (urdf, visual, *collision_records)
+        for item in _object_file_records(record)
     ) + ((GRASP_MAPPING, str(_asset_manifest()["task_metadata"]["grasp_mapping"]["sha256"])),)
     visual_path = _manifest_record_path(visual)
     return ObjectRuntime(
@@ -436,7 +443,7 @@ def _required_paths(
     object_paths: list[Path] = []
     for name in object_names:
         record = _object_record(name)
-        for item in (record["urdf"], record["visual"], *record["collisions"]):
+        for item in _object_file_records(record):
             object_paths.append(_verify_record(item))
     mapping = manifest["task_metadata"].get("grasp_mapping")
     if not isinstance(mapping, dict):
@@ -814,6 +821,21 @@ def _object_body(
             file=str(visual_path),
             scale=_format(visual_scale),
         )
+        record = _object_record(runtime.object_type)
+        material = dict(record["material"])
+        textures = record["textures"]
+        if "texture" in material:
+            if len(textures) != 1:
+                raise ValueError(f"{runtime.object_type} material requires one texture")
+            texture = textures[0]
+            texture_name = f"{runtime.object_type}_visual_texture"
+            ET.SubElement(
+                asset, "texture", name=texture_name,
+                file=str(_manifest_record_path(texture)), **texture["attributes"],
+            )
+            material["texture"] = texture_name
+        material_name = f"{runtime.object_type}_visual_material"
+        ET.SubElement(asset, "material", name=material_name, **material)
         position, quaternion = _origin(visual.find("origin"))
         ET.SubElement(
             body,
@@ -823,7 +845,8 @@ def _object_body(
             mesh=f"{runtime.object_type}_visual_mesh",
             pos=_format(position),
             quat=_format(quaternion),
-            rgba=_visual_rgba(visual, {}, runtime.rgba),
+            rgba=record["visual_rgba"],
+            material=material_name,
             contype="0",
             conaffinity="0",
             group=str(VISUAL_GEOM_GROUP),
@@ -1497,14 +1520,19 @@ def object_collision_vertices(object_type: str = OBJECT_TYPE) -> NDArray[np.floa
 
     runtime = object_runtime(object_type)
     validate_asset_manifest(object_type)
-    pieces = [
-        _collision_mesh_vertices(object_type, path, scale)
-        for path, scale in zip(
-            runtime.collision_mesh_paths,
-            runtime.collision_mesh_scales,
-            strict=True,
-        )
-    ]
+    collisions = ET.parse(runtime.urdf_path).getroot().findall("./link/collision")
+    pieces = []
+    for collision, path, scale in zip(
+        collisions, runtime.collision_mesh_paths, runtime.collision_mesh_scales,
+        strict=True,
+    ):
+        vertices = _collision_mesh_vertices(object_type, path, scale)
+        position, quaternion = _origin(collision.find("origin"))
+        transform = _matrix_from_pose(position, quaternion)
+        # Mesh scale precedes the URDF collision-origin transform. These are
+        # object-body coordinates, the same frame used by MuJoCo geoms and
+        # recorded object poses (not the mesh author's frame).
+        pieces.append(vertices @ transform[:3, :3].T + transform[:3, 3])
     result = np.concatenate(pieces, axis=0)
     if (
         result.ndim != 2

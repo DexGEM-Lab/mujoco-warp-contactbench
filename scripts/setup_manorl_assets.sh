@@ -43,7 +43,7 @@ records = []
 for hand in manifest["hands"].values():
     records.extend(hand["files"])
 for obj in manifest["objects"].values():
-    records.extend([obj["visual"], *obj["collisions"]])
+    records.extend([obj["visual"], *obj["collisions"], *obj["textures"]])
 for record in records:
     if record.get("storage") == "lfs":
         print(record["path"])

@@ -7,7 +7,7 @@ ManoRL has one physical asset source:
 ```text
 git@github.com:DexGEM-Lab/dexstream_digital-assets.git
 checkout: assets/dexstream_digital_assets
-pin: f98da997f316c8a6b4bc2931cabed19e831ef163
+pin: 778614d09e917deffed0bff3f357aa237efa762d
 ```
 
 The root repository tracks the source as a Git submodule. Large meshes are Git
@@ -60,19 +60,27 @@ identity.
 
 ## ManoRL object contract
 
-The adapter discovers same-name rigid URDF bundles under
-`objects/DexGEM/`. It reads the link, visual mesh/scale, every collision
-mesh/scale, inertial values, and source visual color from each URDF. It does not
-assume a fixed CoACD piece count. Object body and free-joint names use the
-canonical lower-case object name used by trajectory identities.
+The adapter discovers same-name rigid URDF entries at each object bundle root
+under `objects/DexGEM/`. Nested `calibration/versions/` URDFs are historical
+snapshots and never runtime candidates. DexStream object-asset-v2 declares the
+root MJCF as physical authority; ManoRL retains the URDF compatibility adapter
+with regression checks against that MJCF for mass, inertia, collision meshes,
+scales, and poses. Scene friction/contact masks remain ManoRL task settings.
 
-The current source exposes these 28 runtime names:
+Each collision mesh is scaled and transformed by its URDF origin into the
+object-body frame, both for simulation and for geometry-derived observations
+and placement. This matters for the marker-aligned egg/cup/rack/bin models.
+There is no fixed CoACD piece count. Body/free-joint names use the canonical
+lower-case trajectory identity. Viewer materials and textures come from the
+selected root MJCF appearance, with per-object names for multi-object scenes.
+
+The current source exposes these 32 runtime names:
 
 ```text
 banana bottle bowl camera1 camera2 cap cube1 cube2 cuboid1 cuboid2 cuboid3
 cylinder1 cylinder2 cylinder3 cylinder4 cylinder5 cylinder6 cylinder7
-disposablecup iphone largeclamp mayonnaisebottle pitcherbase powerdrill
-sphere1 sphere2 sphere3 sphere4
+disposablecup egg_cup egg_ellipsoid egg_stick_rack iphone largeclamp
+mayonnaisebottle pitcherbase powerdrill sphere1 sphere2 sphere3 sphere4 trash_bin
 ```
 
 The source directories `CAMERA1` and `CAMERA2` are exposed as `camera1` and
@@ -81,13 +89,15 @@ or renamed asset. `bottlewithcap` and `scissor` were removed from the current
 DexStream snapshot and therefore fail explicitly. They are not silently mapped
 to `bottle` or another object with different geometry.
 
-The source URDF is authoritative for physical units and parameters:
+The compatibility URDF carries the source physical units and parameters:
 visual meshes are millimetre OBJ files with a `0.001` URDF scale, while CoACD
 collision OBJ files are metre files with scale `1`. All current bundles are
 single-link rigid bodies; multiple convex pieces do not create internal object
-joints. ManoRL's manifest closes every URDF-referenced visual/collision file;
-source USD files are optional for other consumers and are outside the ManoRL
-runtime closure.
+joints. ManoRL's manifest closes every URDF-referenced visual/collision mesh, the root
+MJCF, and its selected texture files. Setup materializes those textures as well
+as meshes; a missing, pointer-only, or altered texture fails integrity checks.
+Alternative appearances, calibration history, and source USD files are outside
+the ManoRL runtime closure.
 
 ## Task metadata boundary
 

@@ -39,10 +39,10 @@ def test_manifest_and_generated_scene_preserve_authoritative_semantics() -> None
         manifest["source_repository"]
         == "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
     )
-    assert manifest["source_commit"] == "f98da997f316c8a6b4bc2931cabed19e831ef163"
+    assert manifest["source_commit"] == "778614d09e917deffed0bff3f357aa237efa762d"
     assert manifest["hand_operator"] == "sunke"
     assert set(manifest["hands"]) == {"left", "right"}
-    assert len(manifest["objects"]) == 28
+    assert len(manifest["objects"]) == 32
     assert manifest["task_metadata"]["grasp_mapping"]["storage"] == "project"
 
     root = ET.fromstring(build_scene_xml())
@@ -207,7 +207,7 @@ def test_visual_scene_replaces_rigid_partition_with_mano_skin() -> None:
     object_visual = root.find(".//body[@name='cube1']/geom[@name='cube1_visual']")
     object_collision = root.find(".//body[@name='cube1']/geom[@name='cube1_collision']")
     assert object_asset is not None
-    assert object_asset.get("file", "").endswith("/objects/DexGEM/cube1/cube1.obj")
+    assert object_asset.get("file", "").endswith("/objects/DexGEM/cube1/visuals/default/cube1.obj")
     assert object_asset.get("scale") == "0.001 0.001 0.001"
     assert object_visual is not None
     assert (object_visual.get("contype"), object_visual.get("conaffinity")) == ("0", "0")
@@ -343,7 +343,7 @@ def test_unified_visual_scene_contains_each_object_visual_mesh() -> None:
 def test_dexstream_object_registry_is_discovered_materialized_and_digest_checked() -> None:
     manifest = validate_asset_manifest()
     expected = tuple(sorted(manifest["objects"]))
-    assert len(expected) == 28
+    assert len(expected) == 32
     assert supported_object_types() == expected
     assert {"banana", "cube2", "largeclamp", "mayonnaisebottle"} <= set(expected)
     assert not {"bottlewithcap", "scissor", "iphone17", "iphone17_T", "phone_sunke"} & set(expected)
