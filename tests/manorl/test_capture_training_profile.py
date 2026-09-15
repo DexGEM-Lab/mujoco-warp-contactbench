@@ -151,7 +151,7 @@ def test_sept15_preset_keeps_right_only_and_requested_padding():
         ["bash", "-c", 'source configs/manorl/sept15_right.env; printf "%s\\n" "$MANORL_HAND_SIDE" "$MANORL_DROP_UNCONTROLLED_HANDS" "$MANORL_REFERENCE_FPS" "$MANORL_PRE_PADDING" "$MANORL_POST_PADDING"'],
         cwd=root, capture_output=True, text=True, check=True,
     )
-    assert result.stdout.splitlines() == ["right", "true", "120", "60", "250"]
+    assert result.stdout.splitlines() == ["right", "true", "120", "120", "250"]
 
 
 @pytest.mark.parametrize("annotation", ["egg_cup,bowl", "bowl,egg_cup", "egg_cup"])

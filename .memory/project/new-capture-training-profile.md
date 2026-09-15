@@ -1,7 +1,7 @@
 # New capture training profile
 
 Canonical instructions: `docs/sept15_capture_training.md`; preset
-`configs/manorl/sept15_right.env` uses right-only,120Hz,pre60/post250.
+`configs/manorl/sept15_right.env` uses right-only,120Hz,pre120/post250.
 
 New trainer defaults: XYZ contribution2mm/cap1cm, five distal finger expected
 contacts. Generic EnvironmentConfig/ResidualActionConfig remain historical;

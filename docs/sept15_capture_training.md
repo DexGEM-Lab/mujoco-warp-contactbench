@@ -5,7 +5,7 @@ It does not start training. The source remains immutable.
 
 ## Requested controls
 
-For this capture use pre60/post250 at120Hz: a0.5-second approach margin
+For this capture use pre120/post250 at120Hz: a1-second approach margin
 and about2.08seconds after the annotated movement end. The shorter pre-window
 does not retime the source; insufficient margins use the existing edge hold.
 
@@ -96,7 +96,7 @@ python -m tools.compile_manorl_trajectory_package \
   --dataset-path "$MANORL_DATASET_PATH" --dataset-version 4 \
   --target-object-overrides egg_cup:04 \
   --hand-side right --drop-uncontrolled-hands --reference-fps 120 \
-  --pre-padding 60 --post-padding 250 \
+  --pre-padding 120 --post-padding 250 \
   --output outputs/sept15-right/approved.mtp
 ```
 
@@ -113,7 +113,7 @@ A future trainer command should explicitly include:
 --hand-side right --drop-uncontrolled-hands --target-object-overrides egg_cup:04
 --position-scale 0.002 --max-position-offset 0.01
 --expected-contact-mode five_fingertips
---reference-fps 120 --pre-padding 60 --post-padding 250
+--reference-fps 120 --pre-padding 120 --post-padding 250
 ```
 
 Server readiness is an operational snapshot, not a durable GPU reservation.
