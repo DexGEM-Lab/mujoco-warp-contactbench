@@ -129,3 +129,9 @@ changes allocation capacity only; meshes, gravity, contact rules and gains
 are unchanged. The Sept15 preset exports `MANORL_CONSTRAINT_CAPACITY=2048`;
 the generic trainer default remains512. Full4096 training memory must still
 be validated against the selected CCD and solver workspaces.
+
+The4096-world preflight also emitted broadphase-overflow warnings with the old
+128slots/world minimum: it requested up to891467total candidate slots. Increase
+`--contacts-per-world` for this scene; the preset uses512, or2097152slots at4096
+worlds. A zero exit code is not sufficient: preflight logs must contain no
+collision/constraint overflow. No collision shape or contact rule is removed.
