@@ -438,6 +438,7 @@ class ManoSkrlRuntime:
             "pre_padding": physical.config.compatibility.movement_pre_padding,
             "post_padding": physical.config.post_padding,
             "warp_ccd": physical.warp_ccd_metadata(),
+            "expected_contact_mode": getattr(physical.config, "expected_contact_mode", "source_mapping"),
             "residual_action": asdict(physical.config.residual_action),
         }
         package = getattr(physical, "trajectory_package", None)

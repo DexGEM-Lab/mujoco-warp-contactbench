@@ -184,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         "pre_padding": checkpoint_options.pre_padding,
         "post_padding": checkpoint_options.post_padding,
         "hand_side": args.hand_side,
+        "drop_uncontrolled_hands": checkpoint_options.drop_uncontrolled_hands,
         "reference_fps": reference_fps,
         "control_fps": control_fps,
     }
@@ -207,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             num_envs=args.num_envs,
             residual_enabled=args.use_residual,
             residual_action=checkpoint_options.residual_action,
+            expected_contact_mode=checkpoint_options.expected_contact_mode,
             compatibility=replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
                 movement_pre_padding=checkpoint_options.pre_padding,

@@ -76,7 +76,7 @@ current native checkpoint contracts. The file-by-file implementation map is in
   the validated early phase of 30 steps, movement pre-padding 180, and the
   `0.10 m` deviation threshold. Its normalized action Box is 28-wide for one
   controlled hand and 56-wide for two controlled hands. XYZ residual actions
-  use a per-step scale of `0.003 m`, gamma `0.9`, and cap `+/-0.03 m`. The six
+  use new-training defaults of `0.002 m` per-step, gamma `0.9`, and cap `+/-0.01 m`. The six
   thumb joint base scales are `(0.02, 0.02, 0.008, 0.02, 0.01, 0.005)` with caps
   `(0.2, 0.2, 0.08, 0.2, 0.1, 0.05)`; each other finger uses base scales
   `(0.01, 0.0025, 0.015, 0.005)` and base caps `(0.1, 0.025, 0.15, 0.1)`. Both
@@ -506,3 +506,18 @@ observation/reward gates, and 0.5x PPO reward boundary. The post-training
 viewer consumes the same actual `MujocoManoEnvironment` path and reports
 both contact thresholds plus the PPO reward scale in
 Rerun metadata.
+
+
+### New-capture expected contacts and right-only models
+
+New training defaults to `--expected-contact-mode five_fingertips`: thumb IP
+and the four finger DIP collision bodies are the expected contact sites,
+enabling all five finger action groups. `source_mapping` remains available for
+legacy action-specific contacts and is restored for old checkpoint inference.
+The contact mode is part of the strict environment signature.
+
+For bilateral captures that should simulate only the controlled hand, use
+`--hand-side right --drop-uncontrolled-hands` at both package compilation and
+training. This removes the left hand from the physical model, not just from
+the action vector. See `sept15_capture_training.md` for source-matched operator
+assets, data coverage and unresolved combined-target annotations.

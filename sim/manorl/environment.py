@@ -220,6 +220,7 @@ class EnvironmentConfig:
     # restricted to a single unified model until multi-route ownership exists.
     warp_persistent_ccd_workspace: bool = False
     hand_side: str = "auto"
+    expected_contact_mode: str = "source_mapping"
     # Data-augmentation option used by the synthetic exporter: sample a per-env
     # uniform XY offset in [-range, +range] meters and apply it to the object's
     # INITIAL position only. Reference hand targets and target object poses stay
@@ -355,6 +356,8 @@ class EnvironmentConfig:
             or self.object_init_xy_offset_range_m < 0.0
         ):
             raise ValueError("object_init_xy_offset_range_m must be a finite non-negative float")
+        if self.expected_contact_mode not in {"source_mapping", "five_fingertips"}:
+            raise ValueError("expected_contact_mode must be source_mapping or five_fingertips")
         normalize_hand_side(self.hand_side)
 
     @property
@@ -859,7 +862,15 @@ def _torch_global_surface_templates(
 
 
 @lru_cache(maxsize=None)
-def _expected_keypoint_ids(object_type: str, action_id: str) -> NDArray[np.int64]:
+def _expected_keypoint_ids(
+    object_type: str, action_id: str, mode: str = "source_mapping"
+) -> NDArray[np.int64]:
+    if mode == "five_fingertips":
+        return np.asarray([KEYPOINT_NAMES.index(name) for name in (
+            "thumb_ip", "index_dip", "middle_dip", "ring_dip", "pinky_dip"
+        )], dtype=np.int64)
+    if mode != "source_mapping":
+        raise ValueError("unknown expected contact mode")
     runtime = object_runtime(object_type)
     import yaml
 
@@ -1679,7 +1690,7 @@ class MujocoManoEnvironment:
             cumulative_joint_dim=self.hand_layout.cumulative_dim,
         )
         self.observation_dim = self.observation_layout.dimension
-        identity_parts = [item.identity.identity.split("_") for item in self.trajectories]
+        identity_parts = [item.identity.identity.rsplit("_", 2) for item in self.trajectories]
         if any(len(parts) != 3 or not parts[1].isdigit() for parts in identity_parts):
             raise ValueError("each trajectory identity must be object_action_sequence")
         object_types = {parts[0] for parts in identity_parts}
@@ -1688,7 +1699,7 @@ class MujocoManoEnvironment:
             for trajectory in self.trajectories
             for object_type in (
                 trajectory.scene_object_types
-                or (trajectory.identity.identity.split("_")[0],)
+                or (trajectory.identity.identity.rsplit("_", 2)[0],)
             )
         }
         has_multi_object_scene = any(
@@ -1837,7 +1848,7 @@ class MujocoManoEnvironment:
         self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
         self._controller_targets_fn = jax.jit(self._device_controller_targets)
         self.expected_keypoint_ids = tuple(
-            _expected_keypoint_ids(self.object_type, parts[1]) for parts in identity_parts
+            _expected_keypoint_ids(self.object_type, parts[1], config.expected_contact_mode) for parts in identity_parts
         )
         self.expected_contact_mask = np.zeros((config.num_envs, len(KEYPOINT_NAMES)), dtype=np.float64)
         for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):
@@ -2069,7 +2080,7 @@ class MujocoManoEnvironment:
         self._joint_upper_device = jax.device_put(self.joint_upper, self.device)
         self._controller_targets_fn = jax.jit(self._device_controller_targets)
         self.expected_keypoint_ids = tuple(
-            _expected_keypoint_ids(parts[0], parts[1]) for parts in identity_parts
+            _expected_keypoint_ids(parts[0], parts[1], config.expected_contact_mode) for parts in identity_parts
         )
         self.expected_contact_mask = np.zeros((config.num_envs, len(KEYPOINT_NAMES)), dtype=np.float64)
         for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):

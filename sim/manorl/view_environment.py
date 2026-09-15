@@ -228,6 +228,8 @@ class _CheckpointEnvironmentOptions:
     post_padding: int = DEFAULT_POST_PADDING
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
+    expected_contact_mode: str = "source_mapping"
+    drop_uncontrolled_hands: bool = False
 
 
 def _resolve_reference_fps(
@@ -364,6 +366,8 @@ def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentO
         post_padding=post_padding,
         warp_ccd_iterations=warp_ccd.get("ccd_iterations"),
         warp_ccd_contacts_per_world=warp_ccd.get("contacts_per_world"),
+        expected_contact_mode=environment.get("expected_contact_mode", "source_mapping"),
+        drop_uncontrolled_hands=runtime_config.get("trajectory_selection", {}).get("drop_uncontrolled_hands", False),
     )
 
 
@@ -1052,6 +1056,7 @@ def view_environment(
                     pre_padding=resolved_pre_padding,
                     post_padding=resolved_post_padding,
                     hand_side=hand_side,
+                    drop_uncontrolled_hands=checkpoint_options.drop_uncontrolled_hands,
                     reference_fps=resolved_reference_fps,
                     control_fps=resolved_control_fps,
                 ),
@@ -1070,6 +1075,7 @@ def view_environment(
                     pre_padding=resolved_pre_padding,
                     post_padding=resolved_post_padding,
                     hand_side=hand_side,
+                    drop_uncontrolled_hands=checkpoint_options.drop_uncontrolled_hands,
                     reference_fps=resolved_reference_fps,
                     control_fps=resolved_control_fps,
                 ),
@@ -1102,6 +1108,7 @@ def view_environment(
             num_envs=num_envs,
             residual_enabled=use_residual,
             residual_action=checkpoint_options.residual_action,
+            expected_contact_mode=checkpoint_options.expected_contact_mode,
             compatibility=replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
                 movement_pre_padding=resolved_pre_padding,

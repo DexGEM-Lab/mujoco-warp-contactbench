@@ -355,11 +355,12 @@ def main() -> None:
         type=Path,
         default=Path("sim/manorl/task_assets/dexstream_manifest.json"),
     )
+    parser.add_argument("--hand-operator", default=HAND_OPERATOR)
     args = parser.parse_args()
     repository_root = Path(__file__).resolve().parents[1]
     asset_root = (repository_root / args.asset_root).resolve()
     output = (repository_root / args.output).resolve()
-    manifest = generate(asset_root, repository_root)
+    manifest = generate(asset_root, repository_root, hand_operator=args.hand_operator)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n",

@@ -175,7 +175,7 @@ class ReferenceTrajectory:
         object.__setattr__(self, "selected_hand_sides", selected)
         if self.scene_object_types:
             scene_types = tuple(self.scene_object_types)
-            active_object = self.identity.identity.split("_")[0]
+            active_object = self.identity.identity.rsplit("_", 2)[0]
             if (
                 not all(isinstance(value, str) and value for value in scene_types)
                 or len(set(scene_types)) != len(scene_types)
@@ -501,9 +501,9 @@ class ObjectActionPair:
     def __post_init__(self) -> None:
         object_type = str(self.object_type)
         action_id = str(self.action_id)
-        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", object_type) is None:
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", object_type) is None:
             raise ValueError(
-                "trajectory selector object must use letters, digits, '.', or '-' and cannot contain '_'"
+                "trajectory selector object must use letters, digits, '_', '.', or '-'"
             )
         if not action_id.isdigit() or not 1 <= int(action_id) <= 50:
             raise ValueError("trajectory selector action must be a source action id in [1, 50]")
@@ -561,6 +561,7 @@ class TrajectorySelection:
     reference_fps: int | None = None
     control_fps: int | None = None
     pair_assignment_cycle: int = 0
+    drop_uncontrolled_hands: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_path", Path(self.dataset_path))
@@ -607,6 +608,8 @@ class TrajectorySelection:
         ):
             raise ValueError("pair_assignment_cycle must be a non-negative integer")
         normalize_hand_side(self.hand_side)
+        if not isinstance(self.drop_uncontrolled_hands, bool):
+            raise ValueError("drop_uncontrolled_hands must be boolean")
 
     @property
     def resolved_control_fps(self) -> int | None:
@@ -947,6 +950,7 @@ def trajectory_from_lance_row(
     hand_side: str = "auto",
     pre_padding: int = 0,
     post_padding: int = 0,
+    drop_uncontrolled_hands: bool = False,
 ) -> ReferenceTrajectory:
     """Decode a modern Lance row with one, left/right, or both hands.
 
@@ -964,6 +968,20 @@ def trajectory_from_lance_row(
     sides = detect_hand_sides(row)
     selected = resolve_hand_selection(sides, hand_side)
     hand_rows = _hand_rows_by_side(row)
+    if drop_uncontrolled_hands:
+        sides = selected
+    from sim.manorl import assets
+    if assets.EXPLICIT_ASSET_MANIFEST:
+        if row.get("index", {}).get("operator") != assets.MANO_OPERATOR:
+            raise ValueError("capture operator differs from explicit hand asset profile")
+        raw_names = metadata["hand_names"]
+        for side in selected:
+            slot = raw_names.index(side)
+            betas = np.asarray(metadata.get("mano_hand_shapes", [])[slot])
+            if betas.shape != (10,) or not np.allclose(
+                betas, assets._asset_manifest()["hands"][side]["betas"], atol=1e-6, rtol=0
+            ):
+                raise ValueError("capture hand shape differs from explicit asset profile")
     source_count = int(metadata.get("total_frames", 0))
     timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
     if source_count <= 0:
@@ -1548,7 +1566,7 @@ def _selection_row_sort_key(row_index_and_row: tuple[int, dict[str, Any]]) -> tu
     index = row["index"]
     source_path = str(index.get("source_path", ""))
     identity = _derive_identity(row)
-    object_type, action_id, sequence = identity.split("_")
+    object_type, action_id, sequence = identity.rsplit("_", 2)
     if index.get("scene") != object_type or str(index.get("gesture", "")).zfill(2) != action_id:
         raise ValueError(f"Lance index/source_path identity mismatch at row {row_index}: {source_path!r}")
     if not sequence.isdigit():
@@ -1589,7 +1607,7 @@ def _candidate_from_metadata_row(
         _, identity = modern_identity
     else:
         return None
-    fields = identity.split("_")
+    fields = identity.rsplit("_", 2)
     if len(fields) != 3 or not fields[2].isdigit():
         return None
     object_type, action_raw, sequence_raw = fields
@@ -1726,6 +1744,7 @@ def _selected_trajectory_from_row(
             hand_side=selection.hand_side,
             pre_padding=selection.pre_padding,
             post_padding=selection.post_padding,
+            drop_uncontrolled_hands=selection.drop_uncontrolled_hands,
         )
         return (
             trajectory
@@ -1737,7 +1756,7 @@ def _selected_trajectory_from_row(
             )
         )
     identity = _derive_identity(row)
-    object_type, action_id, _ = identity.split("_")
+    object_type, action_id, _ = identity.rsplit("_", 2)
     if ObjectActionPair(object_type, action_id) != expected_pair:
         raise ValueError(f"row {row_index} is not {expected_pair.canonical}")
     if index.get("scene") != object_type or str(index.get("gesture", "")).zfill(2) != action_id:

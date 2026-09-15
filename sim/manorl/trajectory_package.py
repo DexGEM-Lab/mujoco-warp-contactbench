@@ -94,7 +94,7 @@ def _canonical_digest(value: object) -> str:
 
 
 def _trajectory_sort_key(trajectory: ReferenceTrajectory) -> tuple[str, str, int, str, int]:
-    fields = trajectory.identity.identity.split("_")
+    fields = trajectory.identity.identity.rsplit("_", 2)
     if len(fields) != 3 or not fields[2].isdigit():
         raise TrajectoryPackageError(
             f"trajectory identity is not object_action_sequence: {trajectory.identity.identity!r}"
@@ -103,7 +103,7 @@ def _trajectory_sort_key(trajectory: ReferenceTrajectory) -> tuple[str, str, int
 
 
 def _pair_for(trajectory: ReferenceTrajectory) -> ObjectActionPair:
-    fields = trajectory.identity.identity.split("_")
+    fields = trajectory.identity.identity.rsplit("_", 2)
     if len(fields) != 3:
         raise TrajectoryPackageError(
             f"trajectory identity is not object_action_sequence: {trajectory.identity.identity!r}"
@@ -353,6 +353,7 @@ def write_trajectory_package(
             "selection": {
                 "catalog_selector": "all",
                 "hand_side": selection.hand_side,
+                "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
                 "pre_padding": selection.pre_padding,
                 "post_padding": selection.post_padding,
                 "reference_fps": selection.reference_fps,
@@ -371,6 +372,9 @@ def write_trajectory_package(
             "compiler": dict(compiler or {}),
             "catalog_digest": _canonical_digest(catalog_basis),
         }
+        from sim.manorl import assets
+        if assets.EXPLICIT_ASSET_MANIFEST:
+            manifest["source_hand_asset_profile"] = assets.asset_provenance()
         manifest["package_digest"] = _canonical_digest(manifest)
         manifest_path = temporary / _MANIFEST_FILE
         manifest_path.write_text(
@@ -432,6 +436,10 @@ def load_trajectory_package(
     if not root.is_dir():
         raise FileNotFoundError(f"trajectory package directory is absent: {root}")
     manifest, manifest_sha256 = _load_manifest(root)
+    if "source_hand_asset_profile" in manifest:
+        from sim.manorl.assets import asset_provenance
+        if manifest["source_hand_asset_profile"] != asset_provenance():
+            raise TrajectoryPackageError("trajectory package source hand asset profile mismatch")
     arrays_metadata = manifest.get("arrays")
     if not isinstance(arrays_metadata, dict) or set(arrays_metadata) != set(_ARRAY_FILES):
         raise TrajectoryPackageError("trajectory package array manifest is incomplete")
@@ -600,6 +608,8 @@ def _validate_catalog_selection(catalog: TrajectoryCatalog, selection: Trajector
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
     }
+    if bool(manifest_selection.get("drop_uncontrolled_hands", False)) != selection.drop_uncontrolled_hands:
+        raise TrajectoryPackageError("trajectory package drop_uncontrolled_hands mismatch")
     mismatches = {
         key: (manifest_selection.get(key), value)
         for key, value in expected.items()

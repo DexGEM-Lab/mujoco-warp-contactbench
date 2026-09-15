@@ -29,6 +29,12 @@ CHECKPOINT_INTERVAL=${MANORL_CHECKPOINT_INTERVAL:-100}
 WARM_START_CHECKPOINT=${MANORL_WARM_START_CHECKPOINT:-}
 WARM_START_PRIOR_UPDATES=${MANORL_WARM_START_PRIOR_UPDATES:-}
 HAND_SIDE=${MANORL_HAND_SIDE:-right}
+DROP_UNCONTROLLED_HANDS=${MANORL_DROP_UNCONTROLLED_HANDS:-false}
+case "$DROP_UNCONTROLLED_HANDS" in
+  true) HAND_MODEL_ARGS=(--drop-uncontrolled-hands) ;;
+  false) HAND_MODEL_ARGS=() ;;
+  *) echo "MANORL_DROP_UNCONTROLLED_HANDS must be true or false" >&2; exit 2 ;;
+esac
 WANDB_ENABLED=${MANORL_WANDB:-true}
 WANDB_ENTITY=${WANDB_ENTITY:-sunjay45711-dexerto}
 WANDB_PROJECT=${WANDB_PROJECT:-mujoco-mano}
@@ -176,11 +182,13 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "warm_start_checkpoint": $WARM_START_CHECKPOINT_JSON,
   "warm_start_prior_updates": $WARM_START_PRIOR_UPDATES_JSON,
   "hand_side": "$HAND_SIDE",
+  "drop_uncontrolled_hands": $DROP_UNCONTROLLED_HANDS,
+  "expected_contact_mode": "five_fingertips",
   "updates": $UPDATES,
   "checkpoint_interval_updates": $CHECKPOINT_INTERVAL,
   "residual_action": {
-    "position_scale_m": 0.003,
-    "max_position_offset_m": 0.03,
+    "position_scale_m": 0.002,
+    "max_position_offset_m": 0.01,
     "joint_scale_multiplier": 2.0,
     "joint_max_offset_multiplier": 2.0
   },
@@ -216,11 +224,13 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --post-padding "$POST_PADDING" \
   "${CHECKPOINT_ARGS[@]}" \
   --hand-side "$HAND_SIDE" \
+  "${HAND_MODEL_ARGS[@]}" \
   "${SELECTION_ARGS[@]}" \
   --pair-assignment-cycle 0 \
+  --expected-contact-mode five_fingertips \
   --use_residual true \
-  --position-scale 0.003 \
-  --max-position-offset 0.03 \
+  --position-scale 0.002 \
+  --max-position-offset 0.01 \
   --joint-scale-multiplier 2.0 \
   --joint-max-offset-multiplier 2.0 \
   --film true \
