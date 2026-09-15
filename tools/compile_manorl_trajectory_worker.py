@@ -32,6 +32,7 @@ def _selection(path: Path) -> TrajectorySelection:
         reference_fps=int(values["reference_fps"]),
         control_fps=int(values["control_fps"]),
         pair_assignment_cycle=0,
+        target_object_overrides=str(values.get("target_object_overrides", "")),
     )
 
 

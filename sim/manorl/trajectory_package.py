@@ -354,6 +354,7 @@ def write_trajectory_package(
                 "catalog_selector": "all",
                 "hand_side": selection.hand_side,
                 "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
+                "target_object_overrides": selection.target_object_overrides,
                 "pre_padding": selection.pre_padding,
                 "post_padding": selection.post_padding,
                 "reference_fps": selection.reference_fps,
@@ -608,6 +609,8 @@ def _validate_catalog_selection(catalog: TrajectoryCatalog, selection: Trajector
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
     }
+    if manifest_selection.get("target_object_overrides", "") != selection.target_object_overrides:
+        raise TrajectoryPackageError("trajectory package target_object_overrides mismatch")
     if bool(manifest_selection.get("drop_uncontrolled_hands", False)) != selection.drop_uncontrolled_hands:
         raise TrajectoryPackageError("trajectory package drop_uncontrolled_hands mismatch")
     mismatches = {

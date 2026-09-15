@@ -100,6 +100,7 @@ def _selection_payload(selection: TrajectorySelection) -> dict[str, object]:
         "post_padding": selection.post_padding,
         "hand_side": selection.hand_side,
         "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
+        "target_object_overrides": selection.target_object_overrides,
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
     }
@@ -333,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hand-side", choices=("right", "left", "both"), default="right")
     parser.add_argument("--pre-padding", type=int, default=DEFAULT_PRE_PADDING)
     parser.add_argument("--post-padding", type=int, default=DEFAULT_POST_PADDING)
+    parser.add_argument("--target-object-overrides", default="", metavar="OBJECT:ACTION[,OBJECT:ACTION...]",
+                        help="explicit single target per action for compound movement annotations")
     parser.add_argument("--drop-uncontrolled-hands", action="store_true")
     parser.add_argument("--shard-size", type=int, default=128)
     parser.add_argument("--max-attempts", type=int, default=3)
@@ -351,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
         post_padding=args.post_padding,
         hand_side=args.hand_side,
         drop_uncontrolled_hands=args.drop_uncontrolled_hands,
+            target_object_overrides=args.target_object_overrides,
         reference_fps=args.reference_fps,
     )
     package = compile_package(

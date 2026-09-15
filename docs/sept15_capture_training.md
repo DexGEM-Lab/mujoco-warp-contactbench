@@ -1,6 +1,6 @@
 # September 15 right-hand capture profile
 
-This profile prepares `dexgem_vla_demo_cma2lance_20260915_030735.lance` v3.
+This profile prepares `dexgem_vla_demo_cma2lance_20260915_030735.lance` v4.
 It does not start training. The source remains immutable.
 
 ## Requested controls
@@ -34,32 +34,38 @@ residual-action signature validation also rejects mismatched XYZ scales.
 
 ## Actual source coverage
 
-The source contains133 rows, all with `hand_names=[left,right]`, operator
+The source now contains132 rows, all with `hand_names=[left,right]`, operator
 `cheyingtong`, and nominal120Hz capture (integer metadata119 or120).
 A process-specific source-matched hand manifest is required; the global
 training manifest remains sunke for compatibility.
 
-After allowing underscore object names and selecting the right hand,117 rows
-have an unambiguous target and decode successfully:
+An explicit `--target-object-overrides egg_cup:04` resolves the compound
+cup/bowl annotations while retaining the annotated interval and every scene body.
+All132 rows are selected with the right-hand-only profile:
 
 | Target/action | Rows |
 |---|---:|
 | egg_ellipsoid:01 | 30 |
 | cylinder7:02 | 30 |
 | bowl:03 | 29 |
-| egg_cup:04 | 11 |
+| egg_cup:04 | 27 |
 | mayonnaisebottle:05 | 10 |
 | pitcherbase:06 | 3 |
 | bowl:07 | 2 |
-| bowl:09 | 2 |
+| bowl:09 | 1 |
 
-Remaining16 source rows (zero-based106,107,109,112–124) contain one
-`object_move` record whose name is `egg_cup,bowl` or `bowl,egg_cup`.
-They are NOT converted to a target by taking the first name. The owner must
-confirm which object should receive policy tracking/reward before these rows
-can join a complete133-row training set. Existing all-pairs discovery excludes
-ineligible metadata rows; inspect the candidate count and do not label117 as
-full133 coverage. Neither the source nor these16 annotations were rewritten.
+Sixteen pouring rows contain `egg_cup,bowl` or `bowl,egg_cup` in one
+`object_move.object_name`. Direct inspection of all27 pouring captures establishes
+`egg_cup` as the primary manipulation target: cups move roughly29–40cm and rotate
+through pouring while bowls mostly remain near their initial location, with some
+recorded drift. The explicit override is scoped to action04 and requires the
+chosen target to appear in both scene and original movement annotation. It
+never chooses the first comma-separated name or silently invents a missing
+object. Original source annotations/UUIDs/poses/windows remain unchanged.
+
+The low-lift bowl09 UUID `61e69a08-e65a-4a5a-8bfd-8d1d57e6a0f9` was removed by
+the owner in v4; v3 still exists historically. Old v3 packages must not be reused
+for this v4 profile. There are132 current rows and eight object/action pairs.
 
 ## Prepare the source hand and omit the left model
 
@@ -87,26 +93,28 @@ For a future package compilation of the explicitly approved selection, use:
 
 ```bash
 python -m tools.compile_manorl_trajectory_package \
-  --dataset-path "$MANORL_DATASET_PATH" --dataset-version 3 \
+  --dataset-path "$MANORL_DATASET_PATH" --dataset-version 4 \
+  --target-object-overrides egg_cup:04 \
   --hand-side right --drop-uncontrolled-hands --reference-fps 120 \
   --pre-padding 60 --post-padding 250 \
   --output outputs/sept15-right/approved.mtp
 ```
 
-At present this yields only the117 unambiguous candidates, not the unresolved
-16 rows. Packages built with an explicit profile record its asset provenance
-and require the same profile when loaded. `MANORL_ASSET_MANIFEST` must therefore
-also be set in the trainer environment. Retain the process-local manifest and
-use the same drop-hand flag at both compile and train time.
+This compiles all132 v4 rows with the same explicit target override. The
+selection is hash-bound into the package and recorded in checkpoint metadata;
+a trainer requesting a different override is rejected. Packages built with an
+explicit profile also require the same asset profile when loaded.
+`MANORL_ASSET_MANIFEST` must be set in the trainer environment, and both
+`--drop-uncontrolled-hands` and `--target-object-overrides` must match compilation.
 
 A future trainer command should explicitly include:
 
 ```text
---hand-side right --drop-uncontrolled-hands
+--hand-side right --drop-uncontrolled-hands --target-object-overrides egg_cup:04
 --position-scale 0.002 --max-position-offset 0.01
 --expected-contact-mode five_fingertips
 --reference-fps 120 --pre-padding 60 --post-padding 250
 ```
 
-This work did not launch training or modify either server deployment. Server
-availability is an operational snapshot, not a durable GPU reservation.
+Server readiness is an operational snapshot, not a durable GPU reservation.
+Preparing a launcher does not start training.

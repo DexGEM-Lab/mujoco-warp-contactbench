@@ -16,5 +16,7 @@ operator/selected-hand betas and binds packages/checkpoints to that profile.
 
 New object IDs egg_cup/egg_ellipsoid require splitting identity from the right
 into object/action/sequence. Legacy source_path suffix eligibility remains
-strict. September15 v3 has133 rows,117 unambiguous targets and16 combined
-cup/bowl object_move names; never silently call the117-row package all133.
+strict. September15 v4 has132 rows after owner deletion of the low-lift bowl09.
+Action04 has one primary target egg_cup;16rows encode combined cup/bowl names.
+Use explicit `--target-object-overrides egg_cup:04` at compile/train; do not
+rewrite source or infer target from comma ordering. This selects all132 rows.

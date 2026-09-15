@@ -185,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         "post_padding": checkpoint_options.post_padding,
         "hand_side": args.hand_side,
         "drop_uncontrolled_hands": checkpoint_options.drop_uncontrolled_hands,
+        "target_object_overrides": checkpoint_options.target_object_overrides,
         "reference_fps": reference_fps,
         "control_fps": control_fps,
     }

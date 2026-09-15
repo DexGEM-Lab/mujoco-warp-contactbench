@@ -562,6 +562,7 @@ class TrajectorySelection:
     control_fps: int | None = None
     pair_assignment_cycle: int = 0
     drop_uncontrolled_hands: bool = False
+    target_object_overrides: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_path", Path(self.dataset_path))
@@ -608,6 +609,11 @@ class TrajectorySelection:
         ):
             raise ValueError("pair_assignment_cycle must be a non-negative integer")
         normalize_hand_side(self.hand_side)
+        if self.target_object_overrides:
+            overrides = parse_trajectory_selector(self.target_object_overrides)
+            if overrides is None or len({p.action_id for p in overrides}) != len(overrides):
+                raise ValueError("target overrides require exactly one object per action")
+            object.__setattr__(self, "target_object_overrides", ",".join(p.canonical for p in overrides))
         if not isinstance(self.drop_uncontrolled_hands, bool):
             raise ValueError("drop_uncontrolled_hands must be boolean")
 
@@ -1582,11 +1588,35 @@ class _TrajectoryCandidate:
     sequence: int
 
 
+def _row_with_target_override(row: dict[str, Any], selection: TrajectorySelection) -> dict[str, Any]:
+    """Apply an explicit action target without changing the source/scene ordering."""
+    if not selection.target_object_overrides:
+        return row
+    index = row.get("index", {})
+    action_id = _gesture_action_id(index.get("gesture", ""))
+    targets = {p.action_id: p.object_type for p in parse_trajectory_selector(selection.target_object_overrides)}
+    if action_id not in targets:
+        return row
+    target = targets[action_id]
+    metadata = row.get("trajectory_metadata", {})
+    info = metadata.get("trajectory_info", {})
+    moves = info.get("object_move", [])
+    if len(moves) != 1 or not isinstance(moves[0], dict):
+        raise ValueError("target override requires one annotated movement interval")
+    annotated = str(moves[0].get("object_name", "")).split(",")
+    if target not in _modern_scene_object_names(row) or target not in [n.strip() for n in annotated]:
+        raise ValueError("target override is absent from the annotated scene/movement")
+    return {**row, "trajectory_metadata": {**metadata, "trajectory_info": {
+        **info, "object_move": [{**moves[0], "object_name": target}]
+    }}}
+
+
 def _candidate_from_metadata_row(
     row: dict[str, Any], *, row_index: int, selection: TrajectorySelection
 ) -> _TrajectoryCandidate | None:
     """Return lightweight eligibility metadata without decoding frame arrays."""
 
+    row = _row_with_target_override(row, selection)
     index = row.get("index")
     metadata = row.get("trajectory_metadata")
     if not isinstance(index, dict) or not isinstance(metadata, dict):
@@ -1718,6 +1748,7 @@ def _selected_trajectory_from_row(
 ) -> ReferenceTrajectory:
     """Decode one fully padded source row selected by object and gesture."""
 
+    row = _row_with_target_override(row, selection)
     index = row["index"]
     metadata = row["trajectory_metadata"]
     # Modern capture rows identify themselves through ``scene``/``gesture``

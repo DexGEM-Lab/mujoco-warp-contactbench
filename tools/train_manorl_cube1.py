@@ -213,6 +213,7 @@ class TrainingBudget:
     trajectory_package: str | None = None
     reference_fps: int = DEFAULT_REFERENCE_FPS
     hand_side: str = "auto"
+    target_object_overrides: str = ""
     drop_uncontrolled_hands: bool = False
     expected_contact_mode: str = "five_fingertips"
     pre_padding: int = DEFAULT_PRE_PADDING
@@ -1838,6 +1839,7 @@ def _trajectory_selection_metadata(
         "reference_resampling": REFERENCE_RESAMPLING_ID,
         "pair_assignment_cycle": selection.pair_assignment_cycle,
         "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
+        "target_object_overrides": selection.target_object_overrides,
         "requested_hand_side": selection.hand_side,
         "resolved_hand_side": (
             "both" if len(hand_layout.controlled_sides) == 2 else hand_layout.controlled_sides[0]
@@ -2142,6 +2144,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         expected_dataset_version=budget.dataset_version,
         hand_side=budget.hand_side,
         drop_uncontrolled_hands=budget.drop_uncontrolled_hands,
+        target_object_overrides=budget.target_object_overrides,
         reference_fps=budget.reference_fps,
         pair_assignment_cycle=budget.pair_assignment_cycle,
         pre_padding=budget.pre_padding,
@@ -2613,6 +2616,8 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="override resolved Gym minibatch size (default: largest 4096-compatible divisor)",
     )
+    parser.add_argument("--target-object-overrides", default="", metavar="OBJECT:ACTION[,OBJECT:ACTION...]",
+                        help="explicit single target per action for compound movement annotations")
     parser.add_argument("--drop-uncontrolled-hands", action="store_true",
                         help="omit unselected hand references and physical models")
     parser.add_argument("--expected-contact-mode", choices=("source_mapping", "five_fingertips"),
@@ -2789,6 +2794,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_dataset_version=args.dataset_version,
             hand_side=args.hand_side,
             drop_uncontrolled_hands=args.drop_uncontrolled_hands,
+            target_object_overrides=args.target_object_overrides,
             reference_fps=args.reference_fps,
             pair_assignment_cycle=args.pair_assignment_cycle,
         )
@@ -2906,6 +2912,7 @@ def main(argv: list[str] | None = None) -> int:
             reference_fps=args.reference_fps,
             hand_side=args.hand_side,
             drop_uncontrolled_hands=args.drop_uncontrolled_hands,
+            target_object_overrides=args.target_object_overrides,
             expected_contact_mode=args.expected_contact_mode,
             pre_padding=args.pre_padding,
             post_padding=args.post_padding,

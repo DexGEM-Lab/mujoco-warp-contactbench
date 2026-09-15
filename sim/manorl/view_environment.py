@@ -229,6 +229,7 @@ class _CheckpointEnvironmentOptions:
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
     expected_contact_mode: str = "source_mapping"
+    target_object_overrides: str = ""
     drop_uncontrolled_hands: bool = False
 
 
@@ -367,6 +368,7 @@ def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentO
         warp_ccd_iterations=warp_ccd.get("ccd_iterations"),
         warp_ccd_contacts_per_world=warp_ccd.get("contacts_per_world"),
         expected_contact_mode=environment.get("expected_contact_mode", "source_mapping"),
+        target_object_overrides=runtime_config.get("trajectory_selection", {}).get("target_object_overrides", ""),
         drop_uncontrolled_hands=runtime_config.get("trajectory_selection", {}).get("drop_uncontrolled_hands", False),
     )
 
@@ -1057,6 +1059,7 @@ def view_environment(
                     post_padding=resolved_post_padding,
                     hand_side=hand_side,
                     drop_uncontrolled_hands=checkpoint_options.drop_uncontrolled_hands,
+                    target_object_overrides=checkpoint_options.target_object_overrides,
                     reference_fps=resolved_reference_fps,
                     control_fps=resolved_control_fps,
                 ),
@@ -1076,6 +1079,7 @@ def view_environment(
                     post_padding=resolved_post_padding,
                     hand_side=hand_side,
                     drop_uncontrolled_hands=checkpoint_options.drop_uncontrolled_hands,
+                    target_object_overrides=checkpoint_options.target_object_overrides,
                     reference_fps=resolved_reference_fps,
                     control_fps=resolved_control_fps,
                 ),
