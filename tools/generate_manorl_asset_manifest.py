@@ -141,14 +141,16 @@ def _mesh_paths(urdf_path: str, root: ET.Element, query: str) -> list[str]:
     return paths
 
 
-def _hand_manifest(asset_root: Path, side: str) -> dict[str, Any]:
-    root_path = f"hand/mano/{HAND_OPERATOR}/{side}"
+def _hand_manifest(
+    asset_root: Path, side: str, *, hand_operator: str = HAND_OPERATOR
+) -> dict[str, Any]:
+    root_path = f"hand/mano/{hand_operator}/{side}"
     urdf_name = f"mano_{side}_hand_floating.urdf"
     urdf_path = f"{root_path}/urdf/{urdf_name}"
     metadata_path = f"{root_path}/metadata.json"
     metadata = json.loads(_git_blob(asset_root, metadata_path).decode("utf-8"))
     if (
-        metadata.get("subject") != HAND_OPERATOR
+        metadata.get("subject") != hand_operator
         or metadata.get("handedness") != side
         or metadata.get("num_dofs") != 28
         or metadata.get("dof_layout") != "cmc3_mcp2_28dof"
@@ -313,7 +315,11 @@ def _object_manifest(
         **_object_appearance(asset_root, object_root, source_name, visual_path),
     }
 
-def generate(asset_root: Path, repository_root: Path) -> dict[str, Any]:
+def generate(
+    asset_root: Path, repository_root: Path, *, hand_operator: str = HAND_OPERATOR
+) -> dict[str, Any]:
+    if re.fullmatch(r"[a-z][a-z0-9_-]*", hand_operator) is None:
+        raise ValueError("hand operator must be a source bundle name")
     commit = _run_git(asset_root, "rev-parse", "HEAD").decode("ascii").strip()
     mapping_path = repository_root / "sim/manorl/task_assets/object_grasps_simple.yaml"
     mapping = mapping_path.read_bytes()
@@ -321,9 +327,10 @@ def generate(asset_root: Path, repository_root: Path) -> dict[str, Any]:
         "schema": SCHEMA,
         "source_repository": SOURCE_REPOSITORY,
         "source_commit": commit,
-        "hand_operator": HAND_OPERATOR,
+        "hand_operator": hand_operator,
         "hands": {
-            side: _hand_manifest(asset_root, side) for side in ("right", "left")
+            side: _hand_manifest(asset_root, side, hand_operator=hand_operator)
+            for side in ("right", "left")
         },
         "objects": {
             canonical: _object_manifest(asset_root, canonical, source_name, urdf_path)
