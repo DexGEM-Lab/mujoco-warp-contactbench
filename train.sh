@@ -10,6 +10,7 @@ set -Eeuo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 OBJECT=${1:-${MANORL_TRAIN_OBJECT:-cube1}}
 NUM_ENVS=${2:-${MANORL_NUM_ENVS:-2048}}
+CONSTRAINT_CAPACITY=${MANORL_CONSTRAINT_CAPACITY:-512}
 GPU=${3:-${MANORL_GPU:-0}}
 if [[ -n ${MANORL_PYTHON:-} ]]; then
   PYTHON=$MANORL_PYTHON
@@ -171,6 +172,7 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "object": "$OBJECT",
   "selector": "$SELECTOR",
   "num_envs": $NUM_ENVS,
+  "constraint_capacity": $CONSTRAINT_CAPACITY,
   "physical_gpu": $GPU,
   "dataset_path": "$DATASET",
   "dataset_version": $DATASET_VERSION,
@@ -218,6 +220,7 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   --updates "$UPDATES" \
   --checkpoint-interval-updates "$CHECKPOINT_INTERVAL" \
   --num-envs "$NUM_ENVS" \
+  --constraint-capacity "$CONSTRAINT_CAPACITY" \
   --evaluation-enabled false \
   --dataset-path "$DATASET" \
   --dataset-version "$DATASET_VERSION" \

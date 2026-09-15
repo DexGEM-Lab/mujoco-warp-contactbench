@@ -184,3 +184,8 @@ def test_override_must_not_invent_unannotated_target():
         TrajectorySelection(target_object_overrides="bowl:04,egg_cup:04")
     with pytest.raises(ValueError, match="one object per action"):
         TrajectorySelection(target_object_overrides="all")
+
+
+def test_dense_capture_constraint_capacity_is_explicit():
+    assert TrainingBudget().constraint_capacity == 512
+    assert TrainingBudget(constraint_capacity=2048).constraint_capacity == 2048

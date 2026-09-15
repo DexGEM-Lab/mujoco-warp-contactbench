@@ -40,6 +40,7 @@ from sim.manorl.cli import parse_cli_bool
 from sim.manorl.contracts import DATASET_PATH, JOINT_DOF, simulation_clock
 from sim.manorl.environment import (
     EnvironmentConfig,
+    CONSTRAINT_CAPACITY,
     MujocoManoEnvironment,
     recommended_warp_contact_capacity,
 )
@@ -194,6 +195,7 @@ class TrainingBudget:
     # These are the validated single-task convergence defaults.  Smaller
     # budgets remain available as explicit diagnostic overrides.
     num_envs: int = 2048
+    constraint_capacity: int = CONSTRAINT_CAPACITY
     updates: int = 8000
     wall_clock_seconds: float | None = None
     seed: int = 42
@@ -1936,6 +1938,7 @@ def _build_evaluation_runtime(
         EnvironmentConfig(
             num_envs=num_envs,
             device="gpu",
+            constraint_capacity=budget.constraint_capacity,
             residual_enabled=budget.residual_enabled,
             residual_action=budget.residual_action_config,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
@@ -2184,6 +2187,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         EnvironmentConfig(
             num_envs=budget.num_envs,
             device="gpu",
+            constraint_capacity=budget.constraint_capacity,
             residual_enabled=budget.residual_enabled,
             residual_action=budget.residual_action_config,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
@@ -2556,6 +2560,8 @@ def main(argv: list[str] | None = None) -> int:
         help="conceptual completed updates represented by the warm-start lineage",
     )
     parser.add_argument("--num-envs", type=int, default=2048)
+    parser.add_argument("--constraint-capacity", type=int, default=CONSTRAINT_CAPACITY,
+                        help="per-world Warp constraint rows (njmax); dense scenes may require more")
     parser.add_argument("--evaluation-num-envs", type=int, default=1)
     parser.add_argument(
         "--evaluation-enabled",
@@ -2800,6 +2806,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.constraint_capacity < 1:
+        parser.error("constraint-capacity must be positive")
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
         parser.error("updates, num-envs, and rerun-stride must be positive")
     if args.pre_padding < 0 or args.post_padding < 0:
@@ -2885,6 +2893,7 @@ def main(argv: list[str] | None = None) -> int:
         TrainingBudget(
             num_envs=args.num_envs,
             updates=args.updates,
+            constraint_capacity=args.constraint_capacity,
             wall_clock_seconds=args.wall_clock_seconds,
             seed=args.seed,
             rerun_output=str(args.rerun_output.resolve()) if args.rerun_output is not None else None,

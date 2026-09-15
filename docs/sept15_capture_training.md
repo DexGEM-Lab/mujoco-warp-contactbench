@@ -118,3 +118,14 @@ A future trainer command should explicitly include:
 
 Server readiness is an operational snapshot, not a durable GPU reservation.
 Preparing a launcher does not start training.
+
+## Dense-scene constraint storage
+
+The all-object model has1450geoms (egg_cup598 collision pieces and
+egg_stick_rack721). Server1's8-world zero-policy probe exceeded default
+`njmax=512` at553 constraints. With `--constraint-capacity 2048`,64steps and
+indexed reset passed, with roughly740constraints in the later steps. This
+changes allocation capacity only; meshes, gravity, contact rules and gains
+are unchanged. The Sept15 preset exports `MANORL_CONSTRAINT_CAPACITY=2048`;
+the generic trainer default remains512. Full4096 training memory must still
+be validated against the selected CCD and solver workspaces.
