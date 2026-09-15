@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = "assets/dexstream_digital_assets"
 ASSET_URL = "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
 ASSET_BRANCH = "main"
-ASSET_COMMIT = "f98da997f316c8a6b4bc2931cabed19e831ef163"
+ASSET_COMMIT = "778614d09e917deffed0bff3f357aa237efa762d"
 
 
 def test_dexstream_is_the_only_physical_asset_submodule() -> None:

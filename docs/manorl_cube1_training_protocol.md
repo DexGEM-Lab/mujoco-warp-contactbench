@@ -294,7 +294,7 @@ scheduler, memory, and progress.
 
 Physical assets are a separate checkpoint identity. The runtime uses
 `git@github.com:DexGEM-Lab/dexstream_digital-assets.git` at the pinned
-`f98da997f316c8a6b4bc2931cabed19e831ef163` revision, with the `sunke` MANO
+`778614d09e917deffed0bff3f357aa237efa762d` revision, with the `sunke` MANO
 bundle and current DexGEM collision/inertial data. The asset manifest SHA is
 recorded in each new native checkpoint signature. Strict resume/inference
 rejects missing or mismatched asset provenance; `--warm-start-checkpoint` or

@@ -61,7 +61,13 @@ def _all_dexstream_objects(asset_root: Path) -> tuple[tuple[str, str, str], ...]
         urdfs = []
         for relative in files.decode("utf-8").splitlines():
             path = PurePosixPath(relative)
-            if path.suffix.lower() == ".urdf" and path.stem.casefold() == source_name.casefold():
+            # Calibration history contains same-name URDF snapshots. Only the
+            # bundle-root entry is the current object; history is not a runtime.
+            if (
+                path.parent == PurePosixPath(prefix)
+                and path.suffix.lower() == ".urdf"
+                and path.stem.casefold() == source_name.casefold()
+            ):
                 urdfs.append(relative)
         if len(urdfs) != 1:
             continue
@@ -219,6 +225,50 @@ def _mesh_scale(mesh: ET.Element) -> list[float]:
     return values
 
 
+def _object_appearance(
+    asset_root: Path, object_root: str, source_name: str, visual_path: str
+) -> dict[str, Any]:
+    """Pin the root MJCF and its selected material/texture, not calibration history."""
+
+    mjcf_path = f"{object_root}/{source_name}.xml"
+    root = ET.fromstring(_git_blob(asset_root, mjcf_path))
+    visuals = [
+        geom for geom in root.findall("./worldbody/body/geom")
+        if geom.get("contype") == "0" and geom.get("conaffinity") == "0"
+    ]
+    if len(visuals) != 1:
+        raise ValueError(f"{source_name} MJCF requires exactly one visual geom")
+    geom = visuals[0]
+    meshes = {mesh.get("name"): mesh for mesh in root.findall("./asset/mesh")}
+    mesh = meshes[geom.get("mesh")]
+    compiler = root.find("compiler")
+    meshdir = compiler.get("meshdir", ".") if compiler is not None else "."
+    if _resolve_urdf_reference(mjcf_path, f"{meshdir}/{mesh.get('file')}") != visual_path:
+        raise ValueError(f"{source_name} URDF/MJCF visual mesh differs")
+    materials = {item.get("name"): item for item in root.findall("./asset/material")}
+    material = dict(materials[geom.get("material")].attrib)
+    material.pop("name")
+    textures = []
+    if "texture" in material:
+        entries = {item.get("name"): item for item in root.findall("./asset/texture")}
+        texture = entries[material["texture"]]
+        filename = texture.get("file")
+        if not filename or texture.get("type") != "2d":
+            raise ValueError(f"{source_name} requires a file-backed 2D texture")
+        texturedir = compiler.get("texturedir", ".") if compiler is not None else "."
+        record = _record(asset_root, _resolve_urdf_reference(mjcf_path, f"{texturedir}/{filename}"))
+        record["attributes"] = {
+            key: value for key, value in texture.attrib.items() if key not in ("file", "name")
+        }
+        textures.append(record)
+    return {
+        "mjcf": _record(asset_root, mjcf_path),
+        "material": material,
+        "visual_rgba": geom.get("rgba", "1 1 1 1"),
+        "textures": textures,
+    }
+
+
 def _object_manifest(
     asset_root: Path, canonical_name: str, source_name: str, urdf_path: str
 ) -> dict[str, Any]:
@@ -260,6 +310,7 @@ def _object_manifest(
         "urdf": _record(asset_root, urdf_path),
         "visual": visual,
         "collisions": collisions,
+        **_object_appearance(asset_root, object_root, source_name, visual_path),
     }
 
 def generate(asset_root: Path, repository_root: Path) -> dict[str, Any]:
