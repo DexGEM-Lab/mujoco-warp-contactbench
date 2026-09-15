@@ -213,11 +213,13 @@ class TrainingBudget:
     trajectory_package: str | None = None
     reference_fps: int = DEFAULT_REFERENCE_FPS
     hand_side: str = "auto"
+    drop_uncontrolled_hands: bool = False
+    expected_contact_mode: str = "five_fingertips"
     pre_padding: int = DEFAULT_PRE_PADDING
     post_padding: int = DEFAULT_POST_PADDING
     residual_enabled: bool = True
-    position_scale: float = 0.003
-    max_position_offset: float = 0.03
+    position_scale: float = 0.002
+    max_position_offset: float = 0.01
     joint_scale_multiplier: float = 2.0
     joint_max_offset_multiplier: float = 2.0
     use_film: bool = True
@@ -616,6 +618,7 @@ def _wandb_config(
         },
         "environment": {
             "contract": ENVIRONMENT_CONTRACT_ID,
+            "expected_contact_mode": budget.expected_contact_mode,
             "reference_fps": budget.reference_fps,
             "control_fps": clock.policy_fps,
             "control_timestep_seconds": clock.control_timestep,
@@ -1761,8 +1764,8 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
         assignments.append({
             "env_id": env_id,
             "identity": item.identity.identity,
-            "object": item.identity.identity.split("_")[0],
-            "action": item.identity.identity.split("_")[1],
+            "object": item.identity.identity.rsplit("_", 2)[0],
+            "action": item.identity.identity.rsplit("_", 2)[1],
             "row_index": item.identity.row_index,
             "uuid": item.identity.uuid,
             "source_slice": [item.identity.source_start, item.identity.source_stop],
@@ -1809,7 +1812,7 @@ def _trajectory_selection_metadata(
         pairs = {
             (fields[0], fields[1])
             for item in assignments
-            if len(fields := str(item["identity"]).split("_")) == 3
+            if len(fields := str(item["identity"]).rsplit("_", 2)) == 3
         }
         resolved_pairs = [
             {"object": object_type, "action": action_id}
@@ -1834,6 +1837,7 @@ def _trajectory_selection_metadata(
         "physics_substeps_per_control": clock.physics_substeps_per_control,
         "reference_resampling": REFERENCE_RESAMPLING_ID,
         "pair_assignment_cycle": selection.pair_assignment_cycle,
+        "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
         "requested_hand_side": selection.hand_side,
         "resolved_hand_side": (
             "both" if len(hand_layout.controlled_sides) == 2 else hand_layout.controlled_sides[0]
@@ -1944,6 +1948,7 @@ def _build_evaluation_runtime(
             post_padding=budget.post_padding,
             unified_object_batch=budget.unified_object_batch,
             hand_side=budget.hand_side,
+            expected_contact_mode=budget.expected_contact_mode,
         ),
     )
     ppo_config = _evaluation_ppo_config(training_config, num_envs=num_envs)
@@ -2136,6 +2141,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         dataset_path=Path(budget.dataset_path),
         expected_dataset_version=budget.dataset_version,
         hand_side=budget.hand_side,
+        drop_uncontrolled_hands=budget.drop_uncontrolled_hands,
         reference_fps=budget.reference_fps,
         pair_assignment_cycle=budget.pair_assignment_cycle,
         pre_padding=budget.pre_padding,
@@ -2157,7 +2163,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         else None
     )
     assigned_object_types = {
-        item.identity.identity.split("_")[0]
+        item.identity.identity.rsplit("_", 2)[0]
         for item in getattr(trajectories, "trajectories", ())
     }
     if len(assigned_object_types) > 1 and (
@@ -2194,6 +2200,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             warp_ccd_contacts_per_world=budget.warp_ccd_contacts_per_world,
             warp_persistent_ccd_workspace=budget.warp_persistent_ccd_workspace,
             hand_side=budget.hand_side,
+            expected_contact_mode=budget.expected_contact_mode,
         ),
     )
     ppo_config = ManoPPOConfig(
@@ -2606,6 +2613,10 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="override resolved Gym minibatch size (default: largest 4096-compatible divisor)",
     )
+    parser.add_argument("--drop-uncontrolled-hands", action="store_true",
+                        help="omit unselected hand references and physical models")
+    parser.add_argument("--expected-contact-mode", choices=("source_mapping", "five_fingertips"),
+                        default="five_fingertips", help="expected hand contact sites for observation/reward and finger masks")
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
@@ -2669,13 +2680,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--position-scale",
         type=float,
-        default=0.003,
+        default=0.002,
         help="scale each normalized XYZ residual action into meters per control step",
     )
     parser.add_argument(
         "--max-position-offset",
         type=float,
-        default=0.03,
+        default=0.01,
         help="symmetric cumulative XYZ residual offset cap in meters",
     )
     parser.add_argument(
@@ -2777,6 +2788,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset_path=args.dataset_path,
             expected_dataset_version=args.dataset_version,
             hand_side=args.hand_side,
+            drop_uncontrolled_hands=args.drop_uncontrolled_hands,
             reference_fps=args.reference_fps,
             pair_assignment_cycle=args.pair_assignment_cycle,
         )
@@ -2893,6 +2905,8 @@ def main(argv: list[str] | None = None) -> int:
             ),
             reference_fps=args.reference_fps,
             hand_side=args.hand_side,
+            drop_uncontrolled_hands=args.drop_uncontrolled_hands,
+            expected_contact_mode=args.expected_contact_mode,
             pre_padding=args.pre_padding,
             post_padding=args.post_padding,
             residual_enabled=args.use_residual,

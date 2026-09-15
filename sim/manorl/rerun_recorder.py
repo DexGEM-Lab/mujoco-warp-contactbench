@@ -449,7 +449,7 @@ class ManoRerunRecorder:
         if not hasattr(self, "hand_meshes"):
             self.hand_meshes = self._hand_meshes()
         trajectory = environment.trajectories[self.env_id]
-        identity_parts = trajectory.identity.identity.split("_")
+        identity_parts = trajectory.identity.identity.rsplit("_", 2)
         metadata = {
             "schema": "manorl.rerun.v2",
             "reward_contract": REWARD_CONTRACT_ID,

@@ -28,6 +28,7 @@ def _selection(path: Path) -> TrajectorySelection:
         pre_padding=int(values["pre_padding"]),
         post_padding=int(values["post_padding"]),
         hand_side=str(values["hand_side"]),
+        drop_uncontrolled_hands=bool(values.get("drop_uncontrolled_hands", False)),
         reference_fps=int(values["reference_fps"]),
         control_fps=int(values["control_fps"]),
         pair_assignment_cycle=0,

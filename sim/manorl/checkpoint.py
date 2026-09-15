@@ -46,6 +46,7 @@ _ENVIRONMENT_SIGNATURE_FIELDS = (
     "pre_padding",
     "post_padding",
     "warp_ccd",
+    "expected_contact_mode",
     "trajectory_package_schema",
     "trajectory_package_digest",
     "trajectory_package_manifest_sha256",
@@ -317,6 +318,7 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
     if not isinstance(checkpoint_environment, dict):
         return
     checkpoint_environment = dict(checkpoint_environment)
+    checkpoint_environment.setdefault("expected_contact_mode", "source_mapping")
 
     target = getattr(agent, "manorl_environment_signature", None)
     if isinstance(target, dict):

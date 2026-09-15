@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import struct
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -34,7 +35,13 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEXSTREAM_ROOT = REPOSITORY_ROOT / "assets" / "dexstream_digital_assets"
 DEXSTREAM_REPOSITORY = "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
 MANO_OPERATOR = "sunke"
-ASSET_MANIFEST = TASK_ASSET_ROOT / "dexstream_manifest.json"
+EXPLICIT_ASSET_MANIFEST = os.environ.get("MANORL_ASSET_MANIFEST", "")
+ASSET_MANIFEST = (
+    Path(EXPLICIT_ASSET_MANIFEST).expanduser().resolve()
+    if EXPLICIT_ASSET_MANIFEST else TASK_ASSET_ROOT / "dexstream_manifest.json"
+)
+if EXPLICIT_ASSET_MANIFEST:
+    MANO_OPERATOR = json.loads(ASSET_MANIFEST.read_text(encoding="utf-8"))["hand_operator"]
 GRASP_MAPPING = TASK_ASSET_ROOT / "object_grasps_simple.yaml"
 VISUAL_GEOM_GROUP = 2
 COLLISION_GEOM_GROUP = 3

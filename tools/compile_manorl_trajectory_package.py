@@ -99,6 +99,7 @@ def _selection_payload(selection: TrajectorySelection) -> dict[str, object]:
         "pre_padding": selection.pre_padding,
         "post_padding": selection.post_padding,
         "hand_side": selection.hand_side,
+        "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
     }
@@ -268,7 +269,7 @@ def compile_package(
                 f"{len(candidates)} candidates"
             )
         valid_pairs = sorted(
-            {item.identity.identity.rsplit("_", 1)[0].replace("_", ":", 1) for item in trajectories}
+            {":".join(item.identity.identity.rsplit("_", 2)[:2]) for item in trajectories}
         )
         if valid_pairs != discovery["resolved_pairs"]:
             raise RuntimeError("one or more discovered pairs has no valid trajectory")
@@ -332,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hand-side", choices=("right", "left", "both"), default="right")
     parser.add_argument("--pre-padding", type=int, default=DEFAULT_PRE_PADDING)
     parser.add_argument("--post-padding", type=int, default=DEFAULT_POST_PADDING)
+    parser.add_argument("--drop-uncontrolled-hands", action="store_true")
     parser.add_argument("--shard-size", type=int, default=128)
     parser.add_argument("--max-attempts", type=int, default=3)
     args = parser.parse_args(argv)
@@ -348,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
         pre_padding=args.pre_padding,
         post_padding=args.post_padding,
         hand_side=args.hand_side,
+        drop_uncontrolled_hands=args.drop_uncontrolled_hands,
         reference_fps=args.reference_fps,
     )
     package = compile_package(

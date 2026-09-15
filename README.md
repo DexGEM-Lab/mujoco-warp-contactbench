@@ -295,6 +295,11 @@ DIMM/channel/CPU-IMC isolation is complete.
 
 ## ManoRL PPO Training
 
+New right-only capture settings and the September15 source inventory are in
+[`docs/sept15_capture_training.md`](docs/sept15_capture_training.md). New training
+defaults to five fingertip expected-contact sites; legacy checkpoint replay
+restores its recorded contact mode and residual scales.
+
 The Cube1 production training contract (budget, launch, W&B, evaluation,
 visual test, artifacts) is documented in
 [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md).
@@ -425,7 +430,7 @@ For an opt-in safety cap that may stop before all 8,000 updates complete, add
 `--wall-clock-seconds <positive-seconds>`. `--evaluation-num-envs` requests a
 minimum diagnostic count within `1..min(--num-envs, 128)`; the trainer raises
 that count when necessary to cover every resolved object/action pair once.
-Residual-action defaults: wrist XYZ `0.003 m` per-step scale and `0.03 m`
+New-training residual defaults: wrist XYZ `0.002 m` per-step scale and `0.01 m`
 cumulative cap; base `thumbCmcTwist` scale/cap `0.008`/`0.08`, each non-thumb
 `fingerMcpFlex` scale/cap `0.0025`/`0.025`, before the global `2.0`
 `--joint-scale-multiplier` / `--joint-max-offset-multiplier`. Resume rejects a

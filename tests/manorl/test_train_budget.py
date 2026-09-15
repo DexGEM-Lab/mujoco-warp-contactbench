@@ -290,16 +290,16 @@ def test_training_cli_parses_independent_diagnostics_switch(
     assert budget.resolved_capture_transition_diagnostics is True
 
 
-def test_training_budget_uses_v5_residual_action_defaults() -> None:
+def test_training_budget_uses_requested_capture_residual_defaults() -> None:
     tool = _load_tool()
     budget = tool.TrainingBudget()
     config = budget.residual_action_config
-    assert budget.position_scale == 0.003
-    assert budget.max_position_offset == 0.03
+    assert budget.position_scale == 0.002
+    assert budget.max_position_offset == 0.01
     assert budget.joint_scale_multiplier == 2.0
     assert budget.joint_max_offset_multiplier == 2.0
-    assert config.position_scale == (0.003, 0.003, 0.003)
-    assert config.max_position_offset == (0.03, 0.03, 0.03)
+    assert config.position_scale == (0.002, 0.002, 0.002)
+    assert config.max_position_offset == (0.01, 0.01, 0.01)
     assert config.joint_scale_multiplier == 2.0
     assert config.joint_max_offset_multiplier == 2.0
 

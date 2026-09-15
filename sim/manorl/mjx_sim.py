@@ -174,7 +174,7 @@ class _ReplayBase:
     ) -> None:
         self.trajectory = trajectory
         self.servo = servo
-        parts = trajectory.identity.identity.split("_")
+        parts = trajectory.identity.identity.rsplit("_", 2)
         if len(parts) != 3 or not parts[1].isdigit():
             raise ValueError("trajectory identity must be object_action_sequence")
         self.object_type = parts[0]
