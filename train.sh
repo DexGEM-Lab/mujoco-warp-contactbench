@@ -29,6 +29,7 @@ CHECKPOINT_INTERVAL=${MANORL_CHECKPOINT_INTERVAL:-100}
 WARM_START_CHECKPOINT=${MANORL_WARM_START_CHECKPOINT:-}
 WARM_START_PRIOR_UPDATES=${MANORL_WARM_START_PRIOR_UPDATES:-}
 HAND_SIDE=${MANORL_HAND_SIDE:-right}
+TARGET_OBJECT_OVERRIDES=${MANORL_TARGET_OBJECT_OVERRIDES:-}
 DROP_UNCONTROLLED_HANDS=${MANORL_DROP_UNCONTROLLED_HANDS:-false}
 case "$DROP_UNCONTROLLED_HANDS" in
   true) HAND_MODEL_ARGS=(--drop-uncontrolled-hands) ;;
@@ -131,7 +132,7 @@ print(",".join(selected))
 PY
 )
   else
-    SELECTOR=$("$PYTHON" - "$DATASET" "$DATASET_VERSION" "$HAND_SIDE" "$OBJECT" <<'PY'
+    SELECTOR=$("$PYTHON" - "$DATASET" "$DATASET_VERSION" "$HAND_SIDE" "$OBJECT" "$TARGET_OBJECT_OVERRIDES" <<'PY'
 import sys
 from pathlib import Path
 import lance
@@ -148,6 +149,7 @@ pairs, _ = _discover_trajectory_candidates(
         dataset_path=path,
         expected_dataset_version=version,
         hand_side=hand_side,
+        target_object_overrides=sys.argv[5],
     ),
 )
 selected = [pair.canonical for pair in pairs if pair.object_type == object_type]
@@ -183,6 +185,7 @@ cat > "$RUN_DIR/run_manifest.json" <<EOF
   "warm_start_prior_updates": $WARM_START_PRIOR_UPDATES_JSON,
   "hand_side": "$HAND_SIDE",
   "drop_uncontrolled_hands": $DROP_UNCONTROLLED_HANDS,
+  "target_object_overrides": "$TARGET_OBJECT_OVERRIDES",
   "expected_contact_mode": "five_fingertips",
   "updates": $UPDATES,
   "checkpoint_interval_updates": $CHECKPOINT_INTERVAL,
@@ -225,6 +228,7 @@ timeout --signal=INT --kill-after=120 "$TIMEOUT" "$PYTHON" -m tools.train_manorl
   "${CHECKPOINT_ARGS[@]}" \
   --hand-side "$HAND_SIDE" \
   "${HAND_MODEL_ARGS[@]}" \
+  --target-object-overrides "$TARGET_OBJECT_OVERRIDES" \
   "${SELECTION_ARGS[@]}" \
   --pair-assignment-cycle 0 \
   --expected-contact-mode five_fingertips \

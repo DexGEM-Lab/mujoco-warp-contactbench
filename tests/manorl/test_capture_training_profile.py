@@ -116,6 +116,8 @@ def test_right_only_package_round_trip_and_selection_contract(tmp_path, monkeypa
         dataset_schema_digest="schema", discovery_digest="discovery")
     c = load_trajectory_package(p)
     b = assign_trajectory_catalog(c, s, num_envs=2)
+    with pytest.raises(ValueError, match="target_object_overrides"):
+        assign_trajectory_catalog(c, replace(s, target_object_overrides="egg_cup:04"), num_envs=1)
     assert b.hand_sides == ("right",)
     assert b.action_dim == 28
     assert b.trajectories[0].scene_object_types == ("bowl", "egg_cup")
@@ -150,3 +152,35 @@ def test_sept15_preset_keeps_right_only_and_requested_padding():
         cwd=root, capture_output=True, text=True, check=True,
     )
     assert result.stdout.splitlines() == ["right", "true", "120", "60", "250"]
+
+
+@pytest.mark.parametrize("annotation", ["egg_cup,bowl", "bowl,egg_cup", "egg_cup"])
+def test_explicit_cup_override_preserves_source_and_object_order(annotation, monkeypatch):
+    from copy import deepcopy
+    import sim.manorl.trajectory as module
+    monkeypatch.setattr(module, "_initial_scene_support_shift", lambda *args: 0.)
+    row = capture_row()
+    row["trajectory_metadata"]["trajectory_info"]["object_move"][0]["object_name"] = annotation
+    original = deepcopy(row["trajectory_metadata"])
+    selection = TrajectorySelection(selector="all", hand_side="right", reference_fps=120,
+        pre_padding=60, post_padding=250, drop_uncontrolled_hands=True,
+        target_object_overrides="egg_cup:4")
+    assert selection.target_object_overrides == "egg_cup:04"
+    c = _candidate_from_metadata_row(row, row_index=2, selection=selection)
+    assert c.pair == ObjectActionPair("egg_cup", "04")
+    t = _selected_trajectory_from_row(row, 4, row_index=2, selection=selection, expected_pair=c.pair)
+    assert t.identity.identity == "egg_cup_04_003"
+    assert t.identity.object_index == 1
+    assert t.scene_object_types == ("bowl", "egg_cup")
+    assert t.hand_sides == ("right",) and t.movement_start_step == 60
+    assert row["trajectory_metadata"] == original
+
+
+def test_override_must_not_invent_unannotated_target():
+    s = TrajectorySelection(target_object_overrides="bowl:04")
+    with pytest.raises(ValueError, match="absent"):
+        _candidate_from_metadata_row(capture_row(), row_index=0, selection=s)
+    with pytest.raises(ValueError, match="one object per action"):
+        TrajectorySelection(target_object_overrides="bowl:04,egg_cup:04")
+    with pytest.raises(ValueError, match="one object per action"):
+        TrajectorySelection(target_object_overrides="all")
