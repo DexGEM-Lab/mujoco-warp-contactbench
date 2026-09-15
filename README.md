@@ -106,6 +106,8 @@ local accidental-workflow guard, not a security boundary.
 | Phase 5A ABI inventory (observation/residual/reward/checkpoint) | [`docs/manorl_phase5_abi_inventory.md`](docs/manorl_phase5_abi_inventory.md) |
 | DexStream asset setup and integrity manifest | [`scripts/setup_manorl_assets.sh`](scripts/setup_manorl_assets.sh), [`tools/generate_manorl_asset_manifest.py`](tools/generate_manorl_asset_manifest.py) |
 | ManoRL physical asset source contract | [`docs/manorl_asset_source.md`](docs/manorl_asset_source.md) |
+| Raw right-hand capture replay without a policy | [`docs/raw_capture_replay.md`](docs/raw_capture_replay.md) |
+| September 14 capture replay results | [`docs/sept14_raw_replay_results.md`](docs/sept14_raw_replay_results.md) |
 | Portable prefix/retreat synthesis method | [`docs/manorl_synthesis_methodology_prompt.md`](docs/manorl_synthesis_methodology_prompt.md) |
 
 ## Local uv Environment

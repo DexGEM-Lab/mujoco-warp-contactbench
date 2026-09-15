@@ -1494,7 +1494,10 @@ def validate_static_fk(
     )
     object_qpos_adr = model.jnt_qposadr[object_joint]
     data.qpos[object_qpos_adr + 3] = 1.0
-    mujoco.mj_forward(model, data)
+    # FK validation needs body transforms only. Unified object defaults overlap
+    # before a source scene is initialized; solving their contacts here can
+    # exhaust MuJoCo's arena for high-piece-count assets (cup/rack scenes).
+    mujoco.mj_kinematics(model, data)
     for scene_side in scene_sides:
         prefix = f"{scene_side}_" if len(scene_sides) > 1 else ""
         for name, expected in urdf_zero_fk(scene_side).items():

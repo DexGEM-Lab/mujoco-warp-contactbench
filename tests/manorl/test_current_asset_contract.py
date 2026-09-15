@@ -111,3 +111,14 @@ def test_texture_integrity_is_checked_before_scene_loading(tmp_path, monkeypatch
     monkeypatch.setattr(assets, "_manifest_record_path", lambda r: replacement if r["path"] == record["path"] else original(r))
     with pytest.raises((FileNotFoundError, ValueError), match="absent|not materialized|digest mismatch"):
         assets.validate_asset_manifest("bowl")
+
+
+def test_uninitialized_unified_scene_fk_does_not_solve_overlapping_objects(monkeypatch) -> None:
+    def forbidden_forward(*args, **kwargs):
+        raise AssertionError("static FK must not solve contacts at uninitialized object poses")
+    monkeypatch.setattr(mujoco, "mj_forward", forbidden_forward)
+    _, model = assets.compile_unified_model(
+        object_types=("cylinder7", "egg_cup", "egg_stick_rack"), object_collisions=True,
+    )
+    assert model.nq == 28 + 3 * 7
+    assert model.nu == 28
