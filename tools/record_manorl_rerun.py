@@ -208,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             num_envs=args.num_envs,
             residual_enabled=args.use_residual,
+            constraint_capacity=checkpoint_options.constraint_capacity,
             residual_action=checkpoint_options.residual_action,
             expected_contact_mode=checkpoint_options.expected_contact_mode,
             compatibility=replace(

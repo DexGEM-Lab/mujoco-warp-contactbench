@@ -228,6 +228,7 @@ class _CheckpointEnvironmentOptions:
     post_padding: int = DEFAULT_POST_PADDING
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
+    constraint_capacity: int = 512
     expected_contact_mode: str = "source_mapping"
     target_object_overrides: str = ""
     drop_uncontrolled_hands: bool = False
@@ -367,6 +368,7 @@ def _checkpoint_environment_options(checkpoint: Path) -> _CheckpointEnvironmentO
         post_padding=post_padding,
         warp_ccd_iterations=warp_ccd.get("ccd_iterations"),
         warp_ccd_contacts_per_world=warp_ccd.get("contacts_per_world"),
+        constraint_capacity=environment.get("constraint_capacity", 512),
         expected_contact_mode=environment.get("expected_contact_mode", "source_mapping"),
         target_object_overrides=runtime_config.get("trajectory_selection", {}).get("target_object_overrides", ""),
         drop_uncontrolled_hands=runtime_config.get("trajectory_selection", {}).get("drop_uncontrolled_hands", False),
@@ -1111,6 +1113,7 @@ def view_environment(
             device=device,
             num_envs=num_envs,
             residual_enabled=use_residual,
+            constraint_capacity=checkpoint_options.constraint_capacity,
             residual_action=checkpoint_options.residual_action,
             expected_contact_mode=checkpoint_options.expected_contact_mode,
             compatibility=replace(
