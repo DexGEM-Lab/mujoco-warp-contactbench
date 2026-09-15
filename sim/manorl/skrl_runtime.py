@@ -464,6 +464,7 @@ class ManoSkrlRuntime:
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
             "environment": {
                 **self._environment_signature(),
+                "contact_capacity": physical.config.contact_capacity,
                 "constraint_capacity": physical.config.constraint_capacity,
                 "residual_enabled": physical.config.residual_enabled,
                 "residual_action": asdict(physical.config.residual_action),

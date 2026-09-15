@@ -195,6 +195,7 @@ class TrainingBudget:
     # These are the validated single-task convergence defaults.  Smaller
     # budgets remain available as explicit diagnostic overrides.
     num_envs: int = 2048
+    contacts_per_world: int = 128
     constraint_capacity: int = CONSTRAINT_CAPACITY
     updates: int = 8000
     wall_clock_seconds: float | None = None
@@ -1942,8 +1943,9 @@ def _build_evaluation_runtime(
             residual_enabled=budget.residual_enabled,
             residual_action=budget.residual_action_config,
             max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
-            contact_capacity=recommended_warp_contact_capacity(
-                num_envs, trajectories.hand_sides
+            contact_capacity=max(
+                recommended_warp_contact_capacity(num_envs, trajectories.hand_sides),
+                budget.contacts_per_world * num_envs,
             ),
             reference_fps=budget.reference_fps,
             compatibility=replace(
@@ -2160,8 +2162,9 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
     )
     torch.manual_seed(budget.seed)
     torch.cuda.manual_seed_all(budget.seed)
-    contact_capacity = recommended_warp_contact_capacity(
-        budget.num_envs, trajectories.hand_sides
+    contact_capacity = max(
+        recommended_warp_contact_capacity(budget.num_envs, trajectories.hand_sides),
+        budget.contacts_per_world * budget.num_envs,
     )
     evaluation_num_envs = (
         _full_coverage_evaluation_num_envs(budget, trajectories)
@@ -2560,6 +2563,8 @@ def main(argv: list[str] | None = None) -> int:
         help="conceptual completed updates represented by the warm-start lineage",
     )
     parser.add_argument("--num-envs", type=int, default=2048)
+    parser.add_argument("--contacts-per-world", type=int, default=128,
+                        help="candidate contact slots per world; honors the per-hand minimum capacity")
     parser.add_argument("--constraint-capacity", type=int, default=CONSTRAINT_CAPACITY,
                         help="per-world Warp constraint rows (njmax); dense scenes may require more")
     parser.add_argument("--evaluation-num-envs", type=int, default=1)
@@ -2806,6 +2811,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.contacts_per_world < 1:
+        parser.error("contacts-per-world must be positive")
     if args.constraint_capacity < 1:
         parser.error("constraint-capacity must be positive")
     if args.updates < 1 or args.num_envs < 1 or args.rerun_stride < 1:
@@ -2894,6 +2901,7 @@ def main(argv: list[str] | None = None) -> int:
             num_envs=args.num_envs,
             updates=args.updates,
             constraint_capacity=args.constraint_capacity,
+            contacts_per_world=args.contacts_per_world,
             wall_clock_seconds=args.wall_clock_seconds,
             seed=args.seed,
             rerun_output=str(args.rerun_output.resolve()) if args.rerun_output is not None else None,
