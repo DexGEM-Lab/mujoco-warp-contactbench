@@ -1,7 +1,7 @@
 {
   "schema": "manorl.local-contact-repair.v1",
   "row_id": "B_row043",
-  "note": "Redistribute index MCP/PIP shape and thumb preload, followed by4deg held wrist correction. No added-contact claim.",
+  "note": "Redistribute index MCP/PIP shape and thumb preload, followed by4deg held wrist correction.",
   "phases": [
     {
       "start_s": 0.6,

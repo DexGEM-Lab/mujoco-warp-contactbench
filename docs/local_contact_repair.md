@@ -39,7 +39,7 @@ remain explicit correspondence fields; `time` is the executed clock.
 The checked-in selection is
 `sim/manorl/task_assets/local_contact_repairs/cheyingtong_120hz/catalog.json`.
 Add `--catalog` with that path to the command above to replay its per-row recipes.
-It contains ten local corrections,32 unchanged120Hz passes, and an explicitly
+It contains twelve local corrections,30 unchanged120Hz passes, and an explicitly
 unresolved full-orientation baseline for B_row035. These are a selection, not a
 promise that contact-sensitive reexecution will be bitwise identical. Read the
 new run's `summary.json` and rowwise `result.json` for its measured outcomes.
@@ -99,7 +99,16 @@ support and full reference-rotation error<15deg. Placement requires the intended
 support, release, upright tilt<10deg and final position error<8cm. Both require
 reference-relative lift and the prior airborne multi-finger-contact threshold.
 Hand tracking and penetration are reported independently; changing a wrist target
-is not mislabeled as unchanged-reference fidelity.
+is not mislabeled as unchanged-reference fidelity. Inspect unsupported intervals
+with no hand contact as well: a dropped bowl that happens to settle on the target
+can pass the historical endpoint gates. Such a transport candidate is rejected.
+
+Repeat marginal candidates independently. Identical commands and parameters can
+show tiny GPU numerical differences that grow after contact. Increasing clearance
+or improving the grasp is preferable to selecting a lucky unchanged replay.
+Geometric fits must respect actuator-target limits: an additional offset toward
+an already-saturated joint does not execute. Transfer grasp poses before load has
+deformed the grasp; matching a slipped midair pose can suggest unnecessary edits.
 
 Contacts are native geometric reconstructions from measured states, not recorded
 GPU contact force or force closure. Inspect actual motion before accepting a

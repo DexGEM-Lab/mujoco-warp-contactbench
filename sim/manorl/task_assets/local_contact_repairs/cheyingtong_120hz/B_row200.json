@@ -1,0 +1,32 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row200",
+  "note": "Small morphology/contact correction after unedited replay showed contact-sensitive failure; passed two independent physical replays.",
+  "phases": [
+    {
+      "start_s": 0.65,
+      "rise_s": 0.2,
+      "end_s": 2.3,
+      "fall_s": 0.25,
+      "translation_m": [
+        -0.0006367416948665343,
+        0.00022852523271514954,
+        -0.0014504720621879982
+      ],
+      "finger_deg": {
+        "j1_thumb_cmc_abd": -2.03027,
+        "j1_thumb_cmc_flex": 0.05168,
+        "j1_thumb_cmc_twist": 1.81743,
+        "j1_thumb_mcp_flex": -3.18218,
+        "j1_thumb_mcp_abd": -3.09577,
+        "j1_thumb_ip": 1.55192,
+        "j2_index_mcp_abd": -1.6658,
+        "j2_index_mcp_flex": 1.43697,
+        "j2_index_pip": -1.48604,
+        "j2_index_dip": 1.02686
+      }
+    }
+  ],
+  "source_uuid": "4f5da22c-3069-4f07-8b7f-1658affd99c0",
+  "baseline_trace_sha256": "b8bd4764e06549efe0014acf9b5b295518f102a092a9b2d78b0187fff4cd3d2f"
+}
