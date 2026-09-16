@@ -1,7 +1,7 @@
 {
   "schema": "manorl.local-contact-repair.v1",
   "row_id": "B_row067",
-  "note": "Transfer a verified Cheyingtong pre-lift contact pose in object-relative coordinates; preserve receiver route/timing. Avoid using a grip already deformed by load as the target. Passed two independent continuous replays.",
+  "note": "Transfer a verified same-hand early opposed-contact state before major slip, in object-relative coordinates. The donor already carries weight; receiver route/timing is preserved. Passed two independent continuous replays.",
   "phases": [
     {
       "start_s": 0.75,

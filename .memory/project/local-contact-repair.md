@@ -26,13 +26,21 @@ state and parameters can diverge from~1e-10 at early GPU steps into task failure
 Reject lucky-repeat selection. Endpoint gates can also accept a slipped bowl
 that lands on the stove; inspect actual unsupported no-contact intervals.
 Respect actuator limits when fitting offsets (B067 index abduction is saturated).
-For grasp transfer, use the verified pre-lift pose, not a midair pose already
-deformed by load. This repaired B067 with4.41mm wrist /2.04deg wrist /6.34deg
-finger targets and two independent complete replays, without a larger route edit.
+For grasp transfer, use a verified early opposed-contact state before major
+slippage, not a deformed midair pose. The selected donor is already unsupported:
+low lift does not mean unloaded. This repaired B067 with4.41mm wrist /2.04deg
+wrist /6.34deg finger targets and two independent complete replays.
 
-B035 remains explicitly unresolved in full orientation: rotation aligns with the
-two-finger pinch line while wrist/reference rotation agrees. Two finger rays do
-not establish rotational force closure. Bounded middle-finger IK failed to add
-contact, and a visually plausible static support pose did not necessarily survive
-continuous dynamic acquisition. Do not publish kinematic fit residuals as task
-success or inherit the candidate's label without final physical replay.
+B035 remains explicitly unresolved in full reference rotation. Its baseline
+extra rotation aligns with the two-finger pinch line while wrist/reference
+rotation agrees. The delivered early-grasp alignment (7.30mm/6.01deg wrist,
+4deg finger targets) reduces opening-axis error to~10deg and full error to~22deg,
+with continued holding in a separate2s audit. The original15deg full-rotation gate
+still fails. Two finger rays do not establish rotational force closure.
+
+Bounded middle-finger IK could not add the intended contact, and a static support
+pose did not necessarily survive continuous dynamic acquisition. Larger15/20deg
+wrist-alignment diagnostics can pass a transient endpoint or a later hold without
+passing both under the original duration; they are not included in the micro
+selection. Audit continuations keep the live controller/solver state and original
+last-tick derivatives, and remain separate from normal trajectory duration.

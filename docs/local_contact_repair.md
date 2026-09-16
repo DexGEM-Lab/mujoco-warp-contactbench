@@ -39,9 +39,10 @@ remain explicit correspondence fields; `time` is the executed clock.
 The checked-in selection is
 `sim/manorl/task_assets/local_contact_repairs/cheyingtong_120hz/catalog.json`.
 Add `--catalog` with that path to the command above to replay its per-row recipes.
-It contains twelve local corrections,30 unchanged120Hz passes, and an explicitly
-unresolved full-orientation baseline for B_row035. These are a selection, not a
-promise that contact-sensitive reexecution will be bitwise identical. Read the
+It contains twelve complete local repairs,one partial B_row035 pose repair, and
+30 unchanged120Hz passes. B_row035's full reference orientation remains unresolved.
+These are a selection, not a promise that contact-sensitive reexecution will be
+bitwise identical. Read the
 new run's `summary.json` and rowwise `result.json` for its measured outcomes.
 
 Published recipes bind source UUID and baseline trace SHA; the catalog binds the
@@ -83,6 +84,10 @@ donor preload blend. This matters because editing only desired fingers would be
 masked by a full donor-preload blend. Corrections and actual physical hand states
 are saved separately. The local envelope caps translation at15mm and rotations
 and finger-target deltas at10deg; reported experiments should begin much smaller.
+A separate expanded orientation-alignment recipe may explicitly set
+`max_wrist_rotation_deg` to15 or20. It must be labeled with its actual larger angular
+change; the default10deg limit,15mm translation and10deg finger limits remain.
+This changes target admissibility only, not any physics or controller parameter.
 
 Apply with `--recipe /path/to/recipe.json --rows B_row045` and a new output root.
 The first runner physically replays the untouched prefix on every trial. It does
@@ -90,6 +95,12 @@ not claim arbitrary-frame checkpoint restoration. Saved controller integrals and
 warmstarts are diagnostic fields; a validated complete restore contract would be
 required before using them to accelerate trials. Final candidates always require
 a complete continuous replay from original initialization.
+
+The dynamics helper optionally appends `hold_tail_frames` on the same live state
+and controller integral for stability audits. It preserves all normal-stream
+velocity estimates, including the original last backward difference, and switches
+to zero desired velocity only after that tick. Audit tails are separate from the
+normal user-facing trajectory and must not be copied into its duration.
 
 ## Interpretation
 
@@ -107,8 +118,9 @@ Repeat marginal candidates independently. Identical commands and parameters can
 show tiny GPU numerical differences that grow after contact. Increasing clearance
 or improving the grasp is preferable to selecting a lucky unchanged replay.
 Geometric fits must respect actuator-target limits: an additional offset toward
-an already-saturated joint does not execute. Transfer grasp poses before load has
-deformed the grasp; matching a slipped midair pose can suggest unnecessary edits.
+an already-saturated joint does not execute. Transfer an early opposed-contact
+pose before major slippage, rather than a similarly timed but already slipped
+midair pose. A low-lift contact state can already carry the object's full weight.
 
 Contacts are native geometric reconstructions from measured states, not recorded
 GPU contact force or force closure. Inspect actual motion before accepting a

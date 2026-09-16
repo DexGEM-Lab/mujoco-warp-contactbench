@@ -42,7 +42,10 @@ def wrist_targets(
     ctrl[0, j] = wp.clamp(raw, lower, upper)
 
 
-def replay(inp, model, desired, finger_delta):
+def replay(inp, model, desired, finger_delta, *, hold_tail_frames=0):
+    """Optionally continue the same live state; tails are separate validation data."""
+    if not isinstance(hold_tail_frames, int) or hold_tail_frames < 0:
+        raise ValueError("hold_tail_frames must be a nonnegative integer")
     import mujoco as mj
     from sim.manorl.mjx_sim import command_target
     names = inp.arrays["scene_object_names"].tolist()
@@ -94,15 +97,21 @@ def replay(inp, model, desired, finger_delta):
     positions, velocities, controls = [initial_qpos], [initial_qvel], [initial_ctrl]
     integrals, warmstarts, times = [np.zeros(6)], [np.zeros(model.nv)], [0.]
     applied_substeps = []
+    # Derivatives above use the ORIGINAL stream: appending a hold must not halve
+    # its final backward-difference velocity or change the normal last tick.
+    total_frames = inp.frames + hold_tail_frames
     # Every trial reexecutes its unmodified prefix in dynamics. No qpos-only jump.
-    for frame in range(1, inp.frames):
+    for frame in range(1, total_frames):
+        index = min(frame, inp.frames - 1)
+        finger_speed = finger_velocity[index] if frame < inp.frames else np.zeros(22)
+        wrist_speed = source_velocity[index] if frame < inp.frames else np.zeros(6)
         current = wd.qpos.numpy()[0]
-        control = finger_control(model, current, desired[frame], finger_velocity[frame],
-                                 inp.arrays["finger_offset_envelope"][frame], inp.arrays["grip_envelope"][frame],
-                                 inp.initial["donor_preload"], finger_delta[frame], flags["finger_feedforward"])
+        control = finger_control(model, current, desired[index], finger_speed,
+                                 inp.arrays["finger_offset_envelope"][index], inp.arrays["grip_envelope"][index],
+                                 inp.initial["donor_preload"], finger_delta[index], flags["finger_feedforward"])
         wd.ctrl.assign(control[None].astype(np.float32))
-        target.assign(desired[frame, :6].astype(np.float32))
-        velocity.assign(source_velocity[frame].astype(np.float32))
+        target.assign(desired[index, :6].astype(np.float32))
+        velocity.assign(wrist_speed.astype(np.float32))
         wp.capture_launch(capture.graph)
         positions.append(wd.qpos.numpy()[0].copy())
         velocities.append(wd.qvel.numpy()[0].copy())
@@ -118,16 +127,25 @@ def replay(inp, model, desired, finger_delta):
     object_pos = np.stack([qpos[:, adr:adr + 3] for adr in addresses], axis=1)
     object_quat = np.stack([qpos[:, adr + 3:adr + 7][:, [1, 2, 3, 0]] for adr in addresses], axis=1)
     result = dict(inp.arrays)
-    result.update(base_desired=inp.arrays["desired"], desired=desired, finger_target_delta=finger_delta,
+    def pad(values):
+        return np.concatenate((values, np.repeat(values[-1:], hold_tail_frames, axis=0))) if hold_tail_frames else values
+    if hold_tail_frames:
+        for key in ("time", "source_frame", "desired", "source_hand", "reference_hand",
+                    "source_timestamp", "source_object_pos", "source_object_quat_xyzw",
+                    "finger_offset_envelope", "grip_envelope"):
+            result[key] = pad(result[key])
+        result["time"] = np.arange(total_frames) / inp.hz
+    result.update(base_desired=result["desired"], desired=pad(desired), finger_target_delta=pad(finger_delta),
                   qpos=qpos, qvel=qvel, ctrl=np.asarray(controls), ctrl_substeps=np.asarray(applied_substeps),
                   wrist_integral=np.asarray(integrals), qacc_warmstart=np.asarray(warmstarts),
-                  physics_time=np.asarray(times), desired_wrist=desired[:, :6], actual_wrist=qpos[:, :6],
+                  physics_time=np.asarray(times), desired_wrist=pad(desired[:, :6]), actual_wrist=qpos[:, :6],
                   actual_object_pos=object_pos, actual_object_quat_xyzw=object_quat)
-    if abs(times[-1] - (inp.frames - 1) / inp.hz) > 2e-3:
+    if abs(times[-1] - (total_frames - 1) / inp.hz) > 2e-3:
         raise RuntimeError("observed physics time does not match the requested clock")
     runtime = dict(backend="MJX-Warp", device="cuda:0", control_hz=inp.hz, physics_hz=4 * inp.hz,
                    physics_timestep_s=float(model.opt.timestep), substeps=4,
                    observed_final_time_s=times[-1], frame_zero_integrated=False,
+                   normal_frames=inp.frames, validation_hold_tail_frames=hold_tail_frames,
                    solver=dict(cone="elliptic", impratio=float(model.opt.impratio)),
                    controller=dict(flags=flags, translation_kp=1200., translation_kd=40., translation_ki=250.,
                                    rotation_kp=100., rotation_kd=3.5, rotation_ki=8., integral_limit=15.,

@@ -77,6 +77,25 @@ def test_rotation_is_geometric_and_bounded():
         edit_targets(inp, recipe, names)
 
 
+def test_larger_orientation_alignment_requires_explicit_recipe():
+    inp = make_input()
+    names = tuple(f"j{i}" for i in range(28))
+    recipe = dict(schema="manorl.local-contact-repair.v1", row_id="example",
+                  phases=[dict(start_s=.3, rotation_deg=[0, 0, 11])])
+    with pytest.raises(ValueError, match="envelope"):
+        edit_targets(inp, recipe, names)
+    recipe["max_wrist_rotation_deg"] = 15
+    _, _, info = edit_targets(inp, recipe, names)
+    assert np.isclose(info["wrist_rotation_max_deg"], 11)
+    recipe["max_wrist_rotation_deg"] = 20
+    recipe["phases"][0]["rotation_deg"] = [0, 0, 19]
+    _, _, info = edit_targets(inp, recipe, names)
+    assert np.isclose(info["wrist_rotation_max_deg"], 19)
+    recipe["max_wrist_rotation_deg"] = 25
+    with pytest.raises(ValueError, match="larger alignment must be explicit"):
+        edit_targets(inp, recipe, names)
+
+
 @pytest.mark.parametrize("phase", [
     {"start_s": -.1}, {"start_s": .3, "rise_s": 0},
     {"start_s": .3, "end_s": .4}, {"start_s": .3, "unknown": 1},

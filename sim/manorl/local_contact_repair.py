@@ -148,7 +148,7 @@ def smooth_envelope(time: np.ndarray, phase: dict[str, Any]) -> np.ndarray:
 
 
 def edit_targets(inp: ReplayInput, recipe: dict[str, Any], joint_names: tuple[str, ...]):
-    if set(recipe) - {"schema", "row_id", "note", "phases", "source_uuid", "baseline_trace_sha256"}:
+    if set(recipe) - {"schema", "row_id", "note", "phases", "source_uuid", "baseline_trace_sha256", "max_wrist_rotation_deg"}:
         raise ValueError("unrecognized recipe fields")
     if recipe.get("schema") != "manorl.local-contact-repair.v1" or recipe.get("row_id") != inp.row_id:
         raise ValueError("recipe schema or source row mismatch")
@@ -190,8 +190,12 @@ def edit_targets(inp: ReplayInput, recipe: dict[str, Any], joint_names: tuple[st
     info = dict(wrist_translation_max_mm=float(position.max() * 1000),
                 wrist_rotation_max_deg=float(np.rad2deg(angles.max())),
                 finger_target_max_deg=float(np.rad2deg(abs(finger_delta).max())))
-    # Explicit local envelope: not a route replacement or arbitrary pose reset.
-    if info["wrist_translation_max_mm"] > 15.000001 or info["wrist_rotation_max_deg"] > 10.000001 or info["finger_target_max_deg"] > 10.000001:
+    # Larger orientation alignment must be explicitly named by the recipe.
+    rotation_limit = float(recipe.get("max_wrist_rotation_deg", 10))
+    if rotation_limit not in (10., 15., 20.):
+        raise ValueError("max_wrist_rotation_deg must be10,15 or20; larger alignment must be explicit")
+    # Translation, finger bounds and the ordinary10deg default remain unchanged.
+    if info["wrist_translation_max_mm"] > 15.000001 or info["wrist_rotation_max_deg"] > rotation_limit + 1e-6 or info["finger_target_max_deg"] > 10.000001:
         raise ValueError(f"correction exceeds local repair envelope: {info}")
     return desired, finger_delta, info
 
