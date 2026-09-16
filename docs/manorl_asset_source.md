@@ -147,3 +147,13 @@ identity and current asset manifest identity together.
 Do not retain a fallback to the removed asset submodules or to copied runtime
 meshes. A missing new source must be surfaced as an explicit setup/validation
 error.
+
+## Default ManoRL rendering light
+
+Homogeneous and unified ManoRL scenes use headlight ambient RGB
+`(0.4, 0.4, 0.4)` and diffuse RGB `(0.65, 0.65, 0.65)`. The tiled viewer and
+hand-residual visualization retain these shared defaults from
+`sim/manorl/assets.py`. Specular, camera, and other visual settings keep their
+existing behavior. These settings affect rendering only, not masses, contact
+parameters, actuator gains, or the checkpoint's physical asset identity.
+Newly constructed scenes use the defaults; existing MP4 files are unchanged.
