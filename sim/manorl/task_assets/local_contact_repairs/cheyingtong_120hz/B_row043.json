@@ -1,0 +1,27 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row043",
+  "note": "Redistribute index MCP/PIP shape and thumb preload, followed by4deg held wrist correction.",
+  "phases": [
+    {
+      "start_s": 0.6,
+      "rise_s": 0.15,
+      "finger_deg": {
+        "j1_thumb_cmc_abd": -2,
+        "j2_index_mcp_flex": 4,
+        "j2_index_pip": -4
+      }
+    },
+    {
+      "start_s": 1.55,
+      "rise_s": 0.3,
+      "rotation_deg": [
+        2.5680271224142204,
+        2.574697454436825,
+        1.6661841784933231
+      ]
+    }
+  ],
+  "source_uuid": "c67a5fb4-2382-4cc7-9323-216405686d91",
+  "baseline_trace_sha256": "f54a5cc8379a6b266d5bfc7c7b7a4678db2d884d8fe97f92f20bf1ac43fc55f0"
+}

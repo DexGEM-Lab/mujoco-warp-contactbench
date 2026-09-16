@@ -1,0 +1,37 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row067",
+  "note": "Transfer a verified same-hand early opposed-contact state before major slip, in object-relative coordinates. The donor already carries weight; receiver route/timing is preserved. Passed two independent continuous replays.",
+  "phases": [
+    {
+      "start_s": 0.75,
+      "rise_s": 0.2,
+      "end_s": 3.12,
+      "fall_s": 0.25,
+      "translation_m": [
+        0.0007306635860182126,
+        -2.2855534839327785e-05,
+        -0.004352021048491056
+      ],
+      "rotation_deg": [
+        1.5544717448953165,
+        1.2679396943305692,
+        -0.3831969634264722
+      ],
+      "finger_deg": {
+        "j1_thumb_cmc_abd": -1.7464676313846244,
+        "j1_thumb_cmc_flex": -1.8061854694019268,
+        "j1_thumb_cmc_twist": 1.8153416581494464,
+        "j1_thumb_mcp_flex": -0.8188933642642197,
+        "j1_thumb_mcp_abd": -3.735840268430174,
+        "j1_thumb_ip": 4.325367095834959,
+        "j2_index_mcp_abd": 0.4609421463274805,
+        "j2_index_mcp_flex": -6.167418348805978,
+        "j2_index_pip": 6.340577304644142,
+        "j2_index_dip": 5.427128295614146
+      }
+    }
+  ],
+  "source_uuid": "7fd90b2f-3080-46e5-8c58-f6b26f5cb9c2",
+  "baseline_trace_sha256": "f30b7704ea6ac00bb926c4b1f3081e638b1d5bfe0586440395dd40b2e3a80cf9"
+}

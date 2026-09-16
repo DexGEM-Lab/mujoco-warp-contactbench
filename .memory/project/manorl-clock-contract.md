@@ -27,3 +27,10 @@ Canonical usage and rationale: `README.md` → “ManoRL PPO Training” and
 `sim/manorl/contracts.py`, `sim/manorl/trajectory.py`,
 `sim/manorl/view_environment.py`, `sim/manorl/lance_v2.py`, and environment
 ABI v7 in `sim/manorl/abi.py`.
+
+Historical100Hz physical-replay commands require time-preserving resampling for
+120Hz repair; changing only physics dt or frame labels changes the motion or
+controller. The wrist integral and finger/wrist velocity feedforward must use
+the selected dt. Local repair inputs retain source-hand identity independently
+of physical replay hand. See `docs/local_contact_repair.md` for the archived43
+Cheyingtong runner and its terminal-grid hold (<one control interval).

@@ -1,0 +1,29 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "A_row049",
+  "note": "6mm approach clearance avoids early thumb-driven bowl rotation;4deg held wrist correction restores terminal orientation.",
+  "phases": [
+    {
+      "start_s": 1.0,
+      "rise_s": 0.15,
+      "end_s": 1.7,
+      "fall_s": 0.25,
+      "translation_m": [
+        -0.005437254825812459,
+        -0.0008370423558017854,
+        0.002394915458585737
+      ]
+    },
+    {
+      "start_s": 2.4,
+      "rise_s": 0.5,
+      "rotation_deg": [
+        0.07602776278621338,
+        1.4936727329120425,
+        3.709873521596228
+      ]
+    }
+  ],
+  "source_uuid": "ef83b5f0-8e5c-4e6c-9a3b-37faec809f5b",
+  "baseline_trace_sha256": "b04c621006e11f7984e32ef7c81cf5b7f3a53271e4d9a77479430cc4c00c0b3f"
+}

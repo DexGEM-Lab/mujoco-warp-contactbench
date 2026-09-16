@@ -1,0 +1,32 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row045",
+  "note": "Morphology correction aligns thumb/index contact positions with a successful grasp; avoids roll-out and tilted landing.",
+  "phases": [
+    {
+      "start_s": 0.45,
+      "rise_s": 0.2,
+      "end_s": 2.15,
+      "fall_s": 0.25,
+      "translation_m": [
+        -0.003060975266457227,
+        -0.0015494382419210585,
+        -0.0018994605256551645
+      ],
+      "finger_deg": {
+        "j1_thumb_cmc_abd": -3.29865,
+        "j1_thumb_cmc_flex": -2.1131,
+        "j1_thumb_cmc_twist": 4.0,
+        "j1_thumb_mcp_flex": -0.7153,
+        "j1_thumb_mcp_abd": -3.82828,
+        "j1_thumb_ip": 4.0,
+        "j2_index_mcp_abd": 1.57178,
+        "j2_index_mcp_flex": -4.0,
+        "j2_index_pip": 3.37146,
+        "j2_index_dip": 4.0
+      }
+    }
+  ],
+  "source_uuid": "3c7737ec-82d8-4600-a80c-f68b668e8329",
+  "baseline_trace_sha256": "1376aa789be588e72e2adae2b54796cedaf91f239f5b34f0b863f6ecba84c92e"
+}

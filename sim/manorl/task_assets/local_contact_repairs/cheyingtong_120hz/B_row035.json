@@ -1,0 +1,28 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row035",
+  "note": "Partial repair from a verified same-hand early opposed-contact state. Opening-axis error is about10deg; full reference rotation remains about22deg and is NOT a full-pose pass.",
+  "phases": [
+    {
+      "start_s": 0.3,
+      "rise_s": 0.2,
+      "translation_m": [
+        -0.003866130204357124,
+        0.0054407329875135885,
+        -0.0029477223177142853
+      ],
+      "rotation_deg": [
+        1.1253881191523272,
+        2.0271616923658784,
+        -5.548061748365091
+      ],
+      "finger_deg": {
+        "j1_thumb_cmc_abd": -2.000000197950678,
+        "j2_index_mcp_flex": 3.9999978345804172,
+        "j2_index_pip": -3.9999995421277097
+      }
+    }
+  ],
+  "source_uuid": "e1772900-1797-41aa-9e21-146254058daf",
+  "baseline_trace_sha256": "c80c2f15e6996b7c8c781dfec5ee93ff4f1d6fd06a0f49f3fe9549a33bc766b4"
+}

@@ -1,0 +1,32 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row108",
+  "note": "Small thumb/index and wrist morphology alignment restores placement accuracy.",
+  "phases": [
+    {
+      "start_s": 1.55,
+      "rise_s": 0.2,
+      "end_s": 4.21,
+      "fall_s": 0.25,
+      "translation_m": [
+        0.0009533711336440681,
+        0.0010575578770779773,
+        -0.001230252068872179
+      ],
+      "finger_deg": {
+        "j1_thumb_cmc_abd": 0.22496,
+        "j1_thumb_cmc_flex": -1.63808,
+        "j1_thumb_cmc_twist": -1.81102,
+        "j1_thumb_mcp_flex": -2.30971,
+        "j1_thumb_mcp_abd": -0.70903,
+        "j1_thumb_ip": 2.46668,
+        "j2_index_mcp_abd": -1.47884,
+        "j2_index_mcp_flex": 0.23699,
+        "j2_index_pip": 0.25551,
+        "j2_index_dip": -0.49208
+      }
+    }
+  ],
+  "source_uuid": "4d24f12f-5a40-4397-b659-fce479a368d5",
+  "baseline_trace_sha256": "3e043cbced292a194368e8f54b7759436d3e2a0375a4fa844fd953fb3e349b2e"
+}
