@@ -1,0 +1,20 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row099",
+  "note": "8mm additional wrist height during existing stable carry, removed before placement.",
+  "phases": [
+    {
+      "start_s": 2.08,
+      "rise_s": 0.2,
+      "end_s": 2.85,
+      "fall_s": 0.25,
+      "translation_m": [
+        0,
+        0,
+        0.008
+      ]
+    }
+  ],
+  "source_uuid": "3a6a74ff-f2be-4332-95ad-3a09abc08759",
+  "baseline_trace_sha256": "d580f8fa60b22271d66117309d1df69fe158fa237cb294db3bbdafdcce399e45"
+}

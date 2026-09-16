@@ -34,6 +34,26 @@ source target is held until the next regular grid boundary, adding less than
 integration use the actual new timestep. Source timestamps/frame coordinates
 remain explicit correspondence fields; `time` is the executed clock.
 
+## Reproduce the selected43-row batch
+
+The checked-in selection is
+`sim/manorl/task_assets/local_contact_repairs/cheyingtong_120hz/catalog.json`.
+Add `--catalog` with that path to the command above to replay its per-row recipes.
+It contains ten local corrections,32 unchanged120Hz passes, and an explicitly
+unresolved full-orientation baseline for B_row035. These are a selection, not a
+promise that contact-sensitive reexecution will be bitwise identical. Read the
+new run's `summary.json` and rowwise `result.json` for its measured outcomes.
+
+Published recipes bind source UUID and baseline trace SHA; the catalog binds the
+baseline comparison and clock. The queue pins code, recipes and initialization
+files while running. A mismatch stops the job rather than silently combining
+incompatible trajectories. One isolated child process is used per row.
+
+`tools/render_local_contact_repairs.py` renders recorded `qpos` without stepping
+physics. Supply a JSON job with the selected manifest, trace hashes and120/480Hz
+clock (same layout as the historical recorded-state renderer). New output paths
+are required. Videos are30fps, sampling every fourth measured120Hz frame.
+
 ## Local recipe
 
 A recipe is tied to one row and uses seconds, never ambiguous source-frame

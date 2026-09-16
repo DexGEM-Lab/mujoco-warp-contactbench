@@ -1,0 +1,26 @@
+{
+  "schema": "manorl.local-contact-repair.v1",
+  "row_id": "B_row038",
+  "note": "1deg pinch adjustment followed by8deg wrist orientation correction during stable hold.",
+  "phases": [
+    {
+      "start_s": 0.9,
+      "rise_s": 0.15,
+      "finger_deg": {
+        "j1_thumb_cmc_abd": -1,
+        "j2_index_mcp_flex": 1
+      }
+    },
+    {
+      "start_s": 1.4,
+      "rise_s": 0.4,
+      "rotation_deg": [
+        1.1946469711767644,
+        3.5989192839862127,
+        -7.044188995307433
+      ]
+    }
+  ],
+  "source_uuid": "bd9755d0-8173-4858-b259-69f3176cff89",
+  "baseline_trace_sha256": "ed047d7dcbe806a86d9c1e55cb6a2b8ab463f607ef40c3526e3a4ba4f73f9449"
+}

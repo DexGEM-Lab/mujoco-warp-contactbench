@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 from sim.manorl.local_contact_repair import (
-    ASSET_COMMIT, CHEY_MANIFEST_SHA, MODEL_FIELDS, dump, edit_targets, evaluate, load_input, sha,
+    ASSET_COMMIT, CHEY_MANIFEST_SHA, MODEL_FIELDS, dump, edit_targets, evaluate, load_catalog, load_input, sha,
 )
 
 
@@ -27,6 +27,7 @@ def parse_args():
     p.add_argument("--hz", type=int, choices=(100, 120), default=120)
     p.add_argument("--rows", nargs="+", help="default: all43, with previous failures first")
     p.add_argument("--recipe", type=Path, help="one source-bound local correction recipe")
+    p.add_argument("--catalog", type=Path, help="complete source-bound per-row recipe selection")
     p.add_argument("--one", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--preflight", action="store_true")
     return p.parse_args()
@@ -59,6 +60,8 @@ def bind_model(a, inp):
 
 
 def one(a):
+    if a.catalog:
+        raise ValueError("--catalog is a queue selection, not a --one input")
     if len(a.rows or []) != 1:
         raise ValueError("--one requires exactly one row")
     inp = load_input(a.baseline, a.rows[0], a.hz)
@@ -100,6 +103,9 @@ def one(a):
 
 def queue(a):
     rows = json.loads((a.baseline / "comparison.json").read_text())["rows"]
+    if a.recipe and a.catalog:
+        raise ValueError("choose either a single recipe or a catalog")
+    recipes = load_catalog(a.catalog, a.baseline, a.hz) if a.catalog else {}
     if a.rows:
         selected = a.rows
     else:
@@ -115,7 +121,13 @@ def queue(a):
     root = Path(__file__).resolve().parents[1]
     code_files = [root / "sim/manorl/local_contact_repair.py", root / "sim/manorl/local_contact_dynamics.py", Path(__file__).resolve()]
     pin = {str(p.relative_to(root)): sha(p) for p in code_files}
+    input_paths = [a.baseline / "comparison.json"]
+    input_paths += ([a.catalog] if a.catalog else []) + ([a.recipe] if a.recipe else [])
+    input_paths += [p for p in recipes.values() if p is not None]
+    input_paths += [a.baseline / name / leaf for name in selected for leaf in ("initial.npz", "manifest.json")]
+    input_pin = {str(p.resolve()): sha(p) for p in input_paths}
     dump(a.output / "code_pin.json", pin)
+    dump(a.output / "recipe_pin.json", input_pin)
     dump(a.output / "job.json", dict(pid=os.getpid(), rows=selected, hz=a.hz,
                                     baseline=str(a.baseline.resolve()), manifest=str(a.manifest.resolve()),
                                     asset_root=str(a.asset_root.resolve()), created=datetime.now(timezone.utc).isoformat()))
@@ -124,11 +136,14 @@ def queue(a):
     for name in selected:
         if {str(p.relative_to(root)): sha(p) for p in code_files} != pin:
             raise RuntimeError("runner code changed during queue; do not combine implementations")
+        if {str(p.resolve()): sha(p) for p in input_paths} != input_pin:
+            raise RuntimeError("recipe selection changed during queue")
         cmd = [sys.executable, str(Path(__file__).resolve()), "--one", "--baseline", str(a.baseline.resolve()),
                "--manifest", str(a.manifest.resolve()), "--asset-root", str(a.asset_root.resolve()),
                "--output", str(a.output.resolve()), "--hz", str(a.hz), "--rows", name]
-        if a.recipe:
-            cmd += ["--recipe", str(a.recipe.resolve())]
+        selected_recipe = recipes.get(name) if a.catalog else a.recipe
+        if selected_recipe is not None:
+            cmd += ["--recipe", str(selected_recipe.resolve())]
         if a.preflight:
             cmd += ["--preflight"]
         dump(a.output / "status.json", dict(state="running", current=name, completed=completed, failures=failures))

@@ -1,12 +1,13 @@
 """Focused contracts for physical-time resampling and local command edits."""
 from types import SimpleNamespace
+import json
 
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
 from sim.manorl.local_contact_repair import (
-    ReplayInput, edit_targets, finger_control, interpolate, resample_hand, smooth_envelope,
+    ReplayInput, edit_targets, finger_control, interpolate, load_catalog, resample_hand, sha, smooth_envelope,
 )
 
 
@@ -96,6 +97,46 @@ def test_finger_correction_survives_absolute_preload_once():
                               1., weight, np.full(22, .7), np.full(22, .1), True)
         np.testing.assert_allclose(ctrl[6:], expected)
         np.testing.assert_allclose(ctrl[:6], .2)
+
+
+def test_recipe_identity_rejects_another_capture():
+    inp = make_input()
+    inp.manifest = {"source": {"uuid": "capture-a"}}
+    inp.provenance = {"baseline_trace_sha256": "trace-a"}
+    names = tuple(f"j{i}" for i in range(28))
+    recipe = dict(schema="manorl.local-contact-repair.v1", row_id="example", phases=[],
+                  source_uuid="capture-b", baseline_trace_sha256="trace-a")
+    with pytest.raises(ValueError, match="UUID"):
+        edit_targets(inp, recipe, names)
+    recipe.update(source_uuid="capture-a", baseline_trace_sha256="trace-b")
+    with pytest.raises(ValueError, match="trace hash"):
+        edit_targets(inp, recipe, names)
+    recipe["baseline_trace_sha256"] = "trace-a"
+    edit_targets(inp, recipe, names)
+
+
+def test_catalog_is_complete_and_clock_bound(tmp_path):
+    baseline = tmp_path / "baseline"
+    baseline.mkdir()
+    (baseline / "comparison.json").write_text(json.dumps({"rows": [{"id": "a"}, {"id": "b"}]}))
+    recipe = tmp_path / "a.json"
+    recipe.write_text("{}")
+    catalog = dict(schema="manorl.local-contact-repair-catalog.v1", hand="cheyingtong",
+                   control_hz=120, physics_hz=480, baseline_comparison_sha256=sha(baseline / "comparison.json"),
+                   rows=[dict(row_id="a", recipe="a.json"), dict(row_id="b", recipe=None)])
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(catalog))
+    assert load_catalog(path, baseline, 120) == {"a": recipe, "b": None}
+    with pytest.raises(ValueError, match="clock"):
+        load_catalog(path, baseline, 100)
+    catalog["rows"].pop()
+    path.write_text(json.dumps(catalog))
+    with pytest.raises(ValueError, match="exactly"):
+        load_catalog(path, baseline, 120)
+    catalog["rows"].append(dict(row_id="a", recipe=None))
+    path.write_text(json.dumps(catalog))
+    with pytest.raises(ValueError, match="duplicate"):
+        load_catalog(path, baseline, 120)
 
 
 def test_finger_offset_must_not_name_wrist():

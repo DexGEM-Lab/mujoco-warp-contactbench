@@ -148,10 +148,14 @@ def smooth_envelope(time: np.ndarray, phase: dict[str, Any]) -> np.ndarray:
 
 
 def edit_targets(inp: ReplayInput, recipe: dict[str, Any], joint_names: tuple[str, ...]):
-    if set(recipe) - {"schema", "row_id", "note", "phases"}:
+    if set(recipe) - {"schema", "row_id", "note", "phases", "source_uuid", "baseline_trace_sha256"}:
         raise ValueError("unrecognized recipe fields")
     if recipe.get("schema") != "manorl.local-contact-repair.v1" or recipe.get("row_id") != inp.row_id:
         raise ValueError("recipe schema or source row mismatch")
+    if "source_uuid" in recipe and recipe["source_uuid"] != inp.manifest["source"]["uuid"]:
+        raise ValueError("recipe source UUID mismatch")
+    if "baseline_trace_sha256" in recipe and recipe["baseline_trace_sha256"] != inp.provenance["baseline_trace_sha256"]:
+        raise ValueError("recipe baseline trace hash mismatch")
     base = inp.arrays["desired"]
     desired = base.copy()
     finger_delta = np.zeros((inp.frames, 22))
@@ -190,6 +194,30 @@ def edit_targets(inp: ReplayInput, recipe: dict[str, Any], joint_names: tuple[st
     if info["wrist_translation_max_mm"] > 15.000001 or info["wrist_rotation_max_deg"] > 10.000001 or info["finger_target_max_deg"] > 10.000001:
         raise ValueError(f"correction exceeds local repair envelope: {info}")
     return desired, finger_delta, info
+
+
+def load_catalog(path: Path, baseline: Path, hz: int) -> dict[str, Path | None]:
+    """Resolve a complete, source-bound selection; never silently skip a row."""
+    catalog = json.loads(path.read_text())
+    if catalog.get("schema") != "manorl.local-contact-repair-catalog.v1":
+        raise ValueError("unsupported repair catalog")
+    if catalog["baseline_comparison_sha256"] != sha(baseline / "comparison.json"):
+        raise ValueError("catalog baseline comparison mismatch")
+    if catalog["control_hz"] != hz or catalog["physics_hz"] != 4 * hz or catalog["hand"] != "cheyingtong":
+        raise ValueError("catalog hand or clock mismatch")
+    expected = {r["id"] for r in json.loads((baseline / "comparison.json").read_text())["rows"]}
+    selected: dict[str, Path | None] = {}
+    for row in catalog["rows"]:
+        name = row["row_id"]
+        if name in selected:
+            raise ValueError("duplicate catalog row")
+        recipe = row["recipe"]
+        selected[name] = None if recipe is None else (path.parent / recipe).resolve()
+        if selected[name] is not None and not selected[name].is_file():
+            raise ValueError(f"catalog recipe missing: {name}")
+    if set(selected) != expected:
+        raise ValueError("catalog must cover exactly the baseline rows")
+    return selected
 
 
 def finger_control(model, current, desired, velocity, envelope, grip, preload, delta, enabled):
