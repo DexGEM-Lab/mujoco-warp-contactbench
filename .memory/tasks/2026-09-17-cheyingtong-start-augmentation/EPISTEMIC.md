@@ -1,0 +1,13 @@
+# Physical initial-position augmentation of42 repaired seeds
+
+Desired state:1000+-scale successful physically executed initial-hand-position variants,120/480Hz Cheyingtong, retaining repaired task behavior. The preliminary set is42 strict passes; B035 is deliberately excluded and remains a separate unresolved full-rotation issue. Existing bundle is immutable.
+
+Fresh evidence (OPS startup;502bbaf9 reports): all42 seed recipes reconstruct delivered desired/finger_target_delta arrays exactly. Historical starts used minimum-jerk residuals before contact and really changed initial hand qpos. Old production additionally mixed orientation/finger/retreat/scene transformations;840 final rows were transformed recordings without individual physics. They cannot supply new success labels.
+
+Core mechanism: initial handXYZ and early wrist targets shift together; a smooth residual vanishes before contact, after which original repaired commands resume exactly. Objects and all other initial coordinates stay fixed. Different physical/controller states remain possible at merge; matching targets is not proof of matching state or success. Fresh contact/task validation is required.
+
+Timing uncertainty: old0.4s guard leaves B043 only~0.09s taper. Shrinking its perturbation to~7mm would weaken desired diversity. Current candidate is0.1s guard, yielding~0.39s taper and predicted10cm residual peak speed~0.48m/s, acceleration~3.8m/s². A035/B043 zero and opposite-position pilot will decide whether this convergence window works. No production radius/acceptance yield claimed yet.
+
+Implementation boundary: augmentation must follow repair reconstruction, outside edit_targets' unchanged-frame0/15mm repair contract. Must update inp.initial['qpos'][:3] as well as desired wristXYZ. Preserve N-1/prestep semantics and finger_target_delta after donor-preload blending. First writer scope is scalar pilot, not premature batch architecture. Next question: do displaced starts reach a usable precontact state under unchanged physical parameters, especially B043's shortest window?
+
+First scalar evidence: A035 zero preserves exact inputs/model/clock and passes all gates. Tiny initial floating-point differences grow after contact, so mixed-unit full-trajectory qpos equality is invalid as a zero acceptance gate. C232 merge has zero wrist position difference and submicrometre object differences; active contact244 matches parent. Six-case completion remains untested: parent owns remaining five. Guard/range is not supported by zero alone. Source profile sunke is the predecessor replay hand, not raw capture operator. See OPS first scalar adjudication.
