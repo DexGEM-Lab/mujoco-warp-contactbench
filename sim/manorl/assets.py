@@ -45,6 +45,8 @@ if EXPLICIT_ASSET_MANIFEST:
 GRASP_MAPPING = TASK_ASSET_ROOT / "object_grasps_simple.yaml"
 VISUAL_GEOM_GROUP = 2
 COLLISION_GEOM_GROUP = 3
+DEFAULT_HEADLIGHT_AMBIENT = (0.4, 0.4, 0.4)
+DEFAULT_HEADLIGHT_DIFFUSE = (0.65, 0.65, 0.65)
 _LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1\n"
 
 
@@ -860,6 +862,18 @@ def _object_body(
         )
 
 
+def _add_scene_headlight(root: ET.Element) -> None:
+    """Set shared render-only lighting without changing physical parameters."""
+
+    visual = ET.SubElement(root, "visual")
+    ET.SubElement(
+        visual,
+        "headlight",
+        ambient=_format(DEFAULT_HEADLIGHT_AMBIENT),
+        diffuse=_format(DEFAULT_HEADLIGHT_DIFFUSE),
+    )
+
+
 def _add_scene_visual_assets(asset: ET.Element) -> None:
     """Add viewer-only sky and floor assets shared by every scene topology."""
 
@@ -912,6 +926,7 @@ def build_scene_xml(
         validate_asset_manifest(object_type, hand_side=scene_side)
     object_root = ET.parse(runtime.urdf_path).getroot()
     root = ET.Element("mujoco", model=f"manorl_{runtime.object_type}_reference")
+    _add_scene_headlight(root)
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(
         root,
@@ -1007,6 +1022,7 @@ def build_unified_scene_xml(
         for scene_side in scene_sides:
             validate_asset_manifest(name, hand_side=scene_side)
     root = ET.Element("mujoco", model="manorl_unified")
+    _add_scene_headlight(root)
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(
         root,

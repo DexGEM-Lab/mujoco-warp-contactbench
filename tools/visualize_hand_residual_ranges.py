@@ -82,8 +82,7 @@ def make_model(operator, output):
     headlight = visual.find("headlight")
     if headlight is None:
         headlight = ET.SubElement(visual, "headlight")
-    headlight.set("ambient", "0.45 0.45 0.45")
-    headlight.set("diffuse", "0.65 0.65 0.65")
+    # Ambient and diffuse inherit the shared ManoRL scene defaults.
     headlight.set("specular", "0.12 0.12 0.12")
     glob = visual.find("global")
     if glob is None:

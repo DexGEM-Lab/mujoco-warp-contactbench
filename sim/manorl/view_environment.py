@@ -30,6 +30,8 @@ from sim.manorl.approach_prefix import (
 )
 from sim.manorl.assets import (
     COLLISION_GEOM_GROUP,
+    DEFAULT_HEADLIGHT_AMBIENT,
+    DEFAULT_HEADLIGHT_DIFFUSE,
     compile_model,
     compile_unified_model,
 )
@@ -507,8 +509,8 @@ def _configure_tiled_visuals(model: object) -> None:
 
     model.vis.rgba.fog[:] = (0.055, 0.085, 0.12, 1.0)
     model.vis.rgba.haze[:] = (0.32, 0.44, 0.56, 1.0)
-    model.vis.headlight.ambient[:] = (0.22, 0.24, 0.28)
-    model.vis.headlight.diffuse[:] = (0.62, 0.66, 0.72)
+    model.vis.headlight.ambient[:] = DEFAULT_HEADLIGHT_AMBIENT
+    model.vis.headlight.diffuse[:] = DEFAULT_HEADLIGHT_DIFFUSE
     model.vis.headlight.specular[:] = (0.28, 0.30, 0.34)
 
 
