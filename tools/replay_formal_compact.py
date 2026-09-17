@@ -221,7 +221,7 @@ def run_group(a):
     e.data=e._forward_fn(e.data)
     outputs=[dict(qpos=[],qvel=[],ctrl=[],solver_object_pos=[],solver_object_quat_xyzw=[],physics_time=[],target_contact_force_N=[])for _ in infos]
     contacts=[[]for _ in infos];first_deviation=[None]*nworld;entry_seen=[False]*nworld;entries=[None]*nworld
-    mesh=assets.object_collision_vertices('trash_bin').reshape(-1,3)if a.group=='01-egg'else None
+    mesh=assets.object_collision_vertices('trash_bin').reshape(-1,3).copy()if a.group=='01-egg'else None
     def capture(frame):
         state=e.producer.materialize_state(e.data);buffers=e.producer.materialize_contact_buffers(e.data,nworld)
         decoded=[[]for _ in infos]
