@@ -91,3 +91,17 @@ def test_compiler_selection_payload_roundtrip(tmp_path):
                                   reference_fps=120,expected_dataset_version=1)
     p=tmp_path/'selection.json';p.write_text(json.dumps(_selection_payload(selection)))
     assert _selection(p).generated_reference
+
+
+def test_trainer_flag_reaches_budget_without_running_training(tmp_path,monkeypatch):
+    import importlib.util,sys
+    path=__import__('pathlib').Path(__file__).parents[2]/'tools/train_manorl_cube1.py'
+    spec=importlib.util.spec_from_file_location('generated_reference_train_cli_test',path)
+    tool=importlib.util.module_from_spec(spec);sys.modules[spec.name]=tool;spec.loader.exec_module(tool)
+    captured=[]
+    monkeypatch.setattr(tool,'run',lambda output,budget:captured.append(budget) or {})
+    assert tool.main(['--output',str(tmp_path/'out'),'--generated-reference','--reference-fps','120',
+                      '--pre-padding','0','--post-padding','0'])==0
+    assert captured[0].generated_reference and captured[0].pre_padding==captured[0].post_padding==0
+    with pytest.raises(SystemExit):
+        tool.main(['--output',str(tmp_path/'invalid'),'--generated-reference'])
