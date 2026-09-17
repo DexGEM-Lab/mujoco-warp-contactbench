@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import json
 import re
 from typing import Any, Mapping
 
@@ -563,6 +564,7 @@ class TrajectorySelection:
     pair_assignment_cycle: int = 0
     drop_uncontrolled_hands: bool = False
     target_object_overrides: str = ""
+    generated_reference: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_path", Path(self.dataset_path))
@@ -608,6 +610,10 @@ class TrajectorySelection:
             or self.pair_assignment_cycle < 0
         ):
             raise ValueError("pair_assignment_cycle must be a non-negative integer")
+        if not isinstance(self.generated_reference, bool):
+            raise ValueError("generated_reference must be boolean")
+        if self.generated_reference and (self.pre_padding or self.post_padding):
+            raise ValueError("generated references require zero padding and full episodes")
         normalize_hand_side(self.hand_side)
         if self.target_object_overrides:
             overrides = parse_trajectory_selector(self.target_object_overrides)
@@ -790,6 +796,12 @@ def _modern_active_object_context(
     return active, names, names.index(active)
 
 
+def _row_gesture(row: dict[str, Any]) -> object:
+    if row.get("index", {}).get("is_generated") is True:
+        return row.get("trajectory_metadata", {}).get("gesture", "")
+    return row.get("index", {}).get("gesture", "")
+
+
 def _safe_row_identity(row: dict[str, Any], row_index: int = 0) -> str:
     """Derive a stable identity for both old source and new capture rows."""
 
@@ -805,7 +817,7 @@ def _safe_row_identity(row: dict[str, Any], row_index: int = 0) -> str:
         if active_context is not None
         else str(index.get("scene", "object")) if isinstance(index, dict) else "object"
     )
-    gesture = str(index.get("gesture", "01")) if isinstance(index, dict) else "01"
+    gesture = str(_row_gesture(row) or "01")
     # Keep environment's object_action_sequence convention even when the new
     # capture uses a descriptive gesture string.
     leading_action = re.match(r"0*(\d+)", gesture)
@@ -820,7 +832,7 @@ def _safe_row_identity(row: dict[str, Any], row_index: int = 0) -> str:
     metadata = row.get("trajectory_metadata", {})
     if isinstance(metadata, dict):
         raw_id = metadata.get("raw_data_info", {}).get("id") if isinstance(metadata.get("raw_data_info"), dict) else None
-        if isinstance(source_path, str) and source_path and isinstance(raw_id, (int, np.integer)):
+        if (source_path or index.get("is_generated") is True) and isinstance(raw_id, (int, np.integer)):
             sequence = int(raw_id)
     return f"{scene}_{gesture_slug}_{sequence:03d}"
 
@@ -855,7 +867,7 @@ def _modern_row_pair_identity(
     if not isinstance(index, dict) or not isinstance(metadata, dict):
         return None
     active_context = _modern_active_object_context(row)
-    action_id = _gesture_action_id(index.get("gesture", ""))
+    action_id = _gesture_action_id(_row_gesture(row))
     if active_context is None or action_id is None:
         return None
     object_type = active_context[0]
@@ -957,6 +969,7 @@ def trajectory_from_lance_row(
     pre_padding: int = 0,
     post_padding: int = 0,
     drop_uncontrolled_hands: bool = False,
+    generated_reference: bool = False,
 ) -> ReferenceTrajectory:
     """Decode a modern Lance row with one, left/right, or both hands.
 
@@ -971,12 +984,49 @@ def trajectory_from_lance_row(
     metadata = row.get("trajectory_metadata")
     if not isinstance(metadata, dict):
         raise ValueError("row lacks trajectory_metadata")
+    if generated_reference:
+        from sim.manorl.lance_v2 import SYNTHETIC_LANCE_CONTRACT
+        if row.get("index", {}).get("is_generated") is not True:
+            raise ValueError("generated reference mode requires a generated row")
+        if pre_padding or post_padding:
+            raise ValueError("generated references require zero padding")
+        provenance = row.get("provenance", {})
+        if (provenance.get("contract") != SYNTHETIC_LANCE_CONTRACT
+                or metadata.get("data_fps") != 120
+                or provenance.get("reference_fps") != 120
+                or provenance.get("control_fps") != 120
+                or provenance.get("physics_fps") != 480
+                or provenance.get("physics_substeps_per_control") != 4):
+            raise ValueError("generated reference requires the canonical120/480Hz contract")
+        extra = json.loads(provenance.get("checkpoint_metadata_json", "{}"))
+        if extra.get("frame_zero_integrated") is not False:
+            raise ValueError("generated reference must explicitly record prestep frame0")
+        slots, hands = metadata.get("hand_slots"), row.get("hands")
+        if slots != ["right", "left"] or not isinstance(hands, list) or len(hands) != 2:
+            raise ValueError("generated row must retain canonical right/left hand slots")
+        active_names = metadata.get("hand_names", [])
+        active_hands = []
+        for side in active_names:
+            item = hands[slots.index(side)]
+            if item.get("hand_name") != side:
+                raise ValueError("generated hand slot disagrees with active hand metadata")
+            active_hands.append(item)
+        for side, item in zip(slots, hands):
+            if side not in active_names and (item.get("hand_name") is not None or item.get("urdf_dof")):
+                raise ValueError("inactive generated hand slot must be empty")
+        row = dict(row, hands=active_hands)
     sides = detect_hand_sides(row)
     selected = resolve_hand_selection(sides, hand_side)
     hand_rows = _hand_rows_by_side(row)
     if drop_uncontrolled_hands:
         sides = selected
     from sim.manorl import assets
+    if generated_reference:
+        if not assets.EXPLICIT_ASSET_MANIFEST:
+            raise ValueError("generated reference requires an explicit physical hand manifest")
+        recorded_profile = extra.get("physical_hand_profile", {})
+        if recorded_profile.get("manifest_sha256") != assets.asset_provenance()["asset_manifest_sha256"]:
+            raise ValueError("generated reference physical asset hash mismatch")
     if assets.EXPLICIT_ASSET_MANIFEST:
         if row.get("index", {}).get("operator") != assets.MANO_OPERATOR:
             raise ValueError("capture operator differs from explicit hand asset profile")
@@ -996,6 +1046,8 @@ def trajectory_from_lance_row(
         raise ValueError(f"timestamp shape {timestamps.shape} does not match total_frames={source_count}")
     if np.any(np.diff(timestamps) <= 0):
         raise ValueError("source timestamps are not strictly increasing")
+    if generated_reference and not np.allclose(timestamps, np.arange(source_count)/120, atol=1e-8, rtol=0):
+        raise ValueError("generated reference timestamps must cover its120Hz grid")
 
     active_context = _modern_active_object_context(row)
     if active_context is None:
@@ -1056,6 +1108,8 @@ def trajectory_from_lance_row(
     # stationary edge hold so every selected pair receives the requested
     # policy-duration padding.
     requested_stop = movement_end + 1 + post_padding
+    if generated_reference:
+        requested_start, requested_stop = 0, source_count
     start = max(0, requested_start)
     stop = min(source_count, requested_stop)
     left_edge_hold = start - requested_start
@@ -1080,14 +1134,15 @@ def trajectory_from_lance_row(
         if q_all.shape[1] != dof_dim or not np.all(np.isfinite(q_all)):
             raise ValueError("all hand references must share one finite DOF width")
         values = q_all[start:stop].copy()
-        values[:, 3:6] = np.unwrap(values[:, 3:6], axis=0, period=2.0 * np.pi)
+        if not generated_reference:
+            values[:, 3:6] = np.unwrap(values[:, 3:6], axis=0, period=2.0 * np.pi)
         q_by_side[side] = _immutable(edge_hold(values))
     assert dof_dim is not None
     object_pos_raw = edge_hold(object_pos_all[start:stop].copy())
     object_quat_xyzw = edge_hold(object_quat_all[start:stop].copy())
     scene_initial_pos_raw = np.stack([values[start] for values in scene_pos_all])
     scene_initial_quat = np.stack([values[start] for values in scene_quat_all])
-    z_shift = _initial_scene_support_shift(
+    z_shift = 0.0 if generated_reference else _initial_scene_support_shift(
         scene_initial_pos_raw,
         scene_initial_quat,
         object_names,
@@ -1153,6 +1208,8 @@ def trajectory_from_lance_row(
         selected_hand_sides=selected,
         movement_start_step=movement_start_step,
         movement_end_step=movement_end_step,
+        reference_fps=int(metadata["data_fps"]) if generated_reference else None,
+        control_fps=int(metadata["data_fps"]) if generated_reference else None,
     )
 
 
@@ -1593,7 +1650,7 @@ def _row_with_target_override(row: dict[str, Any], selection: TrajectorySelectio
     if not selection.target_object_overrides:
         return row
     index = row.get("index", {})
-    action_id = _gesture_action_id(index.get("gesture", ""))
+    action_id = _gesture_action_id(_row_gesture(row))
     targets = {p.action_id: p.object_type for p in parse_trajectory_selector(selection.target_object_overrides)}
     if action_id not in targets:
         return row
@@ -1624,7 +1681,10 @@ def _candidate_from_metadata_row(
     # The accepted s02 source index predates the optional ``is_generated``
     # field.  Missing means a source row here; an explicit true value is the
     # only generated-row marker accepted by the contract.
-    if index.get("is_generated", False) is not False:
+    if selection.generated_reference:
+        if index.get("is_generated") is not True or metadata.get("data_fps") != 120:
+            return None
+    elif index.get("is_generated", False) is not False:
         return None
     source_path = index.get("source_path")
     modern_identity = _modern_row_pair_identity(row, row_index=row_index)
@@ -1645,7 +1705,7 @@ def _candidate_from_metadata_row(
         pair = ObjectActionPair(object_type, action_raw)
     except ValueError:
         return None
-    index_action = _gesture_action_id(index.get("gesture", ""))
+    index_action = _gesture_action_id(_row_gesture(row))
     if index_action != pair.action_id:
         return None
     if source_path and str(index.get("scene", "")) != object_type:
@@ -1776,7 +1836,12 @@ def _selected_trajectory_from_row(
             pre_padding=selection.pre_padding,
             post_padding=selection.post_padding,
             drop_uncontrolled_hands=selection.drop_uncontrolled_hands,
+            generated_reference=selection.generated_reference,
         )
+        if selection.generated_reference:
+            if selection.reference_fps not in (None, trajectory.reference_fps):
+                raise ValueError("generated references must retain their saved clock")
+            return trajectory
         return (
             trajectory
             if selection.reference_fps is None
@@ -1925,7 +1990,7 @@ def _decode_valid_candidates(
             break
         rows = dataset.take(
             [candidate.row_index for _, candidate in requests],
-            columns=list(LANCE_COLUMNS),
+            columns=list(LANCE_COLUMNS) + (["provenance"] if selection.generated_reference else []),
         ).to_pylist()
         if len(rows) != len(requests):
             raise ValueError("Lance did not return every candidate trajectory row")

@@ -352,6 +352,7 @@ def write_trajectory_package(
             },
             "selection": {
                 "catalog_selector": "all",
+                "generated_reference": selection.generated_reference,
                 "hand_side": selection.hand_side,
                 "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
                 "target_object_overrides": selection.target_object_overrides,
@@ -602,6 +603,8 @@ def _validate_catalog_selection(catalog: TrajectoryCatalog, selection: Trajector
     dataset = catalog.manifest.get("dataset")
     if not isinstance(manifest_selection, Mapping) or not isinstance(dataset, Mapping):
         raise TrajectoryPackageError("trajectory package selection contract is missing")
+    if bool(manifest_selection.get("generated_reference", False)) != selection.generated_reference:
+        raise TrajectoryPackageError("trajectory package generated_reference mismatch")
     expected = {
         "hand_side": selection.hand_side,
         "pre_padding": selection.pre_padding,

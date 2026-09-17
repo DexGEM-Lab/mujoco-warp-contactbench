@@ -218,6 +218,7 @@ class TrainingBudget:
     hand_side: str = "auto"
     target_object_overrides: str = ""
     drop_uncontrolled_hands: bool = False
+    generated_reference: bool = False
     expected_contact_mode: str = "five_fingertips"
     pre_padding: int = DEFAULT_PRE_PADDING
     post_padding: int = DEFAULT_POST_PADDING
@@ -1842,6 +1843,7 @@ def _trajectory_selection_metadata(
         "reference_resampling": REFERENCE_RESAMPLING_ID,
         "pair_assignment_cycle": selection.pair_assignment_cycle,
         "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
+        "generated_reference": selection.generated_reference,
         "target_object_overrides": selection.target_object_overrides,
         "requested_hand_side": selection.hand_side,
         "resolved_hand_side": (
@@ -2149,6 +2151,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         expected_dataset_version=budget.dataset_version,
         hand_side=budget.hand_side,
         drop_uncontrolled_hands=budget.drop_uncontrolled_hands,
+        generated_reference=budget.generated_reference,
         target_object_overrides=budget.target_object_overrides,
         reference_fps=budget.reference_fps,
         pair_assignment_cycle=budget.pair_assignment_cycle,
@@ -2631,6 +2634,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="explicit single target per action for compound movement annotations")
     parser.add_argument("--drop-uncontrolled-hands", action="store_true",
                         help="omit unselected hand references and physical models")
+    parser.add_argument("--generated-reference", action="store_true",
+                        help="use canonical120Hz generated full episodes; requires --pre-padding 0 --post-padding 0")
     parser.add_argument("--expected-contact-mode", choices=("source_mapping", "five_fingertips"),
                         default="five_fingertips", help="expected hand contact sites for observation/reward and finger masks")
     parser.add_argument("--wall-clock-seconds", type=float)
@@ -2805,8 +2810,11 @@ def main(argv: list[str] | None = None) -> int:
             expected_dataset_version=args.dataset_version,
             hand_side=args.hand_side,
             drop_uncontrolled_hands=args.drop_uncontrolled_hands,
+            generated_reference=args.generated_reference,
             target_object_overrides=args.target_object_overrides,
             reference_fps=args.reference_fps,
+            pre_padding=args.pre_padding,
+            post_padding=args.post_padding,
             pair_assignment_cycle=args.pair_assignment_cycle,
         )
     except ValueError as exc:
@@ -2929,6 +2937,7 @@ def main(argv: list[str] | None = None) -> int:
             reference_fps=args.reference_fps,
             hand_side=args.hand_side,
             drop_uncontrolled_hands=args.drop_uncontrolled_hands,
+            generated_reference=args.generated_reference,
             target_object_overrides=args.target_object_overrides,
             expected_contact_mode=args.expected_contact_mode,
             pre_padding=args.pre_padding,
