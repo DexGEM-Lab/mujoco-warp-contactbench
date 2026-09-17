@@ -29,6 +29,7 @@ def _selection(path: Path) -> TrajectorySelection:
         post_padding=int(values["post_padding"]),
         hand_side=str(values["hand_side"]),
         drop_uncontrolled_hands=bool(values.get("drop_uncontrolled_hands", False)),
+        generated_reference=bool(values.get("generated_reference", False)),
         reference_fps=int(values["reference_fps"]),
         control_fps=int(values["control_fps"]),
         pair_assignment_cycle=0,
@@ -89,7 +90,8 @@ def _decode(
         raise ValueError("decode request must be a non-empty candidate list")
     dataset = _dataset(selection)
     rows = dataset.take(
-        [int(item["row_index"]) for item in requests], columns=list(LANCE_COLUMNS)
+        [int(item["row_index"]) for item in requests],
+        columns=list(LANCE_COLUMNS) + (["provenance"] if selection.generated_reference else [])
     ).to_pylist()
     if len(rows) != len(requests):
         raise RuntimeError("Lance did not return every requested trajectory row")
