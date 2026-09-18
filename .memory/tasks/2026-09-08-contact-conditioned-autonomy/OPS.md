@@ -376,3 +376,14 @@ The all-action package is not yet compiled. The available source Lance on Server
 The running action matrix is healthy: Exp1 GPU2 `rwg5000cube02c679v1` reached update398/5000 (52,166,656 transitions, valid1); Exp2 GPU3 was stopped by strict cross-package warmstart provenance, then relaunched fresh-scratch as `rwg10000allactions6bbscratchv1` and reached update44/10000 (5,767,168 transitions, valid1). That stop was a provenance rejection, not CUDA/physics failure. The preserved earlier GPU3 run is evidence of the intended fail-closed behavior.
 
 cube1 compilation finished with six actions `01,02,03,04,09,10`: 299 trajectories (49/50/50/50/50/50), one candidate rejected, package digest `8ad3c993423cb7fca8f2ceddf5209e2dcab03a9dc6f8ad0ab2a291d0622e27ec`. The case runtime is now generalized to infer one shared object type from the trajectory package instead of hard-coding cube2. `identity_split` retains the historical cube2 split when those seed witnesses exist and otherwise uses the deterministic first-three-identity anchor for provenance. Focused 109 tests pass. GPU0 remains free for cube1; fresh Adam/RNG (no cross-object warmstart) is the intended launch mode.
+
+## 2026-09-18T16:35:00+08:00 — v5 point-cloud observation implemented
+
+The v5 point-cloud state spec is now implemented in the case branch alongside v4 (v4 untouched; running jobs use their own snapshots). New pieces:
+
+- `sim/manorl/autonomy_contracts.py`: v5 ids `manorl.autonomy.observation.v5.pointcloud` / `manorl.autonomy.ppo.v5`, raw 1342 / encoded 510, exact slice tables.
+- `sim/manorl/autonomy_v4.py`: cache compiles `hand_cloud_template` (16 regions × 16 points, body-local) and `hand_cloud_reference` (T×256×3, object-local); both are hashed into the cache digest. `build_raw_observation_v5` assembles actual(119)+reference(109)+future-numeric(12)+contact-intent(80)+object cloud(192)+actual hand cloud in object frame(768)+action(50)+object geometry(12) = 1342. Contact intent = confidence(16)+valid(16)+per-region paired force(48); slip velocity removed by decision.
+- `sim/manorl/autonomy_training.py`: `AutonomyActorCriticV5` with one PointNet for the object cloud (64 points) and one for the hand cloud (256 points), encoded 510; separate critic supported.
+- `sim/manorl/model.py`: `PointNetEncoder` accepts a configurable point count (default 64, backward compatible).
+
+Focused suite: 114 tests pass (v4 regressions plus new v5 ABI/builder/model/bank tests). The runtime `BatchedAutonomyRuntime` still emits v4 observations; a training-side v5 selection flag is the remaining integration step, not yet wired. Reward/teacher use cache geometry directly and are independent of the observation change.

@@ -28,6 +28,12 @@ POLICY_SAMPLING_CONTRACT: Final[dict[str, str]] = {
 ACTION_DIM: Final = 28
 RAW_OBSERVATION_DIM: Final = 957
 ENCODED_OBSERVATION_DIM: Final = 829
+# v5 point-cloud observation ABI: hand and object surface clouds carry the
+# geometry correspondence; only intent gating and load transfer stay numeric.
+OBSERVATION_CONTRACT_ID_V5: Final = "manorl.autonomy.observation.v5.pointcloud"
+CHECKPOINT_FORMAT_V5: Final = "manorl.autonomy.ppo.v5"
+RAW_OBSERVATION_DIM_V5: Final = 1342
+ENCODED_OBSERVATION_DIM_V5: Final = 510
 # Environments and PPO memory own raw 957. The registered Torch PointNet in
 # the actor converts only the cloud to the 829 model feature internally.
 OBSERVATION_DIM: Final = RAW_OBSERVATION_DIM
@@ -42,6 +48,18 @@ ENCODED_OBSERVATION_FIELDS: Final[tuple[tuple[str, int], ...]] = (
     ("autonomous_future", 123), ("autonomous_geometry", 352),
     ("object_pointnet", 64), ("action_types", 50), ("object_geometry", 12),
 )
+RAW_OBSERVATION_FIELDS_V5: Final[tuple[tuple[str, int], ...]] = (
+    ("autonomous_actual", 119), ("autonomous_reference", 109),
+    ("autonomous_future", 12), ("contact_intent", 80),
+    ("object_point_cloud_raw", 192), ("hand_point_cloud_raw", 768),
+    ("action_types", 50), ("object_geometry", 12),
+)
+ENCODED_OBSERVATION_FIELDS_V5: Final[tuple[tuple[str, int], ...]] = (
+    ("autonomous_actual", 119), ("autonomous_reference", 109),
+    ("autonomous_future", 12), ("contact_intent", 80),
+    ("object_pointnet", 64), ("hand_pointnet", 64),
+    ("action_types", 50), ("object_geometry", 12),
+)
 
 def _slices(fields: tuple[tuple[str, int], ...]) -> dict[str, slice]:
     at = 0; result = {}
@@ -52,6 +70,8 @@ def _slices(fields: tuple[tuple[str, int], ...]) -> dict[str, slice]:
 def raw_observation_slices() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS)
 def encoded_observation_slices() -> dict[str, slice]: return _slices(ENCODED_OBSERVATION_FIELDS)
 def observation_slices() -> dict[str, slice]: return raw_observation_slices()
+def raw_observation_slices_v5() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V5)
+def encoded_observation_slices_v5() -> dict[str, slice]: return _slices(ENCODED_OBSERVATION_FIELDS_V5)
 
 @dataclass(frozen=True)
 class AutonomousActionContract:

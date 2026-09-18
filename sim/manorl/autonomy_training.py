@@ -16,7 +16,7 @@ from skrl.models.torch.deterministic import DeterministicMixin
 from skrl.memories.torch import RandomMemory
 from sim.manorl.rl_games_ppo import RlGamesPPO
 from skrl.agents.torch.ppo.ppo import PPO_CFG
-from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM
+from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM, RAW_OBSERVATION_DIM_V5, ENCODED_OBSERVATION_DIM_V5
 from sim.manorl.model import PointNetEncoder
 from sim.manorl.trajectory_package import TrajectoryCatalog
 from sim.manorl.autonomy_v4 import _gather, reference_lengths
@@ -25,6 +25,7 @@ RESERVED_TRAIN_IDENTITIES=("cube2_02_2833","cube2_02_2835","cube2_02_2837")
 SPLIT_CONTRACT_ID="manorl.autonomy.identity_split.v1"
 TRAINING_CONTRACT_ID="manorl.autonomy.training.v4.disabled"
 ACTOR_CRITIC_ARCHITECTURE_ID="manorl.autonomy.actor_critic.v4.pointnet"
+ACTOR_CRITIC_ARCHITECTURE_ID_V5="manorl.autonomy.actor_critic.v5.pointcloud"
 
 TEACHER_FLEX_JOINTS = (7, 9, 10, 13, 14, 15, 17, 18, 19, 21, 22, 23, 25, 26, 27)
 TEACHER_SQUEEZE_RAD = 0.2
@@ -191,6 +192,44 @@ class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
         cloud=x[:,703:895].reshape(-1,64,3); embedding=self.pointnet(cloud)
         return torch.cat((x[:,:703],embedding,x[:,895:]),dim=-1)
     def checkpoint_architecture(self): return actor_critic_architecture(separate_critic=self.separate_critic)
+    def act(self,inputs,role=""):
+        if role=="policy": return GaussianMixin.act(self,inputs,role=role)
+        if role=="value": return DeterministicMixin.act(self,inputs,role=role)
+        raise ValueError("role must be policy or value")
+    def compute(self,inputs,role=""):
+        features=self._encoded(inputs["observations"])
+        if role=="policy":
+            mean=self.mean(self.net(features)); return mean,{"log_std":self.log_std.expand_as(mean)}
+        if role=="value": return self.value((self.value_net or self.net)(features)),{}
+        raise ValueError("role must be policy or value")
+
+def actor_critic_architecture_v5(*, separate_critic: bool = False) -> dict[str, Any]:
+    return {"id": ACTOR_CRITIC_ARCHITECTURE_ID_V5, "raw_observation_dim": RAW_OBSERVATION_DIM_V5,
+            "encoded_feature_dim": ENCODED_OBSERVATION_DIM_V5,
+            "pointnet": "object 3-64-128-256-max-256-64; hand 3-64-128-256-max-256-64",
+            "value_trunk": "separate" if separate_critic else "shared", "action_dim": ACTION_DIM}
+
+
+class AutonomyActorCriticV5(GaussianMixin,DeterministicMixin,Model):
+    """v5 point-cloud policy: object and hand clouds each get their own PointNet."""
+    def __init__(self,observation_space,action_space,device="cpu",*,separate_critic=False,clip_actions=False):
+        Model.__init__(self,observation_space=observation_space,state_space=None,action_space=action_space,device=device)
+        self.observation_dim=int(self.num_observations); self.action_dim=int(self.num_actions)
+        if (self.observation_dim,self.action_dim)!=(RAW_OBSERVATION_DIM_V5,ACTION_DIM): raise ValueError("v5 actor requires raw 1342 and 28 actions")
+        GaussianMixin.__init__(self,clip_actions=clip_actions,clip_mean_actions=False,clip_log_std=True,min_log_std=-5.,max_log_std=2.,reduction="sum",role="policy")
+        DeterministicMixin.__init__(self,clip_actions=False,role="value")
+        self.object_pointnet=PointNetEncoder(device)
+        self.hand_pointnet=PointNetEncoder(device,points=256)
+        self.net=nn.Sequential(nn.Linear(ENCODED_OBSERVATION_DIM_V5,128),nn.Tanh(),nn.Linear(128,128),nn.Tanh()).to(device)
+        self.value_net=nn.Sequential(nn.Linear(ENCODED_OBSERVATION_DIM_V5,128),nn.Tanh(),nn.Linear(128,128),nn.Tanh()).to(device) if separate_critic else None
+        self.separate_critic=bool(separate_critic)
+        self.mean=nn.Linear(128,ACTION_DIM).to(device); self.value=nn.Linear(128,1).to(device); self.log_std=nn.Parameter(torch.full((ACTION_DIM,),-1.,device=device))
+    def _encoded(self,x):
+        if x.ndim!=2 or x.shape[1]!=RAW_OBSERVATION_DIM_V5: raise ValueError("v5 model requires (batch,1342) raw observations")
+        object_cloud=x[:,320:512].reshape(-1,64,3); hand_cloud=x[:,512:1280].reshape(-1,256,3)
+        object_embedding=self.object_pointnet(object_cloud); hand_embedding=self.hand_pointnet(hand_cloud)
+        return torch.cat((x[:,:320],object_embedding,hand_embedding,x[:,1280:]),dim=-1)
+    def checkpoint_architecture(self): return actor_critic_architecture_v5(separate_critic=self.separate_critic)
     def act(self,inputs,role=""):
         if role=="policy": return GaussianMixin.act(self,inputs,role=role)
         if role=="value": return DeterministicMixin.act(self,inputs,role=role)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any, NamedTuple
 import numpy as np
-from sim.manorl.autonomy_contracts import RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM, raw_observation_slices, encoded_observation_slices
+from sim.manorl.autonomy_contracts import RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM, raw_observation_slices, encoded_observation_slices, RAW_OBSERVATION_DIM_V5
 
 REGIONS = 16
 POINTS = 64
@@ -81,6 +81,11 @@ class ReferenceCacheV4:
     points_object_local: np.ndarray; object_geometry: np.ndarray; action_id: int
     support_shift: np.ndarray; content_hash: str
     object_radius: float = REWARD_MOTION_RADIUS
+    # v5 point-cloud state: static hand surface template (16 regions x 16 points,
+    # body-local per region) and the per-frame reference hand cloud expressed in
+    # the object's local frame. These feed the observation encoder only.
+    hand_cloud_template: np.ndarray | None = None
+    hand_cloud_reference: np.ndarray | None = None
     def __post_init__(self):
         t = len(self.q_feasible)
         expected = {"q_feasible":(t,28), "q_raw":(t,28), "q_lower":(28,), "q_upper":(28,), "object_origin":(t,3), "object_quat_xyzw":(t,4), "palm_origin":(t,3), "palm_quat_xyzw":(t,4), "object_v_com":(t,3), "object_w":(t,3), "palm_v":(t,3), "palm_w":(t,3), "region_anchor_hand":(t,16,3), "region_anchor_object":(t,16,3), "delta_ref":(t,16,3), "signed_gap":(t,16), "proximity":(t,16), "confidence":(t,16), "valid":(t,16), "reference_bottom":(t,), "points_object_local":(64,3), "object_geometry":(12,), "support_shift":(3,)}
@@ -90,6 +95,12 @@ class ReferenceCacheV4:
         if not np.isfinite(self.table_height) or not np.isfinite(self.control_timestep) or self.control_timestep <= 0 or not np.isfinite(self.duration) or self.duration <= 0: raise ValueError("cache table/clock/duration must be finite")
         if not np.isfinite(self.object_radius) or self.object_radius <= 0: raise ValueError("cache object radius must be positive finite")
         if not 1 <= self.action_id <= 50: raise ValueError("action_id must be in [1,50]")
+        if self.hand_cloud_template is not None:
+            template=np.asarray(self.hand_cloud_template)
+            if template.shape != (256,3) or not np.all(np.isfinite(template)): raise ValueError("v5 hand cloud template must be finite (256,3)")
+        if self.hand_cloud_reference is not None:
+            cloud=np.asarray(self.hand_cloud_reference)
+            if cloud.shape != (len(self.q_feasible),256,3) or not np.all(np.isfinite(cloud)): raise ValueError("v5 hand cloud reference must be finite (T,256,3)")
 
 # Time-varying arrays are padded by their final row; gathers still clamp to
 # each reference's own length. Shared geometry is validated, while action_id
@@ -98,7 +109,7 @@ REFERENCE_TIME_FIELDS = (
     "q_feasible", "q_raw", "object_origin", "object_quat_xyzw", "palm_origin",
     "palm_quat_xyzw", "object_v_com", "object_w", "palm_v", "palm_w",
     "region_anchor_hand", "region_anchor_object", "delta_ref", "signed_gap",
-    "proximity", "confidence", "valid", "reference_bottom",
+    "proximity", "confidence", "valid", "reference_bottom", "hand_cloud_reference",
 )
 
 class ReferenceBankV4:
@@ -110,16 +121,21 @@ class ReferenceBankV4:
         if not caches:
             raise ValueError("reference bank must not be empty")
         shared = ("object_com_local", "object_radius", "table_height", "control_timestep",
-                  "points_object_local", "object_geometry")
+                  "points_object_local", "object_geometry", "hand_cloud_template")
         for name in shared + ("q_lower", "q_upper"):
-            if any(not np.array_equal(getattr(caches[0], name), getattr(c, name)) for c in caches[1:]):
+            if any(not np.array_equal(np.asarray(getattr(caches[0], name)) if getattr(caches[0], name) is not None else getattr(caches[0], name), np.asarray(getattr(c, name)) if getattr(c, name) is not None else getattr(c, name)) for c in caches[1:]):
                 raise ValueError(f"reference bank requires shared {name}")
+        if any(c.hand_cloud_reference is not None for c in caches) and not all(c.hand_cloud_reference is not None for c in caches):
+            raise ValueError("reference bank requires hand cloud present on every reference or none")
         put = lambda x: jax.device_put(j.asarray(x), device)
         lengths = np.asarray([len(c.q_feasible) for c in caches], np.int32)
         self.lengths = put(lengths)
         self.max_length = int(lengths.max())
         self.num_references = len(caches)
         for name in REFERENCE_TIME_FIELDS:
+            if all(getattr(c, name) is None for c in caches):
+                setattr(self, name, None)
+                continue
             padded = [np.concatenate((getattr(c, name), np.repeat(getattr(c, name)[-1:], self.max_length-n, axis=0))) for c,n in zip(caches,lengths)]
             setattr(self, name, put(np.stack(padded)))
         for name in ("q_lower", "q_upper", "duration", "support_shift"):
@@ -286,6 +302,9 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     hand_origin=xpos[:,body]; hand_q=xquat[:,body]; object_origin=xpos[:,producer.object_body_id]; object_q=xquat[:,producer.object_body_id]
     hand_world=hand_origin[:,:,None]+_np_quat_rotate(hand_q[:,:,None],hand_samples[None])
     object_local=np.asarray(quat_unrotate(j.asarray(object_q[:,None,None]),j.asarray(hand_world-object_origin[:,None,None])))
+    # v5: 16 points per region (every 8th of the 128 samples), object-local frame.
+    hand_cloud_template=hand_samples[:, ::8, :].reshape(256,3)
+    hand_cloud_reference=object_local[:, :, ::8, :].reshape(T,256,3)
     points=object_local.reshape(-1,3); closest,signed,_=signed_closest_convex_mesh(points,object_triangles); closest=np.asarray(closest).reshape(T,16,128,3); signed=np.asarray(signed).reshape(T,16,128)
     chosen=np.argmin(np.abs(signed),axis=-1); rows=np.arange(T)[:,None]; region=np.arange(16)[None,:]
     ah=hand_samples[None].repeat(T,axis=0)[rows,region,chosen]
@@ -301,9 +320,9 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     com_local=np.asarray(model.body_ipos[producer.object_body_id]); object_radius=float(np.max(np.linalg.norm(object_triangles.reshape(-1,3)-com_local,axis=-1))); com=object_origin+_np_quat_rotate(object_q,np.broadcast_to(com_local,(T,3))); ov=_filtered_derivative(com,dt); ow=_filtered_angular_velocity(object_q,dt); palm=hand_origin[:,0]; pv=_filtered_derivative(palm,dt); pw=_filtered_angular_velocity(hand_q[:,0],dt)
     object_bottom=np.min(object_origin[:,None,2]+_np_quat_rotate(object_q[:,None],object_triangles.reshape(-1,3))[:,:,2],axis=1)
     dimensions=np.ptp(object_triangles.reshape(-1,3),axis=0); geometry=geometry_encoding(object_name=object_type,geometry_type="box",dimensions=dimensions)
-    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration,object_radius]),object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]))
+    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration,object_radius]),object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]),hand_cloud_template,hand_cloud_reference)
     digest=cache_hash(*[np.asarray(x) for x in values],kernel_version="warp-mesh-cache-v4.2-motion-gated")
-    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest,object_radius)
+    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest,object_radius,hand_cloud_template,hand_cloud_reference)
     for name in result.__dataclass_fields__:
         value=getattr(result,name)
         if isinstance(value,np.ndarray): value.setflags(write=False)
@@ -490,6 +509,55 @@ def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: Refer
         action=j.eye(50,dtype=physical.q_raw.dtype)[cache.action_id-1][None].repeat(b,axis=0)
     raw=j.concatenate((actual,ref,j.concatenate(futures,axis=-1),geom,C(cache.points_object_local).reshape(1,192).repeat(b,axis=0)/RELATIVE_POSITION,action,C(cache.object_geometry)[None].repeat(b,axis=0)),axis=-1)
     if raw.shape[-1] != RAW_OBSERVATION_DIM: raise AssertionError(f"v4 raw ABI {raw.shape[-1]} != 957")
+    return raw
+
+HAND_CLOUD_POINTS = 256
+
+def hand_cloud_actual(physical: V4Physical, template):
+    """Actual hand surface cloud in the object's local frame from the live state."""
+    import jax.numpy as j
+    template=j.asarray(template).reshape(16,16,3)
+    world=physical.region_origin[:,:,None]+quat_rotate(physical.region_quat_xyzw[:,:,None],template[None])
+    cloud=quat_unrotate(physical.object_quat_xyzw[:,None,None],world-physical.object_origin[:,None,None])
+    return cloud.reshape(physical.q_raw.shape[0],HAND_CLOUD_POINTS*3)
+
+def build_raw_observation_v5(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
+    """v5 point-cloud observation: geometry correspondence via hand/object clouds.
+
+    Hand-crafted anchor correspondence features are replaced by the hand cloud;
+    only reference intent gating (confidence/valid) and the measured paired
+    hand->object force remain as explicit numbers. Reward and teacher gating are
+    computed from the cache directly and do not depend on this observation.
+    """
+    import jax.numpy as j
+    b=physical.q_raw.shape[0]; i=_gather(cache,index,env_ref=env_ref); t=j.maximum(reference_lengths(cache,env_ref)-1,1)
+    C=lambda x:j.asarray(x)
+    lower=C(cache.q_lower) if env_ref is None else C(cache.q_lower)[env_ref]
+    upper=C(cache.q_upper) if env_ref is None else C(cache.q_upper)[env_ref]
+    oq=C(cache.object_quat_xyzw)[i]; op=C(cache.object_origin)[i]; pq=C(cache.palm_quat_xyzw)[i]; pp=C(cache.palm_origin)[i]
+    rq=C(cache.q_feasible)[i]; rq_normalized=j.concatenate((rq[:,:3]/WORLD_POSITION,rq[:,3:6]/j.pi,2*(rq[:,6:]-lower[...,6:])/(upper[...,6:]-lower[...,6:])-1),axis=-1); av=quat_unrotate(physical.object_quat_xyzw,physical.object_v_com)/LINEAR_VELOCITY; aw=quat_unrotate(physical.object_quat_xyzw,physical.object_w)/ANGULAR_VELOCITY
+    palm_rel=quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-physical.object_origin)
+    palm_relq=quat_mul(quat_conj(physical.object_quat_xyzw),physical.palm_quat_xyzw)
+    ref_rel=quat_unrotate(oq,pp-op); ref_relq=quat_mul(quat_conj(oq),pq)
+    ref_com_v=C(cache.object_v_com)[i]; ref_w=C(cache.object_w)[i]
+    ref_obj6=rot6(oq); ref_palm6=rot6(pq)
+    actual = j.concatenate((physical.q_normalized, physical.qdot, physical.command_error, physical.object_origin/WORLD_POSITION, rot6(physical.object_quat_xyzw), av,aw,palm_rel/RELATIVE_POSITION,rot6(palm_relq),quat_unrotate(physical.object_quat_xyzw,physical.palm_w)/ANGULAR_VELOCITY,(physical.object_bottom-cache.table_height)[:,None]/RELATIVE_POSITION,(C(cache.reference_bottom)[i]-cache.table_height)[:,None]/RELATIVE_POSITION,quat_unrotate(physical.object_quat_xyzw,j.broadcast_to(j.asarray([0.,0.,-1.]),(b,3))),j.tanh(quat_unrotate(physical.object_quat_xyzw,contact.object_all_force)/FORCE_SCALE)),axis=-1)
+    ref = j.concatenate((rq_normalized[:,6:],ref_rel/RELATIVE_POSITION,rot6(ref_relq),quat_unrotate(oq,C(cache.palm_v)[i])/LINEAR_VELOCITY,quat_unrotate(oq,C(cache.palm_w)[i])/ANGULAR_VELOCITY,op/WORLD_POSITION,ref_obj6,ref_com_v/LINEAR_VELOCITY,ref_w/ANGULAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-pp)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(pq),physical.palm_quat_xyzw)),(physical.q_raw[:,6:]-rq[:,6:])/JOINT_ERROR,quat_unrotate(physical.object_quat_xyzw,physical.object_origin-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),physical.object_quat_xyzw)),quat_unrotate(physical.object_quat_xyzw,physical.object_v_com-ref_com_v)/LINEAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.object_w-ref_w)/ANGULAR_VELOCITY,(palm_rel-ref_rel)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),palm_relq)),j.stack((j.asarray(index)/t,1-j.asarray(index)/t),axis=-1)),axis=-1)
+    futures=[]
+    for horizon in (6,12,24):
+        fi=_gather(cache,index,horizon,env_ref); fop=C(cache.object_origin)[fi]
+        valid=((j.asarray(index)+horizon)*cache.control_timestep <= reference_duration(cache,env_ref)+1e-6).astype(j.float32)
+        futures.append(j.concatenate((quat_unrotate(oq,fop-op)/RELATIVE_POSITION,valid[:,None]),axis=-1))
+    intent=j.concatenate((C(cache.confidence)[i],C(cache.valid)[i]),axis=-1)
+    force=j.tanh(quat_unrotate(physical.object_quat_xyzw[:,None],contact.paired_force_on_object)/FORCE_SCALE).reshape(b,48)
+    contact_intent=j.concatenate((intent,force),axis=-1)
+    hand=hand_cloud_actual(physical,C(cache.hand_cloud_template))/RELATIVE_POSITION
+    if isinstance(cache, ReferenceBankV4):
+        action=j.eye(50,dtype=physical.q_raw.dtype)[j.asarray(cache.action_id)[env_ref]-1]
+    else:
+        action=j.eye(50,dtype=physical.q_raw.dtype)[cache.action_id-1][None].repeat(b,axis=0)
+    raw=j.concatenate((actual,ref,j.concatenate(futures,axis=-1),contact_intent,C(cache.points_object_local).reshape(1,192).repeat(b,axis=0)/RELATIVE_POSITION,hand,action,C(cache.object_geometry)[None].repeat(b,axis=0)),axis=-1)
+    if raw.shape[-1] != RAW_OBSERVATION_DIM_V5: raise AssertionError(f"v5 raw ABI {raw.shape[-1]} != {RAW_OBSERVATION_DIM_V5}")
     return raw
 
 def pointnet_encode(raw_points, *, weights):

@@ -28,7 +28,9 @@ def test_bank_one_exact_observation_reward_parity():
 def test_each_reference_observation_and_own_terminal_length():
     a,b=caches(); bank=ReferenceBankV4([a,b]); refs=j.array([0,1,0]); index=j.array([12,12,24]); action=j.zeros((3,28))
     for field in REFERENCE_TIME_FIELDS:
-        assert getattr(bank,field).shape[:2]==(2,25)
+        value=getattr(bank,field)
+        if value is None: continue
+        assert value.shape[:2]==(2,25)
     assert bank.q_lower.shape==(2,28)
     raw=build_raw_observation(_state(3),_contact(3),bank,index,action,refs)
     for row,cache in enumerate((a,b,a)):
