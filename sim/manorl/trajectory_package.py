@@ -18,6 +18,8 @@ from sim.manorl.contracts import TrajectoryIdentity
 from sim.manorl.trajectory import (
     ObjectActionPair,
     REFERENCE_RESAMPLING_ID,
+    RL_EPISODE_REFERENCE_CONTRACT,
+    RL_EPISODE_RESAMPLING_ID,
     ReferenceTrajectory,
     TrajectoryBatch,
     TrajectorySelection,
@@ -226,6 +228,21 @@ def write_trajectory_package(
             "sequence": int(candidate["sequence"]),
             "status": "decoded" if decoded is not None else "rejected",
         }
+        provenance = candidate.get("provenance")
+        if provenance is not None:
+            if not isinstance(provenance, Mapping):
+                raise TrajectoryPackageError(
+                    f"source candidate provenance must be a mapping: {key!r}"
+                )
+            normalized_provenance = dict(provenance)
+            if normalized_provenance.get("contract") != RL_EPISODE_REFERENCE_CONTRACT:
+                raise TrajectoryPackageError(
+                    f"source candidate provenance contract is invalid: {key!r}"
+                )
+            # Fail here instead of writing a manifest that cannot be hashed or
+            # read back as canonical JSON.
+            _canonical_json_bytes(normalized_provenance)
+            entry["provenance"] = normalized_provenance
         if rejection is not None:
             entry["rejection"] = {
                 "error_type": str(rejection["error_type"]),
@@ -340,10 +357,18 @@ def write_trajectory_package(
             "pair_counts": pair_counts,
             "source_catalog": source_catalog_metadata,
         }
+        compiler_metadata = dict(compiler or {})
+        rl_episode_reference = bool(
+            compiler_metadata.get("rl_episode_reference", False)
+        )
         manifest: dict[str, object] = {
             "schema": (SCENE_TRAJECTORY_PACKAGE_SCHEMA if any(t.scene_object_types for t in ordered) else TRAJECTORY_PACKAGE_SCHEMA),
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
-            "reference_resampling": REFERENCE_RESAMPLING_ID,
+            "reference_resampling": (
+                RL_EPISODE_RESAMPLING_ID
+                if rl_episode_reference
+                else REFERENCE_RESAMPLING_ID
+            ),
             "dataset": {
                 "logical_path": next(iter(dataset_paths)),
                 "version": int(dataset_version),
@@ -353,6 +378,11 @@ def write_trajectory_package(
             "selection": {
                 "catalog_selector": "all",
                 "generated_reference": selection.generated_reference,
+                "source_reference_contract": (
+                    RL_EPISODE_REFERENCE_CONTRACT
+                    if rl_episode_reference
+                    else "raw_capture_or_canonical_generated"
+                ),
                 "hand_side": selection.hand_side,
                 "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
                 "target_object_overrides": selection.target_object_overrides,
@@ -371,7 +401,7 @@ def write_trajectory_package(
             "source_catalog": source_catalog_metadata,
             "trajectories": records,
             "arrays": array_metadata,
-            "compiler": dict(compiler or {}),
+            "compiler": compiler_metadata,
             "catalog_digest": _canonical_digest(catalog_basis),
         }
         from sim.manorl import assets

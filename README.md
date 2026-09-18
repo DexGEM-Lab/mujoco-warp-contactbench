@@ -322,6 +322,11 @@ Key facts:
   long-lived MuJoCo/MJX/PPO process consumes the content-addressed
   `manorl.trajectory_package.v1` without importing Lance/PyArrow. See
   [`docs/manorl_lance_isolation_runbook.md`](docs/manorl_lance_isolation_runbook.md).
+- Complete refined RL episodes use a separate import boundary because their
+  declared FPS can disagree with simulator timestamps. The importer preserves
+  timestamp duration, binds a fixed physical hand manifest, and emits a
+  standard 120 Hz MTP; see
+  [`docs/refined_rl_episode_training.md`](docs/refined_rl_episode_training.md).
 
 ```bash
 # Train every eligible gesture at the default coupled 120 Hz source/policy clock.

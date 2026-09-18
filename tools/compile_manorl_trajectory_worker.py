@@ -11,7 +11,9 @@ from sim.manorl.trajectory import (
     LANCE_COLUMNS,
     ObjectActionPair,
     TrajectorySelection,
+    _discover_rl_episode_candidates,
     _discover_trajectory_candidates,
+    _selected_rl_episode_trajectory_from_row,
     _selected_trajectory_from_row,
 )
 from sim.manorl.trajectory_package import write_trajectory_package
@@ -37,6 +39,11 @@ def _selection(path: Path) -> TrajectorySelection:
     )
 
 
+def _rl_episode_reference(path: Path) -> bool:
+    values = json.loads(path.read_text(encoding="utf-8"))
+    return bool(values.get("rl_episode_reference", False))
+
+
 def _dataset(selection: TrajectorySelection):
     # Lance/PyArrow exist only below this short-lived worker boundary.
     import lance
@@ -51,19 +58,30 @@ def _dataset(selection: TrajectorySelection):
     return dataset
 
 
-def _discover(selection: TrajectorySelection, output: Path) -> None:
+def _discover(
+    selection: TrajectorySelection,
+    output: Path,
+    *,
+    rl_episode_reference: bool = False,
+) -> None:
     dataset = _dataset(selection)
-    pairs, candidates_by_pair = _discover_trajectory_candidates(dataset, selection)
-    candidates = [
-        {
-            "row_index": candidate.row_index,
-            "pair": pair.canonical,
-            "identity": candidate.identity,
-            "sequence": candidate.sequence,
-        }
-        for pair in pairs
-        for candidate in candidates_by_pair[pair]
-    ]
+    pairs, candidates_by_pair = (
+        _discover_rl_episode_candidates(dataset, selection)
+        if rl_episode_reference
+        else _discover_trajectory_candidates(dataset, selection)
+    )
+    candidates = []
+    for pair in pairs:
+        for candidate in candidates_by_pair[pair]:
+            record: dict[str, object] = {
+                "row_index": candidate.row_index,
+                "pair": pair.canonical,
+                "identity": candidate.identity,
+                "sequence": candidate.sequence,
+            }
+            if candidate.source_provenance is not None:
+                record["provenance"] = dict(candidate.source_provenance)
+            candidates.append(record)
     payload = {
         "dataset_version": int(dataset.version),
         "dataset_schema_digest": hashlib.sha256(str(dataset.schema).encode("utf-8")).hexdigest(),
@@ -84,6 +102,7 @@ def _decode(
     *,
     dataset_schema_digest: str,
     discovery_digest: str,
+    rl_episode_reference: bool = False,
 ) -> None:
     requests = json.loads(requests_path.read_text(encoding="utf-8"))
     if not isinstance(requests, list) or not requests:
@@ -91,7 +110,8 @@ def _decode(
     dataset = _dataset(selection)
     rows = dataset.take(
         [int(item["row_index"]) for item in requests],
-        columns=list(LANCE_COLUMNS) + (["provenance"] if selection.generated_reference else [])
+        columns=list(LANCE_COLUMNS)
+        + (["provenance"] if selection.generated_reference or rl_episode_reference else [])
     ).to_pylist()
     if len(rows) != len(requests):
         raise RuntimeError("Lance did not return every requested trajectory row")
@@ -100,12 +120,22 @@ def _decode(
     for request, row in zip(requests, rows, strict=True):
         pair = ObjectActionPair(*str(request["pair"]).split(":", maxsplit=1))
         try:
-            trajectory = _selected_trajectory_from_row(
-                row,
-                int(dataset.version),
-                row_index=int(request["row_index"]),
-                selection=selection,
-                expected_pair=pair,
+            trajectory = (
+                _selected_rl_episode_trajectory_from_row(
+                    row,
+                    int(dataset.version),
+                    row_index=int(request["row_index"]),
+                    selection=selection,
+                    expected_pair=pair,
+                )
+                if rl_episode_reference
+                else _selected_trajectory_from_row(
+                    row,
+                    int(dataset.version),
+                    row_index=int(request["row_index"]),
+                    selection=selection,
+                    expected_pair=pair,
+                )
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             # Existing direct-Lance selection defines these rows as invalid
@@ -138,7 +168,11 @@ def _decode(
             selection=selection,
             dataset_schema_digest=dataset_schema_digest,
             discovery_digest=discovery_digest,
-            compiler={"kind": "isolated_decode_shard", "request_count": len(requests)},
+            compiler={
+                "kind": "isolated_decode_shard",
+                "request_count": len(requests),
+                "rl_episode_reference": rl_episode_reference,
+            },
             source_candidates=requests,
             source_rejections=rejections,
         )
@@ -155,10 +189,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--discovery-digest")
     args = parser.parse_args(argv)
     selection = _selection(args.selection_json)
+    rl_episode_reference = _rl_episode_reference(args.selection_json)
     if args.mode == "discover":
         if args.requests_json is not None:
             parser.error("discover does not accept --requests-json")
-        _discover(selection, args.output)
+        _discover(
+            selection,
+            args.output,
+            rl_episode_reference=rl_episode_reference,
+        )
     else:
         if args.requests_json is None or args.rejections_json is None:
             parser.error("decode requires --requests-json and --rejections-json")
@@ -171,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             args.rejections_json,
             dataset_schema_digest=args.dataset_schema_digest,
             discovery_digest=args.discovery_digest,
+            rl_episode_reference=rl_episode_reference,
         )
     return 0
 

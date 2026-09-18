@@ -87,7 +87,9 @@ def _run_worker(
     raise AssertionError("unreachable worker retry state")
 
 
-def _selection_payload(selection: TrajectorySelection) -> dict[str, object]:
+def _selection_payload(
+    selection: TrajectorySelection, *, rl_episode_reference: bool = False
+) -> dict[str, object]:
     if selection.expected_dataset_version is None or selection.reference_fps is None:
         raise ValueError("package compilation requires pinned dataset and reference clocks")
     return {
@@ -101,6 +103,7 @@ def _selection_payload(selection: TrajectorySelection) -> dict[str, object]:
         "hand_side": selection.hand_side,
         "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
         "generated_reference": selection.generated_reference,
+        "rl_episode_reference": rl_episode_reference,
         "target_object_overrides": selection.target_object_overrides,
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
@@ -113,11 +116,14 @@ def compile_package(
     selection: TrajectorySelection,
     shard_size: int,
     max_attempts: int,
+    rl_episode_reference: bool = False,
 ) -> Path:
     """Run isolated Lance workers and atomically publish an MTP catalog."""
 
     if "lance" in sys.modules or "pyarrow" in sys.modules:
         raise RuntimeError("compiler coordinator must start without Lance/PyArrow imports")
+    if rl_episode_reference and selection.generated_reference:
+        raise ValueError("RL episode and canonical generated-reference modes are exclusive")
     if output.exists():
         raise FileExistsError(f"refusing to replace trajectory package: {output}")
     build_root = output.parent / f".{output.name}.compile-{uuid4().hex}"
@@ -128,7 +134,14 @@ def compile_package(
         path.mkdir(parents=True, exist_ok=False)
     selection_path = build_root / "selection.json"
     selection_path.write_text(
-        json.dumps(_selection_payload(selection), indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            _selection_payload(
+                selection, rl_episode_reference=rl_episode_reference
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     worker_base = [
@@ -141,7 +154,9 @@ def compile_package(
     report: dict[str, Any] = {
         "schema": "manorl.trajectory_package.compile_report.v1",
         "package_schema": TRAJECTORY_PACKAGE_SCHEMA,
-        "selection": _selection_payload(selection),
+        "selection": _selection_payload(
+            selection, rl_episode_reference=rl_episode_reference
+        ),
         "shard_size": shard_size,
         "max_attempts": max_attempts,
         "workers": [],
@@ -299,6 +314,7 @@ def compile_package(
                 "rejected_count": len(rejections),
                 "shard_size": shard_size,
                 "max_attempts": max_attempts,
+                "rl_episode_reference": rl_episode_reference,
                 "compile_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
             },
             source_candidates=candidates,
@@ -340,6 +356,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drop-uncontrolled-hands", action="store_true")
     parser.add_argument("--generated-reference", action="store_true",
                         help="opt in to canonical120Hz generated full episodes; requires zero padding")
+    parser.add_argument(
+        "--rl-episode-reference",
+        action="store_true",
+        help=(
+            "import complete generated RL episodes, preserve timestamp duration, "
+            "and resample to the fixed 120Hz public clock"
+        ),
+    )
+    parser.add_argument(
+        "--asset-manifest",
+        type=Path,
+        help="explicit fixed physical hand/object manifest required by RL episode import",
+    )
+    parser.add_argument(
+        "--fixed-hand-operator",
+        default="cheyingtong",
+        help="required hand_operator in --asset-manifest (default: %(default)s)",
+    )
     parser.add_argument("--shard-size", type=int, default=128)
     parser.add_argument("--max-attempts", type=int, default=3)
     args = parser.parse_args(argv)
@@ -349,6 +383,30 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("padding must be non-negative")
     if args.shard_size < 1 or args.max_attempts < 1:
         parser.error("shard-size and max-attempts must be positive")
+    if args.rl_episode_reference:
+        if args.generated_reference:
+            parser.error("--rl-episode-reference and --generated-reference are exclusive")
+        if args.pre_padding or args.post_padding:
+            parser.error("--rl-episode-reference requires --pre-padding 0 --post-padding 0")
+        if args.reference_fps != 120:
+            parser.error("--rl-episode-reference requires --reference-fps 120")
+        if args.hand_side != "right":
+            parser.error("--rl-episode-reference requires --hand-side right")
+        if args.asset_manifest is None:
+            parser.error("--rl-episode-reference requires --asset-manifest")
+        asset_manifest = args.asset_manifest.expanduser().resolve()
+        if not asset_manifest.is_file():
+            parser.error("--asset-manifest must name an existing file")
+        if "sim.manorl.assets" in sys.modules:
+            parser.error("asset module loaded before fixed RL hand profile was selected")
+        os.environ["MANORL_ASSET_MANIFEST"] = str(asset_manifest)
+        from sim.manorl import assets
+
+        if assets.MANO_OPERATOR != args.fixed_hand_operator:
+            parser.error(
+                "asset manifest hand_operator "
+                f"{assets.MANO_OPERATOR!r} != required {args.fixed_hand_operator!r}"
+            )
     selection = TrajectorySelection(
         selector=args.pairs or "all",
         dataset_path=args.dataset_path.expanduser().resolve(),
@@ -366,6 +424,7 @@ def main(argv: list[str] | None = None) -> int:
         selection=selection,
         shard_size=args.shard_size,
         max_attempts=args.max_attempts,
+        rl_episode_reference=args.rl_episode_reference,
     )
     catalog = load_trajectory_package(package)
     print(

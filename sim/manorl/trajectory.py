@@ -35,9 +35,17 @@ from sim.manorl.hand_layout import HandActionLayout
 
 LANCE_COLUMNS = ("index", "trajectory_metadata", "timestamp", "hands", "objects")
 LANCE_DISCOVERY_COLUMNS = ("index", "trajectory_metadata")
+RL_EPISODE_DISCOVERY_COLUMNS = (
+    "index",
+    "trajectory_metadata",
+    "timestamp",
+    "provenance",
+)
 LANCE_DECODE_CHUNK_SIZE = 128
 HAND_DATASET_PATH = Path(DEFAULT_HAND_DATASET_PATH)
 TRAJECTORY_IDENTITY_SCHEMA = "object_action_sequence"
+RL_EPISODE_REFERENCE_CONTRACT = "manorl.refined_rl_episode_reference.v1"
+RL_EPISODE_RESAMPLING_ID = "timestamp_duration_linear_slerp_to_120hz_v1"
 GENERATED_CUBE1_DATASET_PATH = Path(
     "/mnt/nas-222-project/mocap/dataAugmentation/for_retargeting/new_all_with_keypoints/"
     "lance_new_all_generated_mano/new_all_generated_mano.lance"
@@ -431,6 +439,102 @@ def resample_reference_trajectory(
         object_quat_xyzw=_immutable(object_quat_xyzw),
         reference_fps=reference_fps,
         control_fps=resolved_control_fps,
+        movement_start_step=movement_start_step,
+        movement_end_step=movement_end_step,
+    )
+
+
+def resample_timestamped_reference_trajectory(
+    trajectory: ReferenceTrajectory,
+    *,
+    reference_fps: int = 120,
+) -> ReferenceTrajectory:
+    """Resample a physical episode by elapsed timestamp onto a public clock.
+
+    Raw capture selection deliberately interprets source frames on the requested
+    policy clock because historical capture timestamps are not authoritative.
+    Refined RL episodes are different: their timestamps are the simulator clock
+    and may be 100, 120, or 200 Hz.  This adapter preserves elapsed physical
+    time, retains the final source pose with at most one output-frame edge hold,
+    and emits one coupled reference/control clock.
+    """
+
+    if not isinstance(trajectory, ReferenceTrajectory):
+        raise TypeError("trajectory must be a ReferenceTrajectory")
+    if reference_fps not in SUPPORTED_REFERENCE_FPS:
+        raise ValueError(f"reference_fps must be one of {SUPPORTED_REFERENCE_FPS}")
+    if trajectory.reference_fps is not None or trajectory.control_fps is not None:
+        raise ValueError("timestamped trajectory is already bound to a control clock")
+
+    source_times = np.asarray(trajectory.timestamps, dtype=np.float64)
+    source_times = source_times - source_times[0]
+    if source_times.shape != (len(trajectory.q_ref),) or source_times[-1] <= 0.0:
+        raise ValueError("timestamped trajectory must span positive elapsed time")
+    control_timestep = 1.0 / float(reference_fps)
+    control_intervals = int(
+        np.ceil(float(source_times[-1]) / control_timestep - 1e-12)
+    )
+    control_times = np.arange(control_intervals + 1, dtype=np.float64) * control_timestep
+    query_times = np.minimum(control_times, float(source_times[-1]))
+
+    q_ref_by_side = {
+        side: _immutable(_interpolate_hand_qpos(values, source_times, query_times))
+        for side, values in trajectory.q_ref_by_side.items()
+    }
+    primary_side = (
+        "right"
+        if "right" in trajectory.selected_hand_sides
+        else trajectory.selected_hand_sides[0]
+    )
+    object_pos_raw = _interpolate_rows(
+        trajectory.object_pos_raw, source_times, query_times
+    )
+    object_pos = object_pos_raw.copy()
+    object_pos[:, 2] += trajectory.object_z_shift
+    object_quat_xyzw = Slerp(
+        source_times,
+        Rotation.from_quat(trajectory.object_quat_xyzw),
+    )(query_times).as_quat()
+    object_quat_xyzw /= np.linalg.norm(object_quat_xyzw, axis=1, keepdims=True)
+
+    source_coordinates = np.interp(
+        query_times,
+        source_times,
+        np.asarray(trajectory.source_indices, dtype=np.float64),
+    )
+    source_indices = np.floor(source_coordinates + 1e-10).astype(np.int64)
+    source_indices[-1] = int(trajectory.source_indices[-1])
+    movement_start = (
+        0
+        if trajectory.movement_start_step is None
+        else trajectory.movement_start_step
+    )
+    movement_end = (
+        len(trajectory.q_ref) - 1
+        if trajectory.movement_end_step is None
+        else trajectory.movement_end_step
+    )
+    movement_start_step = int(
+        np.ceil(source_times[movement_start] / control_timestep - 1e-10)
+    )
+    movement_end_step = int(
+        np.ceil(source_times[movement_end] / control_timestep - 1e-10)
+    )
+    movement_end_step = min(movement_end_step, len(control_times) - 1)
+    if not 0 <= movement_start_step <= movement_end_step < len(control_times):
+        raise ValueError("source movement window does not map onto the 120 Hz grid")
+
+    return replace(
+        trajectory,
+        source_indices=_immutable(source_indices, dtype=np.int64),
+        timestamps=_immutable(control_times),
+        q_ref=q_ref_by_side[primary_side],
+        q_ref_by_side=q_ref_by_side,
+        object_pos_raw=_immutable(object_pos_raw),
+        object_pos=_immutable(object_pos),
+        object_quat_xyzw=_immutable(object_quat_xyzw),
+        reference_fps=reference_fps,
+        control_fps=reference_fps,
         movement_start_step=movement_start_step,
         movement_end_step=movement_end_step,
     )
@@ -1213,6 +1317,149 @@ def trajectory_from_lance_row(
     )
 
 
+def trajectory_from_rl_episode_row(
+    row: dict[str, Any],
+    dataset_version: int,
+    *,
+    row_index: int,
+    dataset_path: str | Path,
+    hand_side: str = "right",
+) -> ReferenceTrajectory:
+    """Decode one complete refined RL episode without claiming source-hand parity.
+
+    These rows are already simulated episodes rather than annotated raw
+    captures.  Their one object and one 28-DoF target track remain in recorded
+    world coordinates.  The configured explicit physical-asset manifest owns
+    the runtime hand identity; source operator and MANO shape are intentionally
+    not consulted.  Call :func:`resample_timestamped_reference_trajectory`
+    before packaging so mixed source clocks become one explicit policy clock.
+    """
+
+    if not isinstance(row, dict):
+        raise TypeError("RL episode row must be a decoded mapping")
+    if normalize_hand_side(hand_side) != "right":
+        raise ValueError("refined RL episode import currently requires the right hand")
+    index = row.get("index")
+    metadata = row.get("trajectory_metadata")
+    provenance = row.get("provenance")
+    if not isinstance(index, dict) or not isinstance(metadata, dict):
+        raise ValueError("RL episode row lacks index or trajectory_metadata")
+    if not isinstance(provenance, dict):
+        raise ValueError("RL episode row lacks source_rl provenance")
+    if index.get("is_generated") is not True:
+        raise ValueError("RL episode import requires is_generated=true")
+
+    object_type = str(index.get("scene", "")).strip()
+    if not object_type or "," in object_type:
+        raise ValueError("RL episode row must identify exactly one scene object")
+    action_id = _gesture_action_id(index.get("action_code"))
+    if action_id is None:
+        raise ValueError("RL episode row has no valid index.action_code")
+    gesture_action = _gesture_action_id(metadata.get("gesture", index.get("gesture")))
+    index_gesture_action = _gesture_action_id(index.get("gesture"))
+    if gesture_action != action_id or index_gesture_action != action_id:
+        raise ValueError("RL episode action_code and gesture fields disagree")
+    pair = ObjectActionPair(object_type, action_id)
+
+    source_count = int(metadata.get("total_frames", 0))
+    if source_count < 2:
+        raise ValueError("RL episode must contain at least two frames")
+    if metadata.get("hand_names") != ["right"]:
+        raise ValueError("RL episode import requires one right-hand target track")
+    hands = row.get("hands")
+    objects = row.get("objects")
+    if not isinstance(hands, list) or len(hands) != 1:
+        raise ValueError("RL episode row must contain exactly one active hand")
+    if not isinstance(objects, list) or len(objects) != 1:
+        raise ValueError("RL episode row must contain exactly one object state")
+    hand = hands[0]
+    state = objects[0]
+    if not isinstance(hand, dict) or hand.get("hand_name") not in (None, "right"):
+        raise ValueError("RL episode hand state is not the right-hand track")
+    if not isinstance(state, dict):
+        raise ValueError("RL episode object state must be a mapping")
+
+    timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
+    q_ref = np.asarray(hand.get("urdf_dof", ()), dtype=np.float64)
+    object_pos = np.asarray(state.get("pos", ()), dtype=np.float64)
+    object_rotvec = np.asarray(state.get("rot_aa", ()), dtype=np.float64)
+    expected_shapes = {
+        "timestamp": timestamps.shape == (source_count,),
+        "urdf_dof": q_ref.shape == (source_count, JOINT_DOF),
+        "object position": object_pos.shape == (source_count, 3),
+        "object rotation": object_rotvec.shape == (source_count, 3),
+    }
+    invalid = [name for name, valid in expected_shapes.items() if not valid]
+    if invalid:
+        raise ValueError("invalid RL episode arrays: " + ", ".join(invalid))
+    for name, values in (
+        ("timestamp", timestamps),
+        ("urdf_dof", q_ref),
+        ("object position", object_pos),
+        ("object rotation", object_rotvec),
+    ):
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"RL episode {name} contains non-finite values")
+    if np.any(np.diff(timestamps) <= 0.0):
+        raise ValueError("RL episode timestamps are not strictly increasing")
+
+    required_provenance = {
+        "source_rl_lance_path": str,
+        "source_rl_version": int,
+        "source_rl_row": int,
+        "source_rl_uuid": str,
+    }
+    for name, expected_type in required_provenance.items():
+        value = provenance.get(name)
+        if isinstance(value, bool) or not isinstance(value, expected_type):
+            raise ValueError(f"RL episode provenance field {name!r} is invalid")
+        if expected_type is str and not value:
+            raise ValueError(f"RL episode provenance field {name!r} is empty")
+    if int(provenance["source_rl_version"]) < 1 or int(provenance["source_rl_row"]) < 0:
+        raise ValueError("RL episode source version/row must be non-negative and pinned")
+    if str(provenance["source_rl_uuid"]) != str(index.get("uuid", "")):
+        raise ValueError("RL episode UUID disagrees with source_rl provenance")
+
+    from sim.manorl import assets
+
+    if not assets.EXPLICIT_ASSET_MANIFEST:
+        raise ValueError("RL episode import requires an explicit fixed-hand asset manifest")
+    assets.validate_asset_manifest(pair.object_type, hand_side="right")
+
+    quaternion = rotvec_to_xyzw(object_rotvec)
+    immutable_q = _immutable(q_ref)
+    immutable_pos = _immutable(object_pos)
+    identity = f"{pair.object_type}_{pair.action_id}_{row_index + 1:05d}"
+    return ReferenceTrajectory(
+        identity=TrajectoryIdentity(
+            dataset_path=str(Path(dataset_path).expanduser().resolve()),
+            dataset_version=int(dataset_version),
+            row_index=int(row_index),
+            object_index=0,
+            uuid=str(index.get("uuid", "")),
+            file_uuid="",
+            identity=identity,
+            source_start=0,
+            source_stop=source_count,
+            movement_start_raw=0,
+            movement_end_raw=source_count - 1,
+        ),
+        dataset_version=int(dataset_version),
+        source_indices=_immutable(np.arange(source_count), dtype=np.int64),
+        timestamps=_immutable(timestamps),
+        q_ref=immutable_q,
+        object_pos_raw=immutable_pos,
+        object_pos=immutable_pos,
+        object_quat_xyzw=_immutable(quaternion),
+        object_z_shift=0.0,
+        hand_sides=("right",),
+        q_ref_by_side={"right": immutable_q},
+        selected_hand_sides=("right",),
+        movement_start_step=0,
+        movement_end_step=source_count - 1,
+    )
+
+
 def trajectory_from_row(
     row: dict[str, Any],
     dataset_version: int,
@@ -1643,6 +1890,7 @@ class _TrajectoryCandidate:
     pair: ObjectActionPair
     identity: str
     sequence: int
+    source_provenance: Mapping[str, object] | None = None
 
 
 def _row_with_target_override(row: dict[str, Any], selection: TrajectorySelection) -> dict[str, Any]:
@@ -1756,6 +2004,140 @@ def _candidate_from_metadata_row(
         identity=identity,
         sequence=int(sequence_raw),
     )
+
+
+def _rl_episode_candidate_from_discovery_row(
+    row: dict[str, Any], *, row_index: int
+) -> _TrajectoryCandidate | None:
+    """Validate lightweight identity/timing/provenance for one RL episode."""
+
+    index = row.get("index")
+    metadata = row.get("trajectory_metadata")
+    provenance = row.get("provenance")
+    if not isinstance(index, dict) or not isinstance(metadata, dict):
+        return None
+    if index.get("is_generated") is not True or not isinstance(provenance, dict):
+        return None
+    object_type = str(index.get("scene", "")).strip()
+    if not object_type or "," in object_type:
+        return None
+    action_id = _gesture_action_id(index.get("action_code"))
+    if action_id is None:
+        return None
+    if _gesture_action_id(index.get("gesture")) != action_id:
+        return None
+    if _gesture_action_id(metadata.get("gesture")) != action_id:
+        return None
+    if metadata.get("hand_names") != ["right"]:
+        return None
+    try:
+        source_count = int(metadata["total_frames"])
+        declared_fps = int(metadata["data_fps"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
+    if (
+        source_count < 2
+        or declared_fps < 1
+        or timestamps.shape != (source_count,)
+        or not np.all(np.isfinite(timestamps))
+        or np.any(np.diff(timestamps) <= 0.0)
+    ):
+        return None
+    required = (
+        "source_rl_lance_path",
+        "source_rl_version",
+        "source_rl_row",
+        "source_rl_uuid",
+    )
+    if any(name not in provenance for name in required):
+        return None
+    try:
+        source_version = int(provenance["source_rl_version"])
+        source_row = int(provenance["source_rl_row"])
+    except (TypeError, ValueError):
+        return None
+    source_path = provenance["source_rl_lance_path"]
+    source_uuid = provenance["source_rl_uuid"]
+    if (
+        not isinstance(source_path, str)
+        or not source_path
+        or source_version < 1
+        or source_row < 0
+        or not isinstance(source_uuid, str)
+        or not source_uuid
+        or source_uuid != str(index.get("uuid", ""))
+    ):
+        return None
+    try:
+        pair = ObjectActionPair(object_type, action_id)
+    except ValueError:
+        return None
+    timestep = float(np.median(np.diff(timestamps)))
+    sequence = row_index + 1
+    return _TrajectoryCandidate(
+        row_index=row_index,
+        pair=pair,
+        identity=f"{pair.object_type}_{pair.action_id}_{sequence:05d}",
+        sequence=sequence,
+        source_provenance={
+            "contract": RL_EPISODE_REFERENCE_CONTRACT,
+            "source_rl_lance_path": source_path,
+            "source_rl_version": source_version,
+            "source_rl_row": source_row,
+            "source_rl_uuid": source_uuid,
+            "seed_uuid": str(index.get("seed_uuid", "")),
+            "declared_data_fps": declared_fps,
+            "observed_median_timestep_seconds": timestep,
+            "observed_median_fps": 1.0 / timestep,
+            "source_frame_count": source_count,
+            "source_duration_seconds": float(timestamps[-1] - timestamps[0]),
+        },
+    )
+
+
+def _discover_rl_episode_candidates(
+    dataset: Any, selection: TrajectorySelection
+) -> tuple[tuple[ObjectActionPair, ...], dict[ObjectActionPair, tuple[_TrajectoryCandidate, ...]]]:
+    """Discover complete generated RL episodes without raw-capture annotations."""
+
+    if selection.pre_padding or selection.post_padding:
+        raise ValueError("RL episode references require zero pre/post padding")
+    if selection.reference_fps != 120 or selection.resolved_control_fps != 120:
+        raise ValueError("RL episode references require the fixed 120 Hz public clock")
+    rows = dataset.to_table(columns=list(RL_EPISODE_DISCOVERY_COLUMNS)).to_pylist()
+    candidates: dict[ObjectActionPair, list[_TrajectoryCandidate]] = {}
+    for row_index, row in enumerate(rows):
+        candidate = _rl_episode_candidate_from_discovery_row(
+            row, row_index=row_index
+        )
+        if candidate is not None:
+            candidates.setdefault(candidate.pair, []).append(candidate)
+
+    requested_pairs = selection.requested_pairs
+    if requested_pairs is None:
+        resolved_pairs = tuple(sorted(candidates))
+        if not resolved_pairs:
+            raise LookupError("no valid refined RL episode object/action pairs")
+    else:
+        missing = tuple(pair for pair in requested_pairs if pair not in candidates)
+        if missing:
+            available = ", ".join(pair.canonical for pair in sorted(candidates)) or "none"
+            raise LookupError(
+                "RL episode selector pair(s) matched no rows: "
+                + ", ".join(pair.canonical for pair in missing)
+                + f"; available pairs: {available}"
+            )
+        resolved_pairs = requested_pairs
+    return resolved_pairs, {
+        pair: tuple(
+            sorted(
+                candidates[pair],
+                key=lambda item: (item.sequence, item.identity, item.row_index),
+            )
+        )
+        for pair in resolved_pairs
+    }
 
 
 def _discover_trajectory_candidates(
@@ -1946,6 +2328,40 @@ def _selected_trajectory_from_row(
             reference_fps=selection.reference_fps,
             control_fps=selection.resolved_control_fps,
         )
+    )
+
+
+def _selected_rl_episode_trajectory_from_row(
+    row: dict[str, Any],
+    dataset_version: int,
+    *,
+    row_index: int,
+    selection: TrajectorySelection,
+    expected_pair: ObjectActionPair,
+) -> ReferenceTrajectory:
+    """Decode and timestamp-resample one selected refined RL episode."""
+
+    if selection.pre_padding or selection.post_padding:
+        raise ValueError("RL episode references require zero pre/post padding")
+    if selection.reference_fps != 120 or selection.resolved_control_fps != 120:
+        raise ValueError("RL episode references require the fixed 120 Hz public clock")
+    index = row.get("index", {})
+    pair = ObjectActionPair(
+        str(index.get("scene", "")),
+        str(index.get("action_code", "")),
+    )
+    if pair != expected_pair:
+        raise ValueError(f"row {row_index} is not {expected_pair.canonical}")
+    trajectory = trajectory_from_rl_episode_row(
+        row,
+        dataset_version,
+        row_index=row_index,
+        dataset_path=selection.dataset_path,
+        hand_side=selection.hand_side,
+    )
+    return resample_timestamped_reference_trajectory(
+        trajectory,
+        reference_fps=120,
     )
 
 
