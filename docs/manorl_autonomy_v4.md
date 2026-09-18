@@ -403,8 +403,9 @@ Provenance records `reference_assignment.mode=all_package_references`, the
 ordered identities, and the reference count. Use B4096 for training when
 sampling all 50; reference count and environment count are independent.
 
-Both modes require shared cube2:02 geometry/action. The single-identity CLI
-remains the default, and frozen evaluation still selects one identity.
+Both modes require shared cube2 object geometry; the all-package mode permits
+multiple cube2 action IDs and stores action identity per reference. The single-
+identity CLI remains the default, and frozen evaluation still selects one identity.
 The v4 checkpoint, raw957/PointNet/PPO, reward and physical clock are unchanged.
 Model-only warm-start retains the existing identity witness; optimizer resume
 requires an unchanged ordered reference assignment and mode.

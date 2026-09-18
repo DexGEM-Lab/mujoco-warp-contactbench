@@ -92,7 +92,8 @@ class ReferenceCacheV4:
         if not 1 <= self.action_id <= 50: raise ValueError("action_id must be in [1,50]")
 
 # Time-varying arrays are padded by their final row; gathers still clamp to
-# each reference's own length. Shared geometry/action is validated, never inferred.
+# each reference's own length. Shared geometry is validated, while action_id
+# is retained per reference so one bank can represent multiple cube2 actions.
 REFERENCE_TIME_FIELDS = (
     "q_feasible", "q_raw", "object_origin", "object_quat_xyzw", "palm_origin",
     "palm_quat_xyzw", "object_v_com", "object_w", "palm_v", "palm_w",
@@ -101,7 +102,7 @@ REFERENCE_TIME_FIELDS = (
 )
 
 class ReferenceBankV4:
-    """Device-resident [reference,time,...] cache for one geometry/action."""
+    """Device-resident [reference,time,...] cache for shared cube2 geometry."""
     def __init__(self, caches, *, device=None):
         import jax
         import jax.numpy as j
@@ -109,7 +110,7 @@ class ReferenceBankV4:
         if not caches:
             raise ValueError("reference bank must not be empty")
         shared = ("object_com_local", "object_radius", "table_height", "control_timestep",
-                  "points_object_local", "object_geometry", "action_id")
+                  "points_object_local", "object_geometry")
         for name in shared + ("q_lower", "q_upper"):
             if any(not np.array_equal(getattr(caches[0], name), getattr(c, name)) for c in caches[1:]):
                 raise ValueError(f"reference bank requires shared {name}")
@@ -123,6 +124,7 @@ class ReferenceBankV4:
             setattr(self, name, put(np.stack(padded)))
         for name in ("q_lower", "q_upper", "duration", "support_shift"):
             setattr(self, name, put(np.stack([getattr(c,name) for c in caches])))
+        self.action_id = put(np.asarray([c.action_id for c in caches], dtype=np.int32))
         for name in shared:
             value = getattr(caches[0], name)
             setattr(self, name, put(value) if isinstance(value,np.ndarray) else value)
@@ -482,7 +484,10 @@ def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: Refer
     _,_,delta,velocity=anchor_delta_and_velocity(physical,C(cache.region_anchor_hand)[i],C(cache.region_anchor_object)[i])
     error=delta-C(cache.delta_ref)[i]
     geom=j.concatenate((C(cache.signed_gap)[i][...,None]/CONTACT_DISTANCE,C(cache.proximity)[i][...,None],C(cache.confidence)[i][...,None],C(cache.valid)[i][...,None],C(cache.region_anchor_hand)[i]/RELATIVE_POSITION,C(cache.region_anchor_object)[i]/RELATIVE_POSITION,C(cache.delta_ref)[i]/CONTACT_DISTANCE,error/CONTACT_DISTANCE,j.tanh(quat_unrotate(physical.object_quat_xyzw[:,None],contact.paired_force_on_object)/FORCE_SCALE),velocity/CONTACT_VELOCITY),axis=-1).reshape(b,352)
-    action=j.eye(50,dtype=physical.q_raw.dtype)[cache.action_id-1][None].repeat(b,axis=0)
+    if isinstance(cache, ReferenceBankV4):
+        action=j.eye(50,dtype=physical.q_raw.dtype)[j.asarray(cache.action_id)[env_ref]-1]
+    else:
+        action=j.eye(50,dtype=physical.q_raw.dtype)[cache.action_id-1][None].repeat(b,axis=0)
     raw=j.concatenate((actual,ref,j.concatenate(futures,axis=-1),geom,C(cache.points_object_local).reshape(1,192).repeat(b,axis=0)/RELATIVE_POSITION,action,C(cache.object_geometry)[None].repeat(b,axis=0)),axis=-1)
     if raw.shape[-1] != RAW_OBSERVATION_DIM: raise AssertionError(f"v4 raw ABI {raw.shape[-1]} != 957")
     return raw

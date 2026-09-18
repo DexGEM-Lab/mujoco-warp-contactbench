@@ -82,8 +82,8 @@ class BatchedAutonomyRuntime:
         trajectories = tuple(trajectory) if isinstance(trajectory, (list, tuple)) else None
         if trajectories is not None and not trajectories:
             raise ValueError("reference trajectories must not be empty")
-        if trajectories is not None and any(t.identity.identity.split("_")[:2] != ["cube2", "02"] for t in trajectories):
-            raise ValueError("reference bank runtime requires cube2:02 trajectories")
+        if trajectories is not None and any(t.identity.identity.split("_")[0] != "cube2" for t in trajectories):
+            raise ValueError("reference bank runtime requires shared cube2 object geometry; action IDs may differ")
         self.trajectories = trajectories
         trajectory = trajectories[0] if trajectories is not None else trajectory
         self.trajectory, self.full_horizon_diagnostic = trajectory, full_horizon_diagnostic

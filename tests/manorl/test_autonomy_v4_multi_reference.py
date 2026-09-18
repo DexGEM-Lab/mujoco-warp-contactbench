@@ -6,7 +6,7 @@ import jax
 import jax.numpy as j
 import numpy as np
 import pytest
-from sim.manorl.autonomy_v4 import ReferenceBankV4, REFERENCE_TIME_FIELDS, _gather, build_raw_observation, compute_reward
+from sim.manorl.autonomy_v4 import ReferenceBankV4, REFERENCE_TIME_FIELDS, _gather, build_raw_observation, compute_reward, raw_observation_slices
 from sim.manorl.autonomy_batch import BatchedAutonomyRuntime
 from tests.manorl.test_autonomy_v4 import _cache, _state, _contact
 
@@ -63,9 +63,18 @@ def test_three_env_two_reference_reset_isolation():
     np.testing.assert_array_equal(r.indices,[7,0,9]); np.testing.assert_array_equal(r.env_ref,refs); np.testing.assert_array_equal(r.data.global_contact,before.global_contact)
 
 
-def test_bank_rejects_geometry_or_action_drift_and_empty():
+def test_bank_allows_action_id_variation_and_gathers_action_one_hot():
+    a=_cache(25); b=replace(_cache(13), action_id=3)
+    bank=ReferenceBankV4([a,b]); refs=j.array([0,1]); index=j.array([0,0]); action=j.zeros((2,28))
+    raw=build_raw_observation(_state(2),_contact(2),bank,index,action,refs)
+    sl=raw_observation_slices()["action_types"]
+    assert int(np.argmax(np.asarray(raw[0,sl]))) == 1
+    assert int(np.argmax(np.asarray(raw[1,sl]))) == 2
+
+
+def test_bank_rejects_geometry_drift_and_empty():
     with pytest.raises(ValueError,match='empty'): ReferenceBankV4([])
-    with pytest.raises(ValueError,match='action_id'): ReferenceBankV4([_cache(),replace(_cache(),action_id=3)])
+    with pytest.raises(ValueError,match='object_radius'): ReferenceBankV4([_cache(),replace(_cache(),object_radius=_cache().object_radius*1.01)])
 
 def test_multireference_motion_gate_uses_each_env_reference_speed():
     a=_cache(25)
@@ -99,9 +108,9 @@ def test_cli_selects_all_package_references_without_split_filter():
 
 def test_all_reference_requires_shared_cube2_action():
     from tools.train_manorl_autonomy import parse_args,_training_references
-    rows=[SimpleNamespace(identity=SimpleNamespace(identity='cube2_02_0')), SimpleNamespace(identity=SimpleNamespace(identity='cube2_03_1'))]
+    rows=[SimpleNamespace(identity=SimpleNamespace(identity='cube2_02_0')), SimpleNamespace(identity=SimpleNamespace(identity='banana_03_1'))]
     args=parse_args(['train','--all-references'])
-    with pytest.raises(ValueError,match='cube2:02'):
+    with pytest.raises(ValueError,match='cube2 object geometry'):
         _training_references(args,SimpleNamespace(trajectories=rows),rows[0],{'train_indices':[0]})
 
 
