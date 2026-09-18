@@ -110,11 +110,17 @@ def test_all_reference_requires_shared_cube2_action():
     from tools.train_manorl_autonomy import parse_args,_training_references
     rows=[SimpleNamespace(identity=SimpleNamespace(identity='cube2_02_0')), SimpleNamespace(identity=SimpleNamespace(identity='banana_03_1'))]
     args=parse_args(['train','--all-references'])
-    with pytest.raises(ValueError,match='cube2 object geometry'):
+    with pytest.raises(ValueError,match='one shared object type'):
         _training_references(args,SimpleNamespace(trajectories=rows),rows[0],{'train_indices':[0]})
 
+def test_identity_split_fallback_for_new_package_is_deterministic():
+    from sim.manorl.autonomy_training import identity_split
+    rows=[SimpleNamespace(identity=SimpleNamespace(identity=f'cube1_01_{i}')) for i in range(10)]
+    catalog=SimpleNamespace(trajectories=rows)
+    a=identity_split(catalog,seed=0); b=identity_split(catalog,seed=0)
+    assert a==b
+    assert set(a['train_indices'])==set(range(10)) and a['validation_indices']==[] and a['test_indices']==[]
 
-def test_multireference_telemetry_uses_own_targets_and_lengths():
     import torch
     from sim.manorl.autonomy_training import BatchedAutonomyAdapter
     bank=ReferenceBankV4(caches()); refs=j.array([0,1,0]); index=j.array([6,6,12])

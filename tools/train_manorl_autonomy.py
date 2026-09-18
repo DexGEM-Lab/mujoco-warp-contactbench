@@ -56,16 +56,18 @@ def _training_references(args, catalog, trajectory, split):
         references = list(catalog.trajectories)
         if not references:
             raise ValueError("all-reference training requires a non-empty package")
-        if any(t.identity.identity.split('_')[0] != "cube2" for t in references):
-            raise ValueError("all-reference v4 currently requires shared cube2 object geometry")
+        object_types={t.identity.identity.split('_')[0] for t in references}
+        if len(object_types) != 1:
+            raise ValueError("all-reference v4 requires one shared object type")
         return references
     if not getattr(args, "all_train_references", False):
         return trajectory
     references = [catalog.trajectories[i] for i in split["train_indices"]]
     if len(references) != 40:
         raise ValueError("multi-reference training requires exactly 40 TRAIN identities")
-    if any(t.identity.identity.split('_')[0] != "cube2" for t in references):
-        raise ValueError("multi-reference v4 currently requires shared cube2 object geometry")
+    object_types={t.identity.identity.split('_')[0] for t in references}
+    if len(object_types) != 1:
+        raise ValueError("multi-reference v4 requires one shared object type")
     return references
 
 

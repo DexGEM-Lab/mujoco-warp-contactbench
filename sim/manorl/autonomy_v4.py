@@ -260,7 +260,7 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     hand_geoms=np.asarray(producer.keypoint_geom_ids,np.int32)
     if not np.all(np.asarray(model.geom_type)[hand_geoms]==mesh_type): raise ValueError("all v4 hand regions must be compiled mesh collision geoms")
     object_geom=next(iter(producer.object_geom_ids))
-    if int(model.geom_type[object_geom]) != mesh_type: raise ValueError("cube2 collision geom must be a mesh")
+    if int(model.geom_type[object_geom]) != mesh_type: raise ValueError(f"{object_type} collision geom must be a mesh")
     # Source collision triangles are already body-local; deliberately do not
     # apply object geom_pos/geom_quat a second time.
     object_triangles=np.asarray(object_collision_vertices(object_type),np.float64).reshape(-1,3,3)
@@ -300,7 +300,7 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     if duration <= 0: duration=(T-1)*dt
     com_local=np.asarray(model.body_ipos[producer.object_body_id]); object_radius=float(np.max(np.linalg.norm(object_triangles.reshape(-1,3)-com_local,axis=-1))); com=object_origin+_np_quat_rotate(object_q,np.broadcast_to(com_local,(T,3))); ov=_filtered_derivative(com,dt); ow=_filtered_angular_velocity(object_q,dt); palm=hand_origin[:,0]; pv=_filtered_derivative(palm,dt); pw=_filtered_angular_velocity(hand_q[:,0],dt)
     object_bottom=np.min(object_origin[:,None,2]+_np_quat_rotate(object_q[:,None],object_triangles.reshape(-1,3))[:,:,2],axis=1)
-    dimensions=np.ptp(object_triangles.reshape(-1,3),axis=0); geometry=geometry_encoding(object_name="cube2",geometry_type="box",dimensions=dimensions)
+    dimensions=np.ptp(object_triangles.reshape(-1,3),axis=0); geometry=geometry_encoding(object_name=object_type,geometry_type="box",dimensions=dimensions)
     values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration,object_radius]),object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]))
     digest=cache_hash(*[np.asarray(x) for x in values],kernel_version="warp-mesh-cache-v4.2-motion-gated")
     result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest,object_radius)

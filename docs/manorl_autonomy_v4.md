@@ -348,6 +348,16 @@ supports inspecting a GPU checkpoint on CPU; actual training retains the fixed
 device, and CUDA resume requires the saved logical visible-device RNG count.
 Only trusted local Torch checkpoint files are supported.
 
+## Object-type autonomy boundary
+
+The same v4 route accepts one shared object type selected by the package.
+Reference identity names provide the object/action pair; the runtime compiles
+that object's pinned collision geometry and does not hard-code cube2. Current
+capacity/persistent CCD settings remain the cube2-validated `121` contacts per
+world; new object types must be smoke-checked before B4096 production because
+mesh pair counts can differ. `--identity` remains the provenance witness, and
+all-package training still assigns every reference round-robin.
+
 ## Optional online teacher-action anchor (training supervision)
 
 `train --teacher-anchor-beta 1 --teacher-anchor-passes 2` adds mean-action

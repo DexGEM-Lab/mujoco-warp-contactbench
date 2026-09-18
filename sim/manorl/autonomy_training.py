@@ -45,10 +45,21 @@ def teacher_anchor_metadata(beta: float = 0.0, passes: int = 2) -> dict[str, Any
 
 
 def identity_split(catalog: TrajectoryCatalog, *, seed:int=0)->dict[str,Any]:
-    identities=tuple(t.identity.identity for t in catalog.trajectories); missing=[x for x in RESERVED_TRAIN_IDENTITIES if x not in identities]
-    if missing: raise ValueError(f"reserved TRAIN identities absent: {missing}")
-    reserved=[identities.index(x) for x in RESERVED_TRAIN_IDENTITIES]; rest=[i for i in range(len(identities)) if i not in reserved]
-    perm=np.random.default_rng(seed).permutation(rest).tolist(); payload={"contract":SPLIT_CONTRACT_ID,"seed":seed,"train_indices":reserved+perm[:37],"validation_indices":perm[37:42],"test_indices":perm[42:47]}
+    identities=tuple(t.identity.identity for t in catalog.trajectories)
+    if not identities:
+        raise ValueError("trajectory catalog must contain at least one identity")
+    reserved_names=[x for x in RESERVED_TRAIN_IDENTITIES if x in identities]
+    if len(reserved_names)==len(RESERVED_TRAIN_IDENTITIES):
+        reserved=[identities.index(x) for x in reserved_names]
+    else:
+        # New object/action packages do not contain the cube2 seed witnesses.
+        # Keep a deterministic three-identity TRAIN anchor without inventing a
+        # compatibility identity; all-reference training does not use this
+        # split for selection, but provenance still needs a stable contract.
+        reserved=list(range(min(3,len(identities))))
+    rest=[i for i in range(len(identities)) if i not in reserved]
+    perm=np.random.default_rng(seed).permutation(rest).tolist()
+    payload={"contract":SPLIT_CONTRACT_ID,"seed":seed,"train_indices":reserved+perm[:37],"validation_indices":perm[37:42],"test_indices":perm[42:47]}
     payload["digest"]=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest(); return payload
 
 class BatchedAutonomyAdapter:

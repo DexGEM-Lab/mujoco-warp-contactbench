@@ -82,28 +82,29 @@ class BatchedAutonomyRuntime:
         trajectories = tuple(trajectory) if isinstance(trajectory, (list, tuple)) else None
         if trajectories is not None and not trajectories:
             raise ValueError("reference trajectories must not be empty")
-        if trajectories is not None and any(t.identity.identity.split("_")[0] != "cube2" for t in trajectories):
-            raise ValueError("reference bank runtime requires shared cube2 object geometry; action IDs may differ")
+        if trajectories is not None and any(t.identity.identity.split("_")[0] != trajectories[0].identity.identity.split("_")[0] for t in trajectories):
+            raise ValueError("reference bank runtime requires one shared object type; action IDs may differ")
         self.trajectories = trajectories
         trajectory = trajectories[0] if trajectories is not None else trajectory
+        self.object_type = trajectory.identity.identity.split("_")[0]
         self.trajectory, self.full_horizon_diagnostic = trajectory, full_horizon_diagnostic
         self.mujoco, self.model = compile_model_metadata_only(
-            object_type="cube2", hand_side="right", physics_timestep=1 / 480
+            object_type=self.object_type, hand_side="right", physics_timestep=1 / 480
         )
         self.device = jax.devices(device)[0]
         self.mjx_model = mjx.put_model(self.model, device=self.device, impl="warp")
         if getattr(self.mjx_model, "_impl", None) is None:
             raise RuntimeError("v4 requires mjx.put_model(..., impl='warp')")
         self.producer = MjxWarpPhysicalProducer(
-            self.mujoco, self.model, object_type="cube2", hand_sides=("right",)
+            self.mujoco, self.model, object_type=self.object_type, hand_sides=("right",)
         )
         if int(self.model.opt.cone) != int(self.mujoco.mjtCone.mjCONE_PYRAMIDAL):
             raise RuntimeError("v4 supports only pyramidal contact cone")
-        self.cache = compile_reference_cache_v4(trajectory, device=device)
+        self.cache = compile_reference_cache_v4(trajectory, device=device, object_type=self.object_type)
         first_cache = self.cache
         self.env_ref = None
         if trajectories is not None:
-            self.cache = ReferenceBankV4([first_cache] + [compile_reference_cache_v4(t, device=device) for t in trajectories[1:]], device=self.device)
+            self.cache = ReferenceBankV4([first_cache] + [compile_reference_cache_v4(t, device=device, object_type=self.object_type) for t in trajectories[1:]], device=self.device)
             self.env_ref = j.arange(num_envs, dtype=j.int32) % len(trajectories)
         self.length = len(first_cache.q_feasible) if trajectories is None else self.cache.max_length
         self.lengths = j.full((num_envs,), self.length, j.int32) if self.env_ref is None else self.cache.lengths[self.env_ref]
@@ -116,7 +117,7 @@ class BatchedAutonomyRuntime:
             "physics_substeps": 4,
             "full_horizon_diagnostic": full_horizon_diagnostic,
         }
-        self.table_metadata = {"height": self.cache.table_height, "object_type": "cube2"}
+        self.table_metadata = {"height": self.cache.table_height, "object_type": self.object_type}
 
         # naconmax is one global contact arena, not a per-world capacity.
         # Explicit CCD scratch shares the same global allocation contract:
@@ -185,7 +186,7 @@ class BatchedAutonomyRuntime:
         self.indices = j.zeros((num_envs,), j.int32)
         self.pending_reset = j.zeros((num_envs,), bool)
         self.previous_command = self._reset_ctrl[:, :28]
-        self.object_vertices = j.asarray(object_collision_vertices("cube2"), j.float32)
+        self.object_vertices = j.asarray(object_collision_vertices(self.object_type), j.float32)
         self._transition_fn = jax.jit(self._transition)
         self._refresh(False, j.zeros((num_envs, 28), j.float32))
 
