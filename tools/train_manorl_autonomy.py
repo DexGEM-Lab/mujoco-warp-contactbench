@@ -52,6 +52,13 @@ def _catalog_and_trajectory(args):
 
 
 def _training_references(args, catalog, trajectory, split):
+    if getattr(args, "all_references", False):
+        references = list(catalog.trajectories)
+        if not references:
+            raise ValueError("all-reference training requires a non-empty package")
+        if any(t.identity.identity.split('_')[:2] != ["cube2", "02"] for t in references):
+            raise ValueError("all-reference v4 currently requires shared cube2:02 geometry/action")
+        return references
     if not getattr(args, "all_train_references", False):
         return trajectory
     references = [catalog.trajectories[i] for i in split["train_indices"]]
@@ -127,7 +134,9 @@ def _resolved_telemetry_config(adapter, args):
     return {"teacher_anchor": teacher_anchor_metadata(args.teacher_anchor_beta, args.teacher_anchor_passes), "ppo": ppo,
             "runtime": {"num_envs": adapter.num_envs, "raw_observation_dim": adapter.observation_dim,
                         "action_dim": adapter.action_dim, "control_timestep": adapter.runtime.cache.control_timestep,
-                        "physics_substeps": 4},
+                        "physics_substeps": 4,
+                        "reference_count": len(adapter.runtime.trajectories) if getattr(adapter.runtime, "trajectories", None) is not None else 1,
+                        "reference_assignment_mode": "all_package_references" if getattr(args, "all_references", False) else ("train_split_round_robin" if getattr(args, "all_train_references", False) else "single_reference")},
             "architecture": actor_critic_architecture(separate_critic=args.separate_critic),
             "thresholds": {"loaded_force_N": .02, "airborne_clearance_m": .005,
                            "severe_reason_bits": {"reference_complete": 1, "deviation": 2, "fallen": 4, "nonfinite": 8}},
@@ -139,10 +148,17 @@ def train(args):
     anchor = teacher_anchor_metadata(args.teacher_anchor_beta, args.teacher_anchor_passes)
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args); split = identity_split(catalog, seed=args.split_seed)
     identity_index = next(i for i, row in enumerate(catalog.trajectories) if row is trajectory)
-    if identity_index not in split["train_indices"]: raise ValueError("train identity must be in the deterministic TRAIN split")
+    if args.all_references and args.all_train_references:
+        raise ValueError("all-references and all-train-references are mutually exclusive")
+    if not args.all_references and identity_index not in split["train_indices"]:
+        raise ValueError("train identity must be in the deterministic TRAIN split")
     if args.total_transitions is not None and args.total_transitions != args.updates * args.rollouts * args.num_envs:
         raise ValueError("total-transitions must equal updates * rollouts * num-envs")
-    adapter = _adapter(args, _training_references(args, catalog, trajectory, split)); provenance = _provenance(catalog, split, adapter)
+    references = _training_references(args, catalog, trajectory, split)
+    adapter = _adapter(args, references); provenance = _provenance(catalog, split, adapter)
+    if args.all_references and "reference_assignment" in provenance:
+        provenance["reference_assignment"]["mode"] = "all_package_references"
+        provenance["reference_assignment"]["reference_count"] = len(references)
     warmstart_checkpoint = str(Path(args.warmstart).expanduser().resolve()) if args.warmstart else None
     mode = "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"
     config = {key: value for key, value in vars(args).items() if key not in {"fn", "wandb"}}
@@ -190,7 +206,7 @@ def train(args):
         del validation_model, validation_optimizer, payload
     config.update(lineage); provenance.update(lineage)
     config["wandb_run_id"] = args.wandb_run_id or os.environ.get("WANDB_RUN_ID")
-    metadata = {"training_contract": "manorl.autonomy.training.v4.multi_reference" if args.all_train_references else "manorl.autonomy.training.v4.single_reference", "config": config,
+    metadata = {"training_contract": "manorl.autonomy.training.v4.all_references" if args.all_references else ("manorl.autonomy.training.v4.multi_reference" if args.all_train_references else "manorl.autonomy.training.v4.single_reference"), "config": config,
                 "resolved": _resolved_telemetry_config(adapter, args), "provenance": provenance}
     run = _wandb(args, metadata)
     try:
@@ -307,7 +323,9 @@ def build_parser():
     train_parser.add_argument("--learning-epochs", type=int, default=4); train_parser.add_argument("--mini-batches", type=int, default=16); train_parser.add_argument("--total-transitions", type=int)
     train_parser.add_argument("--checkpoint", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt"); train_parser.add_argument("--checkpoint-interval", type=int, default=16)
     train_parser.add_argument("--learning-rate", type=float, default=3e-4, help="finite positive PPO Adam learning rate (default: 3e-4)")
-    train_parser.add_argument("--all-train-references", action="store_true", help="fixed round-robin assignment over all 40 deterministic TRAIN identities")
+    reference_group = train_parser.add_mutually_exclusive_group()
+    reference_group.add_argument("--all-train-references", action="store_true", help="fixed round-robin assignment over all 40 deterministic TRAIN identities")
+    reference_group.add_argument("--all-references", action="store_true", help="fixed round-robin assignment over every reference in the supplied package")
     train_parser.add_argument("--teacher-anchor-beta", type=float, default=0.0, help="optional post-PPO teacher-action MSE weight; training supervision only")
     train_parser.add_argument("--teacher-anchor-passes", type=int, default=2, help="full teacher-label minibatch passes after each PPO update")
     initialization = train_parser.add_mutually_exclusive_group()

@@ -391,15 +391,23 @@ This is an opt-in training intervention for closed-loop drift. An approach-prefi
 MSE improvement alone does not demonstrate physical grasp or contact fidelity;
 acceptance of a learned policy still requires full-start policy-only evaluation.
 
-## Multi-reference TRAIN runtime
+## Multi-reference training modes
 
 `train --all-train-references --split-seed 0` assigns environments round-robin
-in `identity_split(...)["train_indices"]` order over all 40 TRAIN identities.
-This route currently requires one cube2:02 geometry/action. The single-identity
-CLI remains the default, and frozen evaluation still selects one identity.
+in `identity_split(...)["train_indices"]` order over the 40 TRAIN identities.
+This preserves the original TRAIN-only multi-reference experiment.
+
+`train --all-references` assigns environments round-robin over every trajectory
+in the supplied package. The pinned cube2:02 package contains 50 references.
+Provenance records `reference_assignment.mode=all_package_references`, the
+ordered identities, and the reference count. Use B4096 for training when
+sampling all 50; reference count and environment count are independent.
+
+Both modes require shared cube2:02 geometry/action. The single-identity CLI
+remains the default, and frozen evaluation still selects one identity.
 The v4 checkpoint, raw957/PointNet/PPO, reward and physical clock are unchanged.
-Model-only warm-start retains the existing identity witness (2833); optimizer
-resume additionally checks the ordered reference assignment in provenance.
+Model-only warm-start retains the existing identity witness; optimizer resume
+requires an unchanged ordered reference assignment and mode.
 
 The bank stores time-varying cache fields as device `[R,T,...]` arrays, padded
 with the final row only for storage. Each environment clamps gathers and ends
@@ -412,7 +420,6 @@ identity throughout training. Subset resets restore only qpos/qvel/ctrl for
 finished worlds, then forward the global Warp contact arena. Identity rotation
 and heterogeneous geometry are outside this contract. Reference bank gathering
 and telemetry stay on-device; the CUDA adapter retains DLPack transfer.
-
 
 CPU teacher check on `cube2_02_2833`: intent gating first activates at frame162,
 and natural execution completes538/538 transitions (reason1), with130 frames

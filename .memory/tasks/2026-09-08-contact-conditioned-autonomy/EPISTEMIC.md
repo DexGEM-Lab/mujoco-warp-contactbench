@@ -1,3 +1,22 @@
+# All-package reference training mode
+
+The requested next experiment is multi-reference training over every trajectory
+in the pinned cube2:02 package, not frozen evaluation over those trajectories.
+The package contains 50 demonstrations (`cube2_02_*`), all action02. The case
+CLI now has explicit `--all-references`; it selects all package trajectories,
+assigns them round-robin across the configured training environments, skips the
+single-identity TRAIN-membership constraint, and records
+`reference_assignment.mode=all_package_references` plus the ordered count.
+`--all-train-references` remains the separate 40-TRAIN experiment.
+
+Training should use B4096, not B50: B50 is one environment per reference for
+screening; B4096 replicates the 50 references round-robin for PPO sampling.
+The intended run is fresh Adam/RNG from the successful run's model-only
+`initial.pt`, new reward, LR3e-5, separate critic, teacher-anchor beta1/pass2,
+1000 updates, and no optimizer resume. The 87-test focused suite and actual
+package selection (50 references) pass after the CLI change. Other cube2 action
+IDs (01/03/04) still lack compiled packages and are outside this experiment.
+
 # Current reward parameter set: reference-speed-gated contact priority
 
 User approved the source change and subsequently authorized one new

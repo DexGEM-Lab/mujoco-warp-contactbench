@@ -231,6 +231,7 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
     def with_anchor_defaults(config):
         config = dict(config)
         config.setdefault("all_train_references", False)
+        config.setdefault("all_references", False)
         config.setdefault("teacher_anchor_beta", 0.0)
         config.setdefault("teacher_anchor_passes", 2)
         config.setdefault("teacher_anchor", teacher_anchor_metadata())

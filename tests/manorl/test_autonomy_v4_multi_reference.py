@@ -88,6 +88,23 @@ def test_cli_selects_only_all_40_train_references():
     assert _training_references(args,catalog,rows[0],split) is rows[0]
 
 
+def test_cli_selects_all_package_references_without_split_filter():
+    from tools.train_manorl_autonomy import parse_args,_training_references
+    rows=[SimpleNamespace(identity=SimpleNamespace(identity=f'cube2_02_{i}')) for i in range(50)]
+    catalog=SimpleNamespace(trajectories=rows); split={'train_indices':list(range(40))}
+    args=parse_args(['train','--all-references'])
+    assert args.all_references and not args.all_train_references
+    assert _training_references(args,catalog,rows[0],split)==rows
+
+
+def test_all_reference_requires_shared_cube2_action():
+    from tools.train_manorl_autonomy import parse_args,_training_references
+    rows=[SimpleNamespace(identity=SimpleNamespace(identity='cube2_02_0')), SimpleNamespace(identity=SimpleNamespace(identity='cube2_03_1'))]
+    args=parse_args(['train','--all-references'])
+    with pytest.raises(ValueError,match='cube2:02'):
+        _training_references(args,SimpleNamespace(trajectories=rows),rows[0],{'train_indices':[0]})
+
+
 def test_multireference_telemetry_uses_own_targets_and_lengths():
     import torch
     from sim.manorl.autonomy_training import BatchedAutonomyAdapter
