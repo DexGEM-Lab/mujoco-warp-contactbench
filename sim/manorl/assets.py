@@ -263,10 +263,25 @@ def _object_record(object_type: str) -> dict[str, Any]:
 
 
 def _object_file_records(record: dict[str, Any]) -> tuple[dict[str, Any], ...]:
-    return (
-        record["urdf"], record["mjcf"], record["visual"],
-        *record["collisions"], *record["textures"],
-    )
+    """Return every materialized object file across supported manifest schemas.
+
+    The f98 autonomy asset contract predates optional per-object MJCF and texture
+    records. Newer manifests provide both; absence in the pinned older schema is
+    therefore valid, while malformed present values still fail closed.
+    """
+    records = [record["urdf"]]
+    mjcf = record.get("mjcf")
+    if mjcf is not None:
+        if not isinstance(mjcf, dict):
+            raise ValueError("DexStream object MJCF record must be a mapping")
+        records.append(mjcf)
+    records.append(record["visual"])
+    records.extend(record["collisions"])
+    textures = record.get("textures", [])
+    if not isinstance(textures, list):
+        raise ValueError("DexStream object texture records must be a list")
+    records.extend(textures)
+    return tuple(records)
 
 
 def supported_object_types() -> tuple[str, ...]:
@@ -831,8 +846,12 @@ def _object_body(
             scale=_format(visual_scale),
         )
         record = _object_record(runtime.object_type)
-        material = dict(record["material"])
-        textures = record["textures"]
+        # f98 manifests predate explicit material/texture records; preserve their
+        # authoritative object rgba while retaining the richer new schema.
+        material = dict(record.get("material", {"rgba": record.get("rgba", runtime.rgba)}))
+        textures = record.get("textures", [])
+        if not isinstance(textures, list):
+            raise ValueError(f"{runtime.object_type} textures must be a list")
         if "texture" in material:
             if len(textures) != 1:
                 raise ValueError(f"{runtime.object_type} material requires one texture")
@@ -854,7 +873,7 @@ def _object_body(
             mesh=f"{runtime.object_type}_visual_mesh",
             pos=_format(position),
             quat=_format(quaternion),
-            rgba=record["visual_rgba"],
+            rgba=str(record.get("visual_rgba", record.get("rgba", runtime.rgba))),
             material=material_name,
             contype="0",
             conaffinity="0",
@@ -1248,6 +1267,32 @@ def validate_compiled_model(
             raise ValueError(f"hand body gravity compensation missing: {name}")
 
 
+def compile_model_metadata_only(
+    servo: ServoConfig = ServoConfig(),
+    *,
+    object_type: str = OBJECT_TYPE,
+    visual_meshes: bool = False,
+    hand_side: str = "right",
+    physics_timestep: float = PHYSICS_TIMESTEP,
+) -> tuple[Any, Any]:
+    """Compile static model metadata without native ``MjData`` FK validation.
+
+    Warp-only consumers use this narrow constructor then validate kinematics
+    through MJX. Legacy ``compile_model`` retains its native static-FK oracle.
+    """
+    try:
+        import mujoco
+    except ImportError as exc:
+        raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
+    model = mujoco.MjModel.from_xml_string(
+        build_scene_xml(servo, object_type=object_type, visual_meshes=visual_meshes,
+                        hand_side=hand_side, physics_timestep=physics_timestep)
+    )
+    validate_compiled_model(mujoco, model, servo, object_type=object_type,
+                            hand_side=hand_side, physics_timestep=physics_timestep)
+    return mujoco, model
+
+
 def compile_model(
     servo: ServoConfig = ServoConfig(),
     *,
@@ -1262,22 +1307,9 @@ def compile_model(
         import mujoco
     except ImportError as exc:
         raise RuntimeError("mujoco is required to compile the ManoRL scene") from exc
-    model = mujoco.MjModel.from_xml_string(
-        build_scene_xml(
-            servo,
-            object_type=object_type,
-            visual_meshes=visual_meshes,
-            hand_side=hand_side,
-            physics_timestep=physics_timestep,
-        )
-    )
-    validate_compiled_model(
-        mujoco,
-        model,
-        servo,
-        object_type=object_type,
-        hand_side=hand_side,
-        physics_timestep=physics_timestep,
+    mujoco, model = compile_model_metadata_only(
+        servo, object_type=object_type, visual_meshes=visual_meshes,
+        hand_side=hand_side, physics_timestep=physics_timestep,
     )
     validate_static_fk(mujoco, model, object_type=object_type, hand_side=hand_side)
     return mujoco, model

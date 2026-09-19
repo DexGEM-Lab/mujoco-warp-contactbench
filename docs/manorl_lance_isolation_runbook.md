@@ -189,6 +189,10 @@ export MANORL_TIMEOUT=30d
 
 `MANORL_DATASET_PATH` remains source provenance. `MANORL_TRAJECTORY_PACKAGE` is the runtime data path. Supplying the package prevents Lance fallback.
 
+### Immutable deployment provenance
+
+A source archive deployed without `.git` must contain `DEPLOYED_COMMIT` at its source root. The file contains exactly the lowercase, full 40-character feature commit SHA used to build the archive. `tools/train_manorl_autonomy.py` records that value as `source_commit`; a missing marker deliberately falls through to `git rev-parse HEAD`, which fails for a non-Git archive instead of emitting an unknown revision. The asset pin is resolved from the real `assets/dexstream_digital_assets` Git repository unless that directory has its own valid deployment marker. Deployment preflight must continue to reject source-file hash or asset-pin mismatches.
+
 The current production contract is all 75 pairs, right-hand policy, 120 Hz source/reference/policy, 480 Hz physics with four equal substeps, pre-padding 180, post-padding 250, FiLM, terminal handling, unified object batch, persistent CCD, and 16 contacts/world.
 
 Check a live trainer boundary with:
