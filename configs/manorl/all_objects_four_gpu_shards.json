@@ -3,11 +3,12 @@
   "source": {
     "dataset": "/mnt/nas-222-projects/sunjieqiang/new_vla/mano_rl_refined_100_per_action_motion_v1.lance",
     "dataset_version": 1,
-    "rows": 12200,
-    "objects": 21,
-    "pairs": 122,
-    "high_confidence_rows": 8514,
-    "low_confidence_rows": 3686
+    "rows": 11700,
+    "objects": 20,
+    "pairs": 117,
+    "high_confidence_rows": 8157,
+    "low_confidence_rows": 3543,
+    "excluded": {"object": "scissor", "rows": 500, "pairs": 5, "reason": "user explicitly accepted omission because current pinned runtime has no scissor asset"}
   },
   "training_contract": {
     "policy_scope": "one independent shared policy per shard",
@@ -61,23 +62,16 @@
       "id": "shard-c",
       "host": "manorl-server1",
       "physical_gpu": 3,
-      "num_envs": 620,
-      "rows": 3100,
-      "pairs": 31,
-      "high_confidence_rows": 2089,
-      "low_confidence_rows": 1011,
-      "objects": ["banana", "cube1", "cylinder3", "cylinder7", "scissor"],
-      "largest_collision_piece_count": 9,
-      "complex_anchor_object": "scissor",
-      "status": "blocked_until_scissor_runtime_is_pinned_and_validated",
-      "scissor_source_candidate": {
-        "repository": "git@github.com:DexGEM-Lab/dexstream_digital-assets.git",
-        "commit": "120c2dc5c3495da7581746bfff9c5fb681fe9846",
-        "collision_pieces": 9,
-        "mass_kg": 0.075,
-        "note": "Current ManoRL asset commit 778614d omits scissor; do not silently substitute a primitive or another object."
-      },
-      "selector": "banana:01,banana:02,banana:03,banana:04,banana:09,banana:14,banana:18,cube1:01,cube1:02,cube1:03,cube1:04,cube1:09,cube1:10,cube1:18,cylinder3:01,cylinder3:02,cylinder3:03,cylinder3:04,cylinder3:07,cylinder3:09,cylinder3:10,cylinder3:14,cylinder3:18,cylinder7:01,cylinder7:03,cylinder7:10,scissor:01,scissor:02,scissor:03,scissor:04,scissor:12"
+      "num_envs": 520,
+      "rows": 2600,
+      "pairs": 26,
+      "high_confidence_rows": 1732,
+      "low_confidence_rows": 868,
+      "objects": ["banana", "cube1", "cylinder3", "cylinder7"],
+      "largest_collision_piece_count": 3,
+      "complex_anchor_object": "banana",
+      "status": "ready_after_shard_mtp_compile",
+      "selector": "banana:01,banana:02,banana:03,banana:04,banana:09,banana:14,banana:18,cube1:01,cube1:02,cube1:03,cube1:04,cube1:09,cube1:10,cube1:18,cylinder3:01,cylinder3:02,cylinder3:03,cylinder3:04,cylinder3:07,cylinder3:09,cylinder3:10,cylinder3:14,cylinder3:18,cylinder7:01,cylinder7:03,cylinder7:10"
     },
     {
       "id": "shard-d",
