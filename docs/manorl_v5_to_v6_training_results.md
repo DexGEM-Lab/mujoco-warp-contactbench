@@ -327,6 +327,32 @@ final_object_path_error_m = 0.10134772
 这与先前人工检查一致，并补充证明它接触后很快丢失、末端路径偏差超过10cm。
 摘要已保存为该评估目录下的`summary.json`。
 
+### 5.10 自动评估与最终视频队列
+
+CPU评估监督器已部署并在独立tmux中运行：
+
+```text
+tmux: manorl-v5-v6-eval
+script: /mnt/nas-222-projects/cty/manorl-autonomy/ops/
+        v5-v6-ablation-20260919/supervise_manorl_v5_v6_evaluation.py
+status: /mnt/nas-222-projects/cty/manorl-autonomy/outputs/
+        v5-v6-ablation-20260919/evaluation-queue.status.json
+```
+
+每个版本只有在正式训练`exit.status=0`后才进入评估，执行顺序为：
+
+1. 验证从update 50到1000的20个周期checkpoint完整存在；
+2. 对20个checkpoint逐个执行CPU自然首次终止评估；
+3. 使用5.9节物理排序选最佳checkpoint，不按Reward选取；
+4. 从checkpoint provenance读取固定5条验证和5条测试身份；
+5. 对最佳checkpoint计算验证/测试严格抓取成功率；
+6. 从标准训练身份与10条held-out轨迹中选择物理表现最好的一条；
+7. 渲染`Policy actual / Reference`并排MP4，并通过`ffprobe`或完整
+   `imageio`解码读回验证分辨率、帧数、帧率、时长和文件大小。
+
+评估使用CPU，不占用两张训练GPU。监督器目前处于等待状态；v5和v5.25均未结束，
+因此尚未启动任何checkpoint扫描，也没有提前生成“最佳”视频。
+
 ## 6. 正式结果表
 
 | 版本 | 参数量 | updates | 转换数 | 墙钟时间 | 自然成功率 | 最佳抓取表现 | 收敛判断 | 视频 |
