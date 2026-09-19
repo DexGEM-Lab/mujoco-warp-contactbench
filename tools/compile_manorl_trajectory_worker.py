@@ -114,11 +114,29 @@ def _decode(
     if not isinstance(requests, list) or not requests:
         raise ValueError("decode request must be a non-empty candidate list")
     dataset = _dataset(selection)
-    rows = dataset.take(
-        [int(item["row_index"]) for item in requests],
-        columns=list(LANCE_COLUMNS)
-        + (["provenance"] if selection.generated_reference or rl_episode_reference else [])
-    ).to_pylist()
+    decode_columns = list(LANCE_COLUMNS) + (
+        ["provenance"]
+        if selection.generated_reference or rl_episode_reference
+        else []
+    )
+    if rl_episode_reference:
+        # Lance 7 can misdecode nested list offsets when sparse row indices are
+        # gathered together from encodings21 datasets. Each isolated worker
+        # therefore reads refined RL rows one at a time; the coordinator still
+        # accounts for the shard atomically.
+        rows = []
+        for item in requests:
+            values = dataset.take(
+                [int(item["row_index"])], columns=decode_columns
+            ).to_pylist()
+            if len(values) != 1:
+                raise RuntimeError("Lance did not return one requested RL episode row")
+            rows.append(values[0])
+    else:
+        rows = dataset.take(
+            [int(item["row_index"]) for item in requests],
+            columns=decode_columns,
+        ).to_pylist()
     if len(rows) != len(requests):
         raise RuntimeError("Lance did not return every requested trajectory row")
     trajectories = []
