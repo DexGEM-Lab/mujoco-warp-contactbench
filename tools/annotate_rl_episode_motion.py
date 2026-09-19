@@ -174,7 +174,7 @@ def _validate_output(
         field.name for field in source_schema.field("trajectory_metadata").type
     )
     statuses: Counter[str] = Counter()
-    uuids: set[str] = set()
+    uuid_counts: Counter[str] = Counter()
     checked = 0
     for start in range(0, source_rows, batch_size):
         stop = min(source_rows, start + batch_size)
@@ -199,9 +199,7 @@ def _validate_output(
             index = row["index"]
             metadata = row["trajectory_metadata"]
             row_uuid = str(index["uuid"])
-            if row_uuid in uuids:
-                raise RuntimeError(f"duplicate UUID in annotated output: {row_uuid}")
-            uuids.add(row_uuid)
+            uuid_counts[row_uuid] += 1
             movement = metadata["trajectory_info"]["object_move"]
             annotation = metadata["reference_motion_annotation"]
             if (
@@ -218,11 +216,15 @@ def _validate_output(
                 raise RuntimeError(f"invalid movement annotation for UUID {row_uuid}")
             statuses[str(annotation["status"])] += 1
         checked += len(indices)
-    if checked != source_rows or len(uuids) != source_rows:
-        raise RuntimeError("annotated validation did not account for every source UUID")
+    if checked != source_rows:
+        raise RuntimeError("annotated validation did not account for every source row")
+    duplicate_counts = [count for count in uuid_counts.values() if count > 1]
     return {
         "validated_rows": checked,
-        "unique_uuids": len(uuids),
+        "distinct_uuids": len(uuid_counts),
+        "duplicate_uuid_values": len(duplicate_counts),
+        "duplicate_uuid_extra_rows": sum(count - 1 for count in duplicate_counts),
+        "maximum_uuid_multiplicity": max(duplicate_counts, default=1),
         "status_counts": dict(sorted(statuses.items())),
         "original_columns_exact": True,
     }

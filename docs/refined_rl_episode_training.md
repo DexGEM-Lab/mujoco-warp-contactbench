@@ -106,14 +106,16 @@ The command refuses existing outputs and leaves the source immutable. It adds:
 - `trajectory_metadata.trajectory_info.object_move[0].start_frame`;
 - `trajectory_metadata.reference_motion_annotation` with confidence, status,
   motion mode, observed clock, stable window and displacement diagnostics;
-- `<output>.motion_annotations.jsonl`, one audit record per UUID; and
+- `<output>.motion_annotations.jsonl`, one audit record per source row/UUID; and
 - `<output>.motion_annotations.manifest.json`, containing thresholds,
   distributions and validation evidence.
 
 Publication is complete only after the validator proves all original columns
-are exactly equal for all rows, row count and UUID count match, and every
-movement interval is in range. Training-package compilation consumes the new
-`object_move` start and maps it through timestamp-preserving 120 Hz resampling.
+are exactly equal for all rows, row count and the ordered UUID sequence match,
+and every movement interval is in range. Source UUIDs are not assumed unique;
+duplicate multiplicity is reported in the manifest. Training-package
+compilation consumes the new `object_move` start and maps it through
+timestamp-preserving 120 Hz resampling.
 
 ## Train from the package
 
