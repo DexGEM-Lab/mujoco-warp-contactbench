@@ -12,10 +12,13 @@ from sim.manorl.autonomy_contracts import (
     RAW_OBSERVATION_DIM,
     ENCODED_OBSERVATION_DIM,
     RAW_OBSERVATION_DIM_V5,
+    RAW_OBSERVATION_DIM_V55,
+    RAW_OBSERVATION_DIM_V575,
     RAW_OBSERVATION_DIM_V6,
     encoded_observation_slices,
     raw_observation_slices,
     raw_observation_slices_v5,
+    raw_observation_slices_v55,
 )
 
 REGIONS = 16
@@ -97,6 +100,7 @@ class ReferenceCacheV4:
     hand_cloud_reference: np.ndarray | None = None
     object_mass: float = 1.0
     gravity_world: np.ndarray | None = None
+    hand_region_pose_reference: np.ndarray | None = None
     def __post_init__(self):
         t = len(self.q_feasible)
         expected = {"q_feasible":(t,28), "q_raw":(t,28), "q_lower":(28,), "q_upper":(28,), "object_origin":(t,3), "object_quat_xyzw":(t,4), "palm_origin":(t,3), "palm_quat_xyzw":(t,4), "object_v_com":(t,3), "object_w":(t,3), "palm_v":(t,3), "palm_w":(t,3), "region_anchor_hand":(t,16,3), "region_anchor_object":(t,16,3), "delta_ref":(t,16,3), "signed_gap":(t,16), "proximity":(t,16), "confidence":(t,16), "valid":(t,16), "reference_bottom":(t,), "points_object_local":(64,3), "object_geometry":(12,), "support_shift":(3,)}
@@ -112,6 +116,10 @@ class ReferenceCacheV4:
         if self.hand_cloud_reference is not None:
             cloud=np.asarray(self.hand_cloud_reference)
             if cloud.shape != (len(self.q_feasible),256,3) or not np.all(np.isfinite(cloud)): raise ValueError("v5 hand cloud reference must be finite (T,256,3)")
+        if self.hand_region_pose_reference is not None:
+            pose=np.asarray(self.hand_region_pose_reference)
+            if pose.shape != (len(self.q_feasible),16,9) or not np.all(np.isfinite(pose)):
+                raise ValueError("v5.5 hand region pose reference must be finite (T,16,9)")
         if not np.isfinite(self.object_mass) or self.object_mass <= 0:
             raise ValueError("object mass must be positive finite")
         if self.gravity_world is not None:
@@ -127,6 +135,7 @@ REFERENCE_TIME_FIELDS = (
     "palm_quat_xyzw", "object_v_com", "object_w", "palm_v", "palm_w",
     "region_anchor_hand", "region_anchor_object", "delta_ref", "signed_gap",
     "proximity", "confidence", "valid", "reference_bottom", "hand_cloud_reference",
+    "hand_region_pose_reference",
 )
 
 class ReferenceBankV4:
@@ -323,6 +332,25 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     # v5: 16 points per region (every 8th of the 128 samples), object-local frame.
     hand_cloud_template=hand_samples[:, ::8, :].reshape(256,3)
     hand_cloud_reference=object_local[:, :, ::8, :].reshape(T,256,3)
+    hand_region_position_reference=np.asarray(
+        quat_unrotate(
+            j.asarray(object_q[:,None]),
+            j.asarray(hand_origin-object_origin[:,None]),
+        )
+    )
+    hand_region_quat_reference=np.asarray(
+        quat_mul(
+            quat_conj(j.asarray(object_q[:,None])),
+            j.asarray(hand_q),
+        )
+    )
+    hand_region_pose_reference=np.concatenate(
+        (
+            hand_region_position_reference,
+            np.asarray(rot6(j.asarray(hand_region_quat_reference))),
+        ),
+        axis=-1,
+    )
     points=object_local.reshape(-1,3); closest,signed,_=signed_closest_convex_mesh(points,object_triangles); closest=np.asarray(closest).reshape(T,16,128,3); signed=np.asarray(signed).reshape(T,16,128)
     chosen=np.argmin(np.abs(signed),axis=-1); rows=np.arange(T)[:,None]; region=np.arange(16)[None,:]
     ah=hand_samples[None].repeat(T,axis=0)[rows,region,chosen]
@@ -340,9 +368,9 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     dimensions=np.ptp(object_triangles.reshape(-1,3),axis=0); geometry=geometry_encoding(object_name=object_type,geometry_type="box",dimensions=dimensions)
     object_mass=float(model.body_subtreemass[producer.object_body_id])
     gravity_world=np.asarray(model.opt.gravity,dtype=np.float64)
-    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration,object_radius,object_mass]),gravity_world,object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]),hand_cloud_template,hand_cloud_reference)
+    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration,object_radius,object_mass]),gravity_world,object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]),hand_cloud_template,hand_cloud_reference,hand_region_pose_reference)
     digest=cache_hash(*[np.asarray(x) for x in values],kernel_version="warp-mesh-cache-v4.2-motion-gated")
-    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest,object_radius,hand_cloud_template,hand_cloud_reference,object_mass,gravity_world)
+    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest,object_radius,hand_cloud_template,hand_cloud_reference,object_mass,gravity_world,hand_region_pose_reference)
     for name in result.__dataclass_fields__:
         value=getattr(result,name)
         if isinstance(value,np.ndarray): value.setflags(write=False)
@@ -586,6 +614,114 @@ def build_raw_observation_v5(physical: V4Physical, contact: V4Contact, cache: Re
     return raw
 
 
+def build_raw_observation_v55(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
+    """v5.5 observation: v5 plus object-frame reference pose per hand region."""
+    import jax.numpy as j
+
+    if cache.hand_region_pose_reference is None:
+        raise ValueError("v5.5 requires per-frame hand region goal poses")
+    base=build_raw_observation_v5(
+        physical,contact,cache,index,previous_command,env_ref
+    )
+    slices=raw_observation_slices_v5()
+    batch=physical.q_raw.shape[0]
+    gather=_gather(cache,index,env_ref=env_ref)
+    goal=j.asarray(cache.hand_region_pose_reference)[gather]
+    goal=goal.at[...,:3].divide(RELATIVE_POSITION).reshape(batch,144)
+    raw=j.concatenate((
+        base[:,slices["autonomous_actual"]],
+        base[:,slices["autonomous_reference"]],
+        base[:,slices["autonomous_future"]],
+        base[:,slices["contact_intent"]],
+        goal,
+        base[:,slices["object_point_cloud_raw"]],
+        base[:,slices["hand_point_cloud_raw"]],
+        base[:,slices["action_types"]],
+        base[:,slices["object_geometry"]],
+    ),axis=-1)
+    if raw.shape[-1] != RAW_OBSERVATION_DIM_V55:
+        raise AssertionError(
+            f"v5.5 raw ABI {raw.shape[-1]} != {RAW_OBSERVATION_DIM_V55}"
+        )
+    return raw
+
+
+def _region_dynamic_contact_and_object_wrench(
+    physical: V4Physical,
+    contact: V4Contact,
+    cache: ReferenceCacheV4,
+):
+    """Return the shared v5.75/v6 physically normalized dynamic blocks."""
+    import jax.numpy as j
+
+    if contact.object_all_torque is None:
+        raise ValueError("dynamic wrench observations require total object torque")
+    batch=physical.q_raw.shape[0]
+    C=lambda value:j.asarray(value)
+    gravity=C(
+        cache.gravity_world
+        if cache.gravity_world is not None
+        else np.asarray([0.,0.,-9.81])
+    )
+    force_scale=j.maximum(C(cache.object_mass)*j.linalg.norm(gravity),1e-6)
+    torque_scale=j.maximum(force_scale*C(cache.object_radius),1e-6)
+    object_q=physical.object_quat_xyzw
+    active=(contact.paired_count>0).astype(physical.q_raw.dtype)
+    count=j.log1p(contact.paired_count.astype(physical.q_raw.dtype))
+    slip=quat_unrotate(
+        object_q[:,None],contact.tangential_slip
+    )/CONTACT_VELOCITY
+    dynamic=j.concatenate(
+        (active[...,None],count[...,None],slip),axis=-1
+    ).reshape(batch,80)
+    hand_force=j.sum(contact.paired_force_on_object,axis=1)
+    hand_torque=j.sum(contact.paired_torque_com,axis=1)
+    other_force=contact.object_all_force-hand_force
+    other_torque=contact.object_all_torque-hand_torque
+    wrench=j.concatenate((
+        quat_unrotate(
+            object_q,
+            j.broadcast_to(C(gravity)*C(cache.object_mass),(batch,3)),
+        )/force_scale,
+        j.arcsinh(quat_unrotate(object_q,hand_force)/force_scale),
+        j.arcsinh(quat_unrotate(object_q,hand_torque)/torque_scale),
+        j.arcsinh(quat_unrotate(object_q,other_force)/force_scale),
+        j.arcsinh(quat_unrotate(object_q,other_torque)/torque_scale),
+    ),axis=-1)
+    return dynamic,wrench
+
+
+def build_raw_observation_v575(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
+    """v5.75 observation with region dynamic contact, slip and object wrench."""
+    import jax.numpy as j
+
+    base=build_raw_observation_v55(
+        physical,contact,cache,index,previous_command,env_ref
+    )
+    slices=raw_observation_slices_v55()
+    dynamic,wrench=_region_dynamic_contact_and_object_wrench(
+        physical,contact,cache
+    )
+    raw=j.concatenate((
+        base[:,slices["autonomous_actual"]],
+        base[:,slices["autonomous_reference"]],
+        base[:,slices["autonomous_future"]],
+        base[:,slices["contact_intent"]],
+        base[:,slices["hand_region_goal_pose"]],
+        dynamic,
+        wrench,
+        base[:,slices["object_point_cloud_raw"]],
+        base[:,slices["hand_point_cloud_raw"]],
+        base[:,slices["action_types"]],
+        base[:,slices["object_geometry"]],
+    ),axis=-1)
+    if raw.shape[-1] != RAW_OBSERVATION_DIM_V575:
+        raise AssertionError(
+            f"v5.75 raw ABI {raw.shape[-1]} != {RAW_OBSERVATION_DIM_V575}"
+        )
+    return raw
+
+
 def build_raw_observation_v6(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
     """VoxMani-inspired v6 observation with region-bound contact and goal geometry.
 
@@ -597,9 +733,6 @@ def build_raw_observation_v6(physical: V4Physical, contact: V4Contact, cache: Re
 
     if cache.hand_cloud_reference is None:
         raise ValueError("v6 requires the per-frame reference hand cloud")
-    if contact.object_all_torque is None:
-        raise ValueError("v6 requires total object contact torque")
-
     base=build_raw_observation_v5(physical,contact,cache,index,previous_command,env_ref)
     slices=raw_observation_slices_v5()
     batch=physical.q_raw.shape[0]
@@ -608,7 +741,6 @@ def build_raw_observation_v6(physical: V4Physical, contact: V4Contact, cache: Re
 
     gravity=C(cache.gravity_world if cache.gravity_world is not None else np.asarray([0.,0.,-9.81]))
     force_scale=j.maximum(C(cache.object_mass)*j.linalg.norm(gravity),1e-6)
-    torque_scale=j.maximum(force_scale*C(cache.object_radius),1e-6)
     object_q=physical.object_quat_xyzw
 
     paired_force=j.arcsinh(
@@ -626,17 +758,9 @@ def build_raw_observation_v6(physical: V4Physical, contact: V4Contact, cache: Re
         slip,
     ),axis=-1).reshape(batch,160)
 
-    hand_force=j.sum(contact.paired_force_on_object,axis=1)
-    hand_torque=j.sum(contact.paired_torque_com,axis=1)
-    other_force=contact.object_all_force-hand_force
-    other_torque=contact.object_all_torque-hand_torque
-    object_wrench=j.concatenate((
-        quat_unrotate(object_q,j.broadcast_to(C(gravity)*C(cache.object_mass),(batch,3)))/force_scale,
-        j.arcsinh(quat_unrotate(object_q,hand_force)/force_scale),
-        j.arcsinh(quat_unrotate(object_q,hand_torque)/torque_scale),
-        j.arcsinh(quat_unrotate(object_q,other_force)/force_scale),
-        j.arcsinh(quat_unrotate(object_q,other_torque)/torque_scale),
-    ),axis=-1)
+    _,object_wrench=_region_dynamic_contact_and_object_wrench(
+        physical,contact,cache
+    )
 
     reference_hand=C(cache.hand_cloud_reference)[gather].reshape(batch,768)/RELATIVE_POSITION
     raw=j.concatenate((

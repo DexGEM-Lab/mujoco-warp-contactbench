@@ -34,6 +34,30 @@ OBSERVATION_CONTRACT_ID_V5: Final = "manorl.autonomy.observation.v5.pointcloud"
 CHECKPOINT_FORMAT_V5: Final = "manorl.autonomy.ppo.v5"
 RAW_OBSERVATION_DIM_V5: Final = 1342
 ENCODED_OBSERVATION_DIM_V5: Final = 510
+# v5.25 preserves the v5 flat ABI while changing only the current-hand
+# encoder from one global PointNet to 16 identity-preserving region tokens.
+OBSERVATION_CONTRACT_ID_V525: Final = (
+    "manorl.autonomy.observation.v5.25.region-hand"
+)
+CHECKPOINT_FORMAT_V525: Final = "manorl.autonomy.ppo.v5.25"
+RAW_OBSERVATION_DIM_V525: Final = RAW_OBSERVATION_DIM_V5
+ENCODED_OBSERVATION_DIM_V525: Final = ENCODED_OBSERVATION_DIM_V5
+# v5.5 adds one object-frame pose goal per hand region and one hand-only
+# cross-attention layer while preserving the global object PointNet and MLP.
+OBSERVATION_CONTRACT_ID_V55: Final = (
+    "manorl.autonomy.observation.v5.5.region-hand-goal"
+)
+CHECKPOINT_FORMAT_V55: Final = "manorl.autonomy.ppo.v5.5"
+RAW_OBSERVATION_DIM_V55: Final = 1486
+ENCODED_OBSERVATION_DIM_V55: Final = ENCODED_OBSERVATION_DIM_V5
+# v5.75 adds region-bound dynamic contact/slip and an object wrench without
+# adopting the complete v6 object-patch / dual-fusion-tower architecture.
+OBSERVATION_CONTRACT_ID_V575: Final = (
+    "manorl.autonomy.observation.v5.75.contact-wrench"
+)
+CHECKPOINT_FORMAT_V575: Final = "manorl.autonomy.ppo.v5.75"
+RAW_OBSERVATION_DIM_V575: Final = 1581
+ENCODED_OBSERVATION_DIM_V575: Final = 525
 # v6 keeps the v4 MDP/PPO/action semantics while adopting the useful parts
 # of VoxMani v0.5's observation and token-fusion design.
 OBSERVATION_CONTRACT_ID_V6: Final = "manorl.autonomy.observation.v6.region-token-cross-attention"
@@ -61,6 +85,30 @@ RAW_OBSERVATION_FIELDS_V5: Final[tuple[tuple[str, int], ...]] = (
     ("autonomous_future", 12), ("contact_intent", 80),
     ("object_point_cloud_raw", 192), ("hand_point_cloud_raw", 768),
     ("action_types", 50), ("object_geometry", 12),
+)
+RAW_OBSERVATION_FIELDS_V55: Final[tuple[tuple[str, int], ...]] = (
+    ("autonomous_actual", 119),
+    ("autonomous_reference", 109),
+    ("autonomous_future", 12),
+    ("contact_intent", 80),
+    ("hand_region_goal_pose", 144),
+    ("object_point_cloud_raw", 192),
+    ("hand_point_cloud_raw", 768),
+    ("action_types", 50),
+    ("object_geometry", 12),
+)
+RAW_OBSERVATION_FIELDS_V575: Final[tuple[tuple[str, int], ...]] = (
+    ("autonomous_actual", 119),
+    ("autonomous_reference", 109),
+    ("autonomous_future", 12),
+    ("contact_intent", 80),
+    ("hand_region_goal_pose", 144),
+    ("hand_region_dynamic_contact", 80),
+    ("object_wrench", 15),
+    ("object_point_cloud_raw", 192),
+    ("hand_point_cloud_raw", 768),
+    ("action_types", 50),
+    ("object_geometry", 12),
 )
 ENCODED_OBSERVATION_FIELDS_V5: Final[tuple[tuple[str, int], ...]] = (
     ("autonomous_actual", 119), ("autonomous_reference", 109),
@@ -94,6 +142,8 @@ def encoded_observation_slices() -> dict[str, slice]: return _slices(ENCODED_OBS
 def observation_slices() -> dict[str, slice]: return raw_observation_slices()
 def raw_observation_slices_v5() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V5)
 def encoded_observation_slices_v5() -> dict[str, slice]: return _slices(ENCODED_OBSERVATION_FIELDS_V5)
+def raw_observation_slices_v55() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V55)
+def raw_observation_slices_v575() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V575)
 def raw_observation_slices_v6() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V6)
 
 @dataclass(frozen=True)
@@ -158,6 +208,77 @@ OBSERVATION_CONTRACT_V5 = AutonomousObservationContractV5()
 
 
 @dataclass(frozen=True)
+class AutonomousObservationContractV525:
+    version: str = OBSERVATION_CONTRACT_ID_V525
+    raw_dimension: int = RAW_OBSERVATION_DIM_V525
+    encoded_dimension: int = ENCODED_OBSERVATION_DIM_V525
+    hand_regions: int = 16
+    points_per_region: int = 16
+    region_embedding: int = 64
+
+    def __post_init__(self) -> None:
+        if (
+            self.version != OBSERVATION_CONTRACT_ID_V525
+            or self.raw_dimension != RAW_OBSERVATION_DIM_V5
+            or self.encoded_dimension != ENCODED_OBSERVATION_DIM_V5
+            or (self.hand_regions, self.points_per_region, self.region_embedding)
+            != (16, 16, 64)
+        ):
+            raise ValueError("v5.25 region-hand observation ABI drifted")
+
+
+OBSERVATION_CONTRACT_V525 = AutonomousObservationContractV525()
+
+
+@dataclass(frozen=True)
+class AutonomousObservationContractV55:
+    version: str = OBSERVATION_CONTRACT_ID_V55
+    raw_dimension: int = RAW_OBSERVATION_DIM_V55
+    encoded_dimension: int = ENCODED_OBSERVATION_DIM_V55
+    hand_regions: int = 16
+    goal_pose_per_region: int = 9
+    cross_attention_layers: int = 1
+
+    def __post_init__(self) -> None:
+        if (
+            self.version != OBSERVATION_CONTRACT_ID_V55
+            or self.raw_dimension != sum(width for _, width in RAW_OBSERVATION_FIELDS_V55)
+            or self.encoded_dimension != ENCODED_OBSERVATION_DIM_V5
+            or (self.hand_regions, self.goal_pose_per_region)
+            != (16, 9)
+            or self.cross_attention_layers != 1
+        ):
+            raise ValueError("v5.5 region-goal observation ABI drifted")
+
+
+OBSERVATION_CONTRACT_V55 = AutonomousObservationContractV55()
+
+
+@dataclass(frozen=True)
+class AutonomousObservationContractV575:
+    version: str = OBSERVATION_CONTRACT_ID_V575
+    raw_dimension: int = RAW_OBSERVATION_DIM_V575
+    encoded_dimension: int = ENCODED_OBSERVATION_DIM_V575
+    hand_regions: int = 16
+    dynamic_contact_per_region: int = 5
+    object_wrench_dimension: int = 15
+
+    def __post_init__(self) -> None:
+        if (
+            self.version != OBSERVATION_CONTRACT_ID_V575
+            or self.raw_dimension != sum(width for _, width in RAW_OBSERVATION_FIELDS_V575)
+            or self.encoded_dimension != ENCODED_OBSERVATION_DIM_V575
+            or (self.hand_regions, self.dynamic_contact_per_region)
+            != (16, 5)
+            or self.object_wrench_dimension != 15
+        ):
+            raise ValueError("v5.75 contact-wrench observation ABI drifted")
+
+
+OBSERVATION_CONTRACT_V575 = AutonomousObservationContractV575()
+
+
+@dataclass(frozen=True)
 class AutonomousObservationContractV6:
     version: str = OBSERVATION_CONTRACT_ID_V6
     raw_dimension: int = RAW_OBSERVATION_DIM_V6
@@ -205,6 +326,58 @@ def validate_v5_checkpoint_metadata(metadata: dict[str, object]) -> None:
             raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
     if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
         raise ValueError("incompatible v5 policy sampling contract")
+
+
+def validate_v525_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    required = {
+        "checkpoint_format": CHECKPOINT_FORMAT_V525,
+        "observation_contract": OBSERVATION_CONTRACT_ID_V525,
+        "reward_contract": REWARD_CONTRACT_ID,
+        "action_contract": ACTION_CONTRACT_ID,
+    }
+    for name, expected in required.items():
+        if metadata.get(name) != expected:
+            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
+    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
+        raise ValueError("incompatible v5.25 policy sampling contract")
+
+
+def _validate_intermediate_checkpoint_metadata(
+    metadata: dict[str, object],
+    *,
+    checkpoint_format: str,
+    observation_contract: str,
+    version: str,
+) -> None:
+    required = {
+        "checkpoint_format": checkpoint_format,
+        "observation_contract": observation_contract,
+        "reward_contract": REWARD_CONTRACT_ID,
+        "action_contract": ACTION_CONTRACT_ID,
+    }
+    for name, expected in required.items():
+        if metadata.get(name) != expected:
+            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
+    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
+        raise ValueError(f"incompatible {version} policy sampling contract")
+
+
+def validate_v55_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    _validate_intermediate_checkpoint_metadata(
+        metadata,
+        checkpoint_format=CHECKPOINT_FORMAT_V55,
+        observation_contract=OBSERVATION_CONTRACT_ID_V55,
+        version="v5.5",
+    )
+
+
+def validate_v575_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    _validate_intermediate_checkpoint_metadata(
+        metadata,
+        checkpoint_format=CHECKPOINT_FORMAT_V575,
+        observation_contract=OBSERVATION_CONTRACT_ID_V575,
+        version="v5.75",
+    )
 
 
 def validate_v6_checkpoint_metadata(metadata: dict[str, object]) -> None:

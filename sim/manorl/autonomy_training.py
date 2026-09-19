@@ -35,6 +35,14 @@ from sim.manorl.autonomy_v6_model import (
     AutonomyActorCriticV6,
     actor_critic_architecture_v6,
 )
+from sim.manorl.autonomy_v5_intermediate_model import (
+    AutonomyActorCriticV525,
+    AutonomyActorCriticV55,
+    AutonomyActorCriticV575,
+    actor_critic_architecture_v525,
+    actor_critic_architecture_v55,
+    actor_critic_architecture_v575,
+)
 from sim.manorl.model import PointNetEncoder
 from sim.manorl.trajectory_package import TrajectoryCatalog
 from sim.manorl.autonomy_v4 import _gather, reference_lengths
@@ -327,6 +335,21 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
             adapter.observation_space,adapter.action_space,device=device,
             separate_critic=separate_critic,clip_actions=False
         )
+    elif policy_version == "v5.25":
+        model=AutonomyActorCriticV525(
+            adapter.observation_space,adapter.action_space,device=device,
+            separate_critic=separate_critic,clip_actions=False
+        )
+    elif policy_version == "v5.5":
+        model=AutonomyActorCriticV55(
+            adapter.observation_space,adapter.action_space,device=device,
+            separate_critic=separate_critic,clip_actions=False
+        )
+    elif policy_version == "v5.75":
+        model=AutonomyActorCriticV575(
+            adapter.observation_space,adapter.action_space,device=device,
+            separate_critic=separate_critic,clip_actions=False
+        )
     elif policy_version == "v6":
         model=AutonomyActorCriticV6(
             adapter.observation_space,adapter.action_space,device=device,
@@ -347,6 +370,12 @@ def actor_critic_architecture_for_version(
         return actor_critic_architecture(separate_critic=separate_critic)
     if policy_version == "v5":
         return actor_critic_architecture_v5(separate_critic=separate_critic)
+    if policy_version == "v5.25":
+        return actor_critic_architecture_v525(separate_critic=separate_critic)
+    if policy_version == "v5.5":
+        return actor_critic_architecture_v55(separate_critic=separate_critic)
+    if policy_version == "v5.75":
+        return actor_critic_architecture_v575(separate_critic=separate_critic)
     if policy_version == "v6":
         return actor_critic_architecture_v6()
     raise ValueError(f"unsupported policy version: {policy_version!r}")
@@ -367,6 +396,21 @@ def model_for_version(
         )
     if policy_version == "v5":
         return AutonomyActorCriticV5(
+            observation_space, action_space, device=device,
+            separate_critic=separate_critic
+        )
+    if policy_version == "v5.25":
+        return AutonomyActorCriticV525(
+            observation_space, action_space, device=device,
+            separate_critic=separate_critic
+        )
+    if policy_version == "v5.5":
+        return AutonomyActorCriticV55(
+            observation_space, action_space, device=device,
+            separate_critic=separate_critic
+        )
+    if policy_version == "v5.75":
+        return AutonomyActorCriticV575(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )

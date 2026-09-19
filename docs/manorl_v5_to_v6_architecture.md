@@ -1,6 +1,7 @@
 # 两个 v5 架构与 ManoRL v6 架构记录
 
-状态：2026-09-19 已完成代码命名和架构实现，并补充分阶段迭代路线。本文中的
+状态：2026-09-19 五个阶段版本均已完成代码实现；正式训练与自然终止评估仍以
+训练记录文档为准。本文中的
 “两个 v5”分别指：
 
 1. **ManoRL v5-pointcloud**：`mujoco-warp-contactbench` 的
@@ -23,9 +24,9 @@ Model architecture:   manorl.autonomy.actor_critic.v6.region-token-cross-attenti
 
 实现状态边界：
 
-- **已实现并完成静态/依赖环境测试**：ManoRL v5-pointcloud、ManoRL v6；
-- **设计方案，尚未实现或训练**：ManoRL v5.25、v5.5、v5.75；
-- 下文中间版本的参数量均为待实现测量或设计估算，不能视为实测结果；
+- **已实现并完成聚焦依赖环境测试**：ManoRL v5、v5.25、v5.5、v5.75、v6；
+- 下文参数量来自当前代码的精确可训练参数统计；
+- 实现通过不等同于训练收敛或抓取成功，后者只记录在正式实验结果中；
 - 本文中的 **ManoRL v5.5** 是从ManoRL v5走向v6的过渡版本，不是
   `VoxMani v0.5` 或本文简称的“VoxMani v5”。
 
@@ -334,17 +335,13 @@ ManoRL v5 → v5.25 → v5.5 → v5.75 → v6
 | 版本 | 状态 | 原始观测 | 核心改动 | Attention | 参数量 |
 |---|---|---:|---|---|---:|
 | v5 | 已实现 | 1342 | 双全局PointNet | 无 | 285,753 |
-| v5.25 | 计划 | 1342 | 当前手点云改为16个区域Token | 无 | 待实现测量 |
-| v5.5 | 计划 | 1486 | 参考手区域位姿 + 1层Cross-Attention | 1层手部Cross | 预计35万–50万 |
-| v5.75 | 计划 | 1581 | 区域动态接触、slip和物体Wrench | 1层手部Cross | 待实现测量 |
+| v5.25 | 已实现 | 1342 | 当前手点云改为16个区域Token | 无 | 232,377 |
+| v5.5 | 已实现 | 1486 | 参考手区域位姿 + 1层Cross-Attention | 1层手部Cross | 288,569 |
+| v5.75 | 已实现 | 1581 | 区域动态接触、slip和物体Wrench | 1层手部Cross | 293,241 |
 | v6 | 已实现 | 2205 | 物体Patch、完整参考手云、独立双融合塔 | Actor/Critic各2层 | 1,780,025 |
 
-参数量说明：
-
-- v5和v6来自当前实现的精确参数统计；
-- v5.25和v5.75必须等代码落地后再统计；
-- v5.5的35万–50万只是基于64维区域Token和单层Cross-Attention的设计估算，
-  不能用于正式算力或吞吐预算。
+参数量说明：五个数字均使用独立Critic配置，对当前代码中所有
+`requires_grad=True` 参数逐项求和得到。
 
 ### 6.2 v5：双全局PointNet基线（已实现）
 
@@ -363,7 +360,7 @@ v5保持最紧凑的点云策略：
 优点是结构简单、参数少、容易训练和定位PPO问题；主要不足是256个手点被一次
 全局池化，拇指、指尖和掌部等16个区域的身份无法被显式保留。
 
-### 6.3 v5.25：区域化当前手编码（计划）
+### 6.3 v5.25：区域化当前手编码（已实现）
 
 v5.25只改变当前手点云编码器，不改变观测ABI：
 
@@ -388,7 +385,7 @@ v5.25只改变当前手点云编码器，不改变观测ABI：
 该版本只回答一个问题：**在不增加目标条件和Attention的情况下，保留16个手部
 区域身份，是否能提高拇指接触率和对向接触率？**
 
-### 6.4 v5.5：参考手区域目标与单层Cross-Attention（计划）
+### 6.4 v5.5：参考手区域目标与单层Cross-Attention（已实现）
 
 建议正式名称：
 
@@ -437,7 +434,7 @@ v5.5只增加一层手部目标Cross-Attention，仍保留：
 该版本用于回答：**当前手区域显式查询参考手区域目标，是否能降低手型误差和
 接触建立时间？**
 
-### 6.5 v5.75：区域接触与Wrench增强（计划）
+### 6.5 v5.75：区域接触与Wrench增强（已实现）
 
 v5.75在v5.5上增加动态接触表达，但暂不升级为完整v6融合塔。
 
@@ -538,9 +535,9 @@ Actor/Critic相互独立的目标条件融合塔。它的表达能力更强，�
 ```mermaid
 flowchart LR
     V5["v5 已实现\n双全局PointNet\n1342维"]
-    V525["v5.25 计划\n16区域手Token\n1342维"]
-    V55["v5.5 计划\n参考手区域Token\n1层Cross-Attention\n1486维"]
-    V575["v5.75 计划\n区域接触+Slip+Wrench\n1581维"]
+    V525["v5.25 已实现\n16区域手Token\n1342维"]
+    V55["v5.5 已实现\n参考手区域Token\n1层Cross-Attention\n1486维"]
+    V575["v5.75 已实现\n区域接触+Slip+Wrench\n1581维"]
     V6["v6 已实现\n物体Patch+完整Goal云\n独立双融合塔\n2205维"]
 
     V5 -->|"验证区域身份"| V525
@@ -599,12 +596,15 @@ flowchart LR
 
 ```text
 sim/manorl/autonomy_v6_model.py
+sim/manorl/autonomy_v5_intermediate_model.py
 sim/manorl/autonomy_v4.py::build_raw_observation_v6
 sim/manorl/autonomy_contracts.py
 sim/manorl/autonomy_batch.py
 sim/manorl/autonomy_training.py
 tools/train_manorl_autonomy.py
 tests/manorl/test_autonomy_v6.py
+tests/manorl/test_autonomy_v525.py
+tests/manorl/test_autonomy_v55_v575.py
 ```
 
 显式选择v6：

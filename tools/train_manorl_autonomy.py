@@ -21,14 +21,28 @@ from sim.manorl.autonomy_contracts import (
     ACTION_CONTRACT_ID,
     CHECKPOINT_FORMAT,
     CHECKPOINT_FORMAT_V5,
+    CHECKPOINT_FORMAT_V525,
+    CHECKPOINT_FORMAT_V55,
+    CHECKPOINT_FORMAT_V575,
     CHECKPOINT_FORMAT_V6,
     OBSERVATION_CONTRACT_ID,
     OBSERVATION_CONTRACT_ID_V5,
+    OBSERVATION_CONTRACT_ID_V525,
+    OBSERVATION_CONTRACT_ID_V55,
+    OBSERVATION_CONTRACT_ID_V575,
     OBSERVATION_CONTRACT_ID_V6,
     REWARD_CONTRACT_ID,
     validate_v4_checkpoint_metadata,
     validate_v5_checkpoint_metadata,
+    validate_v525_checkpoint_metadata,
+    validate_v55_checkpoint_metadata,
+    validate_v575_checkpoint_metadata,
     validate_v6_checkpoint_metadata,
+)
+from sim.manorl.autonomy_v5_intermediate_model import (
+    actor_critic_architecture_v525,
+    actor_critic_architecture_v55,
+    actor_critic_architecture_v575,
 )
 from sim.manorl.autonomy_training import (
     BatchedAutonomyAdapter,
@@ -111,6 +125,27 @@ def _contracts(policy_version: str) -> dict[str, str]:
         return {
             "checkpoint": CHECKPOINT_FORMAT_V5,
             "observation": OBSERVATION_CONTRACT_ID_V5,
+            "action": ACTION_CONTRACT_ID,
+            "reward": REWARD_CONTRACT_ID,
+        }
+    if policy_version == "v5.25":
+        return {
+            "checkpoint": CHECKPOINT_FORMAT_V525,
+            "observation": OBSERVATION_CONTRACT_ID_V525,
+            "action": ACTION_CONTRACT_ID,
+            "reward": REWARD_CONTRACT_ID,
+        }
+    if policy_version == "v5.5":
+        return {
+            "checkpoint": CHECKPOINT_FORMAT_V55,
+            "observation": OBSERVATION_CONTRACT_ID_V55,
+            "action": ACTION_CONTRACT_ID,
+            "reward": REWARD_CONTRACT_ID,
+        }
+    if policy_version == "v5.75":
+        return {
+            "checkpoint": CHECKPOINT_FORMAT_V575,
+            "observation": OBSERVATION_CONTRACT_ID_V575,
             "action": ACTION_CONTRACT_ID,
             "reward": REWARD_CONTRACT_ID,
         }
@@ -317,6 +352,12 @@ def _checkpoint_separate_critic(payload):
     if architecture == actor_critic_architecture(separate_critic=True): return True
     if architecture == actor_critic_architecture_v5(separate_critic=False): return False
     if architecture == actor_critic_architecture_v5(separate_critic=True): return True
+    if architecture == actor_critic_architecture_v525(separate_critic=False): return False
+    if architecture == actor_critic_architecture_v525(separate_critic=True): return True
+    if architecture == actor_critic_architecture_v55(separate_critic=False): return False
+    if architecture == actor_critic_architecture_v55(separate_critic=True): return True
+    if architecture == actor_critic_architecture_v575(separate_critic=False): return False
+    if architecture == actor_critic_architecture_v575(separate_critic=True): return True
     raise ValueError("checkpoint/model architecture mismatch")
 
 
@@ -328,6 +369,15 @@ def _checkpoint_policy_version(payload) -> str:
     if checkpoint_format == CHECKPOINT_FORMAT_V5:
         validate_v5_checkpoint_metadata(payload)
         return "v5"
+    if checkpoint_format == CHECKPOINT_FORMAT_V525:
+        validate_v525_checkpoint_metadata(payload)
+        return "v5.25"
+    if checkpoint_format == CHECKPOINT_FORMAT_V55:
+        validate_v55_checkpoint_metadata(payload)
+        return "v5.5"
+    if checkpoint_format == CHECKPOINT_FORMAT_V575:
+        validate_v575_checkpoint_metadata(payload)
+        return "v5.75"
     if checkpoint_format == CHECKPOINT_FORMAT_V6:
         validate_v6_checkpoint_metadata(payload)
         return "v6"
@@ -425,7 +475,9 @@ def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--package", default=DEFAULT_PACKAGE); common.add_argument("--identity", default=DEFAULT_IDENTITY)
     common.add_argument("--device", choices=("cpu", "gpu"), default="gpu"); common.add_argument("--seed", type=int, default=0)
-    common.add_argument("--policy-version", choices=("v4", "v5", "v6"),
+    common.add_argument(
+        "--policy-version",
+        choices=("v4", "v5", "v5.25", "v5.5", "v5.75", "v6"),
                         help="observation/model ABI; defaults to v4 for compatibility")
     common.add_argument("--split-seed", type=int, default=0); common.add_argument("--num-envs", type=int, default=4096)
     common.add_argument("--persistentworkspace", action=argparse.BooleanOptionalAction, default=True)
