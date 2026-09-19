@@ -1,6 +1,7 @@
 # 两个 v5 架构与 ManoRL v6 架构记录
 
-状态：2026-09-19 已完成代码命名和架构实现。本文中的“两个 v5”分别指：
+状态：2026-09-19 已完成代码命名和架构实现，并补充分阶段迭代路线。本文中的
+“两个 v5”分别指：
 
 1. **ManoRL v5-pointcloud**：`mujoco-warp-contactbench` 的
    `case/contact-conditioned-autonomy/v5-pointcloud`；
@@ -19,6 +20,14 @@ Observation contract: manorl.autonomy.observation.v6.region-token-cross-attentio
 Checkpoint format:    manorl.autonomy.ppo.v6
 Model architecture:   manorl.autonomy.actor_critic.v6.region-token-cross-attention
 ```
+
+实现状态边界：
+
+- **已实现并完成静态/依赖环境测试**：ManoRL v5-pointcloud、ManoRL v6；
+- **设计方案，尚未实现或训练**：ManoRL v5.25、v5.5、v5.75；
+- 下文中间版本的参数量均为待实现测量或设计估算，不能视为实测结果；
+- 本文中的 **ManoRL v5.5** 是从ManoRL v5走向v6的过渡版本，不是
+  `VoxMani v0.5` 或本文简称的“VoxMani v5”。
 
 ## 1. 三个版本的定位
 
@@ -308,7 +317,268 @@ Actor和Critic共享观测Token编码器，包括Point Stem、区域/patch embed
 - 第一阶段保留ManoRL统一28维动作头，避免同时改变观测、注意力和动作头；
 - 第一阶段保留Raw Gaussian + Clip，Tanh-squashed Gaussian作为后续独立消融。
 
-## 6. 明确没有从VoxMani v5迁移的部分
+## 6. ManoRL v5到v6的分阶段迭代路线
+
+直接从28.6万参数、双全局PointNet的v5跳到178万参数、双Attention融合塔的v6，
+会同时改变手部表达、目标表达、接触表达、物体表达和Actor/Critic融合方式。即使
+最终性能发生变化，也很难判断是哪一项改动造成的。因此建议将完整路线拆为：
+
+```text
+ManoRL v5 → v5.25 → v5.5 → v5.75 → v6
+```
+
+其中v5和v6是已实现端点；v5.25、v5.5和v5.75是用于消融和归因的计划版本。
+
+### 6.1 版本总表
+
+| 版本 | 状态 | 原始观测 | 核心改动 | Attention | 参数量 |
+|---|---|---:|---|---|---:|
+| v5 | 已实现 | 1342 | 双全局PointNet | 无 | 285,753 |
+| v5.25 | 计划 | 1342 | 当前手点云改为16个区域Token | 无 | 待实现测量 |
+| v5.5 | 计划 | 1486 | 参考手区域位姿 + 1层Cross-Attention | 1层手部Cross | 预计35万–50万 |
+| v5.75 | 计划 | 1581 | 区域动态接触、slip和物体Wrench | 1层手部Cross | 待实现测量 |
+| v6 | 已实现 | 2205 | 物体Patch、完整参考手云、独立双融合塔 | Actor/Critic各2层 | 1,780,025 |
+
+参数量说明：
+
+- v5和v6来自当前实现的精确参数统计；
+- v5.25和v5.75必须等代码落地后再统计；
+- v5.5的35万–50万只是基于64维区域Token和单层Cross-Attention的设计估算，
+  不能用于正式算力或吞吐预算。
+
+### 6.2 v5：双全局PointNet基线（已实现）
+
+v5保持最紧凑的点云策略：
+
+```text
+1342维原始观测
+├── 64个物体点 → Object PointNet → 64维全局特征
+├── 256个当前手点 → Hand PointNet → 64维全局特征
+└── 382维数值观测
+
+64 + 64 + 382 = 510维融合特征
+→ Actor MLP / Critic MLP
+```
+
+优点是结构简单、参数少、容易训练和定位PPO问题；主要不足是256个手点被一次
+全局池化，拇指、指尖和掌部等16个区域的身份无法被显式保留。
+
+### 6.3 v5.25：区域化当前手编码（计划）
+
+v5.25只改变当前手点云编码器，不改变观测ABI：
+
+```text
+当前手点云 256×3
+→ 16个区域 × 每区域16点
+→ 共享区域PointNet
+→ 16个64维Current Hand Token
+→ 加入区域身份Embedding
+→ 区域池化
+→ 64维手部特征
+→ 继续进入原510维融合和Actor/Critic MLP
+```
+
+保持不变：
+
+- 原始观测仍为1342维；
+- 物体仍使用全局Object PointNet；
+- 不引入参考手Token和Cross-Attention；
+- 不修改80维接触块、PPO、奖励、teacher、控制器和28维动作头。
+
+该版本只回答一个问题：**在不增加目标条件和Attention的情况下，保留16个手部
+区域身份，是否能提高拇指接触率和对向接触率？**
+
+### 6.4 v5.5：参考手区域目标与单层Cross-Attention（计划）
+
+建议正式名称：
+
+> **ManoRL v5.5 Region-Aware Hand Goal**
+
+在v5.25基础上，为每个参考手区域加入9维位姿：
+
+```text
+position xyz = 3
+rotation 6D  = 6
+每区域       = 9
+16个区域     = 16 × 9 = 144维
+```
+
+因此原始观测宽度变为：
+
+```text
+1342 + 144 = 1486维
+```
+
+计划网络：
+
+```mermaid
+flowchart LR
+    HC["当前手点云\n16区域×16点"] --> HE["共享区域PointNet\n16×64 Current Tokens"]
+    HR["参考手区域位姿\n16×9"] --> PE["Pose MLP\n16×64 Goal Tokens"]
+    HE --> CA["1层Cross-Attention\nQ=Current, K/V=Goal"]
+    PE --> CA
+    CA --> HP["区域池化\n64维手特征"]
+    O["物体点云"] --> OP["原Object PointNet\n64维"]
+    N["原数值特征\n382维"] --> F["510维融合"]
+    HP --> F
+    OP --> F
+    F --> A["原Actor MLP\n→ 28维Mean"]
+    F --> V["原Critic MLP\n→ Value"]
+```
+
+v5.5只增加一层手部目标Cross-Attention，仍保留：
+
+- 原物体全局PointNet；
+- 原Actor/Critic MLP；
+- 原28维统一动作头；
+- Raw Gaussian + Clip策略分布；
+- 当前ManoRL PPO、Reward v10、teacher和控制基础设施。
+
+该版本用于回答：**当前手区域显式查询参考手区域目标，是否能降低手型误差和
+接触建立时间？**
+
+### 6.5 v5.75：区域接触与Wrench增强（计划）
+
+v5.75在v5.5上增加动态接触表达，但暂不升级为完整v6融合塔。
+
+原v5的80维接触块继续保留：
+
+```text
+reference confidence  16
+reference valid       16
+paired force xyz      48
+合计                  80
+```
+
+新增80维逐区域动态接触：
+
+```text
+measured active       16
+log1p(contact count)  16
+tangential slip xyz   48
+合计                  80
+```
+
+再新增15维物体Wrench：
+
+```text
+gravity                  3
+summed hand force        3
+summed hand torque       3
+non-hand force           3
+non-hand torque          3
+合计                    15
+```
+
+因此原始观测宽度为：
+
+```text
+1486 + 80 + 15 = 1581维
+```
+
+每个当前手区域Token绑定同编号区域的：
+
+```text
+confidence
+valid
+active
+log1p(contact count)
+paired force xyz
+tangential slip xyz
+```
+
+力按 `F/(m|g|)`、力矩按 `τ/(m|g|r)` 归一化，动态力和力矩使用 `asinh`
+压缩，避免固定5N裁剪过早饱和。
+
+该阶段仍不加入：
+
+- 物体Patch Token；
+- 完整参考手点云；
+- 双层Attention；
+- Actor/Critic独立Attention融合塔。
+
+该版本用于回答：**区域力、接触状态、slip和物体Wrench是否能帮助策略识别
+载荷转移与接触丢失，从而降低抓取后的掉落率？**
+
+### 6.6 v6：完整区域Token Cross-Attention（已实现）
+
+v6在v5.75的接触表达基础上完成两项主要升级。
+
+第一项是将参考手的144维区域位姿升级为完整参考手点云：
+
+```text
+16区域 × 16点 × xyz = 768维
+768 - 144 = 新增624维
+1581 + 624 = 2205维
+```
+
+第二项是把特征融合从“全局PointNet + 单层手部Cross-Attention + MLP”
+升级为：
+
+```text
+16 Object Patch Tokens
++ 16 Current Hand Tokens
++ 1 State Token
++ 1 Readout Token
+= 34 Current Tokens
+
+16 Reference Hand Cloud Tokens
+= Goal Memory
+
+Actor：2层Self-Attention + Cross-Attention
+Critic：2层Self-Attention + Cross-Attention
+```
+
+与v5.75相比，v6同时引入物体局部Patch身份、完整参考手表面几何，以及
+Actor/Critic相互独立的目标条件融合塔。它的表达能力更强，但归因和训练成本
+也更高，因此应在中间版本消融后判断完整升级是否必要。
+
+### 6.7 完整路线图
+
+```mermaid
+flowchart LR
+    V5["v5 已实现\n双全局PointNet\n1342维"]
+    V525["v5.25 计划\n16区域手Token\n1342维"]
+    V55["v5.5 计划\n参考手区域Token\n1层Cross-Attention\n1486维"]
+    V575["v5.75 计划\n区域接触+Slip+Wrench\n1581维"]
+    V6["v6 已实现\n物体Patch+完整Goal云\n独立双融合塔\n2205维"]
+
+    V5 -->|"验证区域身份"| V525
+    V525 -->|"验证目标手条件"| V55
+    V55 -->|"验证接触表达"| V575
+    V575 -->|"验证完整Token融合"| V6
+```
+
+### 6.8 分阶段实验与判定标准
+
+每次升级只改变该阶段声明的模型/观测因素，并固定：
+
+- 相同环境、物理资产、控制器和终止条件；
+- 相同Reward v10、PPO、teacher设置和动作分布；
+- 相同训练/验证划分、随机种子和环境转换总数；
+- 相同完整起点、自然首次终止的评估协议。
+
+各阶段的核心假设：
+
+| 对比 | 只验证的核心问题 | 重点指标 |
+|---|---|---|
+| v5 → v5.25 | 区域身份是否有效 | 拇指接触率、对向接触率 |
+| v5.25 → v5.5 | 参考手目标条件是否有效 | 手型误差、首次接触时间 |
+| v5.5 → v5.75 | 动态接触与Wrench是否有效 | 接触丢失率、下落速度、掉落率 |
+| v5.75 → v6 | 完整Token融合是否值得额外复杂度 | 完整成功率、复杂物体/未见轨迹泛化 |
+
+所有版本至少统一报告：
+
+- natural full-horizon success；
+- peak lift与loaded airborne frames；
+- opposing contact与thumb contact；
+- contact loss与drop rate；
+- 推理延迟、训练吞吐和精确参数量。
+
+总Reward和启用`full-horizon diagnostic continuation`后的轨迹不能代替自然首次
+终止成功率；近接触初始化或teacher追踪结果也不能表述为完整自主抓取成功。
+
+## 7. 明确没有从VoxMani v5迁移的部分
 
 - 桌面16个Patch Token；
 - 过去5帧物体粗粒度Token；
@@ -323,7 +593,7 @@ Actor和Critic共享观测Token编码器，包括Point Stem、区域/patch embed
 这些内容如果后续需要引入，应分别做消融实验，不能与v6首轮观测改动同时加入，
 否则无法判断性能变化来自哪一部分。
 
-## 7. 代码位置与使用
+## 8. 代码位置与使用
 
 核心代码：
 
