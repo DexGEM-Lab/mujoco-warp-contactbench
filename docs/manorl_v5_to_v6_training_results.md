@@ -1,6 +1,6 @@
 # ManoRL v5 到 v6 五版本训练记录
 
-状态：2026-09-20 正式训练执行中。本文只记录实际运行证据；没有完成训练或自然终止
+状态：2026-09-19 正式训练执行中。本文只记录实际运行证据；没有完成训练或自然终止
 评估的版本不得填写“成功”。
 
 ## 1. 实验目标
@@ -166,7 +166,7 @@ v6     1,780,025
 ### 5.5 v5正式训练当前证据
 
 正式配置为2048环境、32步rollout、4个PPO epochs和16个minibatches。GPU0在PPO
-阶段实测约20.7GB显存，瞬时计算利用率达到99%。截至2026-09-20 02:26 HKT：
+阶段实测约20.7GB显存，瞬时计算利用率达到99%。截至2026-09-19 18:26 UTC：
 
 ```text
 update = 286
@@ -221,8 +221,8 @@ combined_valid=True
 ```
 
 v5.25因此具备启动正式全参考训练的运行条件。正式进程已于
-2026-09-20 02:12 HKT绑定GPU1启动；首次全参考设备缓存完成后已进入PPO。截至
-02:26的正式证据为：
+2026-09-19 18:12 UTC绑定GPU1启动；首次全参考设备缓存完成后已进入PPO。截至
+18:26 UTC的正式证据为：
 
 ```text
 update = 11
@@ -291,6 +291,41 @@ v5.5和v5.75均成功   → GPU0或GPU1空闲 → v6
 监督器不终止任何进程；目标GPU必须没有compute PID且显存低于1GB才允许启动。
 前置任务非零退出或tmux消失但没有`exit.status`时，队列快速失败并停止下游启动，
 保留现场供诊断。当前状态已读回验证为v5/v5.25运行中，其余三版等待。
+
+### 5.9 checkpoint物理摘要与严格成功判据
+
+新增`tools/summarize_manorl_autonomy_evaluation.py`，只读取自然首次终止的
+`eval.json`和真实物理`eval.npz`。诊断续跑产物会被拒绝。固定判据为：
+
+```text
+loaded contact: 任一区域配对力 > 0.02 N
+airborne: 物体最低碰撞顶点高于桌面 > 5 mm
+thumb contact: thumb_cmc/thumb_mcp/thumb_ip任一区域loaded
+opposing contact: thumb loaded且任一index/middle/ring/pinky区域loaded
+strict grasp success:
+  自然终止reason=1
+  且连续loaded-airborne至少0.25 s（120 Hz下为30帧）
+```
+
+`reason=1`单独只表示参考时域走完，不会被摘要器冒充抓取成功。checkpoint排序首先
+比较严格成功和自然完整时域，其次比较载荷空中帧、持续长度、对向/拇指接触、
+接触丢失、掉落和物体路径误差；Reward只保留为旁证。
+
+对v5 update 200已有失败轨迹做回归，摘要器得到：
+
+```text
+strict_grasp_success = false
+terminal_reason_code = 2
+loaded_contact_frames = 3
+thumb_loaded_frames = 0
+opposing_loaded_frames = 0
+loaded_airborne_frames = 0
+contact_loss_fraction_after_first_loaded = 0.92857143
+final_object_path_error_m = 0.10134772
+```
+
+这与先前人工检查一致，并补充证明它接触后很快丢失、末端路径偏差超过10cm。
+摘要已保存为该评估目录下的`summary.json`。
 
 ## 6. 正式结果表
 
