@@ -224,6 +224,30 @@ v5.25因此具备启动正式全参考训练的运行条件。
 渲染器直接读取真实策略产生的物理轨迹，并生成“Policy actual / Reference”并排
 MP4；不会使用参考手位姿冒充实际策略状态。
 
+使用v5 `update 200` checkpoint进行了自然首次终止评估，作为早期诊断和录像链路
+验证，不作为最佳结果：
+
+```text
+frames = 228
+natural termination reason = 2（偏差）
+loaded contact frames = 3
+opposing loaded frames = 0
+airborne frames = 0
+loaded airborne frames = 0
+peak bottom clearance = -0.00010781 m
+```
+
+该checkpoint没有完成抓取。对应并排视频已成功生成并读回：
+
+```text
+resolution = 1280×480
+fps = 30
+frames = 57
+duration = 1.9 s
+```
+
+这只证明评估与录像产物链路有效，视频内容本身是一次失败轨迹。
+
 ## 6. 正式结果表
 
 | 版本 | 参数量 | updates | 转换数 | 墙钟时间 | 自然成功率 | 最佳抓取表现 | 收敛判断 | 视频 |

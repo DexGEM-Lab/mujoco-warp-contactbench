@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from sim.manorl.assets import compile_model, object_runtime
 from sim.manorl.contracts import JOINT_DOF
