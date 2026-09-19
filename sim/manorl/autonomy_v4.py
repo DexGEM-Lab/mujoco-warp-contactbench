@@ -12,7 +12,7 @@ from sim.manorl.autonomy_contracts import (
     RAW_OBSERVATION_DIM,
     ENCODED_OBSERVATION_DIM,
     RAW_OBSERVATION_DIM_V5,
-    RAW_OBSERVATION_DIM_V51,
+    RAW_OBSERVATION_DIM_V6,
     encoded_observation_slices,
     raw_observation_slices,
     raw_observation_slices_v5,
@@ -586,19 +586,19 @@ def build_raw_observation_v5(physical: V4Physical, contact: V4Contact, cache: Re
     return raw
 
 
-def build_raw_observation_v51(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
-    """VoxMani-inspired v5.1 observation with region-bound contact and goal geometry.
+def build_raw_observation_v6(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
+    """VoxMani-inspired v6 observation with region-bound contact and goal geometry.
 
     The environment, reward, action command, PPO and raw-Normal distribution are
     unchanged. This function only enriches the observation consumed by the
-    v5.1 token model.
+    v6 token model.
     """
     import jax.numpy as j
 
     if cache.hand_cloud_reference is None:
-        raise ValueError("v5.1 requires the per-frame reference hand cloud")
+        raise ValueError("v6 requires the per-frame reference hand cloud")
     if contact.object_all_torque is None:
-        raise ValueError("v5.1 requires total object contact torque")
+        raise ValueError("v6 requires total object contact torque")
 
     base=build_raw_observation_v5(physical,contact,cache,index,previous_command,env_ref)
     slices=raw_observation_slices_v5()
@@ -651,8 +651,8 @@ def build_raw_observation_v51(physical: V4Physical, contact: V4Contact, cache: R
         base[:,slices["action_types"]],
         base[:,slices["object_geometry"]],
     ),axis=-1)
-    if raw.shape[-1] != RAW_OBSERVATION_DIM_V51:
-        raise AssertionError(f"v5.1 raw ABI {raw.shape[-1]} != {RAW_OBSERVATION_DIM_V51}")
+    if raw.shape[-1] != RAW_OBSERVATION_DIM_V6:
+        raise AssertionError(f"v6 raw ABI {raw.shape[-1]} != {RAW_OBSERVATION_DIM_V6}")
     return raw
 
 def pointnet_encode(raw_points, *, weights):

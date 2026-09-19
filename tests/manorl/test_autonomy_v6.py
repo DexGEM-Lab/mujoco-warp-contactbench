@@ -1,4 +1,4 @@
-"""v5.1 observation binding and token-fusion model checks."""
+"""v6 observation binding and token-fusion model checks."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -7,17 +7,17 @@ import numpy as np
 import pytest
 
 from sim.manorl.autonomy_contracts import (
-    CURRENT_TOKENS_V51,
-    GOAL_TOKENS_V51,
-    RAW_OBSERVATION_DIM_V51,
-    RAW_OBSERVATION_FIELDS_V51,
-    raw_observation_slices_v51,
+    CURRENT_TOKENS_V6,
+    GOAL_TOKENS_V6,
+    RAW_OBSERVATION_DIM_V6,
+    RAW_OBSERVATION_FIELDS_V6,
+    raw_observation_slices_v6,
 )
-from sim.manorl.autonomy_v4 import build_raw_observation_v51
+from sim.manorl.autonomy_v4 import build_raw_observation_v6
 from tests.manorl.test_autonomy_v4 import _cache, _contact, _state
 
 
-def _v51_cache(frames: int = 25):
+def _v6_cache(frames: int = 25):
     cache = _cache(frames)
     template = (
         np.arange(16 * 16 * 3, dtype=np.float64).reshape(256, 3)
@@ -36,7 +36,7 @@ def _v51_cache(frames: int = 25):
     )
 
 
-def _v51_contact(batch: int):
+def _v6_contact(batch: int):
     jax = pytest.importorskip("jax")
     j = jax.numpy
     return _contact(batch)._replace(
@@ -44,10 +44,10 @@ def _v51_contact(batch: int):
     )
 
 
-def test_v51_schema_has_one_authoritative_exact_width():
-    assert sum(width for _, width in RAW_OBSERVATION_FIELDS_V51) == 2205
-    assert RAW_OBSERVATION_DIM_V51 == 2205
-    slices = raw_observation_slices_v51()
+def test_v6_schema_has_one_authoritative_exact_width():
+    assert sum(width for _, width in RAW_OBSERVATION_FIELDS_V6) == 2205
+    assert RAW_OBSERVATION_DIM_V6 == 2205
+    slices = raw_observation_slices_v6()
     assert (
         slices["hand_region_contact"].stop
         - slices["hand_region_contact"].start
@@ -58,14 +58,14 @@ def test_v51_schema_has_one_authoritative_exact_width():
         - slices["hand_point_cloud_reference_raw"].start
         == 768
     )
-    assert slices["object_geometry"].stop == RAW_OBSERVATION_DIM_V51
+    assert slices["object_geometry"].stop == RAW_OBSERVATION_DIM_V6
 
 
-def test_v51_builder_binds_force_and_slip_to_one_hand_region():
+def test_v6_builder_binds_force_and_slip_to_one_hand_region():
     jax = pytest.importorskip("jax")
     j = jax.numpy
-    cache = _v51_cache()
-    contact = _v51_contact(1)
+    cache = _v6_cache()
+    contact = _v6_contact(1)
     contact = contact._replace(
         paired_force_on_object=contact.paired_force_on_object.at[0, 5].set(
             j.asarray([1.0, 2.0, 3.0])
@@ -77,14 +77,14 @@ def test_v51_builder_binds_force_and_slip_to_one_hand_region():
         object_all_force=j.asarray([[1.0, 2.0, 3.0]]),
     )
     raw = np.asarray(
-        build_raw_observation_v51(
+        build_raw_observation_v6(
             _state(), contact, cache, j.asarray([0]), j.zeros((1, 28))
         )
     )
-    assert raw.shape == (1, RAW_OBSERVATION_DIM_V51)
+    assert raw.shape == (1, RAW_OBSERVATION_DIM_V6)
     assert np.isfinite(raw).all()
     region = raw[
-        :, raw_observation_slices_v51()["hand_region_contact"]
+        :, raw_observation_slices_v6()["hand_region_contact"]
     ].reshape(1, 16, 10)
     # Confidence/valid are reference intent and remain present for every region.
     dynamic = region[0, :, 2:]
@@ -92,24 +92,24 @@ def test_v51_builder_binds_force_and_slip_to_one_hand_region():
     np.testing.assert_array_equal(changed, np.asarray([5]))
 
 
-def test_v51_encoder_preserves_region_identity_for_contact_features():
+def test_v6_encoder_preserves_region_identity_for_contact_features():
     torch = pytest.importorskip("torch")
     gym = pytest.importorskip("gymnasium")
-    from sim.manorl.autonomy_v51_model import AutonomyActorCriticV51
+    from sim.manorl.autonomy_v6_model import AutonomyActorCriticV6
 
-    model = AutonomyActorCriticV51(
+    model = AutonomyActorCriticV6(
         gym.spaces.Box(
             -np.inf,
             np.inf,
-            shape=(RAW_OBSERVATION_DIM_V51,),
+            shape=(RAW_OBSERVATION_DIM_V6,),
             dtype=np.float32,
         ),
         gym.spaces.Box(-1.0, 1.0, shape=(28,), dtype=np.float32),
         device="cpu",
     )
-    baseline = torch.zeros((1, RAW_OBSERVATION_DIM_V51))
+    baseline = torch.zeros((1, RAW_OBSERVATION_DIM_V6))
     changed = baseline.clone()
-    region_slice = raw_observation_slices_v51()["hand_region_contact"]
+    region_slice = raw_observation_slices_v6()["hand_region_contact"]
     changed[:, region_slice][:, 7 * 10 + 4] = 1.0
     current_base, _ = model.encoder(baseline)
     current_changed, _ = model.encoder(changed)
@@ -121,27 +121,27 @@ def test_v51_encoder_preserves_region_identity_for_contact_features():
     assert affected.tolist() == [23]
 
 
-def test_v51_reference_hand_is_cross_attention_memory():
+def test_v6_reference_hand_is_cross_attention_memory():
     torch = pytest.importorskip("torch")
     gym = pytest.importorskip("gymnasium")
-    from sim.manorl.autonomy_v51_model import AutonomyActorCriticV51
+    from sim.manorl.autonomy_v6_model import AutonomyActorCriticV6
 
     torch.manual_seed(7)
-    model = AutonomyActorCriticV51(
+    model = AutonomyActorCriticV6(
         gym.spaces.Box(
             -np.inf,
             np.inf,
-            shape=(RAW_OBSERVATION_DIM_V51,),
+            shape=(RAW_OBSERVATION_DIM_V6,),
             dtype=np.float32,
         ),
         gym.spaces.Box(-1.0, 1.0, shape=(28,), dtype=np.float32),
         device="cpu",
     )
-    first = torch.zeros((2, RAW_OBSERVATION_DIM_V51))
+    first = torch.zeros((2, RAW_OBSERVATION_DIM_V6))
     second = first.clone()
     second[
         :,
-        raw_observation_slices_v51()[
+        raw_observation_slices_v6()[
             "hand_point_cloud_reference_raw"
         ],
     ] = 0.5
@@ -153,27 +153,27 @@ def test_v51_reference_hand_is_cross_attention_memory():
             {"observations": second}, role="policy"
         )
         current, goal = model.encoder(second)
-    assert current.shape == (2, CURRENT_TOKENS_V51, 128)
-    assert goal.shape == (2, GOAL_TOKENS_V51, 128)
+    assert current.shape == (2, CURRENT_TOKENS_V6, 128)
+    assert goal.shape == (2, GOAL_TOKENS_V6, 128)
     assert not torch.allclose(mean_first, mean_second)
 
 
-def test_v51_forward_backward_and_architecture_metadata_are_finite():
+def test_v6_forward_backward_and_architecture_metadata_are_finite():
     torch = pytest.importorskip("torch")
     gym = pytest.importorskip("gymnasium")
-    from sim.manorl.autonomy_v51_model import AutonomyActorCriticV51
+    from sim.manorl.autonomy_v6_model import AutonomyActorCriticV6
 
-    model = AutonomyActorCriticV51(
+    model = AutonomyActorCriticV6(
         gym.spaces.Box(
             -np.inf,
             np.inf,
-            shape=(RAW_OBSERVATION_DIM_V51,),
+            shape=(RAW_OBSERVATION_DIM_V6,),
             dtype=np.float32,
         ),
         gym.spaces.Box(-1.0, 1.0, shape=(28,), dtype=np.float32),
         device="cpu",
     )
-    observations = torch.randn((3, RAW_OBSERVATION_DIM_V51))
+    observations = torch.randn((3, RAW_OBSERVATION_DIM_V6))
     mean, _ = model.compute({"observations": observations}, role="policy")
     value, _ = model.compute({"observations": observations}, role="value")
     (mean.square().mean() + value.square().mean()).backward()
@@ -186,7 +186,7 @@ def test_v51_forward_backward_and_architecture_metadata_are_finite():
     assert value.shape == (3, 1)
     assert gradients and all(torch.isfinite(gradient).all() for gradient in gradients)
     architecture = model.checkpoint_architecture()
-    assert architecture["raw_observation_dim"] == RAW_OBSERVATION_DIM_V51
+    assert architecture["raw_observation_dim"] == RAW_OBSERVATION_DIM_V6
     assert architecture["actor_critic"] == (
-        "shared point stems; independent fusion towers"
+        "shared observation token encoder; independent fusion towers"
     )

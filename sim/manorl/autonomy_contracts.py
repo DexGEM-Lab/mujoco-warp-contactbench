@@ -34,14 +34,14 @@ OBSERVATION_CONTRACT_ID_V5: Final = "manorl.autonomy.observation.v5.pointcloud"
 CHECKPOINT_FORMAT_V5: Final = "manorl.autonomy.ppo.v5"
 RAW_OBSERVATION_DIM_V5: Final = 1342
 ENCODED_OBSERVATION_DIM_V5: Final = 510
-# v5.1 keeps the v4 MDP/PPO/action semantics while adopting the useful parts
+# v6 keeps the v4 MDP/PPO/action semantics while adopting the useful parts
 # of VoxMani v0.5's observation and token-fusion design.
-OBSERVATION_CONTRACT_ID_V51: Final = "manorl.autonomy.observation.v5.1.pointcloud-cross-attention"
-CHECKPOINT_FORMAT_V51: Final = "manorl.autonomy.ppo.v5.1"
-RAW_OBSERVATION_DIM_V51: Final = 2205
-MODEL_DIM_V51: Final = 128
-CURRENT_TOKENS_V51: Final = 34
-GOAL_TOKENS_V51: Final = 16
+OBSERVATION_CONTRACT_ID_V6: Final = "manorl.autonomy.observation.v6.region-token-cross-attention"
+CHECKPOINT_FORMAT_V6: Final = "manorl.autonomy.ppo.v6"
+RAW_OBSERVATION_DIM_V6: Final = 2205
+MODEL_DIM_V6: Final = 128
+CURRENT_TOKENS_V6: Final = 34
+GOAL_TOKENS_V6: Final = 16
 # Environments and PPO memory own raw 957. The registered Torch PointNet in
 # the actor converts only the cloud to the 829 model feature internally.
 OBSERVATION_DIM: Final = RAW_OBSERVATION_DIM
@@ -68,7 +68,7 @@ ENCODED_OBSERVATION_FIELDS_V5: Final[tuple[tuple[str, int], ...]] = (
     ("object_pointnet", 64), ("hand_pointnet", 64),
     ("action_types", 50), ("object_geometry", 12),
 )
-RAW_OBSERVATION_FIELDS_V51: Final[tuple[tuple[str, int], ...]] = (
+RAW_OBSERVATION_FIELDS_V6: Final[tuple[tuple[str, int], ...]] = (
     ("autonomous_actual", 119),
     ("autonomous_reference", 109),
     ("autonomous_future", 12),
@@ -94,7 +94,7 @@ def encoded_observation_slices() -> dict[str, slice]: return _slices(ENCODED_OBS
 def observation_slices() -> dict[str, slice]: return raw_observation_slices()
 def raw_observation_slices_v5() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V5)
 def encoded_observation_slices_v5() -> dict[str, slice]: return _slices(ENCODED_OBSERVATION_FIELDS_V5)
-def raw_observation_slices_v51() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V51)
+def raw_observation_slices_v6() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V6)
 
 @dataclass(frozen=True)
 class AutonomousActionContract:
@@ -135,30 +135,30 @@ REWARD_CONTRACT = AutonomousRewardContract()
 
 
 @dataclass(frozen=True)
-class AutonomousObservationContractV51:
-    version: str = OBSERVATION_CONTRACT_ID_V51
-    raw_dimension: int = RAW_OBSERVATION_DIM_V51
-    model_dimension: int = MODEL_DIM_V51
+class AutonomousObservationContractV6:
+    version: str = OBSERVATION_CONTRACT_ID_V6
+    raw_dimension: int = RAW_OBSERVATION_DIM_V6
+    model_dimension: int = MODEL_DIM_V6
     object_patches: int = 16
     hand_regions: int = 16
     points_per_object_patch: int = 4
     points_per_hand_region: int = 16
-    current_tokens: int = CURRENT_TOKENS_V51
-    goal_tokens: int = GOAL_TOKENS_V51
+    current_tokens: int = CURRENT_TOKENS_V6
+    goal_tokens: int = GOAL_TOKENS_V6
 
     def __post_init__(self) -> None:
         if (
-            self.version != OBSERVATION_CONTRACT_ID_V51
-            or self.raw_dimension != sum(width for _, width in RAW_OBSERVATION_FIELDS_V51)
+            self.version != OBSERVATION_CONTRACT_ID_V6
+            or self.raw_dimension != sum(width for _, width in RAW_OBSERVATION_FIELDS_V6)
             or self.model_dimension != 128
             or (self.object_patches, self.hand_regions) != (16, 16)
             or (self.points_per_object_patch, self.points_per_hand_region) != (4, 16)
             or (self.current_tokens, self.goal_tokens) != (34, 16)
         ):
-            raise ValueError("v5.1 token observation ABI drifted")
+            raise ValueError("v6 token observation ABI drifted")
 
 
-OBSERVATION_CONTRACT_V51 = AutonomousObservationContractV51()
+OBSERVATION_CONTRACT_V6 = AutonomousObservationContractV6()
 
 def validate_v4_checkpoint_metadata(metadata: dict[str, object]) -> None:
     required = {"checkpoint_format": CHECKPOINT_FORMAT, "observation_contract": OBSERVATION_CONTRACT_ID,
@@ -170,10 +170,10 @@ def validate_v4_checkpoint_metadata(metadata: dict[str, object]) -> None:
         raise ValueError("incompatible v4 policy sampling contract")
 
 
-def validate_v51_checkpoint_metadata(metadata: dict[str, object]) -> None:
+def validate_v6_checkpoint_metadata(metadata: dict[str, object]) -> None:
     required = {
-        "checkpoint_format": CHECKPOINT_FORMAT_V51,
-        "observation_contract": OBSERVATION_CONTRACT_ID_V51,
+        "checkpoint_format": CHECKPOINT_FORMAT_V6,
+        "observation_contract": OBSERVATION_CONTRACT_ID_V6,
         "reward_contract": REWARD_CONTRACT_ID,
         "action_contract": ACTION_CONTRACT_ID,
     }
@@ -181,7 +181,7 @@ def validate_v51_checkpoint_metadata(metadata: dict[str, object]) -> None:
         if metadata.get(name) != expected:
             raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
     if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
-        raise ValueError("incompatible v5.1 policy sampling contract")
+        raise ValueError("incompatible v6 policy sampling contract")
 
 def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1 / 120, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
     previous, raw, lo, hi, rate = (np.asarray(x, dtype=np.float64) for x in (previous_command, action, lower, upper, rate_per_second))

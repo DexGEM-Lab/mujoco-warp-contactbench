@@ -20,12 +20,12 @@ from sim.manorl.autonomy_telemetry import configure_wandb_axis
 from sim.manorl.autonomy_contracts import (
     ACTION_CONTRACT_ID,
     CHECKPOINT_FORMAT,
-    CHECKPOINT_FORMAT_V51,
+    CHECKPOINT_FORMAT_V6,
     OBSERVATION_CONTRACT_ID,
-    OBSERVATION_CONTRACT_ID_V51,
+    OBSERVATION_CONTRACT_ID_V6,
     REWARD_CONTRACT_ID,
     validate_v4_checkpoint_metadata,
-    validate_v51_checkpoint_metadata,
+    validate_v6_checkpoint_metadata,
 )
 from sim.manorl.autonomy_training import (
     BatchedAutonomyAdapter,
@@ -102,10 +102,10 @@ def _contracts(policy_version: str) -> dict[str, str]:
             "action": ACTION_CONTRACT_ID,
             "reward": REWARD_CONTRACT_ID,
         }
-    if policy_version == "v5.1-pointcloud":
+    if policy_version == "v6":
         return {
-            "checkpoint": CHECKPOINT_FORMAT_V51,
-            "observation": OBSERVATION_CONTRACT_ID_V51,
+            "checkpoint": CHECKPOINT_FORMAT_V6,
+            "observation": OBSERVATION_CONTRACT_ID_V6,
             "action": ACTION_CONTRACT_ID,
             "reward": REWARD_CONTRACT_ID,
         }
@@ -201,8 +201,8 @@ def train(args):
         raise ValueError("total-transitions must equal updates * rollouts * num-envs")
     references = _training_references(args, catalog, trajectory, split)
     adapter = _adapter(args, references); provenance = _provenance(catalog, split, adapter)
-    if adapter.policy_version == "v5.1-pointcloud":
-        # Independent actor/critic fusion towers are part of the v5.1 model
+    if adapter.policy_version == "v6":
+        # Independent actor/critic fusion towers are part of the v6 model
         # contract rather than an optional PPO setting.
         args.separate_critic = True
     if args.all_references and "reference_assignment" in provenance:
@@ -298,7 +298,7 @@ def train(args):
 
 def _checkpoint_separate_critic(payload):
     policy_version = _checkpoint_policy_version(payload)
-    if policy_version == "v5.1-pointcloud":
+    if policy_version == "v6":
         return True
     architecture = payload.get("model_architecture")
     if architecture == actor_critic_architecture(separate_critic=False): return False
@@ -311,9 +311,9 @@ def _checkpoint_policy_version(payload) -> str:
     if checkpoint_format == CHECKPOINT_FORMAT:
         validate_v4_checkpoint_metadata(payload)
         return "v4"
-    if checkpoint_format == CHECKPOINT_FORMAT_V51:
-        validate_v51_checkpoint_metadata(payload)
-        return "v5.1-pointcloud"
+    if checkpoint_format == CHECKPOINT_FORMAT_V6:
+        validate_v6_checkpoint_metadata(payload)
+        return "v6"
     raise ValueError("unsupported checkpoint format")
 
 
@@ -408,7 +408,7 @@ def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--package", default=DEFAULT_PACKAGE); common.add_argument("--identity", default=DEFAULT_IDENTITY)
     common.add_argument("--device", choices=("cpu", "gpu"), default="gpu"); common.add_argument("--seed", type=int, default=0)
-    common.add_argument("--policy-version", choices=("v4", "v5.1-pointcloud"),
+    common.add_argument("--policy-version", choices=("v4", "v6"),
                         help="observation/model ABI; defaults to v4 for compatibility")
     common.add_argument("--split-seed", type=int, default=0); common.add_argument("--num-envs", type=int, default=4096)
     common.add_argument("--persistentworkspace", action=argparse.BooleanOptionalAction, default=True)

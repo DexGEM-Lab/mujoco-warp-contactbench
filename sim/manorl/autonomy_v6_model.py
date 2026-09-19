@@ -1,4 +1,4 @@
-"""VoxMani-inspired lightweight token model for ManoRL autonomy v5.1.
+"""VoxMani-inspired lightweight token model for ManoRL autonomy v6.
 
 Only the observation encoder and actor-critic network change. The ManoRL v4
 environment, reward, PPO implementation, action command and raw-Normal policy
@@ -17,36 +17,36 @@ from skrl.models.torch.gaussian import GaussianMixin
 from sim.manorl.autonomy_contracts import (
     ACTION_DIM,
     ACTION_CONTRACT_ID,
-    CHECKPOINT_FORMAT_V51,
-    CURRENT_TOKENS_V51,
-    GOAL_TOKENS_V51,
-    MODEL_DIM_V51,
-    OBSERVATION_CONTRACT_ID_V51,
+    CHECKPOINT_FORMAT_V6,
+    CURRENT_TOKENS_V6,
+    GOAL_TOKENS_V6,
+    MODEL_DIM_V6,
+    OBSERVATION_CONTRACT_ID_V6,
     POLICY_SAMPLING_CONTRACT,
-    RAW_OBSERVATION_DIM_V51,
+    RAW_OBSERVATION_DIM_V6,
     REWARD_CONTRACT_ID,
-    raw_observation_slices_v51,
+    raw_observation_slices_v6,
 )
 
-ACTOR_CRITIC_ARCHITECTURE_ID_V51 = (
-    "manorl.autonomy.actor_critic.v5.1.region-token-cross-attention"
+ACTOR_CRITIC_ARCHITECTURE_ID_V6 = (
+    "manorl.autonomy.actor_critic.v6.region-token-cross-attention"
 )
 
 
-def actor_critic_architecture_v51() -> dict[str, Any]:
+def actor_critic_architecture_v6() -> dict[str, Any]:
     return {
-        "id": ACTOR_CRITIC_ARCHITECTURE_ID_V51,
-        "raw_observation_dim": RAW_OBSERVATION_DIM_V51,
-        "model_dim": MODEL_DIM_V51,
-        "current_tokens": CURRENT_TOKENS_V51,
-        "goal_tokens": GOAL_TOKENS_V51,
+        "id": ACTOR_CRITIC_ARCHITECTURE_ID_V6,
+        "raw_observation_dim": RAW_OBSERVATION_DIM_V6,
+        "model_dim": MODEL_DIM_V6,
+        "current_tokens": CURRENT_TOKENS_V6,
+        "goal_tokens": GOAL_TOKENS_V6,
         "object_tokens": "16 patches x 4 points",
         "hand_tokens": "16 regions x 16 points; current/reference share point stem",
         "contact_binding": (
             "per-region confidence, valid, active, count, force xyz, slip xyz"
         ),
         "fusion": "2 x (pre-LN self-attention + cross-attention), 4 heads",
-        "actor_critic": "shared point stems; independent fusion towers",
+        "actor_critic": "shared observation token encoder; independent fusion towers",
         "action_head": "flat 28D mean; raw Normal then physical clip",
         "action_dim": ACTION_DIM,
     }
@@ -55,7 +55,7 @@ def actor_critic_architecture_v51() -> dict[str, Any]:
 class PointStem(nn.Module):
     """Pointwise feature stem shared across actor and critic consumers."""
 
-    def __init__(self, output_dim: int = MODEL_DIM_V51) -> None:
+    def __init__(self, output_dim: int = MODEL_DIM_V6) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(3, output_dim),
@@ -76,7 +76,7 @@ class AttentionBlock(nn.Module):
     def __init__(
         self,
         *,
-        model_dim: int = MODEL_DIM_V51,
+        model_dim: int = MODEL_DIM_V6,
         heads: int = 4,
         feedforward_dim: int = 512,
         cross_attention: bool = False,
@@ -129,8 +129,8 @@ class FusionTower(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList(FusionLayer() for _ in range(2))
         self.head = nn.Sequential(
-            nn.LayerNorm(MODEL_DIM_V51),
-            nn.Linear(MODEL_DIM_V51, 128),
+            nn.LayerNorm(MODEL_DIM_V6),
+            nn.Linear(MODEL_DIM_V6, 128),
             nn.SiLU(),
             nn.Linear(128, output_dim),
         )
@@ -143,25 +143,25 @@ class FusionTower(nn.Module):
         return self.head(current[:, -1])
 
 
-class V51ObservationEncoder(nn.Module):
+class V6ObservationEncoder(nn.Module):
     """Convert the flat ABI into current tokens and reference-hand memory."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.slices = raw_observation_slices_v51()
+        self.slices = raw_observation_slices_v6()
         self.object_stem = PointStem()
         self.hand_stem = PointStem()
-        self.object_patch_embedding = nn.Embedding(16, MODEL_DIM_V51)
-        self.hand_region_embedding = nn.Embedding(16, MODEL_DIM_V51)
+        self.object_patch_embedding = nn.Embedding(16, MODEL_DIM_V6)
+        self.hand_region_embedding = nn.Embedding(16, MODEL_DIM_V6)
         self.current_hand_type = nn.Parameter(
-            torch.zeros(1, 1, MODEL_DIM_V51)
+            torch.zeros(1, 1, MODEL_DIM_V6)
         )
         self.reference_hand_type = nn.Parameter(
-            torch.zeros(1, 1, MODEL_DIM_V51)
+            torch.zeros(1, 1, MODEL_DIM_V6)
         )
         self.region_contact = nn.Sequential(
-            nn.Linear(10, MODEL_DIM_V51),
-            nn.LayerNorm(MODEL_DIM_V51),
+            nn.Linear(10, MODEL_DIM_V6),
+            nn.LayerNorm(MODEL_DIM_V6),
             nn.SiLU(),
         )
         numeric_fields = (
@@ -180,10 +180,10 @@ class V51ObservationEncoder(nn.Module):
         self.state = nn.Sequential(
             nn.Linear(numeric_width, 256),
             nn.SiLU(),
-            nn.Linear(256, MODEL_DIM_V51),
+            nn.Linear(256, MODEL_DIM_V6),
         )
         self.readout = nn.Parameter(
-            torch.zeros(1, 1, MODEL_DIM_V51)
+            torch.zeros(1, 1, MODEL_DIM_V6)
         )
 
     def _block(self, observation: torch.Tensor, name: str) -> torch.Tensor:
@@ -214,10 +214,10 @@ class V51ObservationEncoder(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if (
             observation.ndim != 2
-            or observation.shape[1] != RAW_OBSERVATION_DIM_V51
+            or observation.shape[1] != RAW_OBSERVATION_DIM_V6
         ):
             raise ValueError(
-                "v5.1 model requires (batch,2205) raw observations"
+                "v6 model requires (batch,2205) raw observations"
             )
         batch = observation.shape[0]
         object_points = self._block(
@@ -252,17 +252,17 @@ class V51ObservationEncoder(nn.Module):
             (object_tokens, current_hand, state, readout), dim=1
         )
         if (
-            current.shape[1] != CURRENT_TOKENS_V51
-            or goal.shape[1] != GOAL_TOKENS_V51
+            current.shape[1] != CURRENT_TOKENS_V6
+            or goal.shape[1] != GOAL_TOKENS_V6
         ):
-            raise AssertionError("v5.1 token layout drifted")
+            raise AssertionError("v6 token layout drifted")
         return current, goal
 
 
-class AutonomyActorCriticV51(
+class AutonomyActorCriticV6(
     GaussianMixin, DeterministicMixin, Model
 ):
-    """v5.1 policy with shared geometric stems and independent fusion towers."""
+    """v6 policy with a shared token encoder and independent fusion towers."""
 
     def __init__(
         self,
@@ -280,10 +280,10 @@ class AutonomyActorCriticV51(
             device=device,
         )
         if (int(self.num_observations), int(self.num_actions)) != (
-            RAW_OBSERVATION_DIM_V51,
+            RAW_OBSERVATION_DIM_V6,
             ACTION_DIM,
         ):
-            raise ValueError("v5.1 actor requires raw 2205 and 28 actions")
+            raise ValueError("v6 actor requires raw 2205 and 28 actions")
         GaussianMixin.__init__(
             self,
             clip_actions=clip_actions,
@@ -297,7 +297,7 @@ class AutonomyActorCriticV51(
         DeterministicMixin.__init__(
             self, clip_actions=False, role="value"
         )
-        self.encoder = V51ObservationEncoder().to(device)
+        self.encoder = V6ObservationEncoder().to(device)
         self.actor = FusionTower(ACTION_DIM).to(device)
         self.critic = FusionTower(1).to(device)
         # Preserve the current ManoRL distribution initialization.
@@ -306,12 +306,12 @@ class AutonomyActorCriticV51(
         )
 
     def checkpoint_architecture(self) -> dict[str, Any]:
-        return actor_critic_architecture_v51()
+        return actor_critic_architecture_v6()
 
     def checkpoint_contracts(self) -> dict[str, str]:
         return {
-            "checkpoint_format": CHECKPOINT_FORMAT_V51,
-            "observation_contract": OBSERVATION_CONTRACT_ID_V51,
+            "checkpoint_format": CHECKPOINT_FORMAT_V6,
+            "observation_contract": OBSERVATION_CONTRACT_ID_V6,
             "reward_contract": REWARD_CONTRACT_ID,
             "action_contract": ACTION_CONTRACT_ID,
         }

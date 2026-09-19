@@ -26,12 +26,12 @@ from sim.manorl.autonomy_contracts import (
     OBSERVATION_DIM,
     RAW_OBSERVATION_DIM,
     RAW_OBSERVATION_DIM_V5,
-    RAW_OBSERVATION_DIM_V51,
+    RAW_OBSERVATION_DIM_V6,
     REWARD_CONTRACT_ID,
 )
-from sim.manorl.autonomy_v51_model import (
-    AutonomyActorCriticV51,
-    actor_critic_architecture_v51,
+from sim.manorl.autonomy_v6_model import (
+    AutonomyActorCriticV6,
+    actor_critic_architecture_v6,
 )
 from sim.manorl.model import PointNetEncoder
 from sim.manorl.trajectory_package import TrajectoryCatalog
@@ -307,18 +307,19 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
     """Canonical RlGamesPPO with a version-selected observation/model pair."""
     cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches,learning_rate=learning_rate)
     memory=RandomMemory(memory_size=rollouts,num_envs=adapter.num_envs,device=device)
-    if adapter.policy_version == "v4":
+    policy_version=getattr(adapter,"policy_version","v4")
+    if policy_version == "v4":
         model=AutonomyActorCritic(
             adapter.observation_space,adapter.action_space,device=device,
             separate_critic=separate_critic,clip_actions=False
         )
-    elif adapter.policy_version == "v5.1-pointcloud":
-        model=AutonomyActorCriticV51(
+    elif policy_version == "v6":
+        model=AutonomyActorCriticV6(
             adapter.observation_space,adapter.action_space,device=device,
             clip_actions=False
         )
     else:
-        raise ValueError(f"unsupported policy version: {adapter.policy_version!r}")
+        raise ValueError(f"unsupported policy version: {policy_version!r}")
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
                      observation_space=adapter.observation_space,state_space=None,
                      action_space=adapter.action_space,device=device,cfg=cfg)
@@ -330,8 +331,8 @@ def actor_critic_architecture_for_version(
 ) -> dict[str, Any]:
     if policy_version == "v4":
         return actor_critic_architecture(separate_critic=separate_critic)
-    if policy_version == "v5.1-pointcloud":
-        return actor_critic_architecture_v51()
+    if policy_version == "v6":
+        return actor_critic_architecture_v6()
     raise ValueError(f"unsupported policy version: {policy_version!r}")
 
 
@@ -348,8 +349,8 @@ def model_for_version(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )
-    if policy_version == "v5.1-pointcloud":
-        return AutonomyActorCriticV51(
+    if policy_version == "v6":
+        return AutonomyActorCriticV6(
             observation_space, action_space, device=device
         )
     raise ValueError(f"unsupported policy version: {policy_version!r}")
