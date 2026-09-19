@@ -20,9 +20,9 @@
     "max_deviation_distance_m": 0.15,
     "joint_scale_multiplier": 2.0,
     "joint_max_offset_multiplier": 2.0,
-    "updates_total_per_shard": 8000,
+    "updates_total_per_shard": 10000,
     "assignment_cycles": [0, 1, 2, 3, 4],
-    "updates_per_cycle": 1600,
+    "updates_per_cycle": 2000,
     "assignment_mechanism": "20 fixed worlds per object-action pair per cycle; pair_assignment_cycle advances each pair by 20 rows; five cycles cover all 100 rows per pair exactly",
     "resume_between_cycles": "strict native resume of policy, value, optimizer and normalizers; package and environment contract remain fixed",
     "warning": "The four policies cover disjoint object sets and cannot be merged into one universal checkpoint without distributed/shared-policy training support."
