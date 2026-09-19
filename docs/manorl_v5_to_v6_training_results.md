@@ -67,8 +67,8 @@ Reward只作为训练诊断和同版本趋势指标，不是跨版本的最终�
 
 | 顺序 | 版本 | 实现状态 | GPU | 正式训练状态 |
 |---:|---|---|---|---|
-| 1 | v5 | 已实现并接通CLI | GPU0 | 正式训练中（update 286） |
-| 2 | v5.25 | 已实现；全参考有限性复验通过 | GPU1 | 正式训练中（update 11） |
+| 1 | v5 | 已实现并接通CLI | GPU0 | 正式训练中（update 354） |
+| 2 | v5.25 | 已实现；全参考有限性复验通过 | GPU1 | 正式训练中（update 112） |
 | 3 | v5.5 | 已实现；聚焦测试通过 | 待分配 | 未启动 |
 | 4 | v5.75 | 已实现；聚焦测试通过 | 待分配 | 未启动 |
 | 5 | v6 | 已实现 | 待分配 | 未启动 |
@@ -166,16 +166,16 @@ v6     1,780,025
 ### 5.5 v5正式训练当前证据
 
 正式配置为2048环境、32步rollout、4个PPO epochs和16个minibatches。GPU0在PPO
-阶段实测约20.7GB显存，瞬时计算利用率达到99%。截至2026-09-19 18:26 UTC：
+阶段实测约20.7GB显存，瞬时计算利用率达到100%。截至2026-09-19 18:41 UTC：
 
 ```text
-update = 286
-transitions = 18,743,296
-reward_mean = 0.14420179
-paired_loaded_contact_fraction = 0.01882935
-airborne_5mm_fraction = 0.00047302
-loaded_airborne_fraction = 0.00047302
+update = 354
+transitions = 23,199,744
+reward_mean = 0.08780221
+paired_loaded_contact_fraction = 0.01644611
+loaded_airborne_fraction = 0.00048828
 termination/deviation_rate = 1.0
+termination/reference_complete_rate = 0.0
 ```
 
 这表示训练窗口中已经出现少量载荷接触和离桌5mm事件，但同一窗口所有已完成
@@ -222,19 +222,21 @@ combined_valid=True
 
 v5.25因此具备启动正式全参考训练的运行条件。正式进程已于
 2026-09-19 18:12 UTC绑定GPU1启动；首次全参考设备缓存完成后已进入PPO。截至
-18:26 UTC的正式证据为：
+18:41 UTC的正式证据为：
 
 ```text
-update = 11
-transitions = 720,896
+update = 112
+transitions = 7,340,032
 valid = 1
-reward_mean = 0.19695918
-paired_loaded_contact_fraction = 0.00076771
-airborne_5mm_fraction = 0
+reward_mean = 0.13641311
+paired_loaded_contact_fraction = 0.00882626
+loaded_airborne_fraction = 0.00009155
+termination/deviation_rate = 1.0
+termination/reference_complete_rate = 0.0
 ```
 
-GPU1训练期当前约占13.8GB、计算利用率100%。首批11个窗口均为有限有效更新；
-由于尚未完成任何自然episode，当前不能填写自然成功率或收敛结论。
+GPU1训练期当前约占13.8GB。当前更新持续有限有效；训练窗口中已有极少量载荷
+离桌帧，但所有已完成episode仍因偏差终止，因此不能填写自然成功率或收敛结论。
 
 ### 5.7 当前评估视频链路
 
@@ -353,12 +355,33 @@ status: /mnt/nas-222-projects/cty/manorl-autonomy/outputs/
 评估使用CPU，不占用两张训练GPU。监督器目前处于等待状态；v5和v5.25均未结束，
 因此尚未启动任何checkpoint扫描，也没有提前生成“最佳”视频。
 
+### 5.11 正式运行来源与墙钟起点
+
+已从tmux session创建时间、活跃`/proc/<pid>/cmdline`和可加载checkpoint
+provenance固化两个首发任务的运行元数据：
+
+| 版本 | 启动时间（UTC） | 来源提交 | 已验证checkpoint | SHA256前缀 |
+|---|---|---|---|---|
+| v5 | `2026-09-19T17:10:00Z` | `f906030aaf86` | update 300 | `e5bc10865207` |
+| v5.25 | `2026-09-19T18:12:14Z` | `c6fb1da11e5f` | update 50 | `419ebafef8b8` |
+
+两个checkpoint均通过CPU反序列化，记录50条参考、独立Critic、正确版本ABI和有限
+模型参数；训练日志中未发现Traceback、CUDA OOM或RuntimeError。完整元数据位于：
+
+```text
+v5-formal/run-metadata.json
+v525-formal/run-metadata.json
+```
+
+最终“收敛时间”将使用上述启动时间到被选最佳checkpoint文件落盘时间的差值，
+同时单独记录1000 updates总训练墙钟时间，避免用估算时间代替实测。
+
 ## 6. 正式结果表
 
 | 版本 | 参数量 | updates | 转换数 | 墙钟时间 | 自然成功率 | 最佳抓取表现 | 收敛判断 | 视频 |
 |---|---:|---:|---:|---:|---:|---|---|---|
-| v5 | 285,753 | 286（训练中） | 18,743,296 | 约1小时16分（训练中） | 未评估 | 训练窗口出现少量载荷离桌事件，但完成episode仍100%偏差终止 | 未收敛 | update 200失败诊断视频 |
-| v5.25 | 232,377 | 11（训练中） | 720,896 | 约14分（含初始化，训练中） | 未评估 | 已连续产生有效PPO更新，尚无完整episode | 尚无收敛证据 | — |
+| v5 | 285,753 | 354（训练中） | 23,199,744 | 约1小时32分（训练中） | 未评估 | 训练窗口出现少量载荷离桌事件，但完成episode仍100%偏差终止 | 未收敛 | update 200失败诊断视频 |
+| v5.25 | 232,377 | 112（训练中） | 7,340,032 | 约29分（含初始化，训练中） | 未评估 | 少量载荷离桌事件，但完成episode仍100%偏差终止 | 尚无收敛证据 | — |
 | v5.5 | 288,569 | — | — | — | — | 未训练 | 待定 | — |
 | v5.75 | 293,241 | — | — | — | — | 未训练 | 待定 | — |
 | v6 | 1,780,025 | — | — | — | — | 未训练 | 待定 | — |
