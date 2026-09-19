@@ -8,7 +8,15 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any, NamedTuple
 import numpy as np
-from sim.manorl.autonomy_contracts import RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM, raw_observation_slices, encoded_observation_slices, RAW_OBSERVATION_DIM_V5
+from sim.manorl.autonomy_contracts import (
+    RAW_OBSERVATION_DIM,
+    ENCODED_OBSERVATION_DIM,
+    RAW_OBSERVATION_DIM_V5,
+    RAW_OBSERVATION_DIM_V51,
+    encoded_observation_slices,
+    raw_observation_slices,
+    raw_observation_slices_v5,
+)
 
 REGIONS = 16
 POINTS = 64
@@ -65,6 +73,7 @@ class V4Physical(NamedTuple):
 class V4Contact(NamedTuple):
     object_all_force: Any; paired_force_on_object: Any; paired_torque_com: Any
     paired_count: Any; tangential_slip: Any; valid: Any
+    object_all_torque: Any = None
 
 @dataclass(frozen=True)
 class ReferenceCacheV4:
@@ -86,6 +95,8 @@ class ReferenceCacheV4:
     # the object's local frame. These feed the observation encoder only.
     hand_cloud_template: np.ndarray | None = None
     hand_cloud_reference: np.ndarray | None = None
+    object_mass: float = 1.0
+    gravity_world: np.ndarray | None = None
     def __post_init__(self):
         t = len(self.q_feasible)
         expected = {"q_feasible":(t,28), "q_raw":(t,28), "q_lower":(28,), "q_upper":(28,), "object_origin":(t,3), "object_quat_xyzw":(t,4), "palm_origin":(t,3), "palm_quat_xyzw":(t,4), "object_v_com":(t,3), "object_w":(t,3), "palm_v":(t,3), "palm_w":(t,3), "region_anchor_hand":(t,16,3), "region_anchor_object":(t,16,3), "delta_ref":(t,16,3), "signed_gap":(t,16), "proximity":(t,16), "confidence":(t,16), "valid":(t,16), "reference_bottom":(t,), "points_object_local":(64,3), "object_geometry":(12,), "support_shift":(3,)}
@@ -101,6 +112,12 @@ class ReferenceCacheV4:
         if self.hand_cloud_reference is not None:
             cloud=np.asarray(self.hand_cloud_reference)
             if cloud.shape != (len(self.q_feasible),256,3) or not np.all(np.isfinite(cloud)): raise ValueError("v5 hand cloud reference must be finite (T,256,3)")
+        if not np.isfinite(self.object_mass) or self.object_mass <= 0:
+            raise ValueError("object mass must be positive finite")
+        if self.gravity_world is not None:
+            gravity=np.asarray(self.gravity_world)
+            if gravity.shape != (3,) or not np.all(np.isfinite(gravity)) or np.linalg.norm(gravity) <= 0:
+                raise ValueError("gravity_world must be a finite nonzero 3-vector")
 
 # Time-varying arrays are padded by their final row; gathers still clamp to
 # each reference's own length. Shared geometry is validated, while action_id
@@ -121,7 +138,8 @@ class ReferenceBankV4:
         if not caches:
             raise ValueError("reference bank must not be empty")
         shared = ("object_com_local", "object_radius", "table_height", "control_timestep",
-                  "points_object_local", "object_geometry", "hand_cloud_template")
+                  "points_object_local", "object_geometry", "hand_cloud_template",
+                  "object_mass", "gravity_world")
         for name in shared + ("q_lower", "q_upper"):
             if any(not np.array_equal(np.asarray(getattr(caches[0], name)) if getattr(caches[0], name) is not None else getattr(caches[0], name), np.asarray(getattr(c, name)) if getattr(c, name) is not None else getattr(c, name)) for c in caches[1:]):
                 raise ValueError(f"reference bank requires shared {name}")
@@ -320,9 +338,11 @@ def compile_reference_cache_v4(trajectory, *, device: str = "cpu", object_type: 
     com_local=np.asarray(model.body_ipos[producer.object_body_id]); object_radius=float(np.max(np.linalg.norm(object_triangles.reshape(-1,3)-com_local,axis=-1))); com=object_origin+_np_quat_rotate(object_q,np.broadcast_to(com_local,(T,3))); ov=_filtered_derivative(com,dt); ow=_filtered_angular_velocity(object_q,dt); palm=hand_origin[:,0]; pv=_filtered_derivative(palm,dt); pw=_filtered_angular_velocity(hand_q[:,0],dt)
     object_bottom=np.min(object_origin[:,None,2]+_np_quat_rotate(object_q[:,None],object_triangles.reshape(-1,3))[:,:,2],axis=1)
     dimensions=np.ptp(object_triangles.reshape(-1,3),axis=0); geometry=geometry_encoding(object_name=object_type,geometry_type="box",dimensions=dimensions)
-    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration,object_radius]),object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]),hand_cloud_template,hand_cloud_reference)
+    object_mass=float(model.body_subtreemass[producer.object_body_id])
+    gravity_world=np.asarray(model.opt.gravity,dtype=np.float64)
+    values=(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,np.asarray([table_height,dt,duration,object_radius,object_mass]),gravity_world,object_points,geometry,np.asarray(shift),np.asarray([dt]),np.asarray(model.geom_pos[hand_geoms]),np.asarray(model.geom_quat[hand_geoms]),hand_cloud_template,hand_cloud_reference)
     digest=cache_hash(*[np.asarray(x) for x in values],kernel_version="warp-mesh-cache-v4.2-motion-gated")
-    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest,object_radius,hand_cloud_template,hand_cloud_reference)
+    result=ReferenceCacheV4(feasible,raw,lower,upper,obj,object_q,com_local,palm,hand_q[:,0],ov,ow,pv,pw,ah,ao,delta,gap,proximity,confidence,valid,object_bottom,float(table_height),dt,duration,object_points,geometry,int(trajectory.identity.identity.split('_')[1]),np.asarray(shift),digest,object_radius,hand_cloud_template,hand_cloud_reference,object_mass,gravity_world)
     for name in result.__dataclass_fields__:
         value=getattr(result,name)
         if isinstance(value,np.ndarray): value.setflags(write=False)
@@ -416,7 +436,7 @@ def _gather(cache: ReferenceCacheV4, index, offset=0, env_ref=None):
         return env_ref, i
     return i
 
-def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, addresses, friction, frame, position, constraint_force, ngeom: int, hand_geom_ids, object_geom_ids, object_com, hand_com=None, hand_v_com=None, hand_w=None, object_v_com=None, object_w=None, cone: str = "pyramidal"):
+def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, addresses, friction, frame, position, constraint_force, ngeom: int, hand_geom_ids, object_geom_ids, object_com, hand_com=None, hand_v_com=None, hand_w=None, object_v_com=None, object_w=None, cone: str = "pyramidal", return_object_torque: bool = False):
     """Reduce one *global* Warp contact arena into object and regional signals.
 
     Padded/unsolved (`efc_address=-1`) rows are erased before force, lever, or
@@ -451,10 +471,14 @@ def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, address
     a,b=lookup[safe_geom[:,0]],lookup[safe_geom[:,1]]
     a_obj=j.any(safe_geom[:,0,None]==j.asarray(obj_host)[None],axis=-1); b_obj=j.any(safe_geom[:,1,None]==j.asarray(obj_host)[None],axis=-1)
     first=solved&(a>=0)&b_obj; second=solved&(b>=0)&a_obj
-    paired=j.zeros((batch,16,3),force.dtype); torque=j.zeros_like(paired); counts=j.zeros((batch,16),j.int32); all_force=j.zeros((batch,3),force.dtype)
+    paired=j.zeros((batch,16,3),force.dtype); torque=j.zeros_like(paired); counts=j.zeros((batch,16),j.int32); all_force=j.zeros((batch,3),force.dtype); all_torque=j.zeros_like(all_force)
     all_force=all_force.at[safe_world].add(j.where(b_obj[:,None],force,0.)+j.where(a_obj[:,None],-force,0.))
     paired=paired.at[safe_world,j.maximum(a,0)].add(force*first[:,None]); paired=paired.at[safe_world,j.maximum(b,0)].add(-force*second[:,None])
     lever=position-object_com[safe_world]
+    all_torque=all_torque.at[safe_world].add(
+        j.where(b_obj[:,None],j.cross(lever,force),0.)
+        + j.where(a_obj[:,None],-j.cross(lever,force),0.)
+    )
     torque=torque.at[safe_world,j.maximum(a,0)].add(j.cross(lever,force)*first[:,None]); torque=torque.at[safe_world,j.maximum(b,0)].add(-j.cross(lever,force)*second[:,None])
     counts=counts.at[safe_world,j.maximum(a,0)].add(first.astype(j.int32)); counts=counts.at[safe_world,j.maximum(b,0)].add(second.astype(j.int32))
     slip=j.zeros((batch,16,3),force.dtype)
@@ -474,8 +498,9 @@ def reduce_pyramidal_contacts_v4(*, nacon, nefc, geom, world, dimension, address
         denom=j.zeros((batch,16),force.dtype).at[safe_world,region].add(weight)
         slip=totals/j.maximum(denom[...,None],1e-12)
         valid=valid&j.all(j.where(pair[:,None],j.isfinite(tangential),True))
-    valid=valid&j.all(j.isfinite(all_force))&j.all(j.isfinite(paired))&j.all(j.isfinite(torque))&j.all(j.isfinite(slip))
-    return all_force,paired,torque,counts,slip,valid
+    valid=valid&j.all(j.isfinite(all_force))&j.all(j.isfinite(all_torque))&j.all(j.isfinite(paired))&j.all(j.isfinite(torque))&j.all(j.isfinite(slip))
+    result=(all_force,paired,torque,counts,slip,valid)
+    return result+(all_torque,) if return_object_torque else result
 
 def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
     """Build exact seven raw blocks, unclipped, from one same-time physical state."""
@@ -558,6 +583,76 @@ def build_raw_observation_v5(physical: V4Physical, contact: V4Contact, cache: Re
         action=j.eye(50,dtype=physical.q_raw.dtype)[cache.action_id-1][None].repeat(b,axis=0)
     raw=j.concatenate((actual,ref,j.concatenate(futures,axis=-1),contact_intent,C(cache.points_object_local).reshape(1,192).repeat(b,axis=0)/RELATIVE_POSITION,hand,action,C(cache.object_geometry)[None].repeat(b,axis=0)),axis=-1)
     if raw.shape[-1] != RAW_OBSERVATION_DIM_V5: raise AssertionError(f"v5 raw ABI {raw.shape[-1]} != {RAW_OBSERVATION_DIM_V5}")
+    return raw
+
+
+def build_raw_observation_v51(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, previous_command, env_ref=None):
+    """VoxMani-inspired v5.1 observation with region-bound contact and goal geometry.
+
+    The environment, reward, action command, PPO and raw-Normal distribution are
+    unchanged. This function only enriches the observation consumed by the
+    v5.1 token model.
+    """
+    import jax.numpy as j
+
+    if cache.hand_cloud_reference is None:
+        raise ValueError("v5.1 requires the per-frame reference hand cloud")
+    if contact.object_all_torque is None:
+        raise ValueError("v5.1 requires total object contact torque")
+
+    base=build_raw_observation_v5(physical,contact,cache,index,previous_command,env_ref)
+    slices=raw_observation_slices_v5()
+    batch=physical.q_raw.shape[0]
+    gather=_gather(cache,index,env_ref=env_ref)
+    C=lambda value:j.asarray(value)
+
+    gravity=C(cache.gravity_world if cache.gravity_world is not None else np.asarray([0.,0.,-9.81]))
+    force_scale=j.maximum(C(cache.object_mass)*j.linalg.norm(gravity),1e-6)
+    torque_scale=j.maximum(force_scale*C(cache.object_radius),1e-6)
+    object_q=physical.object_quat_xyzw
+
+    paired_force=j.arcsinh(
+        quat_unrotate(object_q[:,None],contact.paired_force_on_object)/force_scale
+    )
+    slip=quat_unrotate(object_q[:,None],contact.tangential_slip)/CONTACT_VELOCITY
+    active=(contact.paired_count>0).astype(physical.q_raw.dtype)
+    count=j.log1p(contact.paired_count.astype(physical.q_raw.dtype))
+    region_contact=j.concatenate((
+        C(cache.confidence)[gather][...,None],
+        C(cache.valid)[gather][...,None],
+        active[...,None],
+        count[...,None],
+        paired_force,
+        slip,
+    ),axis=-1).reshape(batch,160)
+
+    hand_force=j.sum(contact.paired_force_on_object,axis=1)
+    hand_torque=j.sum(contact.paired_torque_com,axis=1)
+    other_force=contact.object_all_force-hand_force
+    other_torque=contact.object_all_torque-hand_torque
+    object_wrench=j.concatenate((
+        quat_unrotate(object_q,j.broadcast_to(C(gravity)*C(cache.object_mass),(batch,3)))/force_scale,
+        j.arcsinh(quat_unrotate(object_q,hand_force)/force_scale),
+        j.arcsinh(quat_unrotate(object_q,hand_torque)/torque_scale),
+        j.arcsinh(quat_unrotate(object_q,other_force)/force_scale),
+        j.arcsinh(quat_unrotate(object_q,other_torque)/torque_scale),
+    ),axis=-1)
+
+    reference_hand=C(cache.hand_cloud_reference)[gather].reshape(batch,768)/RELATIVE_POSITION
+    raw=j.concatenate((
+        base[:,slices["autonomous_actual"]],
+        base[:,slices["autonomous_reference"]],
+        base[:,slices["autonomous_future"]],
+        region_contact,
+        object_wrench,
+        base[:,slices["object_point_cloud_raw"]],
+        base[:,slices["hand_point_cloud_raw"]],
+        reference_hand,
+        base[:,slices["action_types"]],
+        base[:,slices["object_geometry"]],
+    ),axis=-1)
+    if raw.shape[-1] != RAW_OBSERVATION_DIM_V51:
+        raise AssertionError(f"v5.1 raw ABI {raw.shape[-1]} != {RAW_OBSERVATION_DIM_V51}")
     return raw
 
 def pointnet_encode(raw_points, *, weights):

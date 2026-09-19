@@ -65,11 +65,18 @@ def _assert_finite(*, model: torch.nn.Module, agent: Any, row: dict[str, float],
 
 def checkpoint_payload(*, model: torch.nn.Module, agent: Any, config: dict[str, Any],
                        provenance: dict[str, Any], policy_steps: int, environment_transitions: int) -> dict[str, Any]:
+    contracts = (
+        model.checkpoint_contracts()
+        if hasattr(model, "checkpoint_contracts")
+        else {
+            "checkpoint_format": CHECKPOINT_FORMAT,
+            "observation_contract": OBSERVATION_CONTRACT_ID,
+            "reward_contract": REWARD_CONTRACT_ID,
+            "action_contract": ACTION_CONTRACT_ID,
+        }
+    )
     return {
-        "checkpoint_format": CHECKPOINT_FORMAT,
-        "observation_contract": OBSERVATION_CONTRACT_ID,
-        "reward_contract": REWARD_CONTRACT_ID,
-        "action_contract": ACTION_CONTRACT_ID,
+        **contracts,
         "policy_sampling_contract": dict(POLICY_SAMPLING_CONTRACT),
         "model": model.state_dict(), "model_architecture": model.checkpoint_architecture(),
         "optimizer": agent.optimizer.state_dict(), "normalizer": None,
@@ -127,12 +134,31 @@ def _warmstart_transfer_mode(source: Any, target: dict[str, Any]) -> str:
     raise ValueError("checkpoint/model architecture mismatch")
 
 
+def _validate_checkpoint_contracts(
+    payload: dict[str, Any], expected: dict[str, str]
+) -> None:
+    for name, value in expected.items():
+        if payload.get(name) != value:
+            raise ValueError(
+                f"incompatible checkpoint: {name} must be {value!r}"
+            )
+    if payload.get("policy_sampling_contract") not in (
+        None,
+        POLICY_SAMPLING_CONTRACT,
+    ):
+        raise ValueError("incompatible policy sampling contract")
+
+
 def inspect_v4_warmstart(path: str | Path, target_architecture: dict[str, Any], *,
                          map_location: str | torch.device = "cpu",
-                         expected_provenance: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
+                         expected_provenance: dict[str, Any] | None = None,
+                         target_contracts: dict[str, str] | None = None) -> tuple[dict[str, Any], str]:
     """Validate public metadata/provenance and resolve the only supported transfer mode."""
     payload = torch.load(path, map_location=map_location, weights_only=False)
-    validate_v4_checkpoint_metadata(payload)
+    if target_contracts is None:
+        validate_v4_checkpoint_metadata(payload)
+    else:
+        _validate_checkpoint_contracts(payload, target_contracts)
     mode = _warmstart_transfer_mode(payload.get("model_architecture"), target_architecture)
     _validate_provenance(payload.get("provenance", {}), expected_provenance or {})
     return payload, mode
@@ -144,7 +170,8 @@ def _load_v4_model_state(path: str | Path, model: torch.nn.Module, *,
                          allow_shared_policy_transfer: bool = False) -> tuple[dict[str, Any], str]:
     payload, mode = inspect_v4_warmstart(path, model.checkpoint_architecture(),
                                          map_location=map_location,
-                                         expected_provenance=expected_provenance)
+                                         expected_provenance=expected_provenance,
+                                         target_contracts=model.checkpoint_contracts())
     if mode == "exact_model":
         model.load_state_dict(payload["model"], strict=True)
         return payload, mode
@@ -216,7 +243,7 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
     Checkpoints are trusted local Torch artifacts, not untrusted pickle inputs.
     """
     payload = torch.load(path, map_location="cpu", weights_only=False)
-    validate_v4_checkpoint_metadata(payload)
+    _validate_checkpoint_contracts(payload, model.checkpoint_contracts())
     if payload.get("policy_sampling_contract") != POLICY_SAMPLING_CONTRACT:
         raise ValueError("resume requires the raw Normal sampling contract")
     if payload.get("model_architecture") != model.checkpoint_architecture():

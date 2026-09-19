@@ -16,7 +16,23 @@ from skrl.models.torch.deterministic import DeterministicMixin
 from skrl.memories.torch import RandomMemory
 from sim.manorl.rl_games_ppo import RlGamesPPO
 from skrl.agents.torch.ppo.ppo import PPO_CFG
-from sim.manorl.autonomy_contracts import ACTION_DIM, OBSERVATION_DIM, RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM, RAW_OBSERVATION_DIM_V5, ENCODED_OBSERVATION_DIM_V5
+from sim.manorl.autonomy_contracts import (
+    ACTION_CONTRACT_ID,
+    ACTION_DIM,
+    CHECKPOINT_FORMAT,
+    ENCODED_OBSERVATION_DIM,
+    ENCODED_OBSERVATION_DIM_V5,
+    OBSERVATION_CONTRACT_ID,
+    OBSERVATION_DIM,
+    RAW_OBSERVATION_DIM,
+    RAW_OBSERVATION_DIM_V5,
+    RAW_OBSERVATION_DIM_V51,
+    REWARD_CONTRACT_ID,
+)
+from sim.manorl.autonomy_v51_model import (
+    AutonomyActorCriticV51,
+    actor_critic_architecture_v51,
+)
 from sim.manorl.model import PointNetEncoder
 from sim.manorl.trajectory_package import TrajectoryCatalog
 from sim.manorl.autonomy_v4 import _gather, reference_lengths
@@ -65,12 +81,16 @@ def identity_split(catalog: TrajectoryCatalog, *, seed:int=0)->dict[str,Any]:
 
 class BatchedAutonomyAdapter:
     """Raw-957 adapter. CUDA borrows tensors through DLPack; CPU is test-only."""
-    def __init__(self,trajectory,*,num_envs=1,device="cpu",seed=0,**kwargs):
+    def __init__(self,trajectory,*,num_envs=1,device="cpu",seed=0,policy_version="v4",**kwargs):
         from sim.manorl.autonomy_batch import BatchedAutonomyRuntime
-        self.runtime=BatchedAutonomyRuntime(trajectory,num_envs=num_envs,device=device,seed=seed,**kwargs)
+        self.policy_version=policy_version
+        self.runtime=BatchedAutonomyRuntime(
+            trajectory,num_envs=num_envs,device=device,seed=seed,
+            observation_version=policy_version,**kwargs
+        )
         self.num_envs=self.runtime.num_envs; self.device_name=device; self._device=torch.device("cuda" if device=="gpu" else "cpu")
-        self.observation_dim=RAW_OBSERVATION_DIM; self.action_dim=ACTION_DIM
-        self.observation_space=gym.spaces.Box(-np.inf,np.inf,shape=(RAW_OBSERVATION_DIM,),dtype=np.float32)
+        self.observation_dim=self.runtime.observation_dim; self.action_dim=ACTION_DIM
+        self.observation_space=gym.spaces.Box(-np.inf,np.inf,shape=(self.observation_dim,),dtype=np.float32)
         self.action_space=gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=np.float32)
     @property
     def device(self): return self._device
@@ -80,7 +100,10 @@ class BatchedAutonomyAdapter:
             return jax_to_torch_cuda(x)
         return torch.as_tensor(np.array(x,copy=True),dtype=torch.float32,device=self._device)
     def reset(self,*,mask=None):
-        return self._to_torch(self.runtime.reset(mask)),{"num_envs":self.num_envs,"contract":"manorl.autonomy.v4"}
+        return self._to_torch(self.runtime.reset(mask)),{
+            "num_envs":self.num_envs,
+            "contract":self.runtime.observation_contract,
+        }
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
     def teacher_actions(self, squeeze_rad=TEACHER_SQUEEZE_RAD, contact_intent_threshold=TEACHER_CONTACT_INTENT_THRESHOLD):
         """Analytical chase labels at the current pre-action state, never controls."""
@@ -192,6 +215,13 @@ class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
         cloud=x[:,703:895].reshape(-1,64,3); embedding=self.pointnet(cloud)
         return torch.cat((x[:,:703],embedding,x[:,895:]),dim=-1)
     def checkpoint_architecture(self): return actor_critic_architecture(separate_critic=self.separate_critic)
+    def checkpoint_contracts(self):
+        return {
+            "checkpoint_format": CHECKPOINT_FORMAT,
+            "observation_contract": OBSERVATION_CONTRACT_ID,
+            "reward_contract": REWARD_CONTRACT_ID,
+            "action_contract": ACTION_CONTRACT_ID,
+        }
     def act(self,inputs,role=""):
         if role=="policy": return GaussianMixin.act(self,inputs,role=role)
         if role=="value": return DeterministicMixin.act(self,inputs,role=role)
@@ -274,13 +304,54 @@ def resolved_v4_ppo_config(agent) -> dict[str, Any]:
 
 
 def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False, learning_rate:float=3e-4):
-    """Canonical RlGamesPPO over raw-957 storage and the v4 PointNet model."""
+    """Canonical RlGamesPPO with a version-selected observation/model pair."""
     cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches,learning_rate=learning_rate)
     memory=RandomMemory(memory_size=rollouts,num_envs=adapter.num_envs,device=device)
-    model=AutonomyActorCritic(adapter.observation_space,adapter.action_space,device=device,separate_critic=separate_critic,clip_actions=False)
+    if adapter.policy_version == "v4":
+        model=AutonomyActorCritic(
+            adapter.observation_space,adapter.action_space,device=device,
+            separate_critic=separate_critic,clip_actions=False
+        )
+    elif adapter.policy_version == "v5.1-pointcloud":
+        model=AutonomyActorCriticV51(
+            adapter.observation_space,adapter.action_space,device=device,
+            clip_actions=False
+        )
+    else:
+        raise ValueError(f"unsupported policy version: {adapter.policy_version!r}")
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
                      observation_space=adapter.observation_space,state_space=None,
                      action_space=adapter.action_space,device=device,cfg=cfg)
     agent.init(); return model,agent
+
+
+def actor_critic_architecture_for_version(
+    policy_version: str, *, separate_critic: bool = False
+) -> dict[str, Any]:
+    if policy_version == "v4":
+        return actor_critic_architecture(separate_critic=separate_critic)
+    if policy_version == "v5.1-pointcloud":
+        return actor_critic_architecture_v51()
+    raise ValueError(f"unsupported policy version: {policy_version!r}")
+
+
+def model_for_version(
+    policy_version: str,
+    observation_space,
+    action_space,
+    *,
+    device: str | torch.device,
+    separate_critic: bool = False,
+):
+    if policy_version == "v4":
+        return AutonomyActorCritic(
+            observation_space, action_space, device=device,
+            separate_critic=separate_critic
+        )
+    if policy_version == "v5.1-pointcloud":
+        return AutonomyActorCriticV51(
+            observation_space, action_space, device=device
+        )
+    raise ValueError(f"unsupported policy version: {policy_version!r}")
 
 def seed_everything(seed:int): random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)

@@ -17,8 +17,27 @@ import torch
 
 from sim.manorl.autonomy_batch_training import inspect_v4_resume, inspect_v4_warmstart, load_frozen_v4, resume_lineage, run_batched_ppo
 from sim.manorl.autonomy_telemetry import configure_wandb_axis
-from sim.manorl.autonomy_contracts import ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata
-from sim.manorl.autonomy_training import AutonomyActorCritic, BatchedAutonomyAdapter, actor_critic_architecture, identity_split, seed_everything, v4_ppo_config, validate_learning_rate, teacher_anchor_metadata
+from sim.manorl.autonomy_contracts import (
+    ACTION_CONTRACT_ID,
+    CHECKPOINT_FORMAT,
+    CHECKPOINT_FORMAT_V51,
+    OBSERVATION_CONTRACT_ID,
+    OBSERVATION_CONTRACT_ID_V51,
+    REWARD_CONTRACT_ID,
+    validate_v4_checkpoint_metadata,
+    validate_v51_checkpoint_metadata,
+)
+from sim.manorl.autonomy_training import (
+    BatchedAutonomyAdapter,
+    actor_critic_architecture,
+    actor_critic_architecture_for_version,
+    identity_split,
+    model_for_version,
+    seed_everything,
+    teacher_anchor_metadata,
+    v4_ppo_config,
+    validate_learning_rate,
+)
 from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES
 from sim.manorl.autonomy_v4 import REWARD_MOTION_RADIUS, reward_parameters
 from sim.manorl.trajectory_package import load_trajectory_package
@@ -71,10 +90,33 @@ def _training_references(args, catalog, trajectory, split):
     return references
 
 
-def _adapter(args, trajectory, *, full_horizon_diagnostic=False):
+def _policy_version(args) -> str:
+    return getattr(args, "policy_version", None) or "v4"
+
+
+def _contracts(policy_version: str) -> dict[str, str]:
+    if policy_version == "v4":
+        return {
+            "checkpoint": CHECKPOINT_FORMAT,
+            "observation": OBSERVATION_CONTRACT_ID,
+            "action": ACTION_CONTRACT_ID,
+            "reward": REWARD_CONTRACT_ID,
+        }
+    if policy_version == "v5.1-pointcloud":
+        return {
+            "checkpoint": CHECKPOINT_FORMAT_V51,
+            "observation": OBSERVATION_CONTRACT_ID_V51,
+            "action": ACTION_CONTRACT_ID,
+            "reward": REWARD_CONTRACT_ID,
+        }
+    raise ValueError(f"unsupported policy version: {policy_version!r}")
+
+
+def _adapter(args, trajectory, *, full_horizon_diagnostic=False, policy_version=None):
     return BatchedAutonomyAdapter(trajectory, num_envs=args.num_envs, device=args.device, seed=args.seed,
         persistent_ccd_workspace=args.persistentworkspace, ccd_contacts_per_world=args.ccd_contacts_per_world,
-        full_horizon_diagnostic=full_horizon_diagnostic)
+        full_horizon_diagnostic=full_horizon_diagnostic,
+        policy_version=policy_version or _policy_version(args))
 
 
 def _provenance(catalog, split, adapter):
@@ -86,8 +128,7 @@ def _provenance(catalog, split, adapter):
     result = {"source_commit": _git_revision(ROOT), "asset_pin": _git_revision(ROOT / "assets/dexstream_digital_assets"),
             "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
             "catalog_digest": catalog.catalog_digest, "identity_split": split,
-            "contracts": {"checkpoint": CHECKPOINT_FORMAT, "observation": OBSERVATION_CONTRACT_ID,
-                          "action": ACTION_CONTRACT_ID, "reward": REWARD_CONTRACT_ID},
+            "contracts": _contracts(adapter.policy_version),
             "clock": dict(adapter.runtime.clock_metadata), "identity": adapter.runtime.trajectory.identity.identity,
             "cache_hash_recorded_not_compared": adapter.runtime.cache.content_hash,
             "contact_capacity": adapter.runtime.warp_contact_capacity,
@@ -139,7 +180,9 @@ def _resolved_telemetry_config(adapter, args):
                         "physics_substeps": 4,
                         "reference_count": len(adapter.runtime.trajectories) if getattr(adapter.runtime, "trajectories", None) is not None else 1,
                         "reference_assignment_mode": "all_package_references" if getattr(args, "all_references", False) else ("train_split_round_robin" if getattr(args, "all_train_references", False) else "single_reference")},
-            "architecture": actor_critic_architecture(separate_critic=args.separate_critic),
+            "architecture": actor_critic_architecture_for_version(
+                adapter.policy_version, separate_critic=args.separate_critic
+            ),
             "thresholds": {"loaded_force_N": .02, "airborne_clearance_m": .005,
                            "severe_reason_bits": {"reference_complete": 1, "deviation": 2, "fallen": 4, "nonfinite": 8}},
             "reward_parameters": reward_parameters(getattr(adapter.runtime.cache, "object_radius", REWARD_MOTION_RADIUS))}
@@ -158,6 +201,10 @@ def train(args):
         raise ValueError("total-transitions must equal updates * rollouts * num-envs")
     references = _training_references(args, catalog, trajectory, split)
     adapter = _adapter(args, references); provenance = _provenance(catalog, split, adapter)
+    if adapter.policy_version == "v5.1-pointcloud":
+        # Independent actor/critic fusion towers are part of the v5.1 model
+        # contract rather than an optional PPO setting.
+        args.separate_critic = True
     if args.all_references and "reference_assignment" in provenance:
         provenance["reference_assignment"]["mode"] = "all_package_references"
         provenance["reference_assignment"]["reference_count"] = len(references)
@@ -179,8 +226,17 @@ def train(args):
     transfer_mode = None
     if warmstart_checkpoint is not None:
         _, transfer_mode = inspect_v4_warmstart(
-            warmstart_checkpoint, actor_critic_architecture(separate_critic=args.separate_critic),
+            warmstart_checkpoint,
+            actor_critic_architecture_for_version(
+                adapter.policy_version, separate_critic=args.separate_critic
+            ),
             expected_provenance=warmstart_expected,
+            target_contracts={
+                "checkpoint_format": provenance["contracts"]["checkpoint"],
+                "observation_contract": provenance["contracts"]["observation"],
+                "action_contract": provenance["contracts"]["action"],
+                "reward_contract": provenance["contracts"]["reward"],
+            },
         )
     lineage = {"separate_critic": bool(args.separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
                "warmstart_transfer_mode": transfer_mode, "mode": mode}
@@ -188,8 +244,13 @@ def train(args):
     if args.resume_checkpoint:
         # Metadata and every model/Adam tensor are validated before creating a
         # W&B writer. A CPU model suffices; no B*rollout memory is allocated here.
-        validation_model = AutonomyActorCritic(adapter.observation_space, adapter.action_space,
-                                               device="cpu", separate_critic=args.separate_critic)
+        validation_model = model_for_version(
+            adapter.policy_version,
+            adapter.observation_space,
+            adapter.action_space,
+            device="cpu",
+            separate_critic=args.separate_critic,
+        )
         validation_optimizer = torch.optim.Adam(validation_model.parameters(), lr=args.learning_rate)
         payload = inspect_v4_resume(args.resume_checkpoint, validation_model, validation_optimizer,
             expected_config=config, expected_provenance=provenance, updates=args.updates,
@@ -236,11 +297,24 @@ def train(args):
 
 
 def _checkpoint_separate_critic(payload):
-    validate_v4_checkpoint_metadata(payload)
+    policy_version = _checkpoint_policy_version(payload)
+    if policy_version == "v5.1-pointcloud":
+        return True
     architecture = payload.get("model_architecture")
     if architecture == actor_critic_architecture(separate_critic=False): return False
     if architecture == actor_critic_architecture(separate_critic=True): return True
     raise ValueError("checkpoint/model architecture mismatch")
+
+
+def _checkpoint_policy_version(payload) -> str:
+    checkpoint_format = payload.get("checkpoint_format")
+    if checkpoint_format == CHECKPOINT_FORMAT:
+        validate_v4_checkpoint_metadata(payload)
+        return "v4"
+    if checkpoint_format == CHECKPOINT_FORMAT_V51:
+        validate_v51_checkpoint_metadata(payload)
+        return "v5.1-pointcloud"
+    raise ValueError("unsupported checkpoint format")
 
 
 def evaluate(args):
@@ -248,11 +322,26 @@ def evaluate(args):
     if args.steps is not None and args.steps <= 0: raise ValueError("--steps must be positive")
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    policy_version = _checkpoint_policy_version(payload)
+    if args.policy_version is not None and args.policy_version != policy_version:
+        raise ValueError(
+            f"requested policy version {args.policy_version!r} does not match "
+            f"checkpoint {policy_version!r}"
+        )
     separate_critic = _checkpoint_separate_critic(payload)
     split = identity_split(catalog, seed=payload.get("provenance", {}).get("identity_split", {}).get("seed", args.split_seed))
-    adapter = _adapter(args, trajectory, full_horizon_diagnostic=args.full_horizon_diagnostic)
-    model = AutonomyActorCritic(adapter.observation_space, adapter.action_space, device=adapter.device,
-                                separate_critic=separate_critic)
+    adapter = _adapter(
+        args, trajectory,
+        full_horizon_diagnostic=args.full_horizon_diagnostic,
+        policy_version=policy_version,
+    )
+    model = model_for_version(
+        policy_version,
+        adapter.observation_space,
+        adapter.action_space,
+        device=adapter.device,
+        separate_critic=separate_critic,
+    )
     # Identity is a conditioning input, not a compatibility contract: a frozen
     # checkpoint must accept references it was not trained on.  Compatibility
     # remains gated by asset/package/ABI/split; the identity itself is recorded
@@ -291,7 +380,7 @@ def evaluate(args):
         artifact["reward_terms"].append(terms); artifact["paired_force_on_object"].append(np.asarray(contact.paired_force_on_object)[0]); artifact["object_all_force"].append(np.asarray(contact.object_all_force)[0]); artifact["bottom_clearance"].append(clearance); artifact["reason_code"].append(reason_code)
         if natural_done and not args.full_horizon_diagnostic: break
         observations = next_obs if args.full_horizon_diagnostic else adapter.prepare_action()
-    result = {"format": "manorl.autonomy.frozen_evaluation.v4", "checkpoint": str(args.checkpoint),
+    result = {"format": f"manorl.autonomy.frozen_evaluation.{policy_version}", "checkpoint": str(args.checkpoint),
               "identity": trajectory.identity.identity, "started_reference_frame": 0, "steps": len(trace),
               "return": total, "natural_first_termination": natural_first,
               "full_horizon_diagnostic": bool(args.full_horizon_diagnostic),
@@ -307,7 +396,8 @@ def evaluate(args):
 
 def inspect(args):
     catalog, trajectory = _catalog_and_trajectory(args); adapter = _adapter(args, trajectory)
-    print(json.dumps({"identity": trajectory.identity.identity, "raw_observation": list(adapter.reset()[0].shape),
+    print(json.dumps({"identity": trajectory.identity.identity, "policy_version": adapter.policy_version,
+        "raw_observation": list(adapter.reset()[0].shape),
         "cache_hash": adapter.runtime.cache.content_hash, "clock": adapter.runtime.clock_metadata,
         "workspace": args.persistentworkspace, "ccd_contacts_per_world": args.ccd_contacts_per_world,
         "constraint_capacity_per_world": adapter.runtime.warp_constraint_capacity}))
@@ -318,6 +408,8 @@ def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--package", default=DEFAULT_PACKAGE); common.add_argument("--identity", default=DEFAULT_IDENTITY)
     common.add_argument("--device", choices=("cpu", "gpu"), default="gpu"); common.add_argument("--seed", type=int, default=0)
+    common.add_argument("--policy-version", choices=("v4", "v5.1-pointcloud"),
+                        help="observation/model ABI; defaults to v4 for compatibility")
     common.add_argument("--split-seed", type=int, default=0); common.add_argument("--num-envs", type=int, default=4096)
     common.add_argument("--persistentworkspace", action=argparse.BooleanOptionalAction, default=True)
     common.add_argument("--ccd-contacts-per-world", type=int, default=121, help="cube2 B4096 CCD scratch; runtime keeps njmax=512/world")

@@ -7,14 +7,21 @@ by a post-reset forward and are never row-masked.
 from __future__ import annotations
 from typing import Any, NamedTuple
 import numpy as np
-from sim.manorl.autonomy_contracts import ACTION_DIM, AUTONOMY_VERSION, OBSERVATION_DIM
+from sim.manorl.autonomy_contracts import (
+    ACTION_DIM,
+    AUTONOMY_VERSION,
+    OBSERVATION_CONTRACT_ID_V51,
+    OBSERVATION_DIM,
+    RAW_OBSERVATION_DIM_V51,
+)
 from sim.manorl.autonomy_v4 import (
     ReferenceCacheV4, ReferenceBankV4, V4Contact, compile_reference_cache_v4, extract_v4_physical,
-    reduce_pyramidal_contacts_v4, build_raw_observation, compute_reward,
+    reduce_pyramidal_contacts_v4, build_raw_observation, build_raw_observation_v51, compute_reward,
     DOF_RATE, ANTIWINDUP_ERROR,
 )
 
 V4_OBSERVATION_DIM = OBSERVATION_DIM
+V51_OBSERVATION_DIM = RAW_OBSERVATION_DIM_V51
 # Deliberate import-only migration alias. It is raw v4, never the legacy 538 ABI.
 V3_OBSERVATION_DIM = V4_OBSERVATION_DIM
 
@@ -47,7 +54,7 @@ class BatchedAutonomyRuntime:
     def __init__(
         self, trajectory, *, num_envs: int = 1, device: str = "cpu", seed: int = 0,
         persistent_ccd_workspace: bool = False, ccd_contacts_per_world: int | None = None,
-        full_horizon_diagnostic: bool = False, **_: Any,
+        full_horizon_diagnostic: bool = False, observation_version: str = "v4", **_: Any,
     ):
         if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
             raise ValueError("num_envs must be a positive integer")
@@ -67,6 +74,20 @@ class BatchedAutonomyRuntime:
             raise ValueError("ccd_contacts_per_world must be a positive integer")
         if not isinstance(full_horizon_diagnostic, bool):
             raise TypeError("full_horizon_diagnostic must be bool")
+        observation_builders = {
+            "v4": (build_raw_observation, V4_OBSERVATION_DIM, AUTONOMY_VERSION),
+            "v5.1-pointcloud": (
+                build_raw_observation_v51,
+                V51_OBSERVATION_DIM,
+                OBSERVATION_CONTRACT_ID_V51,
+            ),
+        }
+        if observation_version not in observation_builders:
+            raise ValueError(f"unsupported observation_version: {observation_version!r}")
+        self.observation_version = observation_version
+        self._observation_builder, self.observation_dim, self.observation_contract = (
+            observation_builders[observation_version]
+        )
 
         import jax
         import jax.numpy as j
@@ -218,7 +239,7 @@ class BatchedAutonomyRuntime:
         )
         if any(not hasattr(x, name) for name in required):
             raise RuntimeError("pinned MJX-Warp contact ABI unavailable")
-        allf, pair, torque, count, slip, valid = reduce_pyramidal_contacts_v4(
+        allf, pair, torque, count, slip, valid, all_torque = reduce_pyramidal_contacts_v4(
             nacon=x.nacon, nefc=x.nefc, geom=x.contact__geom, world=x.contact__worldid,
             dimension=x.contact__dim, addresses=x.contact__efc_address,
             friction=x.contact__friction, frame=x.contact__frame, position=x.contact__pos,
@@ -228,13 +249,16 @@ class BatchedAutonomyRuntime:
             hand_com=physical.region_com, hand_v_com=physical.region_v_com,
             hand_w=physical.region_w, object_v_com=physical.object_v_com,
             object_w=physical.object_w,
+            return_object_torque=True,
         )
-        return V4Contact(allf, pair, torque, count, slip, valid)
+        return V4Contact(allf, pair, torque, count, slip, valid, all_torque)
 
     def _observe(self, data, index, previous):
         physical = self._physical(data, previous)
         contact = self._contact(data, physical)
-        raw = build_raw_observation(physical, contact, self.cache, index, previous, self.env_ref)
+        raw = self._observation_builder(
+            physical, contact, self.cache, index, previous, self.env_ref
+        )
         return physical, contact, raw, raw
 
     def _transition(self, data, index, previous, action, execute):
@@ -309,12 +333,12 @@ class BatchedAutonomyRuntime:
             "clock": self.clock_metadata, "cache": self.cache.content_hash,
             "table": self.table_metadata, "contact_capacity": self.warp_contact_capacity,
             "constraint_capacity_per_world": self.warp_constraint_capacity,
-            "contract": AUTONOMY_VERSION,
+            "contract": self.observation_contract,
         }
 
 
 __all__ = [
     "ReferenceCacheV4", "compile_reference_cache_v4", "V4Contact",
-    "V4_OBSERVATION_DIM", "V3_OBSERVATION_DIM", "AutonomyTransitionState",
+    "V4_OBSERVATION_DIM", "V51_OBSERVATION_DIM", "V3_OBSERVATION_DIM", "AutonomyTransitionState",
     "BatchedAutonomyRuntime",
 ]
