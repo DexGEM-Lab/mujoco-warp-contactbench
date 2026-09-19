@@ -20,9 +20,11 @@ from sim.manorl.autonomy_contracts import (
     ACTION_CONTRACT_ID,
     ACTION_DIM,
     CHECKPOINT_FORMAT,
+    CHECKPOINT_FORMAT_V5,
     ENCODED_OBSERVATION_DIM,
     ENCODED_OBSERVATION_DIM_V5,
     OBSERVATION_CONTRACT_ID,
+    OBSERVATION_CONTRACT_ID_V5,
     OBSERVATION_DIM,
     RAW_OBSERVATION_DIM,
     RAW_OBSERVATION_DIM_V5,
@@ -260,6 +262,13 @@ class AutonomyActorCriticV5(GaussianMixin,DeterministicMixin,Model):
         object_embedding=self.object_pointnet(object_cloud); hand_embedding=self.hand_pointnet(hand_cloud)
         return torch.cat((x[:,:320],object_embedding,hand_embedding,x[:,1280:]),dim=-1)
     def checkpoint_architecture(self): return actor_critic_architecture_v5(separate_critic=self.separate_critic)
+    def checkpoint_contracts(self):
+        return {
+            "checkpoint_format": CHECKPOINT_FORMAT_V5,
+            "observation_contract": OBSERVATION_CONTRACT_ID_V5,
+            "reward_contract": REWARD_CONTRACT_ID,
+            "action_contract": ACTION_CONTRACT_ID,
+        }
     def act(self,inputs,role=""):
         if role=="policy": return GaussianMixin.act(self,inputs,role=role)
         if role=="value": return DeterministicMixin.act(self,inputs,role=role)
@@ -313,6 +322,11 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
             adapter.observation_space,adapter.action_space,device=device,
             separate_critic=separate_critic,clip_actions=False
         )
+    elif policy_version == "v5":
+        model=AutonomyActorCriticV5(
+            adapter.observation_space,adapter.action_space,device=device,
+            separate_critic=separate_critic,clip_actions=False
+        )
     elif policy_version == "v6":
         model=AutonomyActorCriticV6(
             adapter.observation_space,adapter.action_space,device=device,
@@ -331,6 +345,8 @@ def actor_critic_architecture_for_version(
 ) -> dict[str, Any]:
     if policy_version == "v4":
         return actor_critic_architecture(separate_critic=separate_critic)
+    if policy_version == "v5":
+        return actor_critic_architecture_v5(separate_critic=separate_critic)
     if policy_version == "v6":
         return actor_critic_architecture_v6()
     raise ValueError(f"unsupported policy version: {policy_version!r}")
@@ -346,6 +362,11 @@ def model_for_version(
 ):
     if policy_version == "v4":
         return AutonomyActorCritic(
+            observation_space, action_space, device=device,
+            separate_critic=separate_critic
+        )
+    if policy_version == "v5":
+        return AutonomyActorCriticV5(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )

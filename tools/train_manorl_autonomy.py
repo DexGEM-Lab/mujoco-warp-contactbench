@@ -20,16 +20,20 @@ from sim.manorl.autonomy_telemetry import configure_wandb_axis
 from sim.manorl.autonomy_contracts import (
     ACTION_CONTRACT_ID,
     CHECKPOINT_FORMAT,
+    CHECKPOINT_FORMAT_V5,
     CHECKPOINT_FORMAT_V6,
     OBSERVATION_CONTRACT_ID,
+    OBSERVATION_CONTRACT_ID_V5,
     OBSERVATION_CONTRACT_ID_V6,
     REWARD_CONTRACT_ID,
     validate_v4_checkpoint_metadata,
+    validate_v5_checkpoint_metadata,
     validate_v6_checkpoint_metadata,
 )
 from sim.manorl.autonomy_training import (
     BatchedAutonomyAdapter,
     actor_critic_architecture,
+    actor_critic_architecture_v5,
     actor_critic_architecture_for_version,
     identity_split,
     model_for_version,
@@ -40,6 +44,7 @@ from sim.manorl.autonomy_training import (
 )
 from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES
 from sim.manorl.autonomy_v4 import REWARD_MOTION_RADIUS, reward_parameters
+from sim.manorl.assets import DEXSTREAM_ROOT
 from sim.manorl.trajectory_package import load_trajectory_package
 
 DEFAULT_PACKAGE = "/home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/manorl/contact_conditioned_autonomy/cube2_02_v295_f120_pre180_post180"
@@ -102,6 +107,13 @@ def _contracts(policy_version: str) -> dict[str, str]:
             "action": ACTION_CONTRACT_ID,
             "reward": REWARD_CONTRACT_ID,
         }
+    if policy_version == "v5":
+        return {
+            "checkpoint": CHECKPOINT_FORMAT_V5,
+            "observation": OBSERVATION_CONTRACT_ID_V5,
+            "action": ACTION_CONTRACT_ID,
+            "reward": REWARD_CONTRACT_ID,
+        }
     if policy_version == "v6":
         return {
             "checkpoint": CHECKPOINT_FORMAT_V6,
@@ -125,7 +137,7 @@ def _provenance(catalog, split, adapter):
     Their float build hash can vary across supported build paths; source/asset/package
     and ABI/clock are the physical compatibility contract.
     """
-    result = {"source_commit": _git_revision(ROOT), "asset_pin": _git_revision(ROOT / "assets/dexstream_digital_assets"),
+    result = {"source_commit": _git_revision(ROOT), "asset_pin": _git_revision(DEXSTREAM_ROOT),
             "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
             "catalog_digest": catalog.catalog_digest, "identity_split": split,
             "contracts": _contracts(adapter.policy_version),
@@ -303,6 +315,8 @@ def _checkpoint_separate_critic(payload):
     architecture = payload.get("model_architecture")
     if architecture == actor_critic_architecture(separate_critic=False): return False
     if architecture == actor_critic_architecture(separate_critic=True): return True
+    if architecture == actor_critic_architecture_v5(separate_critic=False): return False
+    if architecture == actor_critic_architecture_v5(separate_critic=True): return True
     raise ValueError("checkpoint/model architecture mismatch")
 
 
@@ -311,6 +325,9 @@ def _checkpoint_policy_version(payload) -> str:
     if checkpoint_format == CHECKPOINT_FORMAT:
         validate_v4_checkpoint_metadata(payload)
         return "v4"
+    if checkpoint_format == CHECKPOINT_FORMAT_V5:
+        validate_v5_checkpoint_metadata(payload)
+        return "v5"
     if checkpoint_format == CHECKPOINT_FORMAT_V6:
         validate_v6_checkpoint_metadata(payload)
         return "v6"
@@ -346,7 +363,7 @@ def evaluate(args):
     # checkpoint must accept references it was not trained on.  Compatibility
     # remains gated by asset/package/ABI/split; the identity itself is recorded
     # in the result provenance only.
-    expected = {"asset_pin": _git_revision(ROOT / "assets/dexstream_digital_assets"),
+    expected = {"asset_pin": _git_revision(DEXSTREAM_ROOT),
                 "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
                 "catalog_digest": catalog.catalog_digest, "identity_split": split}
     payload = load_frozen_v4(args.checkpoint, model, map_location=adapter.device, expected_provenance=expected)
@@ -408,7 +425,7 @@ def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--package", default=DEFAULT_PACKAGE); common.add_argument("--identity", default=DEFAULT_IDENTITY)
     common.add_argument("--device", choices=("cpu", "gpu"), default="gpu"); common.add_argument("--seed", type=int, default=0)
-    common.add_argument("--policy-version", choices=("v4", "v6"),
+    common.add_argument("--policy-version", choices=("v4", "v5", "v6"),
                         help="observation/model ABI; defaults to v4 for compatibility")
     common.add_argument("--split-seed", type=int, default=0); common.add_argument("--num-envs", type=int, default=4096)
     common.add_argument("--persistentworkspace", action=argparse.BooleanOptionalAction, default=True)

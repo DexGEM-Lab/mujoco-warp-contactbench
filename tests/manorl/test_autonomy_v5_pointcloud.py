@@ -6,7 +6,11 @@ import pytest
 from dataclasses import replace
 
 from sim.manorl.autonomy_contracts import (
+    ACTION_CONTRACT_ID,
+    CHECKPOINT_FORMAT_V5,
     RAW_OBSERVATION_DIM_V5, ENCODED_OBSERVATION_DIM_V5,
+    OBSERVATION_CONTRACT_ID_V5,
+    REWARD_CONTRACT_ID,
     raw_observation_slices_v5, encoded_observation_slices_v5,
 )
 from sim.manorl.autonomy_v4 import (
@@ -69,6 +73,27 @@ def test_v5_model_forward_shapes():
     assert arch["id"] == "manorl.autonomy.actor_critic.v5.pointcloud"
     assert arch["raw_observation_dim"] == RAW_OBSERVATION_DIM_V5
     assert arch["encoded_feature_dim"] == ENCODED_OBSERVATION_DIM_V5
+    assert model.checkpoint_contracts() == {
+        "checkpoint_format": CHECKPOINT_FORMAT_V5,
+        "observation_contract": OBSERVATION_CONTRACT_ID_V5,
+        "reward_contract": REWARD_CONTRACT_ID,
+        "action_contract": ACTION_CONTRACT_ID,
+    }
+
+
+def test_v5_cli_and_checkpoint_version_detection():
+    pytest.importorskip("torch")
+    from tools import train_manorl_autonomy as cli
+
+    args = cli.parse_args(["train", "--policy-version", "v5", "--no-wandb"])
+    assert args.policy_version == "v5"
+    payload = {
+        "checkpoint_format": CHECKPOINT_FORMAT_V5,
+        "observation_contract": OBSERVATION_CONTRACT_ID_V5,
+        "reward_contract": REWARD_CONTRACT_ID,
+        "action_contract": ACTION_CONTRACT_ID,
+    }
+    assert cli._checkpoint_policy_version(payload) == "v5"
 
 
 def test_v5_bank_carries_hand_cloud_and_template():

@@ -32,7 +32,12 @@ from sim.manorl.contracts import (
 
 TASK_ASSET_ROOT = Path(__file__).resolve().parent / "task_assets"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEXSTREAM_ROOT = REPOSITORY_ROOT / "assets" / "dexstream_digital_assets"
+EXPLICIT_DEXSTREAM_ROOT = os.environ.get("MANORL_DEXSTREAM_ROOT", "")
+DEXSTREAM_ROOT = (
+    Path(EXPLICIT_DEXSTREAM_ROOT).expanduser().resolve()
+    if EXPLICIT_DEXSTREAM_ROOT
+    else REPOSITORY_ROOT / "assets" / "dexstream_digital_assets"
+)
 DEXSTREAM_REPOSITORY = "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
 MANO_OPERATOR = "sunke"
 EXPLICIT_ASSET_MANIFEST = os.environ.get("MANORL_ASSET_MANIFEST", "")

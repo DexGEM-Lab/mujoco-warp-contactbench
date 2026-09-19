@@ -135,6 +135,29 @@ REWARD_CONTRACT = AutonomousRewardContract()
 
 
 @dataclass(frozen=True)
+class AutonomousObservationContractV5:
+    version: str = OBSERVATION_CONTRACT_ID_V5
+    raw_dimension: int = RAW_OBSERVATION_DIM_V5
+    encoded_dimension: int = ENCODED_OBSERVATION_DIM_V5
+    object_points: int = 64
+    hand_points: int = 256
+    pointnet_embedding: int = 64
+
+    def __post_init__(self) -> None:
+        if (
+            self.version != OBSERVATION_CONTRACT_ID_V5
+            or self.raw_dimension != sum(width for _, width in RAW_OBSERVATION_FIELDS_V5)
+            or self.encoded_dimension != sum(width for _, width in ENCODED_OBSERVATION_FIELDS_V5)
+            or (self.object_points, self.hand_points, self.pointnet_embedding)
+            != (64, 256, 64)
+        ):
+            raise ValueError("v5 point-cloud observation ABI drifted")
+
+
+OBSERVATION_CONTRACT_V5 = AutonomousObservationContractV5()
+
+
+@dataclass(frozen=True)
 class AutonomousObservationContractV6:
     version: str = OBSERVATION_CONTRACT_ID_V6
     raw_dimension: int = RAW_OBSERVATION_DIM_V6
@@ -168,6 +191,20 @@ def validate_v4_checkpoint_metadata(metadata: dict[str, object]) -> None:
             raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
     if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
         raise ValueError("incompatible v4 policy sampling contract")
+
+
+def validate_v5_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    required = {
+        "checkpoint_format": CHECKPOINT_FORMAT_V5,
+        "observation_contract": OBSERVATION_CONTRACT_ID_V5,
+        "reward_contract": REWARD_CONTRACT_ID,
+        "action_contract": ACTION_CONTRACT_ID,
+    }
+    for name, expected in required.items():
+        if metadata.get(name) != expected:
+            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
+    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
+        raise ValueError("incompatible v5 policy sampling contract")
 
 
 def validate_v6_checkpoint_metadata(metadata: dict[str, object]) -> None:

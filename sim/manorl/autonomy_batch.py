@@ -10,17 +10,21 @@ import numpy as np
 from sim.manorl.autonomy_contracts import (
     ACTION_DIM,
     AUTONOMY_VERSION,
+    OBSERVATION_CONTRACT_ID_V5,
     OBSERVATION_CONTRACT_ID_V6,
     OBSERVATION_DIM,
+    RAW_OBSERVATION_DIM_V5,
     RAW_OBSERVATION_DIM_V6,
 )
 from sim.manorl.autonomy_v4 import (
     ReferenceCacheV4, ReferenceBankV4, V4Contact, compile_reference_cache_v4, extract_v4_physical,
-    reduce_pyramidal_contacts_v4, build_raw_observation, build_raw_observation_v6, compute_reward,
+    reduce_pyramidal_contacts_v4, build_raw_observation, build_raw_observation_v5,
+    build_raw_observation_v6, compute_reward,
     DOF_RATE, ANTIWINDUP_ERROR,
 )
 
 V4_OBSERVATION_DIM = OBSERVATION_DIM
+V5_OBSERVATION_DIM = RAW_OBSERVATION_DIM_V5
 V6_OBSERVATION_DIM = RAW_OBSERVATION_DIM_V6
 # Deliberate import-only migration alias. It is raw v4, never the legacy 538 ABI.
 V3_OBSERVATION_DIM = V4_OBSERVATION_DIM
@@ -76,6 +80,11 @@ class BatchedAutonomyRuntime:
             raise TypeError("full_horizon_diagnostic must be bool")
         observation_builders = {
             "v4": (build_raw_observation, V4_OBSERVATION_DIM, AUTONOMY_VERSION),
+            "v5": (
+                build_raw_observation_v5,
+                V5_OBSERVATION_DIM,
+                OBSERVATION_CONTRACT_ID_V5,
+            ),
             "v6": (
                 build_raw_observation_v6,
                 V6_OBSERVATION_DIM,
@@ -339,6 +348,7 @@ class BatchedAutonomyRuntime:
 
 __all__ = [
     "ReferenceCacheV4", "compile_reference_cache_v4", "V4Contact",
-    "V4_OBSERVATION_DIM", "V6_OBSERVATION_DIM", "V3_OBSERVATION_DIM", "AutonomyTransitionState",
+    "V4_OBSERVATION_DIM", "V5_OBSERVATION_DIM", "V6_OBSERVATION_DIM",
+    "V3_OBSERVATION_DIM", "AutonomyTransitionState",
     "BatchedAutonomyRuntime",
 ]
