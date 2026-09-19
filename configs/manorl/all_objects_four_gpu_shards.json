@@ -1,0 +1,110 @@
+{
+  "schema": "manorl.all_objects_four_gpu_shards.v1",
+  "source": {
+    "dataset": "/mnt/nas-222-projects/sunjieqiang/new_vla/mano_rl_refined_100_per_action_motion_v1.lance",
+    "dataset_version": 1,
+    "rows": 12200,
+    "objects": 21,
+    "pairs": 122,
+    "high_confidence_rows": 8514,
+    "low_confidence_rows": 3686
+  },
+  "training_contract": {
+    "policy_scope": "one independent shared policy per shard",
+    "reference_fps": 120,
+    "control_fps": 120,
+    "physics_fps": 480,
+    "pre_padding": 60,
+    "early_phase_steps": 120,
+    "max_deviation_distance_m": 0.15,
+    "joint_scale_multiplier": 2.0,
+    "joint_max_offset_multiplier": 2.0,
+    "updates_total_per_shard": 8000,
+    "assignment_cycles": [0, 1, 2, 3, 4],
+    "updates_per_cycle": 1600,
+    "assignment_mechanism": "20 fixed worlds per object-action pair per cycle; pair_assignment_cycle advances each pair by 20 rows; five cycles cover all 100 rows per pair exactly",
+    "resume_between_cycles": "strict native resume of policy, value, optimizer and normalizers; package and environment contract remain fixed",
+    "warning": "The four policies cover disjoint object sets and cannot be merged into one universal checkpoint without distributed/shared-policy training support."
+  },
+  "shards": [
+    {
+      "id": "shard-a",
+      "host": "manorl-server1",
+      "physical_gpu": 0,
+      "num_envs": 620,
+      "rows": 3100,
+      "pairs": 31,
+      "high_confidence_rows": 2129,
+      "low_confidence_rows": 971,
+      "objects": ["bowl", "cuboid2", "cuboid3", "cylinder5", "mayonnaisebottle", "sphere1", "sphere2"],
+      "largest_collision_piece_count": 25,
+      "complex_anchor_object": "bowl",
+      "status": "ready_after_shard_mtp_compile",
+      "selector": "bowl:03,bowl:04,bowl:08,bowl:18,cuboid2:01,cuboid2:02,cuboid2:03,cuboid2:04,cuboid2:09,cuboid2:14,cuboid3:01,cuboid3:02,cuboid3:03,cuboid3:04,cuboid3:18,cylinder5:03,cylinder5:04,cylinder5:19,mayonnaisebottle:01,mayonnaisebottle:02,mayonnaisebottle:03,mayonnaisebottle:04,mayonnaisebottle:05,mayonnaisebottle:08,sphere1:01,sphere1:02,sphere1:11,sphere1:19,sphere2:01,sphere2:02,sphere2:19"
+    },
+    {
+      "id": "shard-b",
+      "host": "manorl-server1",
+      "physical_gpu": 2,
+      "num_envs": 600,
+      "rows": 3000,
+      "pairs": 30,
+      "high_confidence_rows": 2116,
+      "low_confidence_rows": 884,
+      "objects": ["cylinder1", "cylinder2", "iphone", "largeclamp"],
+      "largest_collision_piece_count": 27,
+      "complex_anchor_object": "largeclamp",
+      "status": "ready_after_shard_mtp_compile",
+      "selector": "cylinder1:01,cylinder1:02,cylinder1:03,cylinder1:04,cylinder1:09,cylinder1:10,cylinder1:13,cylinder1:14,cylinder1:15,cylinder1:18,cylinder2:01,cylinder2:02,cylinder2:03,cylinder2:04,cylinder2:08,cylinder2:14,cylinder2:18,iphone:01,iphone:02,iphone:03,iphone:04,iphone:08,iphone:14,iphone:15,iphone:18,largeclamp:01,largeclamp:02,largeclamp:03,largeclamp:04,largeclamp:12"
+    },
+    {
+      "id": "shard-c",
+      "host": "manorl-server1",
+      "physical_gpu": 3,
+      "num_envs": 620,
+      "rows": 3100,
+      "pairs": 31,
+      "high_confidence_rows": 2089,
+      "low_confidence_rows": 1011,
+      "objects": ["banana", "cube1", "cylinder3", "cylinder7", "scissor"],
+      "largest_collision_piece_count": 9,
+      "complex_anchor_object": "scissor",
+      "status": "blocked_until_scissor_runtime_is_pinned_and_validated",
+      "scissor_source_candidate": {
+        "repository": "git@github.com:DexGEM-Lab/dexstream_digital-assets.git",
+        "commit": "120c2dc5c3495da7581746bfff9c5fb681fe9846",
+        "collision_pieces": 9,
+        "mass_kg": 0.075,
+        "note": "Current ManoRL asset commit 778614d omits scissor; do not silently substitute a primitive or another object."
+      },
+      "selector": "banana:01,banana:02,banana:03,banana:04,banana:09,banana:14,banana:18,cube1:01,cube1:02,cube1:03,cube1:04,cube1:09,cube1:10,cube1:18,cylinder3:01,cylinder3:02,cylinder3:03,cylinder3:04,cylinder3:07,cylinder3:09,cylinder3:10,cylinder3:14,cylinder3:18,cylinder7:01,cylinder7:03,cylinder7:10,scissor:01,scissor:02,scissor:03,scissor:04,scissor:12"
+    },
+    {
+      "id": "shard-d",
+      "host": "manorl-server2",
+      "physical_gpu": 0,
+      "num_envs": 600,
+      "rows": 3000,
+      "pairs": 30,
+      "high_confidence_rows": 2180,
+      "low_confidence_rows": 820,
+      "objects": ["cube2", "cuboid1", "cylinder6", "pitcherbase", "powerdrill"],
+      "largest_collision_piece_count": 19,
+      "complex_anchor_object": "pitcherbase",
+      "status": "bounded_preflight_then_fail_closed_production_due_server2_history",
+      "selector": "cube2:01,cube2:02,cube2:03,cube2:04,cube2:09,cube2:10,cube2:11,cube2:18,cuboid1:01,cuboid1:02,cuboid1:03,cuboid1:04,cuboid1:09,cuboid1:18,cylinder6:01,cylinder6:02,cylinder6:03,cylinder6:04,cylinder6:08,cylinder6:09,cylinder6:14,cylinder6:18,pitcherbase:04,pitcherbase:10,powerdrill:01,powerdrill:02,powerdrill:03,powerdrill:04,powerdrill:09,powerdrill:18"
+    }
+  ],
+  "resource_exclusions": [
+    {
+      "host": "manorl-server1",
+      "physical_gpu": 1,
+      "reason": "occupied by user fyr; not part of this allocation"
+    },
+    {
+      "host": "manorl-server2",
+      "physical_gpu": 1,
+      "reason": "held free for evaluation/failover while Server2 reliability remains under observation"
+    }
+  ]
+}
