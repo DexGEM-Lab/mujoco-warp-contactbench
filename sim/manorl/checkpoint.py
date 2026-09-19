@@ -47,6 +47,7 @@ _ENVIRONMENT_SIGNATURE_FIELDS = (
     "post_padding",
     "warp_ccd",
     "expected_contact_mode",
+    "max_deviation_distance",
     "trajectory_package_schema",
     "trajectory_package_digest",
     "trajectory_package_manifest_sha256",

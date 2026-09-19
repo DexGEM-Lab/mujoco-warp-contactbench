@@ -88,7 +88,10 @@ def _run_worker(
 
 
 def _selection_payload(
-    selection: TrajectorySelection, *, rl_episode_reference: bool = False
+    selection: TrajectorySelection,
+    *,
+    rl_episode_reference: bool = False,
+    rl_motion_confidence: str = "all",
 ) -> dict[str, object]:
     if selection.expected_dataset_version is None or selection.reference_fps is None:
         raise ValueError("package compilation requires pinned dataset and reference clocks")
@@ -104,6 +107,7 @@ def _selection_payload(
         "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
         "generated_reference": selection.generated_reference,
         "rl_episode_reference": rl_episode_reference,
+        "rl_motion_confidence": rl_motion_confidence,
         "target_object_overrides": selection.target_object_overrides,
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
@@ -117,6 +121,7 @@ def compile_package(
     shard_size: int,
     max_attempts: int,
     rl_episode_reference: bool = False,
+    rl_motion_confidence: str = "all",
 ) -> Path:
     """Run isolated Lance workers and atomically publish an MTP catalog."""
 
@@ -124,6 +129,8 @@ def compile_package(
         raise RuntimeError("compiler coordinator must start without Lance/PyArrow imports")
     if rl_episode_reference and selection.generated_reference:
         raise ValueError("RL episode and canonical generated-reference modes are exclusive")
+    if rl_motion_confidence not in {"all", "high"}:
+        raise ValueError("RL motion confidence filter must be all or high")
     if output.exists():
         raise FileExistsError(f"refusing to replace trajectory package: {output}")
     build_root = output.parent / f".{output.name}.compile-{uuid4().hex}"
@@ -136,7 +143,9 @@ def compile_package(
     selection_path.write_text(
         json.dumps(
             _selection_payload(
-                selection, rl_episode_reference=rl_episode_reference
+                selection,
+                rl_episode_reference=rl_episode_reference,
+                rl_motion_confidence=rl_motion_confidence,
             ),
             indent=2,
             sort_keys=True,
@@ -155,7 +164,9 @@ def compile_package(
         "schema": "manorl.trajectory_package.compile_report.v1",
         "package_schema": TRAJECTORY_PACKAGE_SCHEMA,
         "selection": _selection_payload(
-            selection, rl_episode_reference=rl_episode_reference
+            selection,
+            rl_episode_reference=rl_episode_reference,
+            rl_motion_confidence=rl_motion_confidence,
         ),
         "shard_size": shard_size,
         "max_attempts": max_attempts,
@@ -315,6 +326,7 @@ def compile_package(
                 "shard_size": shard_size,
                 "max_attempts": max_attempts,
                 "rl_episode_reference": rl_episode_reference,
+                "rl_motion_confidence": rl_motion_confidence,
                 "compile_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
             },
             source_candidates=candidates,
@@ -365,6 +377,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--rl-motion-confidence",
+        choices=("all", "high"),
+        default="all",
+        help="optional reference-motion confidence filter for RL episodes",
+    )
+    parser.add_argument(
         "--asset-manifest",
         type=Path,
         help="explicit fixed physical hand/object manifest required by RL episode import",
@@ -386,8 +404,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.rl_episode_reference:
         if args.generated_reference:
             parser.error("--rl-episode-reference and --generated-reference are exclusive")
-        if args.pre_padding or args.post_padding:
-            parser.error("--rl-episode-reference requires --pre-padding 0 --post-padding 0")
         if args.reference_fps != 120:
             parser.error("--rl-episode-reference requires --reference-fps 120")
         if args.hand_side != "right":
@@ -407,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
                 "asset manifest hand_operator "
                 f"{assets.MANO_OPERATOR!r} != required {args.fixed_hand_operator!r}"
             )
+    elif args.rl_motion_confidence != "all":
+        parser.error("--rl-motion-confidence requires --rl-episode-reference")
     selection = TrajectorySelection(
         selector=args.pairs or "all",
         dataset_path=args.dataset_path.expanduser().resolve(),
@@ -425,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
         shard_size=args.shard_size,
         max_attempts=args.max_attempts,
         rl_episode_reference=args.rl_episode_reference,
+        rl_motion_confidence=args.rl_motion_confidence,
     )
     catalog = load_trajectory_package(package)
     print(

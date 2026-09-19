@@ -10,9 +10,11 @@ from sim.manorl.trajectory import (
     RL_EPISODE_REFERENCE_CONTRACT,
     RL_EPISODE_RESAMPLING_ID,
     TrajectorySelection,
+    _discover_rl_episode_candidates,
     _rl_episode_candidate_from_discovery_row,
     resample_timestamped_reference_trajectory,
     trajectory_from_rl_episode_row,
+    window_reference_trajectory,
 )
 from sim.manorl.trajectory_package import (
     load_trajectory_package,
@@ -160,6 +162,128 @@ def test_timestamp_resampling_preserves_elapsed_duration_not_declared_fps(
     np.testing.assert_allclose(resampled.object_pos[-1], source.object_pos[-1])
     assert resampled.reference_fps == resampled.control_fps == 120
     assert (resampled.movement_start_step, resampled.movement_end_step) == (0, 3)
+
+
+def test_timestamp_resampled_window_enforces_pre60_with_real_margin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixed_asset_profile(monkeypatch)
+    row = rl_episode_row(frames=200, timestep=0.005)
+    row["trajectory_metadata"]["trajectory_info"] = {
+        "object_move": [
+            {
+                "object_name": "mayonnaisebottle",
+                "start_frame": 100,
+                "end_frame": 199,
+            }
+        ]
+    }
+    row["trajectory_metadata"]["reference_motion_annotation"] = {
+        "contract": REFERENCE_MOTION_ANNOTATION_CONTRACT,
+        "start_frame": 100,
+        "end_frame": 199,
+        "confidence": "high",
+    }
+    source = trajectory_from_rl_episode_row(
+        row, 1, row_index=0, dataset_path=tmp_path / "annotated.lance"
+    )
+    resampled = resample_timestamped_reference_trajectory(
+        source, reference_fps=120
+    )
+    window = window_reference_trajectory(
+        resampled, pre_padding=60, post_padding=0
+    )
+
+    assert resampled.movement_start_step == 60
+    assert window.movement_start_step == 60
+    assert window.identity.source_start == 0
+    assert window.pre_edge_hold_steps == 0
+    assert len(window.q_ref) == len(resampled.q_ref)
+    assert np.all(np.diff(window.timestamps) > 0)
+
+
+def test_timestamp_resampled_window_edge_holds_missing_pre60(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixed_asset_profile(monkeypatch)
+    row = rl_episode_row(frames=160, timestep=0.005)
+    row["trajectory_metadata"]["trajectory_info"] = {
+        "object_move": [
+            {
+                "object_name": "mayonnaisebottle",
+                "start_frame": 60,
+                "end_frame": 159,
+            }
+        ]
+    }
+    row["trajectory_metadata"]["reference_motion_annotation"] = {
+        "contract": REFERENCE_MOTION_ANNOTATION_CONTRACT,
+        "start_frame": 60,
+        "end_frame": 159,
+        "confidence": "high",
+    }
+    source = trajectory_from_rl_episode_row(
+        row, 1, row_index=0, dataset_path=tmp_path / "annotated.lance"
+    )
+    resampled = resample_timestamped_reference_trajectory(
+        source, reference_fps=120
+    )
+    assert resampled.movement_start_step == 36
+    window = window_reference_trajectory(
+        resampled, pre_padding=60, post_padding=0
+    )
+
+    assert window.movement_start_step == 60
+    assert window.pre_edge_hold_steps == 24
+    np.testing.assert_array_equal(window.source_indices[:25], 0)
+    assert window.identity.source_start == 0
+
+
+def test_rl_episode_discovery_filters_high_confidence_rows(tmp_path: Path) -> None:
+    high = rl_episode_row(frames=160)
+    high["trajectory_metadata"]["reference_motion_annotation"] = {
+        "contract": REFERENCE_MOTION_ANNOTATION_CONTRACT,
+        "start_frame": 60,
+        "end_frame": 159,
+        "confidence": "high",
+    }
+    high["trajectory_metadata"]["trajectory_info"] = {
+        "object_move": [
+            {
+                "object_name": "mayonnaisebottle",
+                "start_frame": 60,
+                "end_frame": 159,
+            }
+        ]
+    }
+    low = json.loads(json.dumps(high))
+    low["index"]["uuid"] = "low-uuid"
+    low["provenance"]["source_rl_uuid"] = "low-uuid"
+    low["trajectory_metadata"]["reference_motion_annotation"]["confidence"] = "low"
+
+    class Table:
+        def to_pylist(self):
+            return [high, low]
+
+    class Dataset:
+        def to_table(self, *, columns):
+            return Table()
+
+    selection = TrajectorySelection(
+        selector="mayonnaisebottle:05",
+        dataset_path=tmp_path / "annotated.lance",
+        expected_dataset_version=1,
+        pre_padding=60,
+        post_padding=0,
+        hand_side="right",
+        reference_fps=120,
+    )
+    pairs, rows = _discover_rl_episode_candidates(
+        Dataset(), selection, confidence="high"
+    )
+    assert [pair.canonical for pair in pairs] == ["mayonnaisebottle:05"]
+    assert len(rows[pairs[0]]) == 1
+    assert rows[pairs[0]][0].row_index == 0
 
 
 def test_rl_episode_discovery_records_observed_clock_and_source_provenance() -> None:

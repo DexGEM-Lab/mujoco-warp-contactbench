@@ -320,6 +320,8 @@ def write_trajectory_package(
                     ),
                     "movement_start_step": trajectory.movement_start_step,
                     "movement_end_step": trajectory.movement_end_step,
+                    "pre_edge_hold_steps": trajectory.pre_edge_hold_steps,
+                    "post_edge_hold_steps": trajectory.post_edge_hold_steps,
                     "offset": [start, stop],
                     "pair": _pair_for(trajectory).canonical,
                 }
@@ -565,6 +567,8 @@ def load_trajectory_package(
                 control_fps=selection.get("control_fps"),
                 movement_start_step=record.get("movement_start_step"),
                 movement_end_step=record.get("movement_end_step"),
+                pre_edge_hold_steps=int(record.get("pre_edge_hold_steps", 0)),
+                post_edge_hold_steps=int(record.get("post_edge_hold_steps", 0)),
             )
         )
 

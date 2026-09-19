@@ -298,6 +298,8 @@ def test_training_budget_uses_requested_capture_residual_defaults() -> None:
     assert budget.max_position_offset == 0.01
     assert budget.joint_scale_multiplier == 2.0
     assert budget.joint_max_offset_multiplier == 2.0
+    assert budget.early_phase_steps == 30
+    assert budget.max_deviation_distance == pytest.approx(0.10)
     assert config.position_scale == (0.002, 0.002, 0.002)
     assert config.max_position_offset == (0.01, 0.01, 0.01)
     assert config.joint_scale_multiplier == 2.0
@@ -318,16 +320,22 @@ def test_training_cli_parses_residual_action_scales(
         "--max-position-offset", "0.04",
         "--joint-scale-multiplier", "1.5",
         "--joint-max-offset-multiplier", "1.5",
+        "--early-phase-steps", "120",
+        "--max-deviation-distance", "0.15",
     ]) == 0
     budget = captured[0]
     assert budget.position_scale == 0.004
     assert budget.max_position_offset == 0.04
     assert budget.joint_scale_multiplier == 1.5
     assert budget.joint_max_offset_multiplier == 1.5
+    assert budget.early_phase_steps == 120
+    assert budget.max_deviation_distance == pytest.approx(0.15)
     assert budget.residual_action_config.position_scale == (0.004, 0.004, 0.004)
     assert budget.residual_action_config.max_position_offset == (0.04, 0.04, 0.04)
     assert budget.residual_action_config.joint_scale_multiplier == 1.5
     assert budget.residual_action_config.joint_max_offset_multiplier == 1.5
+    assert budget.residual_action_config.early_phase_steps == 120
+    assert budget.resolved_max_deviation_distance == pytest.approx(0.15)
 
 
 @pytest.mark.parametrize(
@@ -346,6 +354,32 @@ def test_training_cli_rejects_invalid_residual_action_scale(
     with pytest.raises(SystemExit, match="2"):
         tool.main(["--output", str(tmp_path / "training"), flag, "0"])
     assert "must be finite and positive" in capsys.readouterr().err
+
+
+def test_training_cli_rejects_invalid_early_phase_and_deviation(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tool = _load_tool()
+    with pytest.raises(SystemExit, match="2"):
+        tool.main(
+            [
+                "--output",
+                str(tmp_path / "negative-early"),
+                "--early-phase-steps",
+                "-1",
+            ]
+        )
+    assert "early-phase-steps must be non-negative" in capsys.readouterr().err
+    with pytest.raises(SystemExit, match="2"):
+        tool.main(
+            [
+                "--output",
+                str(tmp_path / "zero-deviation"),
+                "--max-deviation-distance",
+                "0",
+            ]
+        )
+    assert "max-deviation-distance must be finite and positive" in capsys.readouterr().err
 
 
 def test_training_cli_parses_pair_assignment_cycle(

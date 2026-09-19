@@ -20,6 +20,7 @@ import numpy as np
 import torch
 
 from sim.manorl.abi import (
+    DEFAULT_EARLY_PHASE_STEPS,
     ENVIRONMENT_CONTRACT_ID,
     ResidualActionConfig,
     TARGET_MAX_DEVIATION_DISTANCE,
@@ -227,6 +228,8 @@ class TrainingBudget:
     max_position_offset: float = 0.01
     joint_scale_multiplier: float = 2.0
     joint_max_offset_multiplier: float = 2.0
+    early_phase_steps: int = DEFAULT_EARLY_PHASE_STEPS
+    max_deviation_distance: float = TARGET_MAX_DEVIATION_DISTANCE
     use_film: bool = True
     terminal: bool = True
     wandb: WandbOptions = WandbOptions()
@@ -266,7 +269,12 @@ class TrainingBudget:
             max_position_offset=(self.max_position_offset,) * 3,
             joint_scale_multiplier=self.joint_scale_multiplier,
             joint_max_offset_multiplier=self.joint_max_offset_multiplier,
+            early_phase_steps=self.early_phase_steps,
         )
+
+    @property
+    def resolved_max_deviation_distance(self) -> float:
+        return self.max_deviation_distance if self.terminal else 1_000_000.0
 
     @property
     def resolved_minibatch_size(self) -> int:
@@ -647,7 +655,7 @@ def _wandb_config(
                 "early_phase_steps": residual_action.early_phase_steps,
                 "rotation_effective_scale": 0.00025,
             },
-            "max_deviation_distance": TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
+            "max_deviation_distance": budget.resolved_max_deviation_distance,
         },
         "trajectory_assignments": trajectory_assignments,
         "trajectory_selection": trajectory_selection,
@@ -1764,8 +1772,8 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
             if item.movement_end_step is not None
             else item.identity.movement_end_raw - item.identity.source_start
         )
-        captured_pre_steps = item.identity.movement_start_raw - item.identity.source_start
-        captured_post_steps = item.identity.source_stop - 1 - item.identity.movement_end_raw
+        pre_edge_hold_steps = int(getattr(item, "pre_edge_hold_steps", 0))
+        post_edge_hold_steps = int(getattr(item, "post_edge_hold_steps", 0))
         assignments.append({
             "env_id": env_id,
             "identity": item.identity.identity,
@@ -1779,11 +1787,8 @@ def _trajectory_assignments(trajectories: Any) -> list[dict[str, object]]:
             "control_frames": len(item.q_ref),
             "movement_start_step": movement_start_step,
             "movement_end_step": movement_end_step,
-            "pre_edge_hold_steps": max(0, movement_start_step - captured_pre_steps),
-            "post_edge_hold_steps": max(
-                0,
-                len(item.q_ref) - 1 - movement_end_step - captured_post_steps,
-            ),
+            "pre_edge_hold_steps": pre_edge_hold_steps,
+            "post_edge_hold_steps": post_edge_hold_steps,
             "available_hand_sides": list(item.hand_sides),
             "controlled_hand_sides": list(item.action_layout.controlled_sides),
             "reference_following_hand_sides": list(item.action_layout.reference_sides),
@@ -1944,7 +1949,7 @@ def _build_evaluation_runtime(
             constraint_capacity=budget.constraint_capacity,
             residual_enabled=budget.residual_enabled,
             residual_action=budget.residual_action_config,
-            max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
+            max_deviation_distance=budget.resolved_max_deviation_distance,
             contact_capacity=max(
                 recommended_warp_contact_capacity(num_envs, trajectories.hand_sides),
                 budget.contacts_per_world * num_envs,
@@ -1953,6 +1958,7 @@ def _build_evaluation_runtime(
             compatibility=replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
                 movement_pre_padding=budget.pre_padding,
+                early_phase_steps=budget.early_phase_steps,
             ),
             post_padding=budget.post_padding,
             unified_object_batch=budget.unified_object_batch,
@@ -2196,7 +2202,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             constraint_capacity=budget.constraint_capacity,
             residual_enabled=budget.residual_enabled,
             residual_action=budget.residual_action_config,
-            max_deviation_distance=TARGET_MAX_DEVIATION_DISTANCE if budget.terminal else 1_000_000.0,
+            max_deviation_distance=budget.resolved_max_deviation_distance,
             contact_capacity=contact_capacity,
             device_resident_controls=budget.device_resident_controls,
             device_transition=budget.device_transition,
@@ -2206,6 +2212,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             compatibility=replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
                 movement_pre_padding=budget.pre_padding,
+                early_phase_steps=budget.early_phase_steps,
             ),
             post_padding=budget.post_padding,
             unified_object_batch=budget.unified_object_batch,
@@ -2620,6 +2627,18 @@ def main(argv: list[str] | None = None) -> int:
         help="trajectory frames after movement end (default: %(default)s)",
     )
     parser.add_argument(
+        "--early-phase-steps",
+        type=int,
+        default=DEFAULT_EARLY_PHASE_STEPS,
+        help="pure-reference/deviation-suppression control steps after reset",
+    )
+    parser.add_argument(
+        "--max-deviation-distance",
+        type=float,
+        default=TARGET_MAX_DEVIATION_DISTANCE,
+        help="terminal actual-vs-reference object XYZ threshold in meters",
+    )
+    parser.add_argument(
         "--hand-side",
         choices=("auto", "both", "right", "left"),
         default="auto",
@@ -2827,6 +2846,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("updates, num-envs, and rerun-stride must be positive")
     if args.pre_padding < 0 or args.post_padding < 0:
         parser.error("pre-padding and post-padding must be non-negative")
+    if args.early_phase_steps < 0:
+        parser.error("early-phase-steps must be non-negative")
+    if not math.isfinite(args.max_deviation_distance) or args.max_deviation_distance <= 0:
+        parser.error("max-deviation-distance must be finite and positive")
     for name, value in (
         ("position-scale", args.position_scale),
         ("max-position-offset", args.max_position_offset),
@@ -2947,6 +2970,8 @@ def main(argv: list[str] | None = None) -> int:
             max_position_offset=args.max_position_offset,
             joint_scale_multiplier=args.joint_scale_multiplier,
             joint_max_offset_multiplier=args.joint_max_offset_multiplier,
+            early_phase_steps=args.early_phase_steps,
+            max_deviation_distance=args.max_deviation_distance,
             use_film=args.film,
             terminal=args.terminal,
             wandb=WandbOptions(

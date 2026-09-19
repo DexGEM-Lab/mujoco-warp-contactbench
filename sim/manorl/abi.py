@@ -84,6 +84,12 @@ class ResidualActionConfig:
         ):
             if not np.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
+        if (
+            not isinstance(self.early_phase_steps, int)
+            or isinstance(self.early_phase_steps, bool)
+            or self.early_phase_steps < 0
+        ):
+            raise ValueError("early_phase_steps must be a non-negative integer")
 
 
 SOURCE_ALIGNED_RESIDUAL_ACTION: Final = ResidualActionConfig()

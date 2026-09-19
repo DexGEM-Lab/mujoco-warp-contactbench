@@ -129,6 +129,10 @@ class ReferenceTrajectory:
     control_fps: int | None = None
     movement_start_step: int | None = None
     movement_end_step: int | None = None
+    # Explicit padding provenance in resolved control steps. These distinguish
+    # captured context from synthetic edge holds when source onset is too early.
+    pre_edge_hold_steps: int = 0
+    post_edge_hold_steps: int = 0
     # Synthesis-only immutable prefix length. Zero preserves the established
     # fixed ``compatibility.early_phase_steps`` runtime contract. A positive
     # value makes exactly the generated prefix the pure-reference phase; the
@@ -235,6 +239,21 @@ class ReferenceTrajectory:
             0 <= movement_steps[0] <= movement_steps[1] < expected
         ):
             raise ValueError("movement control steps must be an inclusive interval in the trajectory")
+        for name, value in (
+            ("pre_edge_hold_steps", self.pre_edge_hold_steps),
+            ("post_edge_hold_steps", self.post_edge_hold_steps),
+        ):
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                or value >= expected
+            ):
+                raise ValueError(f"{name} must be a non-negative in-range integer")
+        if movement_steps[0] is not None and self.pre_edge_hold_steps > movement_steps[0]:
+            raise ValueError("pre edge hold exceeds movement pre-padding")
+        if movement_steps[1] is not None and self.post_edge_hold_steps > expected - 1 - movement_steps[1]:
+            raise ValueError("post edge hold exceeds movement post-padding")
         if (
             not isinstance(self.augmentation_prefix_frames, int)
             or isinstance(self.augmentation_prefix_frames, bool)
@@ -537,6 +556,98 @@ def resample_timestamped_reference_trajectory(
         control_fps=reference_fps,
         movement_start_step=movement_start_step,
         movement_end_step=movement_end_step,
+    )
+
+
+def window_reference_trajectory(
+    trajectory: ReferenceTrajectory,
+    *,
+    pre_padding: int,
+    post_padding: int,
+) -> ReferenceTrajectory:
+    """Slice a clock-bound episode around its annotated movement interval.
+
+    Padding is measured on the resolved policy/reference clock. Missing source
+    margin becomes an explicit edge hold, so ``movement_start_step`` equals the
+    requested pre-padding for every retained row.
+    """
+
+    if not isinstance(trajectory, ReferenceTrajectory):
+        raise TypeError("trajectory must be a ReferenceTrajectory")
+    if trajectory.reference_fps is None or trajectory.control_fps is None:
+        raise ValueError("trajectory must be clock-bound before windowing")
+    if trajectory.scene_object_types:
+        raise ValueError("RL episode windowing currently requires one scene object")
+    if (
+        not isinstance(pre_padding, int)
+        or isinstance(pre_padding, bool)
+        or pre_padding < 0
+        or not isinstance(post_padding, int)
+        or isinstance(post_padding, bool)
+        or post_padding < 0
+    ):
+        raise ValueError("trajectory padding must use non-negative integers")
+    if trajectory.movement_start_step is None or trajectory.movement_end_step is None:
+        raise ValueError("trajectory windowing requires an annotated movement interval")
+    movement_start = int(trajectory.movement_start_step)
+    movement_end = int(trajectory.movement_end_step)
+    requested_start = movement_start - pre_padding
+    requested_stop = movement_end + 1 + post_padding
+    start = max(0, requested_start)
+    stop = min(len(trajectory.q_ref), requested_stop)
+    left_hold = start - requested_start
+    right_hold = requested_stop - stop
+    if stop - start < 2:
+        raise ValueError("selected RL episode window has fewer than two captured frames")
+
+    def edge_hold(values: NDArray[Any]) -> NDArray[Any]:
+        selected = np.asarray(values)[start:stop]
+        pad_width = ((left_hold, right_hold),) + ((0, 0),) * (selected.ndim - 1)
+        return np.pad(selected, pad_width, mode="edge")
+
+    q_ref_by_side = {
+        side: _immutable(edge_hold(values))
+        for side, values in trajectory.q_ref_by_side.items()
+    }
+    primary_side = (
+        "right"
+        if "right" in trajectory.selected_hand_sides
+        else trajectory.selected_hand_sides[0]
+    )
+    source_indices = np.pad(
+        trajectory.source_indices[start:stop],
+        (left_hold, right_hold),
+        mode="edge",
+    )
+    captured_timestamps = trajectory.timestamps[start:stop]
+    timestep = 1.0 / float(trajectory.control_fps)
+    timestamps = np.concatenate(
+        [
+            captured_timestamps[0] - timestep * np.arange(left_hold, 0, -1),
+            captured_timestamps,
+            captured_timestamps[-1]
+            + timestep * np.arange(1, right_hold + 1),
+        ]
+    )
+    identity = replace(
+        trajectory.identity,
+        source_start=int(trajectory.source_indices[start]),
+        source_stop=int(trajectory.source_indices[stop - 1]) + 1,
+    )
+    return replace(
+        trajectory,
+        identity=identity,
+        source_indices=_immutable(source_indices, dtype=np.int64),
+        timestamps=_immutable(timestamps),
+        q_ref=q_ref_by_side[primary_side],
+        q_ref_by_side=q_ref_by_side,
+        object_pos_raw=_immutable(edge_hold(trajectory.object_pos_raw)),
+        object_pos=_immutable(edge_hold(trajectory.object_pos)),
+        object_quat_xyzw=_immutable(edge_hold(trajectory.object_quat_xyzw)),
+        movement_start_step=left_hold + movement_start - start,
+        movement_end_step=left_hold + movement_end - start,
+        pre_edge_hold_steps=left_hold,
+        post_edge_hold_steps=right_hold,
     )
 
 
@@ -2146,12 +2257,15 @@ def _rl_episode_candidate_from_discovery_row(
 
 
 def _discover_rl_episode_candidates(
-    dataset: Any, selection: TrajectorySelection
+    dataset: Any,
+    selection: TrajectorySelection,
+    *,
+    confidence: str = "all",
 ) -> tuple[tuple[ObjectActionPair, ...], dict[ObjectActionPair, tuple[_TrajectoryCandidate, ...]]]:
     """Discover complete generated RL episodes without raw-capture annotations."""
 
-    if selection.pre_padding or selection.post_padding:
-        raise ValueError("RL episode references require zero pre/post padding")
+    if confidence not in {"all", "high"}:
+        raise ValueError("RL episode confidence filter must be all or high")
     if selection.reference_fps != 120 or selection.resolved_control_fps != 120:
         raise ValueError("RL episode references require the fixed 120 Hz public clock")
     rows = dataset.to_table(columns=list(RL_EPISODE_DISCOVERY_COLUMNS)).to_pylist()
@@ -2160,6 +2274,18 @@ def _discover_rl_episode_candidates(
         candidate = _rl_episode_candidate_from_discovery_row(
             row, row_index=row_index
         )
+        annotation = row.get("trajectory_metadata", {}).get(
+            "reference_motion_annotation"
+        )
+        if confidence == "high" and (
+            not isinstance(annotation, dict)
+            or annotation.get("confidence") != "high"
+        ):
+            continue
+        if (selection.pre_padding or selection.post_padding) and not isinstance(
+            annotation, dict
+        ):
+            continue
         if candidate is not None:
             candidates.setdefault(candidate.pair, []).append(candidate)
 
@@ -2390,8 +2516,6 @@ def _selected_rl_episode_trajectory_from_row(
 ) -> ReferenceTrajectory:
     """Decode and timestamp-resample one selected refined RL episode."""
 
-    if selection.pre_padding or selection.post_padding:
-        raise ValueError("RL episode references require zero pre/post padding")
     if selection.reference_fps != 120 or selection.resolved_control_fps != 120:
         raise ValueError("RL episode references require the fixed 120 Hz public clock")
     index = row.get("index", {})
@@ -2408,9 +2532,14 @@ def _selected_rl_episode_trajectory_from_row(
         dataset_path=selection.dataset_path,
         hand_side=selection.hand_side,
     )
-    return resample_timestamped_reference_trajectory(
+    resampled = resample_timestamped_reference_trajectory(
         trajectory,
         reference_fps=120,
+    )
+    return window_reference_trajectory(
+        resampled,
+        pre_padding=selection.pre_padding,
+        post_padding=selection.post_padding,
     )
 
 

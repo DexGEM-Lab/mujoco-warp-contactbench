@@ -49,14 +49,18 @@ PYTHONPATH=$PWD python -m tools.compile_manorl_trajectory_package \
   --dataset-version 1 \
   --pairs mayonnaisebottle:01,mayonnaisebottle:02,mayonnaisebottle:03,mayonnaisebottle:04,mayonnaisebottle:05,mayonnaisebottle:08 \
   --reference-fps 120 --hand-side right \
-  --pre-padding 0 --post-padding 0 \
-  --rl-episode-reference \
+  --pre-padding 60 --post-padding 0 \
+  --rl-episode-reference --rl-motion-confidence high \
   --asset-manifest outputs/gym2mjx-refined/asset_manifest.json \
   --fixed-hand-operator cheyingtong
 ```
 
 Compilation is fail-closed: every discovered row is either decoded or appears
-in the hash-bound rejection ledger. Never overwrite the source Lance dataset.
+in the hash-bound rejection ledger. `--rl-motion-confidence high` retains only
+rows with a confirmed quiescent-baseline departure; for the mayonnaise subset
+this is 397/600 rows across all six actions. The remaining rows stay in the
+annotated Lance and diagnostics rather than being silently deleted. Never
+overwrite the source Lance dataset.
 
 ## Measure physical replay success
 
@@ -119,9 +123,12 @@ timestamp-preserving 120 Hz resampling.
 
 ## Train from the package
 
-Use the same fixed manifest and select the standard MTP with zero source
-padding. Both joint residual increments and cumulative joint caps are 1× for
-this campaign. The trainer process does not import Lance or PyArrow.
+Use the same fixed manifest and select the standard MTP with 60 resolved 120 Hz
+control steps before annotated movement onset. Rows whose source onset is earlier
+than 0.5 seconds receive explicit frame-zero edge holds; the package and training
+assignment telemetry record those hold counts. Both joint residual increments
+and cumulative joint caps are 2× for this campaign. The trainer process does
+not import Lance or PyArrow.
 
 ```bash
 export MANORL_ASSET_MANIFEST=$PWD/outputs/gym2mjx-refined/asset_manifest.json
@@ -131,10 +138,12 @@ JAX_PLATFORMS=cuda python -m tools.train_manorl_cube1 \
   --dataset-version 1 \
   --pairs mayonnaisebottle:01,mayonnaisebottle:02,mayonnaisebottle:03,mayonnaisebottle:04,mayonnaisebottle:05,mayonnaisebottle:08 \
   --reference-fps 120 --hand-side right \
-  --pre-padding 0 --post-padding 0 \
-  --joint-scale-multiplier 1.0 \
-  --joint-max-offset-multiplier 1.0 \
-  --output outputs/manorl/refined-mayo-cheyingtong-f120-joint1x
+  --pre-padding 60 --post-padding 0 \
+  --early-phase-steps 120 \
+  --max-deviation-distance 0.15 \
+  --joint-scale-multiplier 2.0 \
+  --joint-max-offset-multiplier 2.0 \
+  --output outputs/manorl/refined-mayo-cheyingtong-f120-pre60-early120-joint2x
 ```
 
 Choose `--num-envs`, update budget and GPU only after replay and a bounded

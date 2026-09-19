@@ -39,9 +39,12 @@ def _selection(path: Path) -> TrajectorySelection:
     )
 
 
-def _rl_episode_reference(path: Path) -> bool:
+def _rl_episode_options(path: Path) -> tuple[bool, str]:
     values = json.loads(path.read_text(encoding="utf-8"))
-    return bool(values.get("rl_episode_reference", False))
+    return (
+        bool(values.get("rl_episode_reference", False)),
+        str(values.get("rl_motion_confidence", "all")),
+    )
 
 
 def _dataset(selection: TrajectorySelection):
@@ -63,10 +66,13 @@ def _discover(
     output: Path,
     *,
     rl_episode_reference: bool = False,
+    rl_motion_confidence: str = "all",
 ) -> None:
     dataset = _dataset(selection)
     pairs, candidates_by_pair = (
-        _discover_rl_episode_candidates(dataset, selection)
+        _discover_rl_episode_candidates(
+            dataset, selection, confidence=rl_motion_confidence
+        )
         if rl_episode_reference
         else _discover_trajectory_candidates(dataset, selection)
     )
@@ -189,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--discovery-digest")
     args = parser.parse_args(argv)
     selection = _selection(args.selection_json)
-    rl_episode_reference = _rl_episode_reference(args.selection_json)
+    rl_episode_reference, rl_motion_confidence = _rl_episode_options(
+        args.selection_json
+    )
     if args.mode == "discover":
         if args.requests_json is not None:
             parser.error("discover does not accept --requests-json")
@@ -197,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             selection,
             args.output,
             rl_episode_reference=rl_episode_reference,
+            rl_motion_confidence=rl_motion_confidence,
         )
     else:
         if args.requests_json is None or args.rejections_json is None:

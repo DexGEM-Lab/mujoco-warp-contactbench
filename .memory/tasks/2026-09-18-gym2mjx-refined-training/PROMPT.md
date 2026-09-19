@@ -1,12 +1,14 @@
 ## Objective
-Make the refined 12,200-row RL-episode Lance dataset usable by ManoRL, measure physical zero-residual replay success on all 600 `mayonnaisebottle` rows using the fixed `cheyingtong` physical hand at 120 Hz, start a server-side training run from an immutable Lance-free package with both joint residual scale and cap multipliers set to 1.0, and annotate every source Lance row with the reference-object movement onset. Done means the replay denominator and outcome are explicit, the trainer has crossed a meaningful startup/contact/reset boundary, movement annotations cover all 12,200 UUIDs in a new immutable Lance dataset with confidence diagnostics, and checkpoints/logs/config are durable and inspectable.
+Make the refined 12,200-row RL-episode Lance dataset usable by ManoRL, preserve the completed 1×-joint replay/training evidence, annotate every source row with reference-object movement onset, and launch a fresh mayonnaise campaign from the annotated data using pre60, early-phase120, a 0.15 m deviation threshold, and 2× joint residual increments/caps. Done means the source remains immutable, the high-confidence Mayo package is content-addressed and records edge holds, three Server1 seeds and one bounded Server2 canary cross durable checkpoints, and every run binds the intended clock/action/terminal contract.
 
 ## Workbench
 1. Add an explicit refined-RL-episode import contract on `feat/gym2mjx` without weakening historical/generated-reference contracts.
 2. Compile and validate the six mayonnaise action groups, then run vectorized physical replay to completion and report success by action.
 3. Compile the intended training catalog, stage it on reliable Server1, and launch fresh training with joint multipliers 1.0.
-4. Preserve run identifiers, package/checkpoint digests, logs, and the exact server/GPU configuration.
+4. Preserve the stopped 1× run at checkpoint7600 and do not resume it under the new MDP.
 5. Derive sustained reference-object motion onset for all 12,200 rows, publish a separate annotated Lance dataset from Server1, and preserve per-row confidence/anomaly evidence.
+6. Compile high-confidence Mayo rows with exactly 60 resolved 120 Hz pre-steps, recording frame-zero edge holds when the source margin is shorter.
+7. Run fresh seeds with early-phase120, terminal distance0.15m, joint scale/cap multipliers2.0, and checkpoint-bound configuration.
 
 ## Context
 Repository worker: `/home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/feat-gym2mjx`.
@@ -24,7 +26,9 @@ The dataset contains 12,200 rows / 122 object-action groups. Mayonnaise has acti
 - Do not route refined rows through the canonical generated-reference contract; that contract means saved 120/480 Hz ManoRL physical episodes and has stricter provenance/asset requirements.
 - Replay success means the MJX physical environment reaches each reference horizon under zero residual action before the normal position-deviation failure threshold. Report aggregate and per-action numerators/denominators; source-recorded object motion alone is not replay evidence.
 - Use `mayonnaisebottle` as the replay object and include all 600 rows unless a deterministic invalidity is recorded with row identity and reason.
-- Set both `--joint-scale-multiplier 1.0` and `--joint-max-offset-multiplier 1.0` for training. Do not silently change unrelated generic library defaults.
+- Set both `--joint-scale-multiplier 2.0` and `--joint-max-offset-multiplier 2.0` for the new campaign. Do not silently change unrelated generic library defaults.
+- New training uses `--pre-padding 60 --early-phase-steps 120 --max-deviation-distance 0.15`; all are resolved control-step/checkpoint contracts.
+- Train from scratch; the stopped 1×/pre0/early30/0.10m checkpoint is evidence, not a resume source.
 - Production training must consume a verified local MTP package, not map Lance/PyArrow in the long-lived process.
 - Movement annotation is reference-only: use the stored object position/orientation track, not policy replay or contact. Distinguish initial gravity/settling transients from post-settle task movement.
 - Annotate every row. High-confidence rows use a stable-baseline departure; rows without a clean stable window or without post-settle motion receive an explicit low-confidence/fallback status rather than silent omission.
