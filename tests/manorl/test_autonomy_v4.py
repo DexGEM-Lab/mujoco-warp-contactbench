@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from dataclasses import replace
 from sim.manorl.autonomy_contracts import RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM, raw_observation_slices, encoded_observation_slices, validate_v4_checkpoint_metadata, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, ACTION_CONTRACT_ID
-from sim.manorl.autonomy_v4 import ReferenceCacheV4, V4Physical, V4Contact, anchor_delta_and_velocity, build_raw_observation, compute_reward, encode_observation, motion_gate_weight, quat_rotate, rot6, shortest_angle, reduce_pyramidal_contacts_v4
+from sim.manorl.autonomy_v4 import ReferenceCacheV4, V4Physical, V4Contact, anchor_delta_and_velocity, build_raw_observation, compute_reward, encode_observation, motion_gate_weight, quat_rotate, relative_rot6, rot6, shortest_angle, reduce_pyramidal_contacts_v4
 
 
 def _cache(T=25):
@@ -30,6 +30,14 @@ def test_xyzw_double_cover_and_rotation6_columns():
     jax=pytest.importorskip("jax"); j=jax.numpy
     q=j.asarray([[0.,0.,np.sqrt(.5),np.sqrt(.5)]]); np.testing.assert_allclose(np.asarray(rot6(q)),np.asarray(rot6(-q)),atol=1e-6); np.testing.assert_allclose(np.asarray(shortest_angle(q,-q)),0.,atol=1e-6)
     np.testing.assert_allclose(np.asarray(quat_rotate(q,j.asarray([[1.,0.,0.]]))),[[0.,1.,0.]],atol=1e-6)
+
+
+def test_relative_rot6_normalizes_operands_before_multiplication():
+    jax=pytest.importorskip("jax"); j=jax.numpy
+    huge=j.asarray([[0.,0.,0.,1.e30]])
+    result=np.asarray(relative_rot6(huge,huge))
+    assert np.isfinite(result).all()
+    np.testing.assert_allclose(result,[[1.,0.,0.,0.,1.,0.]],atol=1e-6)
 
 def test_reference_anchor_error_is_zero_for_positive_gap():
     jax=pytest.importorskip("jax"); j=jax.numpy; cache=_cache(); state=_state(); raw=build_raw_observation(state,_contact(),cache,j.asarray([0]),j.zeros((1,28))); g=raw[:,raw_observation_slices()["autonomous_geometry"]].reshape(1,16,22)

@@ -417,7 +417,7 @@ def evaluate(args):
                 "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
                 "catalog_digest": catalog.catalog_digest, "identity_split": split}
     payload = load_frozen_v4(args.checkpoint, model, map_location=adapter.device, expected_provenance=expected)
-    observations, _ = adapter.reset(); total = 0.0; trace = []; natural_first = None; artifact = {"actual_object_position": [], "reference_object_position": [], "actual_palm_position": [], "reference_palm_position": [], "actual_qpos": [], "reference_qpos_raw": [], "reference_qpos_feasible": [], "reward_terms": [], "paired_force_on_object": [], "object_all_force": [], "bottom_clearance": [], "reason_code": []}
+    observations, _ = adapter.reset(); total = 0.0; trace = []; natural_first = None; artifact = {"actual_object_position": [], "reference_object_position": [], "actual_object_quaternion_xyzw": [], "reference_object_quaternion_xyzw": [], "actual_palm_position": [], "reference_palm_position": [], "actual_qpos": [], "reference_qpos_raw": [], "reference_qpos_feasible": [], "reward_terms": [], "paired_force_on_object": [], "paired_contact_count": [], "object_all_force": [], "bottom_clearance": [], "reason_code": []}
     limit = args.steps if args.steps is not None else adapter.runtime.length - 1
     for policy_step in range(limit):
         with torch.no_grad():
@@ -442,9 +442,10 @@ def evaluate(args):
                       "reason_code": reason_code, "bottom_clearance_m": clearance,
                       "cache_hash": adapter.runtime.cache.content_hash})
         artifact["actual_object_position"].append(np.asarray(physical.object_origin)[0]); artifact["reference_object_position"].append(np.asarray(cache.object_origin)[i])
+        artifact["actual_object_quaternion_xyzw"].append(np.asarray(physical.object_quat_xyzw)[0]); artifact["reference_object_quaternion_xyzw"].append(np.asarray(cache.object_quat_xyzw)[i])
         artifact["actual_palm_position"].append(np.asarray(physical.palm_origin)[0]); artifact["reference_palm_position"].append(np.asarray(cache.palm_origin)[i])
         artifact["actual_qpos"].append(np.asarray(physical.q_raw)[0]); artifact["reference_qpos_raw"].append(np.asarray(cache.q_raw)[i]); artifact["reference_qpos_feasible"].append(np.asarray(cache.q_feasible)[i])
-        artifact["reward_terms"].append(terms); artifact["paired_force_on_object"].append(np.asarray(contact.paired_force_on_object)[0]); artifact["object_all_force"].append(np.asarray(contact.object_all_force)[0]); artifact["bottom_clearance"].append(clearance); artifact["reason_code"].append(reason_code)
+        artifact["reward_terms"].append(terms); artifact["paired_force_on_object"].append(np.asarray(contact.paired_force_on_object)[0]); artifact["paired_contact_count"].append(np.asarray(contact.paired_count)[0]); artifact["object_all_force"].append(np.asarray(contact.object_all_force)[0]); artifact["bottom_clearance"].append(clearance); artifact["reason_code"].append(reason_code)
         if natural_done and not args.full_horizon_diagnostic: break
         observations = next_obs if args.full_horizon_diagnostic else adapter.prepare_action()
     result = {"format": f"manorl.autonomy.frozen_evaluation.{policy_version}", "checkpoint": str(args.checkpoint),

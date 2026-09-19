@@ -387,7 +387,18 @@ def cache_hash(*values: np.ndarray, kernel_version: str = "warp-mesh-cache-v4.1"
 
 def quat_normalize(q):
     import jax.numpy as j
-    return q / j.maximum(j.linalg.norm(q,axis=-1,keepdims=True), 1e-12)
+    q=j.asarray(q)
+    norm=j.linalg.norm(q,axis=-1,keepdims=True)
+    scale=j.max(j.abs(q),axis=-1,keepdims=True)
+    scaled=q/j.maximum(scale,1e-30)
+    robust=scaled/j.maximum(
+        j.linalg.norm(scaled,axis=-1,keepdims=True),1e-12
+    )
+    return j.where(
+        j.isfinite(norm)&(norm>1e-12),
+        q/j.maximum(norm,1e-12),
+        robust,
+    )
 def quat_conj(q):
     import jax.numpy as j
     return j.concatenate((-q[...,:3],q[...,3:]),axis=-1)
@@ -404,6 +415,14 @@ def rot6(q):
     import jax.numpy as j
     ex=quat_rotate(q,j.broadcast_to(j.asarray([1.,0.,0.]),q.shape[:-1]+(3,))); ey=quat_rotate(q,j.broadcast_to(j.asarray([0.,1.,0.]),q.shape[:-1]+(3,)))
     return j.concatenate((ex,ey),axis=-1)
+def relative_rot6(reference, actual):
+    """Stable relative rotation after normalizing both quaternion operands."""
+    return rot6(
+        quat_mul(
+            quat_conj(quat_normalize(reference)),
+            quat_normalize(actual),
+        )
+    )
 def shortest_angle(q, target):
     import jax.numpy as j
     return 2*j.arccos(j.clip(j.abs(j.sum(quat_normalize(q)*quat_normalize(target),axis=-1)),0.,1.))
@@ -546,13 +565,13 @@ def build_raw_observation(physical: V4Physical, contact: V4Contact, cache: Refer
     ref_obj6=rot6(oq); ref_palm6=rot6(pq)
     actual = j.concatenate((physical.q_normalized, physical.qdot, physical.command_error, physical.object_origin/WORLD_POSITION, rot6(physical.object_quat_xyzw), av,aw,palm_rel/RELATIVE_POSITION,rot6(palm_relq),quat_unrotate(physical.object_quat_xyzw,physical.palm_w)/ANGULAR_VELOCITY,(physical.object_bottom-cache.table_height)[:,None]/RELATIVE_POSITION,(C(cache.reference_bottom)[i]-cache.table_height)[:,None]/RELATIVE_POSITION,quat_unrotate(physical.object_quat_xyzw,j.broadcast_to(j.asarray([0.,0.,-1.]),(b,3))),j.tanh(quat_unrotate(physical.object_quat_xyzw,contact.object_all_force)/FORCE_SCALE)),axis=-1)
     # translation live errors are intentionally actual-object-frame, exactly as v4 schema specifies.
-    ref = j.concatenate((rq_normalized[:,6:],ref_rel/RELATIVE_POSITION,rot6(ref_relq),quat_unrotate(oq,C(cache.palm_v)[i])/LINEAR_VELOCITY,quat_unrotate(oq,C(cache.palm_w)[i])/ANGULAR_VELOCITY,op/WORLD_POSITION,ref_obj6,ref_com_v/LINEAR_VELOCITY,ref_w/ANGULAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-pp)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(pq),physical.palm_quat_xyzw)),(physical.q_raw[:,6:]-rq[:,6:])/JOINT_ERROR,quat_unrotate(physical.object_quat_xyzw,physical.object_origin-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),physical.object_quat_xyzw)),quat_unrotate(physical.object_quat_xyzw,physical.object_v_com-ref_com_v)/LINEAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.object_w-ref_w)/ANGULAR_VELOCITY,(palm_rel-ref_rel)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),palm_relq)),j.stack((j.asarray(index)/t,1-j.asarray(index)/t),axis=-1)),axis=-1)
+    ref = j.concatenate((rq_normalized[:,6:],ref_rel/RELATIVE_POSITION,rot6(ref_relq),quat_unrotate(oq,C(cache.palm_v)[i])/LINEAR_VELOCITY,quat_unrotate(oq,C(cache.palm_w)[i])/ANGULAR_VELOCITY,op/WORLD_POSITION,ref_obj6,ref_com_v/LINEAR_VELOCITY,ref_w/ANGULAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-pp)/RELATIVE_POSITION,relative_rot6(pq,physical.palm_quat_xyzw),(physical.q_raw[:,6:]-rq[:,6:])/JOINT_ERROR,quat_unrotate(physical.object_quat_xyzw,physical.object_origin-op)/RELATIVE_POSITION,relative_rot6(oq,physical.object_quat_xyzw),quat_unrotate(physical.object_quat_xyzw,physical.object_v_com-ref_com_v)/LINEAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.object_w-ref_w)/ANGULAR_VELOCITY,(palm_rel-ref_rel)/RELATIVE_POSITION,relative_rot6(ref_relq,palm_relq),j.stack((j.asarray(index)/t,1-j.asarray(index)/t),axis=-1)),axis=-1)
     futures=[]
     for horizon in (6,12,24):
         fi=_gather(cache,index,horizon,env_ref); fq=C(cache.q_feasible)[fi]; fop=C(cache.object_origin)[fi]; foq=C(cache.object_quat_xyzw)[fi]; fpp=C(cache.palm_origin)[fi]; fpq=C(cache.palm_quat_xyzw)[fi]
         frel=quat_unrotate(foq,fpp-fop); frelq=quat_mul(quat_conj(foq),fpq)
         valid=((j.asarray(index)+horizon)*cache.control_timestep <= reference_duration(cache,env_ref)+1e-6).astype(j.float32)
-        futures.append(j.concatenate(((fq[:,6:]-rq[:,6:])/JOINT_ERROR,(frel-ref_rel)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),frelq)),quat_unrotate(oq,fop-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),foq)),valid[:,None]),axis=-1))
+        futures.append(j.concatenate(((fq[:,6:]-rq[:,6:])/JOINT_ERROR,(frel-ref_rel)/RELATIVE_POSITION,relative_rot6(ref_relq,frelq),quat_unrotate(oq,fop-op)/RELATIVE_POSITION,relative_rot6(oq,foq),valid[:,None]),axis=-1))
     _,_,delta,velocity=anchor_delta_and_velocity(physical,C(cache.region_anchor_hand)[i],C(cache.region_anchor_object)[i])
     error=delta-C(cache.delta_ref)[i]
     geom=j.concatenate((C(cache.signed_gap)[i][...,None]/CONTACT_DISTANCE,C(cache.proximity)[i][...,None],C(cache.confidence)[i][...,None],C(cache.valid)[i][...,None],C(cache.region_anchor_hand)[i]/RELATIVE_POSITION,C(cache.region_anchor_object)[i]/RELATIVE_POSITION,C(cache.delta_ref)[i]/CONTACT_DISTANCE,error/CONTACT_DISTANCE,j.tanh(quat_unrotate(physical.object_quat_xyzw[:,None],contact.paired_force_on_object)/FORCE_SCALE),velocity/CONTACT_VELOCITY),axis=-1).reshape(b,352)
@@ -595,7 +614,7 @@ def build_raw_observation_v5(physical: V4Physical, contact: V4Contact, cache: Re
     ref_com_v=C(cache.object_v_com)[i]; ref_w=C(cache.object_w)[i]
     ref_obj6=rot6(oq); ref_palm6=rot6(pq)
     actual = j.concatenate((physical.q_normalized, physical.qdot, physical.command_error, physical.object_origin/WORLD_POSITION, rot6(physical.object_quat_xyzw), av,aw,palm_rel/RELATIVE_POSITION,rot6(palm_relq),quat_unrotate(physical.object_quat_xyzw,physical.palm_w)/ANGULAR_VELOCITY,(physical.object_bottom-cache.table_height)[:,None]/RELATIVE_POSITION,(C(cache.reference_bottom)[i]-cache.table_height)[:,None]/RELATIVE_POSITION,quat_unrotate(physical.object_quat_xyzw,j.broadcast_to(j.asarray([0.,0.,-1.]),(b,3))),j.tanh(quat_unrotate(physical.object_quat_xyzw,contact.object_all_force)/FORCE_SCALE)),axis=-1)
-    ref = j.concatenate((rq_normalized[:,6:],ref_rel/RELATIVE_POSITION,rot6(ref_relq),quat_unrotate(oq,C(cache.palm_v)[i])/LINEAR_VELOCITY,quat_unrotate(oq,C(cache.palm_w)[i])/ANGULAR_VELOCITY,op/WORLD_POSITION,ref_obj6,ref_com_v/LINEAR_VELOCITY,ref_w/ANGULAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-pp)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(pq),physical.palm_quat_xyzw)),(physical.q_raw[:,6:]-rq[:,6:])/JOINT_ERROR,quat_unrotate(physical.object_quat_xyzw,physical.object_origin-op)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(oq),physical.object_quat_xyzw)),quat_unrotate(physical.object_quat_xyzw,physical.object_v_com-ref_com_v)/LINEAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.object_w-ref_w)/ANGULAR_VELOCITY,(palm_rel-ref_rel)/RELATIVE_POSITION,rot6(quat_mul(quat_conj(ref_relq),palm_relq)),j.stack((j.asarray(index)/t,1-j.asarray(index)/t),axis=-1)),axis=-1)
+    ref = j.concatenate((rq_normalized[:,6:],ref_rel/RELATIVE_POSITION,rot6(ref_relq),quat_unrotate(oq,C(cache.palm_v)[i])/LINEAR_VELOCITY,quat_unrotate(oq,C(cache.palm_w)[i])/ANGULAR_VELOCITY,op/WORLD_POSITION,ref_obj6,ref_com_v/LINEAR_VELOCITY,ref_w/ANGULAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-pp)/RELATIVE_POSITION,relative_rot6(pq,physical.palm_quat_xyzw),(physical.q_raw[:,6:]-rq[:,6:])/JOINT_ERROR,quat_unrotate(physical.object_quat_xyzw,physical.object_origin-op)/RELATIVE_POSITION,relative_rot6(oq,physical.object_quat_xyzw),quat_unrotate(physical.object_quat_xyzw,physical.object_v_com-ref_com_v)/LINEAR_VELOCITY,quat_unrotate(physical.object_quat_xyzw,physical.object_w-ref_w)/ANGULAR_VELOCITY,(palm_rel-ref_rel)/RELATIVE_POSITION,relative_rot6(ref_relq,palm_relq),j.stack((j.asarray(index)/t,1-j.asarray(index)/t),axis=-1)),axis=-1)
     futures=[]
     for horizon in (6,12,24):
         fi=_gather(cache,index,horizon,env_ref); fop=C(cache.object_origin)[fi]
