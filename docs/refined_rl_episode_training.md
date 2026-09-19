@@ -77,6 +77,44 @@ PYTHONPATH=$PWD python -m tools.replay_rl_episode_package \
 The JSON result contains aggregate and per-action success rates plus every row's
 termination reason, target error, UUID and original RL provenance.
 
+## Annotate reference-object movement onset
+
+The refined source omits raw-capture `trajectory_info.object_move`. Detect the
+onset from the stored reference object pose before choosing pre-padding or an
+early-phase boundary. The detector first finds a 100 ms quiescent pose after
+initial gravity settling, then marks the first persistent 2 mm / 2 degree
+departure that reaches 5 mm / 5 degrees within 500 ms. Translation and rotation
+are both supported.
+
+Rows without a clean quiescent window use the least-active early window with
+low confidence. Rows whose only motion is the initial settling transient receive
+`start_frame=0` and `status=initial_transient_only`; they are never silently
+omitted. `end_frame` remains the episode end because this tool detects onset,
+not a separately justified stop time.
+
+Run with pylance 7 on a healthy Lance host and write a new dataset:
+
+```bash
+PYTHONPATH=$PWD python -m tools.annotate_rl_episode_motion \
+  --input /path/to/mano_rl_refined_100_per_action.lance \
+  --input-version 1 \
+  --output /local/path/mano_rl_refined_100_per_action_motion_v1.lance
+```
+
+The command refuses existing outputs and leaves the source immutable. It adds:
+
+- `trajectory_metadata.trajectory_info.object_move[0].start_frame`;
+- `trajectory_metadata.reference_motion_annotation` with confidence, status,
+  motion mode, observed clock, stable window and displacement diagnostics;
+- `<output>.motion_annotations.jsonl`, one audit record per UUID; and
+- `<output>.motion_annotations.manifest.json`, containing thresholds,
+  distributions and validation evidence.
+
+Publication is complete only after the validator proves all original columns
+are exactly equal for all rows, row count and UUID count match, and every
+movement interval is in range. Training-package compilation consumes the new
+`object_move` start and maps it through timestamp-preserving 120 Hz resampling.
+
 ## Train from the package
 
 Use the same fixed manifest and select the standard MTP with zero source

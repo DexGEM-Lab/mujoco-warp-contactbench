@@ -1427,6 +1427,41 @@ def trajectory_from_rl_episode_row(
     assets.validate_asset_manifest(pair.object_type, hand_side="right")
 
     quaternion = rotvec_to_xyzw(object_rotvec)
+    movement = metadata.get("trajectory_info")
+    if movement is None:
+        movement_start, movement_end = 0, source_count - 1
+    else:
+        if not isinstance(movement, dict):
+            raise ValueError("RL episode trajectory_info must be a mapping")
+        object_move = movement.get("object_move")
+        if (
+            not isinstance(object_move, list)
+            or len(object_move) != 1
+            or not isinstance(object_move[0], dict)
+            or object_move[0].get("object_name") != pair.object_type
+        ):
+            raise ValueError("RL episode requires one matching object_move annotation")
+        movement_start = int(object_move[0].get("start_frame", -1))
+        movement_end = int(object_move[0].get("end_frame", -1))
+        if not 0 <= movement_start <= movement_end < source_count:
+            raise ValueError("RL episode object_move annotation lies outside the episode")
+        reference_annotation = metadata.get("reference_motion_annotation")
+        if reference_annotation is not None:
+            from sim.manorl.reference_motion import (
+                REFERENCE_MOTION_ANNOTATION_CONTRACT,
+            )
+
+            if (
+                not isinstance(reference_annotation, dict)
+                or reference_annotation.get("contract")
+                != REFERENCE_MOTION_ANNOTATION_CONTRACT
+                or int(reference_annotation.get("start_frame", -1))
+                != movement_start
+                or int(reference_annotation.get("end_frame", -1))
+                != movement_end
+            ):
+                raise ValueError("RL episode reference-motion annotation is inconsistent")
+
     immutable_q = _immutable(q_ref)
     immutable_pos = _immutable(object_pos)
     identity = f"{pair.object_type}_{pair.action_id}_{row_index + 1:05d}"
@@ -1441,8 +1476,8 @@ def trajectory_from_rl_episode_row(
             identity=identity,
             source_start=0,
             source_stop=source_count,
-            movement_start_raw=0,
-            movement_end_raw=source_count - 1,
+            movement_start_raw=movement_start,
+            movement_end_raw=movement_end,
         ),
         dataset_version=int(dataset_version),
         source_indices=_immutable(np.arange(source_count), dtype=np.int64),
@@ -1455,8 +1490,8 @@ def trajectory_from_rl_episode_row(
         hand_sides=("right",),
         q_ref_by_side={"right": immutable_q},
         selected_hand_sides=("right",),
-        movement_start_step=0,
-        movement_end_step=source_count - 1,
+        movement_start_step=movement_start,
+        movement_end_step=movement_end,
     )
 
 
@@ -2075,24 +2110,38 @@ def _rl_episode_candidate_from_discovery_row(
         return None
     timestep = float(np.median(np.diff(timestamps)))
     sequence = row_index + 1
+    source_provenance: dict[str, object] = {
+        "contract": RL_EPISODE_REFERENCE_CONTRACT,
+        "source_rl_lance_path": source_path,
+        "source_rl_version": source_version,
+        "source_rl_row": source_row,
+        "source_rl_uuid": source_uuid,
+        "seed_uuid": str(index.get("seed_uuid", "")),
+        "declared_data_fps": declared_fps,
+        "observed_median_timestep_seconds": timestep,
+        "observed_median_fps": 1.0 / timestep,
+        "source_frame_count": source_count,
+        "source_duration_seconds": float(timestamps[-1] - timestamps[0]),
+    }
+    reference_annotation = metadata.get("reference_motion_annotation")
+    if reference_annotation is not None:
+        from sim.manorl.reference_motion import REFERENCE_MOTION_ANNOTATION_CONTRACT
+
+        if (
+            not isinstance(reference_annotation, dict)
+            or reference_annotation.get("contract")
+            != REFERENCE_MOTION_ANNOTATION_CONTRACT
+        ):
+            return None
+        source_provenance["reference_motion_annotation"] = dict(
+            reference_annotation
+        )
     return _TrajectoryCandidate(
         row_index=row_index,
         pair=pair,
         identity=f"{pair.object_type}_{pair.action_id}_{sequence:05d}",
         sequence=sequence,
-        source_provenance={
-            "contract": RL_EPISODE_REFERENCE_CONTRACT,
-            "source_rl_lance_path": source_path,
-            "source_rl_version": source_version,
-            "source_rl_row": source_row,
-            "source_rl_uuid": source_uuid,
-            "seed_uuid": str(index.get("seed_uuid", "")),
-            "declared_data_fps": declared_fps,
-            "observed_median_timestep_seconds": timestep,
-            "observed_median_fps": 1.0 / timestep,
-            "source_frame_count": source_count,
-            "source_duration_seconds": float(timestamps[-1] - timestamps[0]),
-        },
+        source_provenance=source_provenance,
     )
 
 

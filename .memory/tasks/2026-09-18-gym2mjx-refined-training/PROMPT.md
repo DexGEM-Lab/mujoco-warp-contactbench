@@ -1,11 +1,12 @@
 ## Objective
-Make the refined 12,200-row RL-episode Lance dataset usable by ManoRL, measure physical zero-residual replay success on all 600 `mayonnaisebottle` rows using the fixed `cheyingtong` physical hand at 120 Hz, and start a server-side training run from an immutable Lance-free package with both joint residual scale and cap multipliers set to 1.0. Done means the replay denominator and outcome are explicit, the trainer has crossed a meaningful startup/contact/reset boundary, and checkpoints/logs/config are durable and inspectable.
+Make the refined 12,200-row RL-episode Lance dataset usable by ManoRL, measure physical zero-residual replay success on all 600 `mayonnaisebottle` rows using the fixed `cheyingtong` physical hand at 120 Hz, start a server-side training run from an immutable Lance-free package with both joint residual scale and cap multipliers set to 1.0, and annotate every source Lance row with the reference-object movement onset. Done means the replay denominator and outcome are explicit, the trainer has crossed a meaningful startup/contact/reset boundary, movement annotations cover all 12,200 UUIDs in a new immutable Lance dataset with confidence diagnostics, and checkpoints/logs/config are durable and inspectable.
 
 ## Workbench
 1. Add an explicit refined-RL-episode import contract on `feat/gym2mjx` without weakening historical/generated-reference contracts.
 2. Compile and validate the six mayonnaise action groups, then run vectorized physical replay to completion and report success by action.
 3. Compile the intended training catalog, stage it on reliable Server1, and launch fresh training with joint multipliers 1.0.
 4. Preserve run identifiers, package/checkpoint digests, logs, and the exact server/GPU configuration.
+5. Derive sustained reference-object motion onset for all 12,200 rows, publish a separate annotated Lance dataset from Server1, and preserve per-row confidence/anomaly evidence.
 
 ## Context
 Repository worker: `/home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/feat-gym2mjx`.
@@ -25,6 +26,9 @@ The dataset contains 12,200 rows / 122 object-action groups. Mayonnaise has acti
 - Use `mayonnaisebottle` as the replay object and include all 600 rows unless a deterministic invalidity is recorded with row identity and reason.
 - Set both `--joint-scale-multiplier 1.0` and `--joint-max-offset-multiplier 1.0` for training. Do not silently change unrelated generic library defaults.
 - Production training must consume a verified local MTP package, not map Lance/PyArrow in the long-lived process.
+- Movement annotation is reference-only: use the stored object position/orientation track, not policy replay or contact. Distinguish initial gravity/settling transients from post-settle task movement.
+- Annotate every row. High-confidence rows use a stable-baseline departure; rows without a clean stable window or without post-settle motion receive an explicit low-confidence/fallback status rather than silent omission.
+- Preserve the source Lance byte/logical content. Publish a new dataset containing standard `trajectory_info.object_move` plus a per-row reference-motion annotation, diagnostics JSONL, and manifest; never overwrite the source.
 - Prefer Server1 because prior Server2 MTP training reproduced a host-level SIGSEGV after checkpoint 25.
 
 ## Constraints

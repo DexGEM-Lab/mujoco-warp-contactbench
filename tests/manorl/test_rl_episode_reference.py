@@ -18,6 +18,7 @@ from sim.manorl.trajectory_package import (
     load_trajectory_package,
     write_trajectory_package,
 )
+from sim.manorl.reference_motion import REFERENCE_MOTION_ANNOTATION_CONTRACT
 
 
 def rl_episode_row(*, frames: int = 5, timestep: float = 0.005) -> dict[str, object]:
@@ -91,6 +92,37 @@ def test_rl_episode_decoder_uses_fixed_hand_and_preserves_world_coordinates(
     assert trajectory.identity.uuid == row["index"]["uuid"]
     assert trajectory.hand_sides == trajectory.selected_hand_sides == ("right",)
     assert (trajectory.movement_start_step, trajectory.movement_end_step) == (0, 4)
+
+
+def test_rl_episode_decoder_consumes_reference_motion_annotation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixed_asset_profile(monkeypatch)
+    row = rl_episode_row()
+    row["trajectory_metadata"]["trajectory_info"] = {
+        "object_move": [
+            {
+                "object_name": "mayonnaisebottle",
+                "start_frame": 2,
+                "end_frame": 4,
+            }
+        ]
+    }
+    row["trajectory_metadata"]["reference_motion_annotation"] = {
+        "contract": REFERENCE_MOTION_ANNOTATION_CONTRACT,
+        "start_frame": 2,
+        "end_frame": 4,
+    }
+    trajectory = trajectory_from_rl_episode_row(
+        row,
+        1,
+        row_index=0,
+        dataset_path=tmp_path / "annotated.lance",
+    )
+
+    assert trajectory.identity.movement_start_raw == 2
+    assert trajectory.identity.movement_end_raw == 4
+    assert (trajectory.movement_start_step, trajectory.movement_end_step) == (2, 4)
 
 
 def test_rl_episode_decoder_requires_explicit_fixed_asset_profile(
