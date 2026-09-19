@@ -67,8 +67,8 @@ Reward只作为训练诊断和同版本趋势指标，不是跨版本的最终�
 
 | 顺序 | 版本 | 实现状态 | GPU | 正式训练状态 |
 |---:|---|---|---|---|
-| 1 | v5 | 已实现并接通CLI | GPU0 | 正式训练中（update 354） |
-| 2 | v5.25 | 已实现；全参考有限性复验通过 | GPU1 | 正式训练中（update 112） |
+| 1 | v5 | 已实现并接通CLI | GPU0 | 正式训练中（update 371） |
+| 2 | v5.25 | 已实现；全参考有限性复验通过 | GPU1 | 正式训练中（update 138） |
 | 3 | v5.5 | 已实现；聚焦测试通过 | 待分配 | 未启动 |
 | 4 | v5.75 | 已实现；聚焦测试通过 | 待分配 | 未启动 |
 | 5 | v6 | 已实现 | 待分配 | 未启动 |
@@ -376,12 +376,53 @@ v525-formal/run-metadata.json
 最终“收敛时间”将使用上述启动时间到被选最佳checkpoint文件落盘时间的差值，
 同时单独记录1000 updates总训练墙钟时间，避免用估算时间代替实测。
 
+### 5.12 固定窗口收敛证据
+
+新增`tools/summarize_manorl_training_convergence.py`，对原始metrics JSONL做
+50-update固定窗口归约，并验证update连续、全部`valid=1`以及关键训练配置未改变。
+它不会把训练窗口Reward或瞬时抬升判定为冻结策略成功。
+
+截至2026-09-19 18:45 UTC：
+
+```text
+v5:
+  latest update = 371
+  latest transitions = 24,313,856
+  first loaded-airborne update = 6
+  first reference-complete update = 159
+  last-200 reference complete = 3 / 57,120 = 0.005252%
+  last-200 deviation rate = 99.994748%
+  peak loaded-airborne fraction = 0.055481 at update 185
+  status = training_in_progress
+
+v5.25:
+  latest update = 138
+  latest transitions = 9,043,968
+  first loaded-airborne update = 28
+  first reference-complete update = none
+  all observed completed episodes deviation-terminated
+  peak loaded-airborne fraction = 0.019135 at update 65
+  status = training_in_progress
+```
+
+因此需要修正“v5历史上从未到达参考末端”的过强说法：v5确实出现过极少量
+`reference_complete`训练事件，但发生率约为十万分之五，且update 200在固定身份
+上的冻结自然评估仍于228帧偏差终止、无载荷离桌。当前证据只能说明v5偶发走到
+时域末端，不能证明稳定抓取或收敛。v5.25目前连这一稀有信号也尚未出现。
+
+归约结果保存在：
+
+```text
+v5-formal/convergence-progress.json
+v525-formal/convergence-progress.json
+```
+
 ## 6. 正式结果表
 
 | 版本 | 参数量 | updates | 转换数 | 墙钟时间 | 自然成功率 | 最佳抓取表现 | 收敛判断 | 视频 |
 |---|---:|---:|---:|---:|---:|---|---|---|
-| v5 | 285,753 | 354（训练中） | 23,199,744 | 约1小时32分（训练中） | 未评估 | 训练窗口出现少量载荷离桌事件，但完成episode仍100%偏差终止 | 未收敛 | update 200失败诊断视频 |
-| v5.25 | 232,377 | 112（训练中） | 7,340,032 | 约29分（含初始化，训练中） | 未评估 | 少量载荷离桌事件，但完成episode仍100%偏差终止 | 尚无收敛证据 | — |
+| v5 | 285,753 | 371（训练中） | 24,313,856 | 约1小时36分（训练中） | 未完成正式评估 | 极少量训练episode到达末端，但update 200冻结评估失败 | 未收敛 | update 200失败诊断视频 |
+| v5.25 | 232,377 | 138（训练中） | 9,043,968 | 约34分（含初始化，训练中） | 未评估 | 有瞬时载荷离桌，尚无自然完整episode | 尚无收敛证据 | — |
 | v5.5 | 288,569 | — | — | — | — | 未训练 | 待定 | — |
 | v5.75 | 293,241 | — | — | — | — | 未训练 | 待定 | — |
 | v6 | 1,780,025 | — | — | — | — | 未训练 | 待定 | — |
