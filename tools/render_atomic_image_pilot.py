@@ -306,7 +306,9 @@ def render_row(
         for target in story_targets
     }
     output.mkdir(parents=True, exist_ok=False)
-    head_path, wrist_path = output / "head.mp4", output / "right_wrist.mp4"
+    head_path = output / "head.mp4"
+    wrist_path = output / "right_wrist.mp4"
+    combined_path = output / "combined.mp4"
     renderer = mujoco.Renderer(model, width=width, height=height)  # type: ignore[attr-defined]
     scene_option = mujoco.MjvOption()  # type: ignore[attr-defined]
     scene_option.geomgroup[3] = 0
@@ -316,7 +318,9 @@ def render_row(
         head_path, fps=fps, codec="libx264", quality=8, macro_block_size=2
     ) as head_writer, imageio.get_writer(
         wrist_path, fps=fps, codec="libx264", quality=8, macro_block_size=2
-    ) as wrist_writer:
+    ) as wrist_writer, imageio.get_writer(
+        combined_path, fps=fps, codec="libx264", quality=8, macro_block_size=2
+    ) as combined_writer:
         for frame in selected_frames:
             data.qpos[:28] = hand[frame]
             data.qvel[:] = 0.0
@@ -338,6 +342,7 @@ def render_row(
             wrist = renderer.render().copy()
             head_writer.append_data(head)
             wrist_writer.append_data(wrist)
+            combined_writer.append_data(np.concatenate([head, wrist], axis=1))
             if frame in story_selected:
                 saved_story.append((frame, head, wrist))
     renderer.close()
@@ -377,6 +382,7 @@ def render_row(
         ),
         "head_sha256": sha256(head_path),
         "right_wrist_sha256": sha256(wrist_path),
+        "combined_sha256": sha256(combined_path),
         "storyboard_sha256": sha256(output / "storyboard.jpg"),
         "provenance": dict(provenance),
     }

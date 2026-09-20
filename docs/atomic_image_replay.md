@@ -47,8 +47,9 @@ real time. The eventual image Lance should use `--video-stride 1` semantics and
 store every control-frame head/wrist image. `--max-frames` exists only for a
 bounded smoke test.
 
-Each action directory contains `head.mp4`, `right_wrist.mp4`, `storyboard.jpg`
-and `metadata.json`. The top-level manifest authenticates the selected row,
+Each action directory contains `combined.mp4` (head/right-wrist side by side),
+the component `head.mp4` and `right_wrist.mp4`, `storyboard.jpg` and
+`metadata.json`. The top-level manifest authenticates the selected row,
 layout, asset manifest, asset commit, camera contract and output hashes.
 
 ## Atomic language boundary
