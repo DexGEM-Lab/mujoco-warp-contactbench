@@ -4,7 +4,9 @@
 `--dataset/--version/--row/--asset-manifest`, with explicit `--asset-root` and
 `--output`. Raw mode validates the pinned Cheyingtong profile, selects the
 recorded right-hand slot, and adds only the common scene grounding shift.
-It never writes Lance or asset files.
+An optional `--target /path/to/target.npy` loads an explicit finite `[frames,28]`
+U1 candidate; source poses remain the comparison reference. It never writes
+Lance or asset files.
 
 ```bash
 DISPLAY=:1 PYTHONPATH=. python tools/view_u1_repair.py \
@@ -26,6 +28,29 @@ target[t] produces state[t] from state[t-1] through four 480Hz substeps. Teacher
 frame[t] is compared with live state[t]. The legacy `replay_capture_no_policy`
 trace instead records its frame0 after one interval; its trace is not an exact
 state-prefix comparator for this workspace.
+
+## Terminal-first inspection
+
+Attach an observation-only terminal to a running workspace; no simulator restart:
+
+```bash
+PYTHONPATH=. python -m tools.watch_u1_repair \
+  --workspace outputs/u1_live_row82 \
+  --log outputs/u1_live_row82/telemetry.log
+```
+
+It prints on published state changes: frame/checkpoint, object pose/tilt and
+motion since the previous sample, contacting links, maximum geometric
+penetration, source-relative hand/object pose error, actual servo target error,
+and new command acknowledgments or rejections. A paused unchanged state does not
+spam output. Restore/rewind is marked explicitly; stale output and process exit
+are surfaced. `--once` gives one snapshot. The UI publishes snapshots rather
+than every physics step: this log is for live diagnosis, not full-rate acceptance.
+Geometry contacts do not prove support force, handle insertion, or a stable grasp.
+
+Use this terminal to pause at the first deviation, save/restore the same complete
+state, change a small target window, and compare at the same arrival frame. This
+fully observable workflow does not require overwriting the object trajectory.
 
 Save/Restore includes every native device array, cursor, target and edits.
 Disk checkpoints contain `state.npz` and `workspace.json`; Restore uses the
