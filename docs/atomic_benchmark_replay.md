@@ -30,3 +30,8 @@ Each action produces one 30 fps side-by-side video containing the five complete
 replays, plus a storyboard, per-row dynamic traces and replay/reference error
 metrics. Six GPUs may run six action processes concurrently; the remaining two
 actions run on the first two cards after their first jobs finish.
+
+Every worker uses one physical GPU for both compute and offscreen rendering:
+`CUDA_VISIBLE_DEVICES=N`, `MUJOCO_EGL_DEVICE_ID=N`, and `--gpu N` must agree.
+The entry point rejects a mismatch before importing JAX or MuJoCo, preventing
+all EGL contexts from silently accumulating on physical GPU0.

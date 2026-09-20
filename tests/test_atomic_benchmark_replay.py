@@ -3,7 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tools.replay_atomic_benchmark_pilot import decode_row, static_layout, wxyz
+from tools.replay_atomic_benchmark_pilot import (
+    decode_row,
+    static_layout,
+    validate_gpu_binding,
+    wxyz,
+)
 
 
 def row_fixture() -> dict:
@@ -78,3 +83,12 @@ def test_static_layout_excludes_physical_objects() -> None:
 
 def test_wxyz_identity() -> None:
     np.testing.assert_allclose(wxyz([0, 0, 0]), [1, 0, 0, 0])
+
+
+def test_compute_and_egl_gpu_binding_must_match(monkeypatch) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3")
+    monkeypatch.setenv("MUJOCO_EGL_DEVICE_ID", "3")
+    assert validate_gpu_binding(3)["physical_gpu"] == 3
+    monkeypatch.setenv("MUJOCO_EGL_DEVICE_ID", "0")
+    with pytest.raises(RuntimeError, match="identical physical index"):
+        validate_gpu_binding(3)

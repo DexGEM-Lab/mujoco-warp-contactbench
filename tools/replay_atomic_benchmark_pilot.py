@@ -64,6 +64,23 @@ def wxyz(rot_aa: Sequence[float]) -> np.ndarray:
     return xyzw[[3, 0, 1, 2]]
 
 
+def validate_gpu_binding(gpu: int) -> dict[str, object]:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    egl = os.environ.get("MUJOCO_EGL_DEVICE_ID", "").strip()
+    if visible != str(gpu) or egl != str(gpu):
+        raise RuntimeError(
+            "GPU binding must use one identical physical index for compute and EGL: "
+            f"--gpu={gpu}, CUDA_VISIBLE_DEVICES={visible!r}, "
+            f"MUJOCO_EGL_DEVICE_ID={egl!r}"
+        )
+    return {
+        "physical_gpu": gpu,
+        "cuda_visible_devices": visible,
+        "mujoco_egl_device_id": egl,
+        "contract": "one_worker_one_matching_compute_egl_gpu_v1",
+    }
+
+
 def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any]:
     os.environ["MANORL_REPO_ROOT"] = str(args.manorl_root.resolve())
     os.environ["MANORL_EXPECTED_COMMIT"] = args.manorl_commit
@@ -794,6 +811,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError(f"output must be fresh: {args.output}")
+    gpu_binding = validate_gpu_binding(args.gpu)
     selection = json.loads(args.selection.read_text())
     import lance
 
@@ -830,6 +848,7 @@ def main() -> None:
         "client_commit": os.popen(f"git -C {args.client_root} rev-parse HEAD").read().strip(),
         "selection": str(args.selection),
         "selection_sha256": sha256(args.selection),
+        "gpu_binding": gpu_binding,
         "physics": physics_report,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
