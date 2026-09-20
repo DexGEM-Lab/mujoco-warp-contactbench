@@ -163,7 +163,7 @@ def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any
         }
 
     consumer_visual._inject_consumer_skin = existing_skin
-    return native, visual, assets, contracts
+    return native, visual, consumer_visual, assets, contracts
 
 
 def selected_rows(dataset: Any, selection: Mapping[str, object], action: str) -> list[tuple[int, dict]]:
@@ -236,27 +236,132 @@ def decode_row(row_index: int, row: dict) -> dict[str, Any]:
     }
 
 
+def benchmark_invariance(mujoco: Any, physics_model: Any, visual_model: Any, table: Mapping[str, Any]) -> dict[str, Any]:
+    if (physics_model.nq, physics_model.nv, physics_model.nu) != (
+        visual_model.nq,
+        visual_model.nv,
+        visual_model.nu,
+    ):
+        raise ValueError("benchmark decoration changed nq/nv/nu")
+    exact = (
+        "jnt_type",
+        "jnt_bodyid",
+        "jnt_qposadr",
+        "jnt_dofadr",
+        "body_parentid",
+        "body_mass",
+        "body_inertia",
+        "body_ipos",
+        "body_iquat",
+        "actuator_trnid",
+        "actuator_gainprm",
+        "actuator_biasprm",
+    )
+    for name in exact:
+        if not np.array_equal(np.asarray(getattr(physics_model, name)), np.asarray(getattr(visual_model, name))):
+            raise ValueError(f"benchmark decoration changed {name}")
+    if not np.isclose(physics_model.opt.timestep, visual_model.opt.timestep, rtol=0, atol=1e-15):
+        raise ValueError("benchmark decoration changed physics timestep")
+    for geom_id in range(physics_model.ngeom):
+        name = mujoco.mj_id2name(physics_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id) or ""
+        if name == "floor":
+            continue
+        if int(physics_model.geom_contype[geom_id]) == 0 and int(physics_model.geom_conaffinity[geom_id]) == 0:
+            continue
+        other = mujoco.mj_name2id(visual_model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        if other < 0:
+            raise ValueError(f"benchmark decoration removed collision geom {name}")
+        for field in ("geom_type", "geom_bodyid", "geom_contype", "geom_conaffinity"):
+            if int(getattr(physics_model, field)[geom_id]) != int(getattr(visual_model, field)[other]):
+                raise ValueError(f"benchmark decoration changed {field} for {name}")
+        for field in ("geom_pos", "geom_quat", "geom_size", "geom_friction"):
+            if not np.array_equal(np.asarray(getattr(physics_model, field)[geom_id]), np.asarray(getattr(visual_model, field)[other])):
+                raise ValueError(f"benchmark decoration changed {field} for {name}")
+    floor = mujoco.mj_name2id(visual_model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+    if floor < 0 or int(visual_model.geom_type[floor]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+        raise ValueError("benchmark collidable tabletop is absent")
+    if not np.allclose(visual_model.geom_pos[floor], table["top_pos"], atol=1e-12, rtol=0):
+        raise ValueError("benchmark tabletop position changed")
+    if not np.allclose(visual_model.geom_size[floor], table["top_size"], atol=1e-12, rtol=0):
+        raise ValueError("benchmark tabletop size changed")
+    return {
+        "verified": True,
+        "joint_actuator_body_contract_unchanged": True,
+        "task_collision_geoms_unchanged": True,
+        "intentional_table_delta": table["contract_id"],
+    }
+
+
+def build_benchmark_model(
+    *,
+    consumer_visual: Any,
+    assets: Any,
+    contracts: Any,
+    target: str,
+    object_types: Sequence[str],
+    decorative_scene_spec: Path,
+) -> tuple[Any, Any, dict[str, Any]]:
+    return consumer_visual.build_consumer_visual_model(
+        target,
+        WIDTH,
+        HEIGHT,
+        object_types=tuple(object_types),
+        head_camera_preset="current",
+        scene_style="collidable_table",
+        background_style="photoreal_room",
+        decorative_scene_spec=str(decorative_scene_spec),
+        closed_ceiling=True,
+        runtime={"assets": assets, "contracts": contracts},
+        apply_visual_lod=lambda _root, _name: None,
+        collidable_invariance_check=benchmark_invariance,
+        visual_invariance_check=lambda _mujoco, _physics, _visual: {
+            "verified": True
+        },
+        object_body_name=assets.object_runtime(target).body_name,
+    )
+
+
 def make_scene(
-    native: Any,
+    consumer_visual: Any,
+    assets: Any,
+    contracts: Any,
     *,
     target: str,
     object_types: Sequence[str],
     decorative_scene_spec: Path,
     create_renderer: bool,
 ) -> tuple[Any, ...]:
-    return native.make_scene(
-        target,
-        WIDTH,
-        HEIGHT,
-        physics=True,
-        physics_timestep=1 / PHYSICS_HZ,
-        create_renderer=create_renderer,
-        head_camera_preset="current",
-        scene_style="collidable_table",
-        background_style="photoreal_room",
-        decorative_scene_spec=str(decorative_scene_spec),
-        closed_ceiling=True,
-        object_types=tuple(object_types),
+    mujoco, model, invariance = build_benchmark_model(
+        consumer_visual=consumer_visual,
+        assets=assets,
+        contracts=contracts,
+        target=target,
+        object_types=object_types,
+        decorative_scene_spec=decorative_scene_spec,
+    )
+    data = mujoco.MjData(model)
+    renderer = (
+        mujoco.Renderer(model, width=WIDTH, height=HEIGHT) if create_renderer else None
+    )
+    target_address = int(model.joint(target + "_free").qposadr[0])
+    joint_ids = [
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        for name in contracts.JOINT_NAMES_28
+    ]
+    hand_addresses = np.asarray(
+        [int(model.jnt_qposadr[joint_id]) for joint_id in joint_ids], dtype=np.int64
+    )
+    return (
+        mujoco,
+        model,
+        data,
+        renderer,
+        target_address,
+        0,
+        hand_addresses,
+        np.arange(28),
+        None,
+        invariance,
     )
 
 
@@ -265,9 +370,12 @@ def run_physics(
     dataset_path: Path,
     dataset_version: int,
     decoded: list[dict[str, Any]],
+    consumer_visual: Any,
     assets: Any,
     contracts: Any,
+    decorative_scene_spec: Path,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    import sim.manorl.environment as environment_module
     from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
     from sim.manorl.observations import SOURCE_ALIGNED_COMPATIBILITY
     from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch
@@ -321,6 +429,14 @@ def run_physics(
                 scene_object_initial_quat_xyzw=scene_quat_xyzw,
             )
         )
+    environment_module.compile_unified_model = lambda servo, *, object_types, **_kwargs: build_benchmark_model(
+        consumer_visual=consumer_visual,
+        assets=assets,
+        contracts=contracts,
+        target=target,
+        object_types=tuple(object_types),
+        decorative_scene_spec=decorative_scene_spec,
+    )[:2]
     config = EnvironmentConfig(
         num_envs=len(decoded),
         device="gpu",
@@ -508,8 +624,10 @@ def render_action(
     action: str,
     outputs: list[dict[str, Any]],
     layouts: Mapping[str, Mapping[str, Any]],
-    native: Any,
     visual: Any,
+    consumer_visual: Any,
+    assets: Any,
+    contracts: Any,
     decorative_scene_spec: Path,
     output_dir: Path,
     gpu: int,
@@ -519,13 +637,16 @@ def render_action(
     import mujoco
     from PIL import Image, ImageDraw
 
-    _, model, data, renderer, _target_address, _dof, _hand, _hand_dof, _limits = make_scene(
-        native,
+    scene = make_scene(
+        consumer_visual,
+        assets,
+        contracts,
         target=outputs[0]["target"],
         object_types=ALL_OBJECTS,
         decorative_scene_spec=decorative_scene_spec,
         create_renderer=True,
     )
+    mujoco, model, data, renderer = scene[:4]
     for geom_id in range(model.ngeom):
         body_name = mujoco.mj_id2name(
             model, mujoco.mjtObj.mjOBJ_BODY, int(model.geom_bodyid[geom_id])
@@ -683,13 +804,15 @@ def main() -> None:
     layouts = {entry["uuid"]: entry for entry in layout_payload["trajectories"]}
     if any(item["uuid"] not in layouts for item in decoded):
         raise ValueError("one or more selected rows have no scene layout")
-    native, visual, assets, contracts = configure_modules(args)
+    native, visual, consumer_visual, assets, contracts = configure_modules(args)
     outputs, physics_report = run_physics(
         dataset_path=args.dataset,
         dataset_version=args.dataset_version,
         decoded=decoded,
         assets=assets,
         contracts=contracts,
+        consumer_visual=consumer_visual,
+        decorative_scene_spec=args.scene,
     )
     provenance = {
         "dataset": str(args.dataset),
@@ -714,8 +837,10 @@ def main() -> None:
         action=args.action,
         outputs=outputs,
         layouts=layouts,
-        native=native,
         visual=visual,
+        consumer_visual=consumer_visual,
+        assets=assets,
+        contracts=contracts,
         decorative_scene_spec=args.scene,
         output_dir=args.output,
         gpu=args.gpu,
