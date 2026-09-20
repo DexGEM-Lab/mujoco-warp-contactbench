@@ -99,3 +99,17 @@ def test_action_element_max_and_invalid_reconciliation_are_exact() -> None:
     assert row["action/raw_abs_max"] == 7.
     assert row["reward/component_sum_denominator"] == 1.
     assert row["reward/component_sum_minus_total_abs_mean"] == 0.
+
+
+def test_dynamic_reward_names_preserve_component_accounting() -> None:
+    names = ("tracking", "contact", "severe")
+    acc = V4TelemetryAccumulator(
+        2, torch.device("cpu"), reward_names=names,
+    )
+    sample = _sample()
+    sample["reward_terms"] = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+    sample["reward_total"] = sample["reward_terms"].sum(1)
+    acc.add(sample)
+    row = acc.reduce(update=1, transitions=2)
+    assert row["reward/contact"] == pytest.approx(3.5)
+    assert row["reward/component_sum_minus_total_abs_mean"] == 0.0

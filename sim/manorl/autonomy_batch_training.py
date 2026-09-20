@@ -25,7 +25,7 @@ from sim.manorl.autonomy_contracts import (
     POLICY_SAMPLING_CONTRACT, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata,
 )
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
-from sim.manorl.autonomy_v4_telemetry import V4TelemetryAccumulator
+from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES, V4TelemetryAccumulator
 from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config, validate_learning_rate, teacher_anchor_metadata
 
 
@@ -254,9 +254,11 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
     required_config = {"num_envs", "rollouts", "learning_epochs", "mini_batches", "learning_rate", "separate_critic", "seed", "device"}
     if not required_config <= source_config.keys() or not required_config <= expected_config.keys():
         raise ValueError("resume config is missing fixed training fields")
-    # Absent anchor metadata in pre-feature checkpoints means the disabled path.
+    # Absent anchor/reward metadata in pre-feature checkpoints means the
+    # original disabled-anchor, v4-reward path.
     def with_anchor_defaults(config):
         config = dict(config)
+        config["reward_version"] = config.get("reward_version") or "v4"
         config.setdefault("all_train_references", False)
         config.setdefault("all_references", False)
         config.setdefault("teacher_anchor_beta", 0.0)
@@ -474,7 +476,15 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     episode_length = torch.zeros_like(episode_return)
     rows: list[dict[str, float]] = []
     policy_steps = resumed["policy_steps"] if resumed is not None else 0
-    telemetry = V4TelemetryAccumulator(adapter.num_envs, adapter.device) if hasattr(adapter, "telemetry_snapshot") else None
+    telemetry = (
+        V4TelemetryAccumulator(
+            adapter.num_envs,
+            adapter.device,
+            reward_names=getattr(adapter, "reward_names", REWARD_NAMES),
+        )
+        if hasattr(adapter, "telemetry_snapshot")
+        else None
+    )
     if resumed is not None:
         restore_v4_rng(resumed, device=adapter.device)
     for update in range(policy_steps // rollouts + 1, updates + 1):

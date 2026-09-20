@@ -20,14 +20,18 @@ from sim.manorl.autonomy_contracts import (
     RAW_OBSERVATION_DIM_V55,
     RAW_OBSERVATION_DIM_V575,
     RAW_OBSERVATION_DIM_V6,
+    V4_REWARD_TERM_NAMES,
+    V10_REWARD_TERM_NAMES,
+    resolve_reward_contract,
 )
 from sim.manorl.autonomy_v4 import (
     ReferenceCacheV4, ReferenceBankV4, V4Contact, compile_reference_cache_v4, extract_v4_physical,
     reduce_pyramidal_contacts_v4, build_raw_observation, build_raw_observation_v5,
     build_raw_observation_v55, build_raw_observation_v575,
-    build_raw_observation_v6, compute_reward,
+    build_raw_observation_v6, compute_reward as compute_reward_v4,
     DOF_RATE, ANTIWINDUP_ERROR,
 )
+from sim.manorl.autonomy_reward_v10 import compute_reward as compute_reward_v10
 
 V4_OBSERVATION_DIM = OBSERVATION_DIM
 V5_OBSERVATION_DIM = RAW_OBSERVATION_DIM_V5
@@ -67,7 +71,8 @@ class BatchedAutonomyRuntime:
     def __init__(
         self, trajectory, *, num_envs: int = 1, device: str = "cpu", seed: int = 0,
         persistent_ccd_workspace: bool = False, ccd_contacts_per_world: int | None = None,
-        full_horizon_diagnostic: bool = False, observation_version: str = "v4", **_: Any,
+        full_horizon_diagnostic: bool = False, observation_version: str = "v4",
+        reward_version: str = "v4", **_: Any,
     ):
         if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
             raise ValueError("num_envs must be a positive integer")
@@ -121,6 +126,16 @@ class BatchedAutonomyRuntime:
         self._observation_builder, self.observation_dim, self.observation_contract = (
             observation_builders[observation_version]
         )
+        self.reward_version, self.reward_contract_id = resolve_reward_contract(
+            reward_version
+        )
+        reward_builders = {
+            "v4": (compute_reward_v4, V4_REWARD_TERM_NAMES),
+            "v10": (compute_reward_v10, V10_REWARD_TERM_NAMES),
+        }
+        self._compute_reward, self.reward_names = reward_builders[
+            self.reward_version
+        ]
 
         import jax
         import jax.numpy as j
@@ -319,7 +334,14 @@ class BatchedAutonomyRuntime:
         next_data = jax.lax.cond(execute, advance, lambda value: value, stepped)
         next_index = index + self.jp.asarray(execute, self.jp.int32)
         physical_next, contact, raw, observation = self._observe(next_data, next_index, command)
-        reward = compute_reward(physical_next, contact, self.cache, next_index, self.jp.clip(action, -1, 1), self.env_ref)
+        reward = self._compute_reward(
+            physical_next,
+            contact,
+            self.cache,
+            next_index,
+            self.jp.clip(action, -1, 1),
+            self.env_ref,
+        )
         valid = physical_next.valid & contact.valid & reward.valid
         return next_data, next_index, command, raw, observation, reward, valid, contact, physical_next
 
@@ -367,6 +389,7 @@ class BatchedAutonomyRuntime:
             "table": self.table_metadata, "contact_capacity": self.warp_contact_capacity,
             "constraint_capacity_per_world": self.warp_constraint_capacity,
             "contract": self.observation_contract,
+            "reward_contract": self.reward_contract_id,
         }
 
 

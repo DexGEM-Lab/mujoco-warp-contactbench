@@ -13,6 +13,26 @@ AUTONOMY_VERSION: Final = "manorl.autonomy.v4"
 OBSERVATION_CONTRACT_ID: Final = "manorl.autonomy.observation.v4"
 ACTION_CONTRACT_ID: Final = "manorl.autonomy.action.v4"
 REWARD_CONTRACT_ID: Final = "manorl.autonomy.reward.v4"
+V10_REWARD_CONTRACT_ID: Final = (
+    "manorl.autonomy.reward.v10.gated_tracking_airborne_hold"
+)
+REWARD_CONTRACT_BY_VERSION: Final[dict[str, str]] = {
+    "v4": REWARD_CONTRACT_ID,
+    "v10": V10_REWARD_CONTRACT_ID,
+}
+SUPPORTED_REWARD_CONTRACT_IDS: Final = frozenset(
+    REWARD_CONTRACT_BY_VERSION.values()
+)
+V4_REWARD_TERM_NAMES: Final = (
+    "object_position", "object_rotation", "object_velocity", "hand_relative",
+    "fingers", "geometry", "action", "survival", "severe",
+)
+V10_REWARD_TERM_NAMES: Final = (
+    "object_position", "object_rotation", "object_velocity", "hand_relative",
+    "fingers", "geometry", "contact", "thumb_contact", "opposing_contact",
+    "lift_progress", "lift_velocity", "hold_contact", "contact_loss",
+    "falling", "lateral_slip", "action", "survival", "severe",
+)
 CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v4"
 CACHE_CONTRACT_ID: Final = "manorl.autonomy.reference_cache.v4"
 # The old name remains an import-only alias; it names the v4 cache and never
@@ -184,6 +204,17 @@ OBSERVATION_CONTRACT = AutonomousObservationContract()
 REWARD_CONTRACT = AutonomousRewardContract()
 
 
+def resolve_reward_contract(value: str) -> tuple[str, str]:
+    """Return the canonical short reward version and contract identifier."""
+    if value in REWARD_CONTRACT_BY_VERSION:
+        return value, REWARD_CONTRACT_BY_VERSION[value]
+    for version, contract_id in REWARD_CONTRACT_BY_VERSION.items():
+        if value == contract_id:
+            return version, contract_id
+    choices = ", ".join(REWARD_CONTRACT_BY_VERSION)
+    raise ValueError(f"unsupported autonomy reward {value!r}; choose {choices}")
+
+
 @dataclass(frozen=True)
 class AutonomousObservationContractV5:
     version: str = OBSERVATION_CONTRACT_ID_V5
@@ -304,45 +335,7 @@ class AutonomousObservationContractV6:
 
 OBSERVATION_CONTRACT_V6 = AutonomousObservationContractV6()
 
-def validate_v4_checkpoint_metadata(metadata: dict[str, object]) -> None:
-    required = {"checkpoint_format": CHECKPOINT_FORMAT, "observation_contract": OBSERVATION_CONTRACT_ID,
-                "reward_contract": REWARD_CONTRACT_ID, "action_contract": ACTION_CONTRACT_ID}
-    for name, expected in required.items():
-        if metadata.get(name) != expected:
-            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
-    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
-        raise ValueError("incompatible v4 policy sampling contract")
-
-
-def validate_v5_checkpoint_metadata(metadata: dict[str, object]) -> None:
-    required = {
-        "checkpoint_format": CHECKPOINT_FORMAT_V5,
-        "observation_contract": OBSERVATION_CONTRACT_ID_V5,
-        "reward_contract": REWARD_CONTRACT_ID,
-        "action_contract": ACTION_CONTRACT_ID,
-    }
-    for name, expected in required.items():
-        if metadata.get(name) != expected:
-            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
-    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
-        raise ValueError("incompatible v5 policy sampling contract")
-
-
-def validate_v525_checkpoint_metadata(metadata: dict[str, object]) -> None:
-    required = {
-        "checkpoint_format": CHECKPOINT_FORMAT_V525,
-        "observation_contract": OBSERVATION_CONTRACT_ID_V525,
-        "reward_contract": REWARD_CONTRACT_ID,
-        "action_contract": ACTION_CONTRACT_ID,
-    }
-    for name, expected in required.items():
-        if metadata.get(name) != expected:
-            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
-    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
-        raise ValueError("incompatible v5.25 policy sampling contract")
-
-
-def _validate_intermediate_checkpoint_metadata(
+def _validate_checkpoint_metadata(
     metadata: dict[str, object],
     *,
     checkpoint_format: str,
@@ -352,18 +345,46 @@ def _validate_intermediate_checkpoint_metadata(
     required = {
         "checkpoint_format": checkpoint_format,
         "observation_contract": observation_contract,
-        "reward_contract": REWARD_CONTRACT_ID,
         "action_contract": ACTION_CONTRACT_ID,
     }
     for name, expected in required.items():
         if metadata.get(name) != expected:
             raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
+    if metadata.get("reward_contract") not in SUPPORTED_REWARD_CONTRACT_IDS:
+        raise ValueError("incompatible checkpoint: unsupported reward_contract")
     if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
         raise ValueError(f"incompatible {version} policy sampling contract")
 
 
+def validate_v4_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    _validate_checkpoint_metadata(
+        metadata,
+        checkpoint_format=CHECKPOINT_FORMAT,
+        observation_contract=OBSERVATION_CONTRACT_ID,
+        version="v4",
+    )
+
+
+def validate_v5_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    _validate_checkpoint_metadata(
+        metadata,
+        checkpoint_format=CHECKPOINT_FORMAT_V5,
+        observation_contract=OBSERVATION_CONTRACT_ID_V5,
+        version="v5",
+    )
+
+
+def validate_v525_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    _validate_checkpoint_metadata(
+        metadata,
+        checkpoint_format=CHECKPOINT_FORMAT_V525,
+        observation_contract=OBSERVATION_CONTRACT_ID_V525,
+        version="v5.25",
+    )
+
+
 def validate_v55_checkpoint_metadata(metadata: dict[str, object]) -> None:
-    _validate_intermediate_checkpoint_metadata(
+    _validate_checkpoint_metadata(
         metadata,
         checkpoint_format=CHECKPOINT_FORMAT_V55,
         observation_contract=OBSERVATION_CONTRACT_ID_V55,
@@ -372,7 +393,7 @@ def validate_v55_checkpoint_metadata(metadata: dict[str, object]) -> None:
 
 
 def validate_v575_checkpoint_metadata(metadata: dict[str, object]) -> None:
-    _validate_intermediate_checkpoint_metadata(
+    _validate_checkpoint_metadata(
         metadata,
         checkpoint_format=CHECKPOINT_FORMAT_V575,
         observation_contract=OBSERVATION_CONTRACT_ID_V575,
@@ -381,17 +402,12 @@ def validate_v575_checkpoint_metadata(metadata: dict[str, object]) -> None:
 
 
 def validate_v6_checkpoint_metadata(metadata: dict[str, object]) -> None:
-    required = {
-        "checkpoint_format": CHECKPOINT_FORMAT_V6,
-        "observation_contract": OBSERVATION_CONTRACT_ID_V6,
-        "reward_contract": REWARD_CONTRACT_ID,
-        "action_contract": ACTION_CONTRACT_ID,
-    }
-    for name, expected in required.items():
-        if metadata.get(name) != expected:
-            raise ValueError(f"incompatible checkpoint: {name} must be {expected!r}")
-    if metadata.get("policy_sampling_contract") not in (None, POLICY_SAMPLING_CONTRACT):
-        raise ValueError("incompatible v6 policy sampling contract")
+    _validate_checkpoint_metadata(
+        metadata,
+        checkpoint_format=CHECKPOINT_FORMAT_V6,
+        observation_contract=OBSERVATION_CONTRACT_ID_V6,
+        version="v6",
+    )
 
 def rate_limited_command(previous_command: NDArray[np.floating], action: NDArray[np.floating], lower: NDArray[np.floating], upper: NDArray[np.floating], rate_per_second: NDArray[np.floating], *, measured_qpos: NDArray[np.floating] | None = None, control_timestep: float = 1 / 120, max_tracking_error: NDArray[np.floating] | None = None) -> NDArray[np.float64]:
     previous, raw, lo, hi, rate = (np.asarray(x, dtype=np.float64) for x in (previous_command, action, lower, upper, rate_per_second))

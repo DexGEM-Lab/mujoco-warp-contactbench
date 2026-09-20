@@ -214,7 +214,9 @@ class AutonomyActorCriticV525(
         return {
             "checkpoint_format": CHECKPOINT_FORMAT_V525,
             "observation_contract": OBSERVATION_CONTRACT_ID_V525,
-            "reward_contract": REWARD_CONTRACT_ID,
+            "reward_contract": getattr(
+                self, "reward_contract_id", REWARD_CONTRACT_ID
+            ),
             "action_contract": ACTION_CONTRACT_ID,
         }
 
@@ -477,7 +479,9 @@ class AutonomyActorCriticV55(_AutonomyActorCriticRegionGoal):
         return {
             "checkpoint_format": CHECKPOINT_FORMAT_V55,
             "observation_contract": OBSERVATION_CONTRACT_ID_V55,
-            "reward_contract": REWARD_CONTRACT_ID,
+            "reward_contract": getattr(
+                self, "reward_contract_id", REWARD_CONTRACT_ID
+            ),
             "action_contract": ACTION_CONTRACT_ID,
         }
 
@@ -499,6 +503,8 @@ class AutonomyActorCriticV575(_AutonomyActorCriticRegionGoal):
         return {
             "checkpoint_format": CHECKPOINT_FORMAT_V575,
             "observation_contract": OBSERVATION_CONTRACT_ID_V575,
-            "reward_contract": REWARD_CONTRACT_ID,
+            "reward_contract": getattr(
+                self, "reward_contract_id", REWARD_CONTRACT_ID
+            ),
             "action_contract": ACTION_CONTRACT_ID,
         }

@@ -7,7 +7,7 @@ accounting uses fixed-size device reductions; only update rows leave device.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import torch
 
@@ -27,20 +27,24 @@ class V4TelemetryAccumulator:
     """Tensor-only episode/update accounting for fixed-size batched PPO."""
     num_envs: int
     device: torch.device
+    reward_names: Sequence[str] = REWARD_NAMES
 
     def __post_init__(self) -> None:
+        self.reward_names = tuple(self.reward_names)
+        if not self.reward_names or len(set(self.reward_names)) != len(self.reward_names):
+            raise ValueError("telemetry reward names must be unique and non-empty")
         self.episode_returns = torch.zeros((self.num_envs,), device=self.device)
         self.episode_lengths = torch.zeros((self.num_envs,), device=self.device)
-        self.episode_terms = torch.zeros((self.num_envs, len(REWARD_NAMES)), device=self.device)
+        self.episode_terms = torch.zeros((self.num_envs, len(self.reward_names)), device=self.device)
         self.episode_max_clearance = torch.full((self.num_envs,), -torch.inf, device=self.device)
         self.episode_loaded_frames = torch.zeros((self.num_envs,), device=self.device)
         self._reset_window()
 
     def _reset_window(self) -> None:
         self.frames = torch.zeros((), device=self.device)
-        self.reward_sum = torch.zeros((len(REWARD_NAMES) + 1,), device=self.device)
-        self.reward_min = torch.full((len(REWARD_NAMES) + 1,), torch.inf, device=self.device)
-        self.reward_max = torch.full((len(REWARD_NAMES) + 1,), -torch.inf, device=self.device)
+        self.reward_sum = torch.zeros((len(self.reward_names) + 1,), device=self.device)
+        self.reward_min = torch.full((len(self.reward_names) + 1,), torch.inf, device=self.device)
+        self.reward_max = torch.full((len(self.reward_names) + 1,), -torch.inf, device=self.device)
         self.reason_counts = torch.zeros((len(REASON_BITS),), device=self.device)
         self.horizon_only = torch.zeros((), device=self.device)
         self.completed_count = torch.zeros((), device=self.device)
@@ -74,7 +78,7 @@ class V4TelemetryAccumulator:
     def add(self, sample: Mapping[str, torch.Tensor]) -> None:
         """Add one post-transition B-row snapshot before any reset."""
         terms, total = sample["reward_terms"], sample["reward_total"]
-        if terms.shape != (self.num_envs, len(REWARD_NAMES)) or total.shape != (self.num_envs,):
+        if terms.shape != (self.num_envs, len(self.reward_names)) or total.shape != (self.num_envs,):
             raise ValueError("v4 telemetry reward shapes are incompatible with the batch")
         if sample["tangential_slip"].shape != (self.num_envs, 16):
             raise ValueError("v4 tangential_slip must be per-region scalar [B,16]")
@@ -117,7 +121,7 @@ class V4TelemetryAccumulator:
         self._completed("return", self.episode_returns, done); self._completed("length", self.episode_lengths, done)
         self._completed("max_clearance", self.episode_max_clearance, done); self._completed("loaded_contact_frames", self.episode_loaded_frames, done)
         self._completed("final_reference_progress", sample["reference_progress"], done)
-        for i, name in enumerate(REWARD_NAMES): self._completed(f"term/{name}", self.episode_terms[:, i], done)
+        for i, name in enumerate(self.reward_names): self._completed(f"term/{name}", self.episode_terms[:, i], done)
         self.episode_returns = torch.where(done, torch.zeros_like(self.episode_returns), self.episode_returns)
         self.episode_lengths = torch.where(done, torch.zeros_like(self.episode_lengths), self.episode_lengths)
         self.episode_terms = torch.where(done[:, None], torch.zeros_like(self.episode_terms), self.episode_terms)
@@ -127,7 +131,7 @@ class V4TelemetryAccumulator:
     def reduce(self, *, update: int, transitions: int) -> dict[str, float]:
         if not bool(self.frames > 0): raise ValueError("cannot reduce an empty telemetry window")
         out: dict[str, float] = {"update": float(update), "transitions": float(transitions), "telemetry/frames": _scalar(self.frames)}
-        for i, name in enumerate((*REWARD_NAMES, "total")):
+        for i, name in enumerate((*self.reward_names, "total")):
             out[f"reward/{name}"] = _scalar(self.reward_sum[i] / self.frames); out[f"reward/{name}_min"] = _scalar(self.reward_min[i]); out[f"reward/{name}_max"] = _scalar(self.reward_max[i])
         for axis in "xyz": out[f"physics/object_position_error_{axis}_abs_mean"] = _scalar(self.sums[f"object_position_error_{axis}_abs"] / self.frames)
         out["physics/object_position_error_l2_mean"] = _scalar(self.sums["object_position_error_l2"] / self.frames); out["physics/object_position_error_l2_rmse"] = _scalar(torch.sqrt(self.sums["object_position_error_l2_sq"] / self.frames))
@@ -149,7 +153,7 @@ class V4TelemetryAccumulator:
             for name in ("return", "length"):
                 out[f"episodes/{name}_mean"] = _scalar(self.completed_sums[name] / self.completed_count); out[f"episodes/{name}_min"] = _scalar(self.completed_mins[name]); out[f"episodes/{name}_max"] = _scalar(self.completed_maxes[name])
             out["episodes/return_denominator"] = completed_count
-            for name in REWARD_NAMES:
+            for name in self.reward_names:
                 key=f"term/{name}"; out[f"reward/episode_{name}_return_mean"] = _scalar(self.completed_sums[key] / self.completed_count); out[f"reward/episode_{name}_return_min"] = _scalar(self.completed_mins[key]); out[f"reward/episode_{name}_return_max"] = _scalar(self.completed_maxes[key])
             for name in ("max_clearance", "loaded_contact_frames", "final_reference_progress"):
                 out[f"episodes/{name}_mean"] = _scalar(self.completed_sums[name] / self.completed_count)

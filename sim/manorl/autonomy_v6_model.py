@@ -312,7 +312,9 @@ class AutonomyActorCriticV6(
         return {
             "checkpoint_format": CHECKPOINT_FORMAT_V6,
             "observation_contract": OBSERVATION_CONTRACT_ID_V6,
-            "reward_contract": REWARD_CONTRACT_ID,
+            "reward_contract": getattr(
+                self, "reward_contract_id", REWARD_CONTRACT_ID
+            ),
             "action_contract": ACTION_CONTRACT_ID,
         }
 

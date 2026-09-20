@@ -30,6 +30,7 @@ from sim.manorl.autonomy_contracts import (
     RAW_OBSERVATION_DIM_V5,
     RAW_OBSERVATION_DIM_V6,
     REWARD_CONTRACT_ID,
+    V4_REWARD_TERM_NAMES,
 )
 from sim.manorl.autonomy_v6_model import (
     AutonomyActorCriticV6,
@@ -91,15 +92,20 @@ def identity_split(catalog: TrajectoryCatalog, *, seed:int=0)->dict[str,Any]:
 
 class BatchedAutonomyAdapter:
     """Raw-957 adapter. CUDA borrows tensors through DLPack; CPU is test-only."""
-    def __init__(self,trajectory,*,num_envs=1,device="cpu",seed=0,policy_version="v4",**kwargs):
+    def __init__(
+        self, trajectory, *, num_envs=1, device="cpu", seed=0,
+        policy_version="v4", reward_version="v4", **kwargs,
+    ):
         from sim.manorl.autonomy_batch import BatchedAutonomyRuntime
         self.policy_version=policy_version
         self.runtime=BatchedAutonomyRuntime(
             trajectory,num_envs=num_envs,device=device,seed=seed,
-            observation_version=policy_version,**kwargs
+            observation_version=policy_version,reward_version=reward_version,
+            **kwargs
         )
         self.num_envs=self.runtime.num_envs; self.device_name=device; self._device=torch.device("cuda" if device=="gpu" else "cpu")
         self.observation_dim=self.runtime.observation_dim; self.action_dim=ACTION_DIM
+        self.reward_names=self.runtime.reward_names
         self.observation_space=gym.spaces.Box(-np.inf,np.inf,shape=(self.observation_dim,),dtype=np.float32)
         self.action_space=gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=np.float32)
     @property
@@ -157,8 +163,10 @@ class BatchedAutonomyAdapter:
         # NumPy's host path. Only physical execution crosses JAX/Torch via DLPack.
         raw_action_abs=raw_actions.detach().abs()
         executed=torch.clamp(raw_actions.detach(),-1.,1.)
-        terms=jp.stack((reward.object_position,reward.object_rotation,reward.object_velocity,reward.hand_relative,
-                        reward.fingers,reward.geometry,reward.action,reward.survival,reward.severe),axis=1)
+        reward_names = getattr(self, "reward_names", V4_REWARD_TERM_NAMES)
+        terms=jp.stack(
+            tuple(getattr(reward, name) for name in reward_names), axis=1
+        )
         snapshot={
             "reward_terms":terms, "reward_total":reward.total, "reason":reward.reason, "valid":reward.valid,
             "position_error_abs":jp.abs(physical.object_origin-target_object),
@@ -229,7 +237,9 @@ class AutonomyActorCritic(GaussianMixin,DeterministicMixin,Model):
         return {
             "checkpoint_format": CHECKPOINT_FORMAT,
             "observation_contract": OBSERVATION_CONTRACT_ID,
-            "reward_contract": REWARD_CONTRACT_ID,
+            "reward_contract": getattr(
+                self, "reward_contract_id", REWARD_CONTRACT_ID
+            ),
             "action_contract": ACTION_CONTRACT_ID,
         }
     def act(self,inputs,role=""):
@@ -274,7 +284,9 @@ class AutonomyActorCriticV5(GaussianMixin,DeterministicMixin,Model):
         return {
             "checkpoint_format": CHECKPOINT_FORMAT_V5,
             "observation_contract": OBSERVATION_CONTRACT_ID_V5,
-            "reward_contract": REWARD_CONTRACT_ID,
+            "reward_contract": getattr(
+                self, "reward_contract_id", REWARD_CONTRACT_ID
+            ),
             "action_contract": ACTION_CONTRACT_ID,
         }
     def act(self,inputs,role=""):
@@ -320,6 +332,11 @@ def resolved_v4_ppo_config(agent) -> dict[str, Any]:
             "learning_epochs":cfg.learning_epochs,"mini_batches":cfg.mini_batches,"rollouts":cfg.rollouts}
 
 
+def _bind_reward_contract(model, reward_contract_id: str):
+    model.reward_contract_id = reward_contract_id
+    return model
+
+
 def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False, learning_rate:float=3e-4):
     """Canonical RlGamesPPO with a version-selected observation/model pair."""
     cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches,learning_rate=learning_rate)
@@ -357,6 +374,12 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
         )
     else:
         raise ValueError(f"unsupported policy version: {policy_version!r}")
+    reward_contract_id = getattr(
+        getattr(adapter, "runtime", None),
+        "reward_contract_id",
+        REWARD_CONTRACT_ID,
+    )
+    _bind_reward_contract(model, reward_contract_id)
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
                      observation_space=adapter.observation_space,state_space=None,
                      action_space=adapter.action_space,device=device,cfg=cfg)
@@ -388,36 +411,39 @@ def model_for_version(
     *,
     device: str | torch.device,
     separate_critic: bool = False,
+    reward_contract_id: str = REWARD_CONTRACT_ID,
 ):
     if policy_version == "v4":
-        return AutonomyActorCritic(
+        model = AutonomyActorCritic(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )
-    if policy_version == "v5":
-        return AutonomyActorCriticV5(
+    elif policy_version == "v5":
+        model = AutonomyActorCriticV5(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )
-    if policy_version == "v5.25":
-        return AutonomyActorCriticV525(
+    elif policy_version == "v5.25":
+        model = AutonomyActorCriticV525(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )
-    if policy_version == "v5.5":
-        return AutonomyActorCriticV55(
+    elif policy_version == "v5.5":
+        model = AutonomyActorCriticV55(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )
-    if policy_version == "v5.75":
-        return AutonomyActorCriticV575(
+    elif policy_version == "v5.75":
+        model = AutonomyActorCriticV575(
             observation_space, action_space, device=device,
             separate_critic=separate_critic
         )
-    if policy_version == "v6":
-        return AutonomyActorCriticV6(
+    elif policy_version == "v6":
+        model = AutonomyActorCriticV6(
             observation_space, action_space, device=device
         )
-    raise ValueError(f"unsupported policy version: {policy_version!r}")
+    else:
+        raise ValueError(f"unsupported policy version: {policy_version!r}")
+    return _bind_reward_contract(model, reward_contract_id)
 
 def seed_everything(seed:int): random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)

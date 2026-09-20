@@ -31,7 +31,10 @@ from sim.manorl.autonomy_contracts import (
     OBSERVATION_CONTRACT_ID_V55,
     OBSERVATION_CONTRACT_ID_V575,
     OBSERVATION_CONTRACT_ID_V6,
+    REWARD_CONTRACT_BY_VERSION,
     REWARD_CONTRACT_ID,
+    V4_REWARD_TERM_NAMES,
+    resolve_reward_contract,
     validate_v4_checkpoint_metadata,
     validate_v5_checkpoint_metadata,
     validate_v525_checkpoint_metadata,
@@ -56,8 +59,8 @@ from sim.manorl.autonomy_training import (
     v4_ppo_config,
     validate_learning_rate,
 )
-from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES
 from sim.manorl.autonomy_v4 import REWARD_MOTION_RADIUS, reward_parameters
+from sim.manorl.autonomy_reward_v10 import reward_parameters_v10
 from sim.manorl.assets import DEXSTREAM_ROOT
 from sim.manorl.trajectory_package import load_trajectory_package
 
@@ -113,48 +116,50 @@ def _policy_version(args) -> str:
     return getattr(args, "policy_version", None) or "v4"
 
 
-def _contracts(policy_version: str) -> dict[str, str]:
+def _contracts(
+    policy_version: str, reward_contract: str = REWARD_CONTRACT_ID,
+) -> dict[str, str]:
     if policy_version == "v4":
         return {
             "checkpoint": CHECKPOINT_FORMAT,
             "observation": OBSERVATION_CONTRACT_ID,
             "action": ACTION_CONTRACT_ID,
-            "reward": REWARD_CONTRACT_ID,
+            "reward": reward_contract,
         }
     if policy_version == "v5":
         return {
             "checkpoint": CHECKPOINT_FORMAT_V5,
             "observation": OBSERVATION_CONTRACT_ID_V5,
             "action": ACTION_CONTRACT_ID,
-            "reward": REWARD_CONTRACT_ID,
+            "reward": reward_contract,
         }
     if policy_version == "v5.25":
         return {
             "checkpoint": CHECKPOINT_FORMAT_V525,
             "observation": OBSERVATION_CONTRACT_ID_V525,
             "action": ACTION_CONTRACT_ID,
-            "reward": REWARD_CONTRACT_ID,
+            "reward": reward_contract,
         }
     if policy_version == "v5.5":
         return {
             "checkpoint": CHECKPOINT_FORMAT_V55,
             "observation": OBSERVATION_CONTRACT_ID_V55,
             "action": ACTION_CONTRACT_ID,
-            "reward": REWARD_CONTRACT_ID,
+            "reward": reward_contract,
         }
     if policy_version == "v5.75":
         return {
             "checkpoint": CHECKPOINT_FORMAT_V575,
             "observation": OBSERVATION_CONTRACT_ID_V575,
             "action": ACTION_CONTRACT_ID,
-            "reward": REWARD_CONTRACT_ID,
+            "reward": reward_contract,
         }
     if policy_version == "v6":
         return {
             "checkpoint": CHECKPOINT_FORMAT_V6,
             "observation": OBSERVATION_CONTRACT_ID_V6,
             "action": ACTION_CONTRACT_ID,
-            "reward": REWARD_CONTRACT_ID,
+            "reward": reward_contract,
         }
     raise ValueError(f"unsupported policy version: {policy_version!r}")
 
@@ -163,7 +168,29 @@ def _adapter(args, trajectory, *, full_horizon_diagnostic=False, policy_version=
     return BatchedAutonomyAdapter(trajectory, num_envs=args.num_envs, device=args.device, seed=args.seed,
         persistent_ccd_workspace=args.persistentworkspace, ccd_contacts_per_world=args.ccd_contacts_per_world,
         full_horizon_diagnostic=full_horizon_diagnostic,
-        policy_version=policy_version or _policy_version(args))
+        policy_version=policy_version or _policy_version(args),
+        reward_version=args.reward_version)
+
+
+def _reward_parameters(adapter):
+    reward_version = getattr(adapter.runtime, "reward_version", "v4")
+    if reward_version == "v10":
+        return reward_parameters_v10()
+    return reward_parameters(
+        getattr(adapter.runtime.cache, "object_radius", REWARD_MOTION_RADIUS)
+    )
+
+
+def _adapter_policy_version(adapter):
+    return getattr(adapter, "policy_version", "v4")
+
+
+def _adapter_reward_contract_id(adapter):
+    return getattr(
+        getattr(adapter, "runtime", None),
+        "reward_contract_id",
+        REWARD_CONTRACT_ID,
+    )
 
 
 def _provenance(catalog, split, adapter):
@@ -175,12 +202,15 @@ def _provenance(catalog, split, adapter):
     result = {"source_commit": _git_revision(ROOT), "asset_pin": _git_revision(DEXSTREAM_ROOT),
             "package_digest": catalog.package_digest, "manifest_sha256": catalog.manifest_sha256,
             "catalog_digest": catalog.catalog_digest, "identity_split": split,
-            "contracts": _contracts(adapter.policy_version),
+            "contracts": _contracts(
+                _adapter_policy_version(adapter),
+                _adapter_reward_contract_id(adapter),
+            ),
             "clock": dict(adapter.runtime.clock_metadata), "identity": adapter.runtime.trajectory.identity.identity,
             "cache_hash_recorded_not_compared": adapter.runtime.cache.content_hash,
             "contact_capacity": adapter.runtime.warp_contact_capacity,
             "constraint_capacity_per_world": adapter.runtime.warp_constraint_capacity,
-            "reward_parameters": reward_parameters(getattr(adapter.runtime.cache, "object_radius", REWARD_MOTION_RADIUS))}
+            "reward_parameters": _reward_parameters(adapter)}
     if getattr(adapter.runtime, "trajectories", None) is not None:
         result["reference_assignment"] = {"mode": "fixed_round_robin_same_reference_reset",
             "identities": [t.identity.identity for t in adapter.runtime.trajectories]}
@@ -228,15 +258,30 @@ def _resolved_telemetry_config(adapter, args):
                         "reference_count": len(adapter.runtime.trajectories) if getattr(adapter.runtime, "trajectories", None) is not None else 1,
                         "reference_assignment_mode": "all_package_references" if getattr(args, "all_references", False) else ("train_split_round_robin" if getattr(args, "all_train_references", False) else "single_reference")},
             "architecture": actor_critic_architecture_for_version(
-                adapter.policy_version, separate_critic=args.separate_critic
+                _adapter_policy_version(adapter),
+                separate_critic=args.separate_critic,
             ),
             "thresholds": {"loaded_force_N": .02, "airborne_clearance_m": .005,
                            "severe_reason_bits": {"reference_complete": 1, "deviation": 2, "fallen": 4, "nonfinite": 8}},
-            "reward_parameters": reward_parameters(getattr(adapter.runtime.cache, "object_radius", REWARD_MOTION_RADIUS))}
+            "reward": {
+                "version": getattr(adapter.runtime, "reward_version", "v4"),
+                "contract": getattr(
+                    adapter.runtime,
+                    "reward_contract_id",
+                    REWARD_CONTRACT_ID,
+                ),
+                "terms": list(
+                    getattr(adapter, "reward_names", V4_REWARD_TERM_NAMES)
+                ),
+            },
+            "reward_parameters": _reward_parameters(adapter)}
 
 
 def train(args):
     validate_learning_rate(args.learning_rate)
+    args.reward_version, _ = resolve_reward_contract(
+        args.reward_version or "v4"
+    )
     anchor = teacher_anchor_metadata(args.teacher_anchor_beta, args.teacher_anchor_passes)
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args); split = identity_split(catalog, seed=args.split_seed)
     identity_index = next(i for i, row in enumerate(catalog.trajectories) if row is trajectory)
@@ -248,7 +293,7 @@ def train(args):
         raise ValueError("total-transitions must equal updates * rollouts * num-envs")
     references = _training_references(args, catalog, trajectory, split)
     adapter = _adapter(args, references); provenance = _provenance(catalog, split, adapter)
-    if adapter.policy_version == "v6":
+    if _adapter_policy_version(adapter) == "v6":
         # Independent actor/critic fusion towers are part of the v6 model
         # contract rather than an optional PPO setting.
         args.separate_critic = True
@@ -275,7 +320,8 @@ def train(args):
         _, transfer_mode = inspect_v4_warmstart(
             warmstart_checkpoint,
             actor_critic_architecture_for_version(
-                adapter.policy_version, separate_critic=args.separate_critic
+                _adapter_policy_version(adapter),
+                separate_critic=args.separate_critic,
             ),
             expected_provenance=warmstart_expected,
             target_contracts={
@@ -292,11 +338,12 @@ def train(args):
         # Metadata and every model/Adam tensor are validated before creating a
         # W&B writer. A CPU model suffices; no B*rollout memory is allocated here.
         validation_model = model_for_version(
-            adapter.policy_version,
+            _adapter_policy_version(adapter),
             adapter.observation_space,
             adapter.action_space,
             device="cpu",
             separate_critic=args.separate_critic,
+            reward_contract_id=_adapter_reward_contract_id(adapter),
         )
         validation_optimizer = torch.optim.Adam(validation_model.parameters(), lr=args.learning_rate)
         payload = inspect_v4_resume(args.resume_checkpoint, validation_model, validation_optimizer,
@@ -384,12 +431,26 @@ def _checkpoint_policy_version(payload) -> str:
     raise ValueError("unsupported checkpoint format")
 
 
+def _checkpoint_reward_version(payload) -> str:
+    reward_version, _ = resolve_reward_contract(payload.get("reward_contract"))
+    return reward_version
+
+
 def evaluate(args):
     if args.num_envs != 1: raise ValueError("frozen v4 evaluate requires --num-envs 1")
     if args.steps is not None and args.steps <= 0: raise ValueError("--steps must be positive")
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     policy_version = _checkpoint_policy_version(payload)
+    checkpoint_reward_version = _checkpoint_reward_version(payload)
+    if (
+        args.reward_version is not None
+        and args.reward_version != checkpoint_reward_version
+    ):
+        raise ValueError(
+            "requested reward version does not match checkpoint"
+        )
+    args.reward_version = checkpoint_reward_version
     if args.policy_version is not None and args.policy_version != policy_version:
         raise ValueError(
             f"requested policy version {args.policy_version!r} does not match "
@@ -408,6 +469,7 @@ def evaluate(args):
         adapter.action_space,
         device=adapter.device,
         separate_critic=separate_critic,
+        reward_contract_id=adapter.runtime.reward_contract_id,
     )
     # Identity is a conditioning input, not a compatibility contract: a frozen
     # checkpoint must accept references it was not trained on.  Compatibility
@@ -431,7 +493,10 @@ def evaluate(args):
         physical, contact, diagnostics, cache = adapter.runtime.last_physical, adapter.runtime.last_contact, adapter.runtime.last_reward, adapter.runtime.cache
         reason_code = int(np.asarray(adapter.runtime.last_reason)[0])
         clearance = float(np.asarray(physical.object_bottom)[0] - cache.table_height)
-        terms = [float(np.asarray(getattr(diagnostics, name))[0]) for name in ("object_position", "object_rotation", "object_velocity", "hand_relative", "fingers", "geometry", "action", "survival", "severe")]
+        terms = [
+            float(np.asarray(getattr(diagnostics, name))[0])
+            for name in adapter.reward_names
+        ]
         runtime_valid = bool(np.asarray(info["valid"])[0])
         finite = bool(np.isfinite(reward_value) and np.isfinite(clearance)
                       and np.isfinite(np.asarray(physical.object_origin)[0]).all()
@@ -455,18 +520,23 @@ def evaluate(args):
               "diagnostic_boundary": "natural termination recorded; continued after it" if args.full_horizon_diagnostic else "stopped at natural first termination",
               "natural_prefix_steps": len(trace) if natural_first is None else natural_first["policy_step"] + 1,
               "provenance": {"checkpoint": payload["provenance"], "evaluation_cache_hash_recorded_not_compared": adapter.runtime.cache.content_hash,
-                             "evaluation_reward_parameters": reward_parameters(getattr(adapter.runtime.cache, "object_radius", REWARD_MOTION_RADIUS))}, "trace": trace}
+                             "evaluation_reward_parameters": _reward_parameters(adapter)}, "trace": trace}
     trace_path = Path(args.trace); trace_path.parent.mkdir(parents=True, exist_ok=True); trace_path.write_text(json.dumps(result, indent=2, default=_jsonable) + "\n")
     artifact_path = Path(args.artifact) if args.artifact else trace_path.with_suffix(".npz")
-    artifact_path.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(artifact_path, **{name: np.asarray(values) for name, values in artifact.items()}, reward_term_names=np.asarray(REWARD_NAMES), natural_prefix_steps=np.asarray(result["natural_prefix_steps"]), full_horizon_diagnostic=np.asarray(args.full_horizon_diagnostic))
+    artifact_path.parent.mkdir(parents=True, exist_ok=True); np.savez_compressed(artifact_path, **{name: np.asarray(values) for name, values in artifact.items()}, reward_term_names=np.asarray(adapter.reward_names), natural_prefix_steps=np.asarray(result["natural_prefix_steps"]), full_horizon_diagnostic=np.asarray(args.full_horizon_diagnostic))
     print(json.dumps({"trace": str(trace_path), "artifact": str(artifact_path), "steps": len(trace), "return": total, "natural_first_termination": natural_first}), flush=True)
 
 
 def inspect(args):
+    args.reward_version, _ = resolve_reward_contract(
+        args.reward_version or "v4"
+    )
     catalog, trajectory = _catalog_and_trajectory(args); adapter = _adapter(args, trajectory)
     print(json.dumps({"identity": trajectory.identity.identity, "policy_version": adapter.policy_version,
         "raw_observation": list(adapter.reset()[0].shape),
         "cache_hash": adapter.runtime.cache.content_hash, "clock": adapter.runtime.clock_metadata,
+        "reward_version": adapter.runtime.reward_version,
+        "reward_contract": adapter.runtime.reward_contract_id,
         "workspace": args.persistentworkspace, "ccd_contacts_per_world": args.ccd_contacts_per_world,
         "constraint_capacity_per_world": adapter.runtime.warp_constraint_capacity}))
 
@@ -480,6 +550,12 @@ def build_parser():
         "--policy-version",
         choices=("v4", "v5", "v5.25", "v5.5", "v5.75", "v6"),
                         help="observation/model ABI; defaults to v4 for compatibility")
+    common.add_argument(
+        "--reward-version",
+        choices=tuple(REWARD_CONTRACT_BY_VERSION),
+        default=None,
+        help="reward semantics; defaults to v4 for checkpoint compatibility",
+    )
     common.add_argument("--split-seed", type=int, default=0); common.add_argument("--num-envs", type=int, default=4096)
     common.add_argument("--persistentworkspace", action=argparse.BooleanOptionalAction, default=True)
     common.add_argument("--ccd-contacts-per-world", type=int, default=121, help="cube2 B4096 CCD scratch; runtime keeps njmax=512/world")
