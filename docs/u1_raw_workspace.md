@@ -128,3 +128,14 @@ contact, and fingertip contact alone does not establish that the handle is insid
 the grasp. The rim check uses a collision-mesh upper-rim proxy, not liquid
 simulation. These two local runs do not establish cross-GPU robustness or H200
 parity. No existing Lance was changed or republished by this candidate repair.
+
+## Keep interactive repair visible
+
+During local interactive repair, the visible native simulator must show the
+current action and candidate target. Switch the live workspace when changing the
+object or target; do not leave a water-pitcher window on screen while silently
+iterating a bowl in headless jobs. Save a complete pre-edit checkpoint, show the
+local edit and physical continuation, then restore for comparison. Headless fresh
+replays remain useful for validation, but identify them separately. Check the
+workspace PID and publication freshness: a leftover `state.json` can still say
+`running=true` after its process has exited.

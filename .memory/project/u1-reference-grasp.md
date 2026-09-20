@@ -24,3 +24,9 @@ Canonical recipe and evidence: `docs/u1_raw_workspace.md`, section
 - Row82 has two successful fresh local frozen-target replays and exact recipe
   reconstruction. Other parents, augmentation, H200 parity and Lance publication
   remain separate work; existing1923-row data are unchanged.
+
+Interactive repair visibility: keep the live GUI synchronized with the current
+object/target and demonstrate edits from a complete checkpoint. User explicitly
+rejected leaving the visible simulator stale while conducting headless trials.
+Headless native verification is separate, not a substitute for that interaction.
+Check PID liveness and state freshness before calling a workspace live.
