@@ -148,10 +148,15 @@ def main():
     p.add_argument('--checkpoint',type=int,default=1030)
     a=p.parse_args()
     if a.dataset is not None:
-        if a.version is None or a.row is None or a.asset_manifest is None or a.bundle or a.target:
-            p.error('raw mode requires --version --row --asset-manifest and excludes --bundle/--target')
+        if a.version is None or a.row is None or a.asset_manifest is None or a.bundle:
+            p.error('raw mode requires --version --row --asset-manifest, excludes --bundle, and permits an optional --target')
         from tools.u1_raw_source import load_raw_source
-        inp,model,target,teacher,provenance=load_raw_source(a.dataset,a.version,a.row,a.asset_root,a.asset_manifest)
+        inp,model,source_target,teacher,provenance=load_raw_source(a.dataset,a.version,a.row,a.asset_root,a.asset_manifest)
+        target=source_target if a.target is None else np.load(a.target,allow_pickle=False)
+        if target.shape != source_target.shape or not np.isfinite(target).all():
+            p.error('raw --target must be a finite array matching the source [frames,28] shape')
+        provenance=dict(provenance,target_role=('recorded_right_qpos_grounded' if a.target is None else 'explicit_U1_direct_target'),
+                        target_path=None if a.target is None else str(a.target.resolve()))
         a.label=f'raw v{a.version} row{a.row}'
     else:
         if not a.bundle or not a.target or a.version is not None or a.row is not None or a.asset_manifest:
