@@ -26,7 +26,18 @@ from sim.manorl.autonomy_contracts import (
 )
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
 from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES, V4TelemetryAccumulator
-from sim.manorl.autonomy_training import build_batched_runtime, resolved_v4_ppo_config, validate_learning_rate, teacher_anchor_metadata
+from sim.manorl.autonomy_curriculum import (
+    CurriculumConfig,
+    CurriculumController,
+    curriculum_parameters,
+)
+from sim.manorl.autonomy_training import (
+    build_batched_runtime,
+    resolved_v4_ppo_config,
+    teacher_anchor_metadata,
+    validate_learning_rate,
+    validate_target_kl,
+)
 
 
 def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
@@ -264,8 +275,16 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
         config.setdefault("teacher_anchor_beta", 0.0)
         config.setdefault("teacher_anchor_passes", 2)
         config.setdefault("teacher_anchor", teacher_anchor_metadata())
+        if config.get("teacher_anchor_final_beta") is None:
+            config["teacher_anchor_final_beta"] = config["teacher_anchor_beta"]
+        curriculum = config.get("curriculum", False)
+        if curriculum is False:
+            config["curriculum"] = {"enabled": False}
+        config.setdefault("target_kl", None)
         if config["teacher_anchor_beta"] == 0:
-            config["teacher_anchor"] = teacher_anchor_metadata(0., config["teacher_anchor_passes"])
+            config["teacher_anchor"] = teacher_anchor_metadata(
+                0., config["teacher_anchor_passes"]
+            )
         return config
     source_config = with_anchor_defaults(source_config)
     expected_config = with_anchor_defaults(expected_config)
@@ -410,11 +429,30 @@ def _apply_teacher_anchor(model, optimizer, pairs, *, beta: float, passes: int, 
             "teacher_anchor/optimizer_steps": float(passes * mini_batches)}
 
 
+def teacher_anchor_beta_for_update(
+    start_beta: float, final_beta: float, *, update: int, updates: int
+) -> float:
+    """Linear inclusive schedule: update 1 uses start, final update uses final."""
+    if type(update) is not int or type(updates) is not int or not 1 <= update <= updates:
+        raise ValueError("teacher anchor update must be within the total update budget")
+    if updates == 1:
+        return float(final_beta)
+    if update == 1:
+        return float(start_beta)
+    if update == updates:
+        return float(final_beta)
+    alpha = (update - 1) / (updates - 1)
+    return float(start_beta + alpha * (final_beta - start_beta))
+
+
 def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epochs: int,
                     mini_batches: int, learning_rate: float = 3e-4, checkpoint: str | Path | None = None,
                     checkpoint_interval: int = 16, config: dict[str, Any] | None = None,
                     provenance: dict[str, Any] | None = None, separate_critic: bool = False,
                     teacher_anchor_beta: float = 0.0, teacher_anchor_passes: int = 2,
+                    teacher_anchor_final_beta: float | None = None,
+                    target_kl: float | None = None,
+                    curriculum_config: CurriculumConfig | None = None,
                     warmstart: str | Path | None = None,
                     resume_checkpoint: str | Path | None = None,
                     expected_warmstart_provenance: dict[str, Any] | None = None,
@@ -426,15 +464,31 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     observation; true terminations do not bootstrap and reset afterward.
     """
     validate_learning_rate(learning_rate)
-    anchor = teacher_anchor_metadata(teacher_anchor_beta, teacher_anchor_passes)
+    validate_target_kl(target_kl)
+    resolved_anchor_final = (
+        teacher_anchor_beta
+        if teacher_anchor_final_beta is None
+        else teacher_anchor_final_beta
+    )
+    anchor = teacher_anchor_metadata(
+        teacher_anchor_beta,
+        teacher_anchor_passes,
+        final_beta=teacher_anchor_final_beta,
+        schedule_updates=updates if teacher_anchor_final_beta is not None else None,
+    )
     if warmstart is not None and resume_checkpoint is not None:
         raise ValueError("warmstart and resume-checkpoint are mutually exclusive")
     if min(updates, rollouts, learning_epochs, mini_batches) < 1:
         raise ValueError("updates, rollouts, learning_epochs and mini_batches must be positive")
     if rollouts * adapter.num_envs < mini_batches:
         raise ValueError("mini-batches cannot exceed rollout transitions")
+    if curriculum_config is not None and not getattr(
+        getattr(adapter, "runtime", None), "curriculum_enabled", False
+    ):
+        raise ValueError("curriculum controller requires curriculum reset sampling")
     model, agent = build_batched_runtime(adapter, rollouts=rollouts, learning_epochs=learning_epochs,
-                                         mini_batches=mini_batches, device=str(adapter.device), separate_critic=separate_critic, learning_rate=learning_rate)
+                                         mini_batches=mini_batches, device=str(adapter.device), separate_critic=separate_critic, learning_rate=learning_rate,
+                                         target_kl=target_kl)
     config, provenance = dict(config or {}), dict(provenance or {})
     actual_device = "gpu" if adapter.device.type == "cuda" else "cpu"
     if resume_checkpoint is not None and config.get("device", actual_device) != actual_device:
@@ -452,9 +506,16 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                "mode": "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"}
     config.update({"updates": updates, "rollouts": rollouts, "num_envs": adapter.num_envs,
                    "learning_epochs": learning_epochs, "mini_batches": mini_batches,
-                   "learning_rate": learning_rate, "separate_critic": bool(separate_critic)})
+                   "learning_rate": learning_rate, "target_kl": target_kl,
+                   "separate_critic": bool(separate_critic)})
     config.update({"teacher_anchor_beta": teacher_anchor_beta, "teacher_anchor_passes": teacher_anchor_passes,
+                   "teacher_anchor_final_beta": resolved_anchor_final,
                    "teacher_anchor": anchor})
+    config["curriculum"] = (
+        curriculum_parameters(curriculum_config)
+        if curriculum_config is not None
+        else {"enabled": False}
+    )
     provenance["teacher_anchor"] = anchor
     config.setdefault("seed", 0)
     config.setdefault("device", "gpu" if adapter.device.type == "cuda" else "cpu")
@@ -487,14 +548,25 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     )
     if resumed is not None:
         restore_v4_rng(resumed, device=adapter.device)
+    curriculum = (
+        CurriculumController(curriculum_config)
+        if curriculum_config is not None
+        else None
+    )
     for update in range(policy_steps // rollouts + 1, updates + 1):
+        current_anchor_beta = teacher_anchor_beta_for_update(
+            teacher_anchor_beta,
+            resolved_anchor_final,
+            update=update,
+            updates=updates,
+        )
         _sync(adapter.device); sampled = time.perf_counter()
         reward_sum = torch.zeros((), device=adapter.device); done_count = torch.zeros((), device=adapter.device)
         valid = torch.ones((), dtype=torch.bool, device=adapter.device)
         completed_return = torch.zeros((), device=adapter.device); completed_length = torch.zeros((), device=adapter.device)
         completed_count = torch.zeros((), device=adapter.device)
         summaries = {name: torch.zeros((), device=adapter.device) for name in ("object_motion", "contact_force", "path")}
-        teacher_pairs = [] if teacher_anchor_beta > 0 else None
+        teacher_pairs = [] if current_anchor_beta > 0 else None
         for _ in range(rollouts):
             with torch.no_grad():
                 if teacher_pairs is not None:
@@ -526,7 +598,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         anchor_metrics = {}
         if teacher_pairs is not None:
             anchor_metrics = _apply_teacher_anchor(model, agent.optimizer, teacher_pairs,
-                beta=teacher_anchor_beta, passes=teacher_anchor_passes, mini_batches=mini_batches)
+                beta=current_anchor_beta, passes=teacher_anchor_passes, mini_batches=mini_batches)
             del teacher_pairs
         _sync(adapter.device)
         optimize_seconds = time.perf_counter() - optimized
@@ -551,9 +623,18 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                     if isinstance(value, (bool, float, int))})
         row.update(anchor_metrics)
         row.update({"config/teacher_anchor_beta": teacher_anchor_beta,
+                    "config/teacher_anchor_current_beta": current_anchor_beta,
+                    "config/teacher_anchor_final_beta": resolved_anchor_final,
                     "config/teacher_anchor_passes": teacher_anchor_passes,
                     "config/teacher_squeeze_rad": anchor["squeeze_rad"],
                     "config/teacher_contact_intent_threshold": anchor["contact_intent_threshold"]})
+        if curriculum is not None:
+            stage_used = curriculum.stage
+            curriculum_metrics = curriculum.observe(row)
+            row["curriculum/stage_used"] = float(stage_used)
+            row.update(curriculum_metrics)
+            if curriculum.stage != stage_used:
+                adapter.configure_curriculum_stage(curriculum.stage)
         row.update(latest_ppo_metrics(agent)); _assert_finite(model=model, agent=agent, row=row, checkpoint=None if checkpoint is None else Path(checkpoint), update=update)
         rows.append(row)
         if checkpoint is not None and update % checkpoint_interval == 0:

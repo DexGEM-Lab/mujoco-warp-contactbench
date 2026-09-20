@@ -18,6 +18,15 @@ from skrl.agents.torch.ppo.ppo import compute_gae
 RL_GAMES_BOUNDS_SOFT_BOUND = 1.1
 
 
+def target_kl_exceeded(exact_kl: float, target_kl: float | None) -> bool:
+    """Return whether an explicitly enabled PPO KL guard should stop."""
+    if target_kl is None:
+        return False
+    if target_kl <= 0:
+        raise ValueError("target KL must be positive")
+    return exact_kl > target_kl
+
+
 def rl_games_policy_kl(
     current_mean: torch.Tensor,
     current_std: torch.Tensor,
@@ -242,6 +251,9 @@ class RlGamesPPO(PPO):
         scheduler_increases = 0
         scheduler_decreases = 0
         completed_minibatches = 0
+        target_kl = getattr(self, "target_kl", None)
+        early_stopped = False
+        early_stop_kl = 0.0
 
         for epoch in range(self.cfg.learning_epochs):
             samples = self.memory.sample(
@@ -292,6 +304,15 @@ class RlGamesPPO(PPO):
                         approximate_kl = (
                             (torch.exp(log_ratio) - 1.0) - log_ratio
                         ).mean()
+                    if config.torch.is_distributed:
+                        torch.distributed.all_reduce(
+                            exact_kl, op=torch.distributed.ReduceOp.SUM
+                        )
+                        exact_kl /= config.torch.world_size
+                    if target_kl_exceeded(exact_kl.item(), target_kl):
+                        early_stopped = True
+                        early_stop_kl = exact_kl.item()
+                        break
 
                     entropy_loss: torch.Tensor | float
                     if self.cfg.entropy_loss_scale:
@@ -345,11 +366,6 @@ class RlGamesPPO(PPO):
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
-                if config.torch.is_distributed:
-                    torch.distributed.all_reduce(
-                        exact_kl, op=torch.distributed.ReduceOp.SUM
-                    )
-                    exact_kl /= config.torch.world_size
                 previous_lr = float(self.optimizer.param_groups[0]["lr"])
                 if self.scheduler is not None:
                     self.scheduler.step(exact_kl.item())
@@ -377,9 +393,17 @@ class RlGamesPPO(PPO):
                 exact_kls.append(exact_kl.item())
                 approximate_kls.append(approximate_kl.item())
                 completed_minibatches += 1
+            if early_stopped:
+                break
 
-        if completed_minibatches != self.cfg.learning_epochs * self.cfg.mini_batches:
+        if (
+            target_kl is None
+            and completed_minibatches
+            != self.cfg.learning_epochs * self.cfg.mini_batches
+        ):
             raise RuntimeError("PPO did not complete every configured minibatch")
+        if completed_minibatches < 1:
+            raise RuntimeError("PPO target-KL stopped before any optimizer minibatch")
         denominator = float(completed_minibatches)
         self.track_data("Loss / Policy loss", policy_loss_total / denominator)
         self.track_data("Loss / Value loss", value_loss_total / denominator)
@@ -403,3 +427,7 @@ class RlGamesPPO(PPO):
         self.track_data("Learning / Scheduler increases", scheduler_increases)
         self.track_data("Learning / Scheduler decreases", scheduler_decreases)
         self.track_data("Learning / Completed minibatches", completed_minibatches)
+        self.track_data("Learning / Target KL enabled", float(target_kl is not None))
+        self.track_data("Learning / Target KL", 0.0 if target_kl is None else target_kl)
+        self.track_data("Learning / KL early stop", float(early_stopped))
+        self.track_data("Learning / KL early stop value", early_stop_kl)

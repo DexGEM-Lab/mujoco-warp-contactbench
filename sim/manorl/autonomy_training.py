@@ -59,17 +59,38 @@ TEACHER_SQUEEZE_RAD = 0.2
 TEACHER_CONTACT_INTENT_THRESHOLD = 0.5
 
 
-def teacher_anchor_metadata(beta: float = 0.0, passes: int = 2) -> dict[str, Any]:
+def teacher_anchor_metadata(
+    beta: float = 0.0,
+    passes: int = 2,
+    *,
+    final_beta: float | None = None,
+    schedule_updates: int | None = None,
+) -> dict[str, Any]:
     """Training supervision only; these targets never enter physical execution."""
     if not math.isfinite(beta) or beta < 0:
         raise ValueError("teacher-anchor-beta must be finite and nonnegative")
-    if beta > 0 and (type(passes) is not int or passes < 1):
+    resolved_final = beta if final_beta is None else final_beta
+    if not math.isfinite(resolved_final) or resolved_final < 0:
+        raise ValueError("teacher-anchor-final-beta must be finite and nonnegative")
+    if max(beta, resolved_final) > 0 and (type(passes) is not int or passes < 1):
         raise ValueError("teacher-anchor-passes must be a positive integer when beta > 0")
-    return {"beta": beta, "passes": passes, "squeeze_rad": TEACHER_SQUEEZE_RAD,
+    if schedule_updates is not None and (
+        type(schedule_updates) is not int or schedule_updates < 1
+    ):
+        raise ValueError("teacher-anchor schedule updates must be a positive integer")
+    result = {"beta": beta, "passes": passes, "squeeze_rad": TEACHER_SQUEEZE_RAD,
             "gate": "current_reference_max_proximity_confidence_valid",
             "contact_intent_threshold": TEACHER_CONTACT_INTENT_THRESHOLD,
             "gate_comparison": ">=", "flex_joints": list(TEACHER_FLEX_JOINTS),
             "role": "training_supervision_only"}
+    if final_beta is not None:
+        result["schedule"] = {
+            "type": "linear_by_update",
+            "start_beta": beta,
+            "final_beta": resolved_final,
+            "updates": schedule_updates,
+        }
+    return result
 
 
 def identity_split(catalog: TrajectoryCatalog, *, seed:int=0)->dict[str,Any]:
@@ -121,6 +142,8 @@ class BatchedAutonomyAdapter:
             "contract":self.runtime.observation_contract,
         }
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
+    def configure_curriculum_stage(self, stage: int) -> None:
+        self.runtime.configure_curriculum_stage(stage)
     def teacher_actions(self, squeeze_rad=TEACHER_SQUEEZE_RAD, contact_intent_threshold=TEACHER_CONTACT_INTENT_THRESHOLD):
         """Analytical chase labels at the current pre-action state, never controls."""
         runtime = self.runtime; jp = runtime.jp
@@ -157,6 +180,9 @@ class BatchedAutonomyAdapter:
         target_object=jp.asarray(cache.object_origin)[index]; target_palm=jp.asarray(cache.palm_origin)[index]
         target_raw=jp.asarray(cache.q_raw)[index]; target_feasible=jp.asarray(cache.q_feasible)[index]
         paired_norm=jp.linalg.norm(contact.paired_force_on_object,axis=-1); loaded=paired_norm>.02
+        opposing_loaded=(jp.any(loaded[:,:13],axis=-1)&jp.any(loaded[:,13:],axis=-1))
+        positive_lift=opposing_loaded&(physical.object_v_com[:,2]>.005)
+        stable_airborne=opposing_loaded&(physical.object_bottom>cache.table_height+.005)
         if raw_actions.shape != (self.num_envs, ACTION_DIM):
             raise ValueError("v4 raw actions must be (num_envs,28)")
         # Raw Normal samples stay in Torch: jp.asarray(CUDA Tensor) would take
@@ -185,6 +211,9 @@ class BatchedAutonomyAdapter:
             # produces exactly one scalar slip speed per hand region.
             "tangential_slip":jp.linalg.norm(contact.tangential_slip,axis=-1),
             "airborne":physical.object_bottom > cache.table_height+.005,
+            "opposing_loaded":getattr(reward,"opposition_loaded",opposing_loaded),
+            "positive_lift":getattr(reward,"positive_lift",positive_lift),
+            "stable_airborne":getattr(reward,"stable_airborne",stable_airborne),
             "action_raw_abs_sum":raw_action_abs.sum(dim=-1), "action_raw_abs_max":raw_action_abs.amax(dim=-1),
             "action_raw_abs_denominator":torch.full((self.num_envs,), ACTION_DIM, dtype=raw_actions.dtype, device=raw_actions.device),
             "action_executed_norm":torch.linalg.vector_norm(executed,dim=-1),
@@ -304,9 +333,17 @@ def validate_learning_rate(learning_rate: float) -> None:
     if not math.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("learning-rate must be finite and positive")
 
-def v4_ppo_config(*, rollouts:int, learning_epochs:int, mini_batches:int, learning_rate:float=3e-4) -> dict[str, Any]:
+def validate_target_kl(target_kl: float | None) -> None:
+    if target_kl is not None and (
+        not math.isfinite(target_kl) or target_kl <= 0
+    ):
+        raise ValueError("target-kl must be finite and positive when enabled")
+
+
+def v4_ppo_config(*, rollouts:int, learning_epochs:int, mini_batches:int, learning_rate:float=3e-4, target_kl:float|None=None) -> dict[str, Any]:
     """Installed PPO defaults plus the unchanged v4 overrides, in one source."""
     validate_learning_rate(learning_rate)
+    validate_target_kl(target_kl)
     defaults=PPO_CFG()
     return {"rollouts":rollouts,"learning_epochs":learning_epochs,"mini_batches":mini_batches,
             "discount_factor":defaults.discount_factor,"gae_lambda":defaults.gae_lambda,
@@ -329,7 +366,8 @@ def resolved_v4_ppo_config(agent) -> dict[str, Any]:
             "grad_norm_clip":cfg.grad_norm_clip,"optimizer":type(agent.optimizer).__name__,
             "adam_betas":list(optimizer["betas"]),"adam_eps":optimizer["eps"],
             "learning_starts":cfg.learning_starts,"time_limit_bootstrap":cfg.time_limit_bootstrap,
-            "learning_epochs":cfg.learning_epochs,"mini_batches":cfg.mini_batches,"rollouts":cfg.rollouts}
+            "learning_epochs":cfg.learning_epochs,"mini_batches":cfg.mini_batches,"rollouts":cfg.rollouts,
+            "target_kl":getattr(agent,"target_kl",None)}
 
 
 def _bind_reward_contract(model, reward_contract_id: str):
@@ -337,9 +375,9 @@ def _bind_reward_contract(model, reward_contract_id: str):
     return model
 
 
-def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False, learning_rate:float=3e-4):
+def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_batches:int, device:str, separate_critic:bool=False, learning_rate:float=3e-4, target_kl:float|None=None):
     """Canonical RlGamesPPO with a version-selected observation/model pair."""
-    cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches,learning_rate=learning_rate)
+    cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches,learning_rate=learning_rate,target_kl=target_kl)
     memory=RandomMemory(memory_size=rollouts,num_envs=adapter.num_envs,device=device)
     policy_version=getattr(adapter,"policy_version","v4")
     if policy_version == "v4":
@@ -383,6 +421,7 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
                      observation_space=adapter.observation_space,state_space=None,
                      action_space=adapter.action_space,device=device,cfg=cfg)
+    agent.target_kl = target_kl
     agent.init(); return model,agent
 
 

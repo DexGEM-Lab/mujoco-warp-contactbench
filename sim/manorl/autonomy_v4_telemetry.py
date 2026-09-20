@@ -107,6 +107,14 @@ class V4TelemetryAccumulator:
         self._sum("active_slip", sample["tangential_slip"] * active); self._sum("active_slip_denominator", active)
         airborne = sample["airborne"].to(torch.float32); any_loaded = loaded.amax(1)
         self._sum("airborne", airborne); self._sum("loaded_airborne", airborne * any_loaded)
+        for name in ("opposing_loaded", "positive_lift", "stable_airborne"):
+            value = sample.get(
+                name,
+                torch.zeros((self.num_envs,), device=self.device),
+            ).to(torch.float32)
+            if value.shape != (self.num_envs,):
+                raise ValueError(f"{name} must be a per-environment scalar")
+            self._sum(name, value)
         self._sum("action_raw_abs", sample["action_raw_abs_sum"]); self._sum("action_raw_abs_denominator", sample["action_raw_abs_denominator"])
         self._max("action_raw_abs", sample["action_raw_abs_max"]); self._sum("action_executed_norm", sample["action_executed_norm"])
         self._sum("action_clipped", sample["action_clipped"]); self._count("action_denominator", sample["action_denominator"])
@@ -147,6 +155,9 @@ class V4TelemetryAccumulator:
         active = self.sums["active_slip_denominator"]
         if bool(active > 0): out["physics/contact_active_tangential_slip_mean"] = _scalar(self.sums["active_slip"] / active)
         out["physics/airborne_5mm_fraction"] = _scalar(self.sums["airborne"] / self.frames); out["physics/loaded_airborne_fraction"] = _scalar(self.sums["loaded_airborne"] / self.frames)
+        out["curriculum/opposing_loaded_fraction"] = _scalar(self.sums["opposing_loaded"] / self.frames)
+        out["curriculum/positive_lift_fraction"] = _scalar(self.sums["positive_lift"] / self.frames)
+        out["curriculum/stable_airborne_fraction"] = _scalar(self.sums["stable_airborne"] / self.frames)
         out["action/raw_clip_fraction"] = _scalar(self.sums["action_clipped"] / self.counts["action_denominator"]); out["action/antiwindup_fraction"] = _scalar(self.sums["antiwindup_active"] / self.frames)
         completed_count = _scalar(self.completed_count); out["episodes/completed_count"] = completed_count
         if completed_count:

@@ -22,6 +22,7 @@ from sim.manorl.autonomy_contracts import (
     RAW_OBSERVATION_DIM_V6,
     V4_REWARD_TERM_NAMES,
     V10_REWARD_TERM_NAMES,
+    V101_REWARD_TERM_NAMES,
     resolve_reward_contract,
 )
 from sim.manorl.autonomy_v4 import (
@@ -31,7 +32,19 @@ from sim.manorl.autonomy_v4 import (
     build_raw_observation_v6, compute_reward as compute_reward_v4,
     DOF_RATE, ANTIWINDUP_ERROR,
 )
-from sim.manorl.autonomy_reward_v10 import compute_reward as compute_reward_v10
+from sim.manorl.autonomy_reward_v10 import (
+    DEFAULT_REWARD_V10_CONFIG,
+    RewardV10Config,
+    compute_reward as compute_reward_v10,
+)
+from sim.manorl.autonomy_reward_v101 import (
+    DEFAULT_REWARD_V101_CONFIG,
+    RewardV101Config,
+    compute_reward as compute_reward_v101,
+    initial_reward_state,
+    reset_reward_state,
+)
+from sim.manorl.autonomy_curriculum import reference_stage_candidates
 
 V4_OBSERVATION_DIM = OBSERVATION_DIM
 V5_OBSERVATION_DIM = RAW_OBSERVATION_DIM_V5
@@ -72,7 +85,9 @@ class BatchedAutonomyRuntime:
         self, trajectory, *, num_envs: int = 1, device: str = "cpu", seed: int = 0,
         persistent_ccd_workspace: bool = False, ccd_contacts_per_world: int | None = None,
         full_horizon_diagnostic: bool = False, observation_version: str = "v4",
-        reward_version: str = "v4", **_: Any,
+        reward_version: str = "v4", reward_severe_penalty: float | None = None,
+        curriculum_reset: bool = False,
+        **_: Any,
     ):
         if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
             raise ValueError("num_envs must be a positive integer")
@@ -92,6 +107,8 @@ class BatchedAutonomyRuntime:
             raise ValueError("ccd_contacts_per_world must be a positive integer")
         if not isinstance(full_horizon_diagnostic, bool):
             raise TypeError("full_horizon_diagnostic must be bool")
+        if not isinstance(curriculum_reset, bool):
+            raise TypeError("curriculum_reset must be bool")
         observation_builders = {
             "v4": (build_raw_observation, V4_OBSERVATION_DIM, AUTONOMY_VERSION),
             "v5": (
@@ -129,13 +146,36 @@ class BatchedAutonomyRuntime:
         self.reward_version, self.reward_contract_id = resolve_reward_contract(
             reward_version
         )
-        reward_builders = {
-            "v4": (compute_reward_v4, V4_REWARD_TERM_NAMES),
-            "v10": (compute_reward_v10, V10_REWARD_TERM_NAMES),
-        }
-        self._compute_reward, self.reward_names = reward_builders[
-            self.reward_version
-        ]
+        if reward_severe_penalty is not None and (
+            not np.isfinite(reward_severe_penalty) or reward_severe_penalty >= 0
+        ):
+            raise ValueError("reward-severe-penalty must be finite and negative")
+        self.reward_config = None
+        if self.reward_version == "v4":
+            if reward_severe_penalty is not None:
+                raise ValueError("reward-severe-penalty is supported only by v10/v10.1")
+            self._compute_reward = compute_reward_v4
+            self.reward_names = V4_REWARD_TERM_NAMES
+        elif self.reward_version == "v10":
+            severe = (
+                DEFAULT_REWARD_V10_CONFIG.severe_penalty
+                if reward_severe_penalty is None
+                else float(reward_severe_penalty)
+            )
+            self.reward_config = RewardV10Config(severe_penalty=severe)
+            self._compute_reward = compute_reward_v10
+            self.reward_names = V10_REWARD_TERM_NAMES
+        else:
+            severe = (
+                DEFAULT_REWARD_V101_CONFIG.base.severe_penalty
+                if reward_severe_penalty is None
+                else float(reward_severe_penalty)
+            )
+            self.reward_config = RewardV101Config(
+                base=RewardV10Config(severe_penalty=severe)
+            )
+            self._compute_reward = compute_reward_v101
+            self.reward_names = V101_REWARD_TERM_NAMES
 
         import jax
         import jax.numpy as j
@@ -171,10 +211,16 @@ class BatchedAutonomyRuntime:
             raise RuntimeError("v4 supports only pyramidal contact cone")
         self.cache = compile_reference_cache_v4(trajectory, device=device, object_type=self.object_type)
         first_cache = self.cache
+        reference_caches = [first_cache]
         self.env_ref = None
         if trajectories is not None:
-            self.cache = ReferenceBankV4([first_cache] + [compile_reference_cache_v4(t, device=device, object_type=self.object_type) for t in trajectories[1:]], device=self.device)
+            reference_caches.extend(
+                compile_reference_cache_v4(t, device=device, object_type=self.object_type)
+                for t in trajectories[1:]
+            )
+            self.cache = ReferenceBankV4(reference_caches, device=self.device)
             self.env_ref = j.arange(num_envs, dtype=j.int32) % len(trajectories)
+        self._reference_caches = tuple(reference_caches)
         self.length = len(first_cache.q_feasible) if trajectories is None else self.cache.max_length
         self.lengths = j.full((num_envs,), self.length, j.int32) if self.env_ref is None else self.cache.lengths[self.env_ref]
         self.lower = np.asarray(self.model.jnt_range[:28, 0], np.float32)
@@ -221,17 +267,9 @@ class BatchedAutonomyRuntime:
             self._reset_qpos = self._reset_qpos.at[:, address:address+3].set(self.cache.object_origin[self.env_ref, 0])
             self._reset_qpos = self._reset_qpos.at[:, address+3:address+7].set(self.cache.object_quat_xyzw[self.env_ref, 0][:, (3,0,1,2)])
             self._reset_ctrl = self._reset_ctrl.at[:, :28].set(self.cache.q_feasible[self.env_ref, 0])
-        self._masked_reset_data_fn = _build_masked_reset_data_fn(
-            jax=jax, jp=j, reset_qpos=self._reset_qpos, reset_ctrl=self._reset_ctrl
-        )
-        self._reset_and_forward = jax.jit(
-            lambda data, mask: jax.lax.cond(
-                j.any(mask),
-                lambda value: self._forward_batch(self._masked_reset_data_fn(value, mask)),
-                lambda value: value,
-                data,
-            )
-        )
+        self.curriculum_enabled = curriculum_reset
+        self.curriculum_stage = 1 if curriculum_reset else 0
+        self._install_reset_templates(self.curriculum_stage)
         self.data = self._forward_batch(jax.vmap(lambda _: self.initial)(j.arange(num_envs)).replace(qpos=self._reset_qpos, ctrl=self._reset_ctrl))
         self.persistent_ccd_workspace = None
         self.persistent_solver_workspace = None
@@ -252,12 +290,68 @@ class BatchedAutonomyRuntime:
                 nv=int(self.model.nv), nv_pad=int(impl.nv_pad),
                 njmax=int(self.data._impl.njmax), solver_type=int(self.model.opt.solver),
             )
-        self.indices = j.zeros((num_envs,), j.int32)
+        self.indices = self._reset_indices
         self.pending_reset = j.zeros((num_envs,), bool)
         self.previous_command = self._reset_ctrl[:, :28]
+        self.reward_state = initial_reward_state(num_envs, jp=j)
         self.object_vertices = j.asarray(object_collision_vertices(self.object_type), j.float32)
         self._transition_fn = jax.jit(self._transition)
         self._refresh(False, j.zeros((num_envs, 28), j.float32))
+
+    def _install_reset_templates(self, stage: int) -> None:
+        from sim.manorl.environment import _build_masked_reset_data_fn
+
+        if stage not in ({1, 2, 3} if self.curriculum_enabled else {0}):
+            raise ValueError("curriculum stage must be 1, 2 or 3")
+        reset_indices = np.zeros((self.num_envs,), dtype=np.int32)
+        qpos = np.broadcast_to(
+            np.asarray(self.initial.qpos), (self.num_envs, self.initial.qpos.shape[0])
+        ).copy()
+        ctrl = np.broadcast_to(
+            np.asarray(self.initial.ctrl), (self.num_envs, self.initial.ctrl.shape[0])
+        ).copy()
+        address = self.producer.object_qpos_address
+        for env in range(self.num_envs):
+            cache = self._reference_caches[env % len(self._reference_caches)]
+            frame = 0
+            if stage:
+                candidates = reference_stage_candidates(cache)[stage]
+                frame = candidates[env % len(candidates)]
+            reset_indices[env] = frame
+            qpos[env, :28] = cache.q_feasible[frame]
+            qpos[env, address:address + 3] = cache.object_origin[frame]
+            qpos[env, address + 3:address + 7] = cache.object_quat_xyzw[
+                frame, (3, 0, 1, 2)
+            ]
+            ctrl[env, :28] = cache.q_feasible[frame]
+        self._reset_indices = self.jp.asarray(reset_indices)
+        self._reset_qpos = self.jp.asarray(qpos)
+        self._reset_ctrl = self.jp.asarray(ctrl)
+        self._masked_reset_data_fn = _build_masked_reset_data_fn(
+            jax=self.jax,
+            jp=self.jp,
+            reset_qpos=self._reset_qpos,
+            reset_ctrl=self._reset_ctrl,
+        )
+        self._reset_and_forward = self.jax.jit(
+            lambda data, mask: self.jax.lax.cond(
+                self.jp.any(mask),
+                lambda value: self._forward_batch(
+                    self._masked_reset_data_fn(value, mask)
+                ),
+                lambda value: value,
+                data,
+            )
+        )
+
+    def configure_curriculum_stage(self, stage: int) -> None:
+        if not self.curriculum_enabled:
+            raise RuntimeError("curriculum reset sampling is disabled")
+        if stage == self.curriculum_stage:
+            return
+        self.curriculum_stage = stage
+        self._install_reset_templates(stage)
+        self.reset()
 
     def _physical(self, data, previous):
         from sim.manorl.autonomy_v4 import quat_rotate
@@ -309,7 +403,7 @@ class BatchedAutonomyRuntime:
         )
         return physical, contact, raw, raw
 
-    def _transition(self, data, index, previous, action, execute):
+    def _transition(self, data, index, previous, reward_state, action, execute):
         import jax
         physical = self._physical(data, previous)
 
@@ -334,23 +428,66 @@ class BatchedAutonomyRuntime:
         next_data = jax.lax.cond(execute, advance, lambda value: value, stepped)
         next_index = index + self.jp.asarray(execute, self.jp.int32)
         physical_next, contact, raw, observation = self._observe(next_data, next_index, command)
-        reward = self._compute_reward(
-            physical_next,
-            contact,
-            self.cache,
-            next_index,
-            self.jp.clip(action, -1, 1),
-            self.env_ref,
-        )
+        if self.reward_version == "v10.1":
+            reward, next_reward_state = self._compute_reward(
+                physical_next,
+                contact,
+                self.cache,
+                next_index,
+                self.jp.clip(action, -1, 1),
+                reward_state,
+                self.env_ref,
+                config=self.reward_config,
+            )
+            next_reward_state = self.jax.tree.map(
+                lambda candidate, current: self.jp.where(
+                    execute, candidate, current
+                ),
+                next_reward_state,
+                reward_state,
+            )
+        else:
+            reward = self._compute_reward(
+                physical_next,
+                contact,
+                self.cache,
+                next_index,
+                self.jp.clip(action, -1, 1),
+                self.env_ref,
+                **(
+                    {"config": self.reward_config}
+                    if self.reward_version == "v10"
+                    else {}
+                ),
+            )
+            next_reward_state = reward_state
         valid = physical_next.valid & contact.valid & reward.valid
-        return next_data, next_index, command, raw, observation, reward, valid, contact, physical_next
+        return (
+            next_data,
+            next_index,
+            command,
+            next_reward_state,
+            raw,
+            observation,
+            reward,
+            valid,
+            contact,
+            physical_next,
+        )
 
     def _refresh(self, execute, action):
         (
-            self.data, self.indices, self.previous_command, self.raw_observation,
-            self.observation, self.last_reward, self.last_valid, self.last_contact,
-            self.last_physical,
-        ) = self._transition_fn(self.data, self.indices, self.previous_command, action, execute)
+            self.data, self.indices, self.previous_command, self.reward_state,
+            self.raw_observation, self.observation, self.last_reward,
+            self.last_valid, self.last_contact, self.last_physical,
+        ) = self._transition_fn(
+            self.data,
+            self.indices,
+            self.previous_command,
+            self.reward_state,
+            action,
+            execute,
+        )
         # Diagnostic rollouts may continue past a normal terminal, but this
         # option is runtime-only and is intentionally absent from training.
         self.last_done = self.jp.zeros_like(self.last_reward.done) if self.full_horizon_diagnostic else self.last_reward.done
@@ -364,9 +501,10 @@ class BatchedAutonomyRuntime:
         if mask.shape != (self.num_envs,):
             raise ValueError("reset mask must be (num_envs,)")
         self.data = self._reset_and_forward(self.data, mask)
-        self.indices = self.jp.where(mask, 0, self.indices)
+        self.indices = self.jp.where(mask, self._reset_indices, self.indices)
         initial_command = self._reset_ctrl[:, :28]
         self.previous_command = self.jp.where(mask[:, None], initial_command, self.previous_command)
+        self.reward_state = reset_reward_state(self.reward_state, mask, jp=self.jp)
         # Every raw cache row is rebuilt from one forwarded state; no stale
         # global contact arena is exposed after a subset reset.
         self._refresh(False, self.jp.zeros((self.num_envs, 28), self.jp.float32))

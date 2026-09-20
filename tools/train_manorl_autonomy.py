@@ -61,6 +61,8 @@ from sim.manorl.autonomy_training import (
 )
 from sim.manorl.autonomy_v4 import REWARD_MOTION_RADIUS, reward_parameters
 from sim.manorl.autonomy_reward_v10 import reward_parameters_v10
+from sim.manorl.autonomy_reward_v101 import reward_parameters_v101
+from sim.manorl.autonomy_curriculum import CurriculumConfig, curriculum_parameters
 from sim.manorl.assets import DEXSTREAM_ROOT
 from sim.manorl.trajectory_package import load_trajectory_package
 
@@ -169,13 +171,17 @@ def _adapter(args, trajectory, *, full_horizon_diagnostic=False, policy_version=
         persistent_ccd_workspace=args.persistentworkspace, ccd_contacts_per_world=args.ccd_contacts_per_world,
         full_horizon_diagnostic=full_horizon_diagnostic,
         policy_version=policy_version or _policy_version(args),
-        reward_version=args.reward_version)
+        reward_version=args.reward_version,
+        reward_severe_penalty=getattr(args, "severe_penalty", None),
+        curriculum_reset=getattr(args, "curriculum", False))
 
 
 def _reward_parameters(adapter):
     reward_version = getattr(adapter.runtime, "reward_version", "v4")
     if reward_version == "v10":
-        return reward_parameters_v10()
+        return reward_parameters_v10(adapter.runtime.reward_config)
+    if reward_version == "v10.1":
+        return reward_parameters_v101(adapter.runtime.reward_config)
     return reward_parameters(
         getattr(adapter.runtime.cache, "object_radius", REWARD_MOTION_RADIUS)
     )
@@ -211,6 +217,8 @@ def _provenance(catalog, split, adapter):
             "contact_capacity": adapter.runtime.warp_contact_capacity,
             "constraint_capacity_per_world": adapter.runtime.warp_constraint_capacity,
             "reward_parameters": _reward_parameters(adapter)}
+    if getattr(adapter.runtime, "curriculum_enabled", False):
+        result["curriculum"] = curriculum_parameters(CurriculumConfig())
     if getattr(adapter.runtime, "trajectories", None) is not None:
         result["reference_assignment"] = {"mode": "fixed_round_robin_same_reference_reset",
             "identities": [t.identity.identity for t in adapter.runtime.trajectories]}
@@ -245,13 +253,24 @@ def _wandb(args, metadata):
 def _resolved_telemetry_config(adapter, args):
     # Keep W&B metadata tied to the same default-plus-override factory passed
     # into the PPO builder. Per-update config/* fields record the live agent.
-    ppo = v4_ppo_config(rollouts=args.rollouts, learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, learning_rate=args.learning_rate)
+    ppo = v4_ppo_config(
+        rollouts=args.rollouts,
+        learning_epochs=args.learning_epochs,
+        mini_batches=args.mini_batches,
+        learning_rate=args.learning_rate,
+        target_kl=args.target_kl,
+    )
     ppo.update({"normalize_observations": False, "normalize_values": False,
                 # skrl 2.1.0 compute_gae standardizes advantages unconditionally.
                 "normalize_advantages": True, "optimizer": "Adam",
                 "adam_betas": [0.9, 0.999], "adam_eps": 1e-8,
                 "rollout_batch_samples": args.rollouts * adapter.num_envs})
-    return {"teacher_anchor": teacher_anchor_metadata(args.teacher_anchor_beta, args.teacher_anchor_passes), "ppo": ppo,
+    return {"teacher_anchor": teacher_anchor_metadata(
+                args.teacher_anchor_beta,
+                args.teacher_anchor_passes,
+                final_beta=args.teacher_anchor_final_beta,
+                schedule_updates=args.updates if args.teacher_anchor_final_beta is not None else None,
+            ), "ppo": ppo,
             "runtime": {"num_envs": adapter.num_envs, "raw_observation_dim": adapter.observation_dim,
                         "action_dim": adapter.action_dim, "control_timestep": adapter.runtime.cache.control_timestep,
                         "physics_substeps": 4,
@@ -282,7 +301,12 @@ def train(args):
     args.reward_version, _ = resolve_reward_contract(
         args.reward_version or "v4"
     )
-    anchor = teacher_anchor_metadata(args.teacher_anchor_beta, args.teacher_anchor_passes)
+    anchor = teacher_anchor_metadata(
+        args.teacher_anchor_beta,
+        args.teacher_anchor_passes,
+        final_beta=args.teacher_anchor_final_beta,
+        schedule_updates=args.updates if args.teacher_anchor_final_beta is not None else None,
+    )
     seed_everything(args.seed); catalog, trajectory = _catalog_and_trajectory(args); split = identity_split(catalog, seed=args.split_seed)
     identity_index = next(i for i, row in enumerate(catalog.trajectories) if row is trajectory)
     if args.all_references and args.all_train_references:
@@ -303,6 +327,16 @@ def train(args):
     warmstart_checkpoint = str(Path(args.warmstart).expanduser().resolve()) if args.warmstart else None
     mode = "ppo_warmstart" if warmstart_checkpoint else "ppo_from_scratch"
     config = {key: value for key, value in vars(args).items() if key not in {"fn", "wandb"}}
+    config["teacher_anchor_final_beta"] = (
+        args.teacher_anchor_beta
+        if args.teacher_anchor_final_beta is None
+        else args.teacher_anchor_final_beta
+    )
+    config["curriculum"] = (
+        curriculum_parameters(CurriculumConfig())
+        if args.curriculum
+        else {"enabled": False}
+    )
     config["teacher_anchor"] = anchor; provenance["teacher_anchor"] = anchor
     warmstart_expected = {
         key: provenance[key] for key in (
@@ -380,6 +414,9 @@ def train(args):
             checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
             separate_critic=args.separate_critic, warmstart=warmstart_checkpoint,
             teacher_anchor_beta=args.teacher_anchor_beta, teacher_anchor_passes=args.teacher_anchor_passes,
+            teacher_anchor_final_beta=args.teacher_anchor_final_beta,
+            target_kl=args.target_kl,
+            curriculum_config=CurriculumConfig() if args.curriculum else None,
             resume_checkpoint=args.resume_checkpoint,
             expected_warmstart_provenance=warmstart_expected, on_update=publish)
     except BaseException:
@@ -436,6 +473,23 @@ def _checkpoint_reward_version(payload) -> str:
     return reward_version
 
 
+def _checkpoint_severe_penalty(payload, reward_version: str) -> float | None:
+    parameters = payload.get("provenance", {}).get("reward_parameters", {})
+    if reward_version == "v10":
+        value = parameters.get("coefficients", {}).get("severe_penalty")
+    elif reward_version == "v10.1":
+        value = (
+            parameters.get("base", {})
+            .get("coefficients", {})
+            .get("severe_penalty")
+        )
+    else:
+        return None
+    if not isinstance(value, (int, float)) or not np.isfinite(value) or value >= 0:
+        raise ValueError("checkpoint reward severe penalty is missing or invalid")
+    return float(value)
+
+
 def evaluate(args):
     if args.num_envs != 1: raise ValueError("frozen v4 evaluate requires --num-envs 1")
     if args.steps is not None and args.steps <= 0: raise ValueError("--steps must be positive")
@@ -451,6 +505,15 @@ def evaluate(args):
             "requested reward version does not match checkpoint"
         )
     args.reward_version = checkpoint_reward_version
+    checkpoint_severe_penalty = _checkpoint_severe_penalty(
+        payload, checkpoint_reward_version
+    )
+    if (
+        args.severe_penalty is not None
+        and args.severe_penalty != checkpoint_severe_penalty
+    ):
+        raise ValueError("requested severe penalty does not match checkpoint")
+    args.severe_penalty = checkpoint_severe_penalty
     if args.policy_version is not None and args.policy_version != policy_version:
         raise ValueError(
             f"requested policy version {args.policy_version!r} does not match "
@@ -556,6 +619,12 @@ def build_parser():
         default=None,
         help="reward semantics; defaults to v4 for checkpoint compatibility",
     )
+    common.add_argument(
+        "--severe-penalty",
+        type=float,
+        default=None,
+        help="explicit negative severe-failure value for reward v10/v10.1",
+    )
     common.add_argument("--split-seed", type=int, default=0); common.add_argument("--num-envs", type=int, default=4096)
     common.add_argument("--persistentworkspace", action=argparse.BooleanOptionalAction, default=True)
     common.add_argument("--ccd-contacts-per-world", type=int, default=121, help="cube2 B4096 CCD scratch; runtime keeps njmax=512/world")
@@ -563,10 +632,13 @@ def build_parser():
     train_parser.add_argument("--learning-epochs", type=int, default=4); train_parser.add_argument("--mini-batches", type=int, default=16); train_parser.add_argument("--total-transitions", type=int)
     train_parser.add_argument("--checkpoint", default="outputs/manorl/contact_conditioned_autonomy/cube2_02_v4_ppo.pt"); train_parser.add_argument("--checkpoint-interval", type=int, default=16)
     train_parser.add_argument("--learning-rate", type=float, default=3e-4, help="finite positive PPO Adam learning rate (default: 3e-4)")
+    train_parser.add_argument("--target-kl", type=float, default=None, help="optional exact-KL early-stop threshold for each PPO update")
+    train_parser.add_argument("--curriculum", action="store_true", help="enable telemetry-gated three-stage key-frame reset curriculum")
     reference_group = train_parser.add_mutually_exclusive_group()
     reference_group.add_argument("--all-train-references", action="store_true", help="fixed round-robin assignment over all 40 deterministic TRAIN identities")
     reference_group.add_argument("--all-references", action="store_true", help="fixed round-robin assignment over every reference in the supplied package")
     train_parser.add_argument("--teacher-anchor-beta", type=float, default=0.0, help="optional post-PPO teacher-action MSE weight; training supervision only")
+    train_parser.add_argument("--teacher-anchor-final-beta", type=float, default=None, help="optional final teacher-anchor weight for a linear update schedule")
     train_parser.add_argument("--teacher-anchor-passes", type=int, default=2, help="full teacher-label minibatch passes after each PPO update")
     initialization = train_parser.add_mutually_exclusive_group()
     initialization.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
