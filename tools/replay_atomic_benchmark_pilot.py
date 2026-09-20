@@ -87,7 +87,6 @@ def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any
     sys.modules["scripts.eval.manorl_native_physics"] = native
     sys.modules["scripts.eval.mano_visual_contract"] = visual
     sys.modules["scripts.eval.scene_asset_catalog"] = scene_catalog
-    import scripts.eval.mjx_skin.manorl_mjx_warp_runtime as runtime_module
     from scripts.eval.mjx_skin import consumer_visual
 
     from sim.manorl import assets, contracts
@@ -164,8 +163,7 @@ def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any
         }
 
     consumer_visual._inject_consumer_skin = existing_skin
-    sys.modules["scripts.eval.manorl_mjx_warp_runtime"] = runtime_module
-    return native, visual, runtime_module, assets, contracts
+    return native, visual, assets, contracts
 
 
 def selected_rows(dataset: Any, selection: Mapping[str, object], action: str) -> list[tuple[int, dict]]:
@@ -229,6 +227,7 @@ def decode_row(row_index: int, row: dict) -> dict[str, Any]:
         "frames": frames,
         "names": names,
         "target": target,
+        "movement": dict(moves[0]),
         "hand_recorded": hand_qpos,
         "commands": commands,
         "object_recorded_pos": object_pos,
@@ -263,71 +262,116 @@ def make_scene(
 
 def run_physics(
     *,
+    dataset_path: Path,
+    dataset_version: int,
     decoded: list[dict[str, Any]],
-    native: Any,
-    runtime_module: Any,
     assets: Any,
     contracts: Any,
-    gpu: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    names = decoded[0]["names"]
+    from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
+    from sim.manorl.observations import SOURCE_ALIGNED_COMPATIBILITY
+    from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch
+    from sim.manorl.contracts import TrajectoryIdentity
+
+    row_names = decoded[0]["names"]
     target = decoded[0]["target"]
-    if any(item["names"] != names or item["target"] != target for item in decoded):
+    if any(item["names"] != row_names or item["target"] != target for item in decoded):
         raise ValueError("one action batch must have one physical object topology and target")
-    mujoco, model = assets.compile_unified_model(
-        contracts.ServoConfig(),
-        object_types=names,
-        object_object_collisions=True,
-        visual_meshes=False,
+    trajectories = []
+    for item in decoded:
+        names = item["names"]
+        active_index = names.index(target)
+        movement = item["movement"]
+        identity = TrajectoryIdentity(
+            str(dataset_path),
+            dataset_version,
+            item["row_index"],
+            active_index,
+            item["uuid"],
+            item["uuid"],
+            item["provenance"]["source_identity"],
+            0,
+            item["frames"],
+            int(movement["start_frame"]),
+            int(movement["end_frame"]),
+        )
+        scene_pos = np.stack([item["object_recorded_pos"][name][0] for name in names])
+        scene_quat_xyzw = np.stack(
+            [item["object_recorded_quat_wxyz"][name][0][[1, 2, 3, 0]] for name in names]
+        )
+        active_pos = item["object_recorded_pos"][target]
+        active_quat_xyzw = item["object_recorded_quat_wxyz"][target][:, [1, 2, 3, 0]]
+        trajectories.append(
+            ReferenceTrajectory(
+                identity,
+                1,
+                np.arange(item["frames"], dtype=np.int64),
+                np.arange(item["frames"], dtype=np.float64) / CONTROL_HZ,
+                item["hand_recorded"],
+                active_pos,
+                active_pos,
+                active_quat_xyzw,
+                0.0,
+                reference_fps=CONTROL_HZ,
+                control_fps=CONTROL_HZ,
+                movement_start_step=int(movement["start_frame"]),
+                movement_end_step=int(movement["end_frame"]),
+                scene_object_types=names,
+                scene_object_initial_pos=scene_pos,
+                scene_object_initial_quat_xyzw=scene_quat_xyzw,
+            )
+        )
+    config = EnvironmentConfig(
+        num_envs=len(decoded),
+        device="gpu",
         hand_side="right",
-        physics_timestep=1 / PHYSICS_HZ,
-    )
-    target_address = int(model.joint(target + "_free").qposadr[0])
-    joint_ids = [
-        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        for name in contracts.JOINT_NAMES_28
-    ]
-    if any(joint_id < 0 for joint_id in joint_ids):
-        raise ValueError("compiled Cheyingtong hand joint ABI is incomplete")
-    hand_addresses = np.asarray(
-        [int(model.jnt_qposadr[joint_id]) for joint_id in joint_ids], dtype=np.int64
-    )
-    addresses = {name: int(model.joint(name + "_free").qposadr[0]) for name in names}
-    runtime = runtime_module.MjxWarpManoRuntime(
-        model=model,
-        object_name=target,
-        object_qpos_address=target_address,
-        hand_qpos_addresses=hand_addresses,
-        object_types=names,
-        object_qpos_addresses=addresses,
-        device_index=gpu,
-        num_worlds=len(decoded),
+        reference_fps=CONTROL_HZ,
+        control_fps=CONTROL_HZ,
+        post_padding=0,
+        compatibility=SOURCE_ALIGNED_COMPATIBILITY,
+        residual_enabled=False,
+        expected_contact_mode="five_fingertips",
         contact_capacity=1024 * len(decoded),
         constraint_capacity=4096,
-        ccd_iterations=16,
-        ccd_contacts_per_world=256,
+        unified_object_batch=True,
+        warp_ccd_iterations=16,
+        warp_ccd_contacts_per_world=256,
+        warp_persistent_ccd_workspace=True,
+        device_resident_controls=True,
+        capture_transition_diagnostics=True,
+        point_sampling_backend="numpy_per_env",
     )
-    extras = []
-    for item in decoded:
-        extras.append(
-            {
-                name: {
-                    "position": item["object_recorded_pos"][name][0],
-                    "quaternion_wxyz": item["object_recorded_quat_wxyz"][name][0],
-                }
-                for name in names
-                if name != target
-            }
-        )
-    snapshots = runtime.reset_batch(
-        hand_qpos=np.stack([item["hand_recorded"][0] for item in decoded]),
-        object_position=np.stack([item["object_recorded_pos"][target][0] for item in decoded]),
-        object_quaternion_wxyz=np.stack(
-            [item["object_recorded_quat_wxyz"][target][0] for item in decoded]
-        ),
-        ctrl=np.stack([item["commands"][0] for item in decoded]),
-        extra_objects=extras,
+    environment = MujocoManoEnvironment(TrajectoryBatch(tuple(trajectories)), config)
+    model = environment.model
+    names = tuple(environment._unified_object_types)
+    if not np.isclose(model.opt.timestep, 1 / PHYSICS_HZ, rtol=0, atol=1e-15):
+        raise RuntimeError(f"compiled physics timestep {model.opt.timestep} is not 1/480")
+    if config.physics_substeps_per_control != 4:
+        raise RuntimeError("120 Hz replay did not resolve four physics substeps")
+    addresses = {name: int(model.joint(name + "_free").qposadr[0]) for name in names}
+    qpos = np.asarray(environment.data.qpos).copy()
+    qvel = np.zeros_like(np.asarray(environment.data.qvel))
+    ctrl = np.zeros_like(np.asarray(environment.data.ctrl))
+    for world, item in enumerate(decoded):
+        qpos[world, :28] = item["hand_recorded"][0]
+        ctrl[world] = item["commands"][0]
+        for name in item["names"]:
+            address = addresses[name]
+            qpos[world, address : address + 3] = item["object_recorded_pos"][name][0]
+            qpos[world, address + 3 : address + 7] = item[
+                "object_recorded_quat_wxyz"
+            ][name][0]
+    device = lambda value: environment.jax.device_put(
+        environment.jp.asarray(value), environment.device
     )
+    environment.data = environment.data.replace(
+        qpos=device(qpos),
+        qvel=device(qvel),
+        ctrl=device(ctrl),
+        qacc_warmstart=device(np.zeros_like(qvel)),
+        time=device(np.zeros(len(decoded))),
+    )
+    environment.data = environment._forward_fn(environment.data)
     outputs = []
     for item in decoded:
         frames = item["frames"]
@@ -336,28 +380,28 @@ def run_physics(
                 **item,
                 "hand_simulated": np.empty((frames, 28), dtype=np.float32),
                 "object_simulated_pos": {
-                    name: np.empty((frames, 3), dtype=np.float32) for name in names
+                    name: np.empty((frames, 3), dtype=np.float32) for name in item["names"]
                 },
                 "object_simulated_quat_wxyz": {
-                    name: np.empty((frames, 4), dtype=np.float32) for name in names
+                    name: np.empty((frames, 4), dtype=np.float32) for name in item["names"]
                 },
                 "sim_time": np.arange(frames, dtype=np.float64) / CONTROL_HZ,
             }
         )
     max_frames = max(item["frames"] for item in decoded)
-    frame_counts = np.asarray([item["frames"] for item in decoded], dtype=np.int64)
     for frame in range(max_frames):
+        state = environment.producer.materialize_state(environment.data)
         for world, output in enumerate(outputs):
             if frame >= output["frames"]:
                 continue
-            snapshot = snapshots[world]
-            output["hand_simulated"][frame] = snapshot.hand_qpos
-            for name, address in addresses.items():
-                output["object_simulated_pos"][name][frame] = snapshot.qpos[
-                    address : address + 3
+            output["hand_simulated"][frame] = state.qpos[world, :28]
+            for name in output["names"]:
+                address = addresses[name]
+                output["object_simulated_pos"][name][frame] = state.qpos[
+                    world, address : address + 3
                 ]
-                output["object_simulated_quat_wxyz"][name][frame] = snapshot.qpos[
-                    address + 3 : address + 7
+                output["object_simulated_quat_wxyz"][name][frame] = state.qpos[
+                    world, address + 3 : address + 7
                 ]
         if frame == max_frames - 1:
             break
@@ -367,7 +411,10 @@ def run_physics(
                 for item in decoded
             ]
         )
-        snapshots = runtime.step_batch(next_targets)
+        environment.data = environment.data.replace(ctrl=device(next_targets))
+        for _ in range(config.physics_substeps_per_control):
+            environment.data = environment._step_fn(environment.data)
+            environment._check_warp_ccd_overflow()
         if frame and frame % 120 == 0:
             print("PHYSICS_FRAME", frame, "/", max_frames - 1, flush=True)
     metrics = []
@@ -379,7 +426,7 @@ def run_physics(
         )
         hand_error = np.abs(output["hand_simulated"] - output["hand_recorded"])
         context = {}
-        for name in names:
+        for name in output["names"]:
             error = np.linalg.norm(
                 output["object_simulated_pos"][name]
                 - output["object_recorded_pos"][name],
@@ -411,8 +458,24 @@ def run_physics(
         output["metrics"] = metric
         metrics.append(metric)
     return outputs, {
-        "runtime": runtime.backend_provenance,
-        "capacity": runtime.statistics(),
+        "runtime": {
+            "physics_backend": "mjx_warp",
+            "right_hand_only": True,
+            "control_hz": CONTROL_HZ,
+            "physics_hz": PHYSICS_HZ,
+            "physics_substeps_per_control": config.physics_substeps_per_control,
+            "num_worlds": len(decoded),
+            "object_types": list(names),
+            "target_object": target,
+            "object_object_collisions": True,
+            "ccd_iterations": 16,
+            "ccd_contacts_per_world": 256,
+            "environment_clock": {
+                "control_timestep": config.control_timestep,
+                "physics_timestep": config.physics_timestep,
+            },
+        },
+        "ccd": environment.warp_ccd_metadata(),
         "rows": metrics,
     }
 
@@ -620,14 +683,13 @@ def main() -> None:
     layouts = {entry["uuid"]: entry for entry in layout_payload["trajectories"]}
     if any(item["uuid"] not in layouts for item in decoded):
         raise ValueError("one or more selected rows have no scene layout")
-    native, visual, runtime_module, assets, contracts = configure_modules(args)
+    native, visual, assets, contracts = configure_modules(args)
     outputs, physics_report = run_physics(
+        dataset_path=args.dataset,
+        dataset_version=args.dataset_version,
         decoded=decoded,
-        native=native,
-        runtime_module=runtime_module,
         assets=assets,
         contracts=contracts,
-        gpu=args.gpu,
     )
     provenance = {
         "dataset": str(args.dataset),
