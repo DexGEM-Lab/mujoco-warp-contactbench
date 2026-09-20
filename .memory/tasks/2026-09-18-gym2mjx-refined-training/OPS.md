@@ -25,3 +25,18 @@
 - 2026-09-20T00:10:00+08:00 — User replaced the four-run Mayo campaign with an all-object allocation objective. Stopped Server1 seeds42/43/44 after each had atomically written checkpoint1100; checkpoint SHA256 seed42 `52d10e381e9ecb423e29992ea97d9f4240f81ff7eb0c193807094cc775f409c0`, seed43 `7e017a3ee112466da5977735ae0781c662daa341cd0814dcdbc4d73e621419e9`, seed44 `f83e206800e87e2bdbb0a54d1593f11f52b4982dc51aea9011fbd560796238d7`. Removed owned tmux/processes. Server2 seed45 had already completed checkpoint200/EXIT0; its tmux was removed. Server1 GPUs0/2/3 and both Server2 GPUs are free; Server1 GPU1 remains foreign user `fyr` and was untouched.
 - 2026-09-20T00:20:00+08:00 — All-object audit:21 objects,122 pairs,12,200 rows;8,514 high/3,686 low confidence. Current778 asset profile supports20 objects; only `scissor` is absent. Located authoritative scissor candidate at DexStream commit `120c2dc5c3495da7581746bfff9c5fb681fe9846`, mass0.075kg,9 CoACD pieces; it may not be silently substituted and requires explicit asset provenance/runtime validation.
 - 2026-09-20T00:25:00+08:00 — Published exact four-shard allocation `configs/manorl/all_objects_four_gpu_shards.json`. ShardA Server1 GPU0: bowl,cuboid2,cuboid3,cylinder5,mayonnaisebottle,sphere1,sphere2;31pairs/3100rows/high2129. ShardB Server1 GPU2: cylinder1,cylinder2,iphone,largeclamp;30/3000/high2116. ShardC Server1 GPU3: banana,cube1,cylinder3,cylinder7,scissor;31/3100/high2089, blocked on scissor. ShardD Server2 GPU0: cube2,cuboid1,cylinder6,pitcherbase,powerdrill;30/3000/high2180. N620 for31-pair shards and N600 for30-pair shards gives20 rows/pair/cycle; pair_assignment_cycle0..4 covers every100-row pair exactly. Five1600-update stages preserve one policy/optimizer per shard. Four shards are four independent policies, not mergeable weights.
+
+## 2026-09-20T12:22:58+08:00 — target-state diagnosis and target120 contract
+
+**Prediction before inspection:** if refined `urdf_dof` is measured state while the provenance source retains a distinct actuator target, replaying `urdf_dof` as `ctrl` introduces a second servo lag. Target-driven MuJoCo should reduce actual-vs-recorded-state error.
+
+**Observations:**
+- The annotated/refined Lance schema contains only `hands[].urdf_dof`; `trajectory_from_rl_episode_row` used that array as `q_ref` and therefore controller target.
+- Provenance source for cylinder7 row8045 (source Lance version36 row75) contains both `urdf_dof` and `urdf_dof_target`. Its timestamp is 0.005s/200Hz despite metadata `data_fps=100`.
+- Local hand-only replay, contacts disabled: state-as-target at step60 had wrist XYZ error3.84cm, joint MAE0.131rad, max0.509rad. Target-driven replay reduced these to2.21cm,0.084rad,0.301rad. Improvement is substantial but incomplete because source and MuJoCo servos differ.
+- Schema audit of all40 provenance path/version sources: 40/40 expose `urdf_dof_target`; all12,200 rows are recoverable with no fallback.
+- One-row real Lance smoke joined source UUID/timestamp/state/object exactly, resampled state/target/object to120Hz, emitted dual tracks, and decoded with `q_ref=target`, `q_state_ref=state`; pre60 window resolved movement_start_step60.
+
+**Intervention:** added explicit `manorl.refined_rl_episode_state_target_120hz.v1`; ReferenceTrajectory/MTP v3 carry distinct measured-state and target tracks; environment initial qpos uses state while controller uses target. Added streaming `tools/build_rl_episode_target120_lance.py`, with provenance joins and fail-closed equality checks.
+
+**Validation:** focused target decoder/package tests 22 passed; combined relevant tests 39 passed before unrelated historical-environment fixtures failed because `/mnt/nas-222-project/mocap_v2/...` is absent locally.

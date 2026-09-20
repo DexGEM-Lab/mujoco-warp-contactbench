@@ -1,31 +1,20 @@
 # Epistemic Model
 
 ## Phenomenon
-The source RL trajectories are internally coherent, but their physical transfer to a fixed `cheyingtong` hand under MJX-Warp depends on where the task-motion window begins and how much residual authority the policy receives. The current intervention asks whether reference-derived onset, a resolved 0.5s pre-window, 1.0s early phase, 0.15m terminal bound and 2× finger residual range produce learnable shared Mayo policies.
+The refined RL rows preserve measured hand DoF state in `hands[].urdf_dof`, but the existing refinement dropped the source actuator command `urdf_dof_target`. ManoRL compiled measured state as `q_ref` and replayed it as a position-servo command. This applies a second dynamical lag to a track that was already the output of an upstream controller, so hand tracking falls behind before object tracking and terminal logic can be meaningful.
 
 ## Supported mechanism
-The binary/schema boundary is solved: pylance7 reads encodings21; the refined-RL importer preserves source provenance and emits Lance-free MTPs. Timestamp spacing, not unreliable `data_fps`, determines physical duration and is resampled to120Hz.
+All40 provenance-pinned source Lance/version datasets expose both state and target for all12,200 rows. On cylinder7 action03, hand-only replay with contacts disabled shows state-as-target step60 errors of3.84cm wrist XYZ,0.131rad joint MAE and0.509rad max joint error. Driving with the source target reduces them to2.21cm,0.084rad and0.301rad. The residual gap is expected because source and MuJoCo servo dynamics differ; target remains the correct command semantics.
 
-Reference movement onset is now explicit for all12,200 rows. The detector separates initial gravity settling from sustained translation/rotation by anchoring a 100ms quiescent pose, then requiring a persistent2mm/2° departure with5mm/5° confirmation. It records high/low confidence rather than silently dropping ambiguity. Server1-local annotation validation proves12,200 original rows/columns remain exactly equal;8514 rows are high confidence, with duplicate source UUID multiplicity preserved by row index.
+Timestamps are authoritative. The inspected source declares data_fps100 but has exact0.005s intervals (200Hz). State, target and object pose must be jointly resampled by timestamp to120Hz; wrist rotation coordinates are unwrapped before interpolation and object orientation uses SLERP.
 
-For Mayo,397/600 rows have high-confidence onset across all six actions. Resolving every row to120Hz and requesting pre60 gives movement_start_step60 universally. Only132 rows contain the full captured0.5s margin;265 need a frame-zero hold, up to48 control steps. This is intentional and audit-visible—not equivalent to claiming captured pre60 for every row.
-
-The fresh training contract is executable: pre60, early120, max deviation0.15m, joint increment/cap multipliers2.0, 120Hz control/480Hz physics, Cheyingtong assets, package digest `fc279...`. Three independent Server1 preflights completed without memory/contact-capacity faults and produced25–28 stochastic successes in update5. Three production seeds crossed checkpoint100. The earlier pre0/early30/0.10m/joint1x run is stopped at checkpoint7600 and is not a resume source because its MDP/action scale differ.
+The correct runtime contract is dual-track: `q_ref` is actuator position target; `q_state_ref` is measured physical state. Initial qpos and tracking evaluation use state. Controller base target plus RL residual use target. Historical/raw trajectories explicitly retain state==target semantics; target120 artifacts use a new contract and MTP v3 so fallback cannot be silent.
 
 ## Ruled out
-The original failure is not simply a clock bug: zero-residual success was similarly low for observed120Hz and200Hz cohorts. It is not initial coordinate mismatch: failed rows begin near the target but make weak/brief contact while the target moves away. A first-numerical-change onset detector is invalid because it labels gravity settling as task motion.
-
-Four GPUs on Server1 are not all available: GPU1 belongs to user `fyr`. No foreign process was stopped. One policy cannot be synchronously spread across current trainer GPUs; independent seeds are the valid parallel unit. Server2 cannot yet be considered equivalent production capacity: it has recurrent kernel-level Python/libcuda/Vulkan segfault history through Sep13, even after MTP isolation.
-
-## Anomalies
-Mayo high-confidence onset is uneven by action (01:59,02:43,03:51,04:80,05:100,08:64). Action05 has no full captured0.5s pre-window; all its examples require edge holds, so future per-action comparisons must separate edge-hold exposure from policy difficulty. The full annotated Lance is now published to NAS with byte-identical source columns and adjacent diagnostics; its duplicate source UUIDs remain intentional row-level identities.
+The observed hand lag is not principally object complexity or contact reaction: it remains with the object hidden and hand contacts disabled. It is not a simple120/480Hz arithmetic mismatch: reference/control are120Hz and physics uses four480Hz substeps. The data semantic mismatch—state replayed as target—is upstream of object terminal failures.
 
 ## Current claim
-The previous Mayo-only campaign is preserved and released. Server1 seeds42/43/44 stopped at complete checkpoint1100; Server2 seed45 completed its200-update canary with EXIT0. No task-owned trainer remains. Server1 GPUs0/2/3 and both Server2 GPUs are available; Server1 GPU1 remains owned by `fyr`.
-
-The all-object request contains21 objects/122pairs/12,200 rows. Four balanced multi-object policy shards are defined in `configs/manorl/all_objects_four_gpu_shards.json`:3100/3000/3100/3000 rows and high-confidence loads2129/2116/2089/2180. N620 for31-pair shards and N600 for30-pair shards allocates exactly20 trajectories per pair per stage; five pair-assignment cycles cover every trajectory exactly while strict resume preserves each shard's policy and optimizer. This creates four independently deployable policies over disjoint object sets—not one universal checkpoint.
-
-Twenty objects are runtime-ready under the pinned778 asset profile. `scissor` is the sole blocker to honest all-object delivery. An authoritative candidate exists at DexStream120c (0.075kg,9 convex pieces), but that repository history also changes other object physics and its manifest layout differs. Scissor needs an explicit mixed-provenance/runtime asset boundary; substituting another geometry or silently omitting its500 rows would invalidate the objective.
+A one-row real-data target120 Lance smoke passed exact provenance joining,120Hz resampling, dual-track decode and pre60 windowing. All sources have target tracks, so full reconstruction is feasible without omissions. Current server training remains an intact state-as-target baseline until the new Lance, four MTPs and4096-env preflight pass.
 
 ## Most informative next observation
-Pin and validate the scissor runtime without changing the other20 objects'778 physics, then compile/preflight the four shard MTPs. The first discriminating preflight is shardB (largeclamp27 pieces) versus shardA (bowl25 pieces) at N600/620; their peak memory determines whether the five-cycle plan fits24GiB or needs a smaller per-cycle world count.
+Run the full12,200-row streaming target120 build. Any UUID/timestamp/state/object mismatch is a contract failure and must stop publication. After publication, random20 target-driven replay should be compared against recorded state, followed by four-shard MTP compilation and4096-env preflight before switching training.

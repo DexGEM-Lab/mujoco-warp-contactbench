@@ -19,6 +19,7 @@ from sim.manorl.trajectory import (
     ObjectActionPair,
     REFERENCE_RESAMPLING_ID,
     RL_EPISODE_REFERENCE_CONTRACT,
+    RL_EPISODE_TARGET120_CONTRACT,
     RL_EPISODE_RESAMPLING_ID,
     ReferenceTrajectory,
     TrajectoryBatch,
@@ -28,9 +29,10 @@ from sim.manorl.trajectory import (
 
 TRAJECTORY_PACKAGE_SCHEMA = "manorl.trajectory_package.v1"
 SCENE_TRAJECTORY_PACKAGE_SCHEMA = "manorl.trajectory_package.v2"
+STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA = "manorl.trajectory_package.v3"
 _READY_FILE = "READY"
 _MANIFEST_FILE = "manifest.json"
-_ARRAY_FILES = {
+_BASE_ARRAY_FILES = {
     "offsets": "offsets.npy",
     "source_indices": "source_indices.npy",
     "timestamps": "timestamps.npy",
@@ -39,6 +41,18 @@ _ARRAY_FILES = {
     "object_pos": "object_pos.npy",
     "object_quat_xyzw": "object_quat_xyzw.npy",
 }
+_STATE_TARGET_ARRAY_FILES = {
+    **_BASE_ARRAY_FILES,
+    "q_state_ref_by_side": "q_state_ref_by_side.npy",
+}
+
+
+def _array_files_for_schema(schema: str) -> dict[str, str]:
+    return (
+        _STATE_TARGET_ARRAY_FILES
+        if schema == STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA
+        else _BASE_ARRAY_FILES
+    )
 
 
 class TrajectoryPackageError(ValueError):
@@ -173,6 +187,22 @@ def write_trajectory_package(
     if len(dof_dims) != 1:
         raise TrajectoryPackageError("trajectory package contains mixed hand DOF dimensions")
     dof_dim = next(iter(dof_dims))
+    state_target_contracts = {item.state_target_contract for item in ordered}
+    if len(state_target_contracts) != 1:
+        raise TrajectoryPackageError("trajectory package contains mixed state/target contracts")
+    state_target_contract = next(iter(state_target_contracts))
+    if state_target_contract not in (None, RL_EPISODE_TARGET120_CONTRACT):
+        raise TrajectoryPackageError("trajectory package state/target contract is unsupported")
+    schema = (
+        STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA
+        if state_target_contract == RL_EPISODE_TARGET120_CONTRACT
+        else (
+            SCENE_TRAJECTORY_PACKAGE_SCHEMA
+            if any(item.scene_object_types for item in ordered)
+            else TRAJECTORY_PACKAGE_SCHEMA
+        )
+    )
+    array_files = _array_files_for_schema(schema)
     if selection.reference_fps != reference_fps or selection.resolved_control_fps != control_fps:
         raise TrajectoryPackageError("package selection clock does not match decoded trajectories")
     if selection.expected_dataset_version is not None and selection.expected_dataset_version != dataset_version:
@@ -263,41 +293,47 @@ def write_trajectory_package(
     try:
         arrays: dict[str, NDArray[Any]] = {
             "offsets": _open_array(
-                temporary / _ARRAY_FILES["offsets"], dtype=np.dtype(np.int64), shape=offsets.shape
+                temporary / array_files["offsets"], dtype=np.dtype(np.int64), shape=offsets.shape
             ),
             "source_indices": _open_array(
-                temporary / _ARRAY_FILES["source_indices"],
+                temporary / array_files["source_indices"],
                 dtype=np.dtype(np.int64),
                 shape=(total_frames,),
             ),
             "timestamps": _open_array(
-                temporary / _ARRAY_FILES["timestamps"],
+                temporary / array_files["timestamps"],
                 dtype=np.dtype(np.float64),
                 shape=(total_frames,),
             ),
             "q_ref_by_side": _open_array(
-                temporary / _ARRAY_FILES["q_ref_by_side"],
+                temporary / array_files["q_ref_by_side"],
                 dtype=np.dtype(np.float64),
                 # Side-major layout keeps each side/trajectory slice contiguous
                 # and mmap-backed in the long-lived trainer.
                 shape=(len(hand_sides), total_frames, dof_dim),
             ),
             "object_pos_raw": _open_array(
-                temporary / _ARRAY_FILES["object_pos_raw"],
+                temporary / array_files["object_pos_raw"],
                 dtype=np.dtype(np.float64),
                 shape=(total_frames, 3),
             ),
             "object_pos": _open_array(
-                temporary / _ARRAY_FILES["object_pos"],
+                temporary / array_files["object_pos"],
                 dtype=np.dtype(np.float64),
                 shape=(total_frames, 3),
             ),
             "object_quat_xyzw": _open_array(
-                temporary / _ARRAY_FILES["object_quat_xyzw"],
+                temporary / array_files["object_quat_xyzw"],
                 dtype=np.dtype(np.float64),
                 shape=(total_frames, 4),
             ),
         }
+        if schema == STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA:
+            arrays["q_state_ref_by_side"] = _open_array(
+                temporary / array_files["q_state_ref_by_side"],
+                dtype=np.dtype(np.float64),
+                shape=(len(hand_sides), total_frames, dof_dim),
+            )
         arrays["offsets"][:] = offsets
         records: list[dict[str, object]] = []
         for index, trajectory in enumerate(ordered):
@@ -306,6 +342,10 @@ def write_trajectory_package(
             arrays["timestamps"][start:stop] = trajectory.timestamps
             for side_index, side in enumerate(hand_sides):
                 arrays["q_ref_by_side"][side_index, start:stop] = trajectory.q_ref_for(side)
+                if schema == STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA:
+                    arrays["q_state_ref_by_side"][side_index, start:stop] = (
+                        trajectory.q_state_ref_for(side)
+                    )
             arrays["object_pos_raw"][start:stop] = trajectory.object_pos_raw
             arrays["object_pos"][start:stop] = trajectory.object_pos
             arrays["object_quat_xyzw"][start:stop] = trajectory.object_quat_xyzw
@@ -332,7 +372,7 @@ def write_trajectory_package(
         del arrays
 
         array_metadata: dict[str, dict[str, object]] = {}
-        for name, filename in _ARRAY_FILES.items():
+        for name, filename in array_files.items():
             path = temporary / filename
             loaded = np.load(path, mmap_mode="r", allow_pickle=False)
             array_metadata[name] = {
@@ -364,7 +404,7 @@ def write_trajectory_package(
             compiler_metadata.get("rl_episode_reference", False)
         )
         manifest: dict[str, object] = {
-            "schema": (SCENE_TRAJECTORY_PACKAGE_SCHEMA if any(t.scene_object_types for t in ordered) else TRAJECTORY_PACKAGE_SCHEMA),
+            "schema": schema,
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
             "reference_resampling": (
                 RL_EPISODE_RESAMPLING_ID
@@ -381,9 +421,13 @@ def write_trajectory_package(
                 "catalog_selector": "all",
                 "generated_reference": selection.generated_reference,
                 "source_reference_contract": (
-                    RL_EPISODE_REFERENCE_CONTRACT
-                    if rl_episode_reference
-                    else "raw_capture_or_canonical_generated"
+                    RL_EPISODE_TARGET120_CONTRACT
+                    if state_target_contract == RL_EPISODE_TARGET120_CONTRACT
+                    else (
+                        RL_EPISODE_REFERENCE_CONTRACT
+                        if rl_episode_reference
+                        else "raw_capture_or_canonical_generated"
+                    )
                 ),
                 "hand_side": selection.hand_side,
                 "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
@@ -396,6 +440,15 @@ def write_trajectory_package(
             "hand_sides": list(hand_sides),
             "selected_hand_sides": list(selected_hand_sides),
             "dof_dim": dof_dim,
+            "hand_reference_semantics": (
+                {
+                    "q_ref_by_side": "actuator_position_target",
+                    "q_state_ref_by_side": "measured_physical_state",
+                    "contract": RL_EPISODE_TARGET120_CONTRACT,
+                }
+                if state_target_contract == RL_EPISODE_TARGET120_CONTRACT
+                else {"q_ref_by_side": "legacy_state_equals_target"}
+            ),
             "trajectory_count": len(ordered),
             "total_frames": total_frames,
             "resolved_pairs": [pair.canonical for pair in pairs],
@@ -445,7 +498,11 @@ def _load_manifest(path: Path) -> tuple[dict[str, Any], str]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise TrajectoryPackageError("trajectory package manifest is invalid JSON") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema") not in {TRAJECTORY_PACKAGE_SCHEMA, SCENE_TRAJECTORY_PACKAGE_SCHEMA}:
+    if not isinstance(manifest, dict) or manifest.get("schema") not in {
+        TRAJECTORY_PACKAGE_SCHEMA,
+        SCENE_TRAJECTORY_PACKAGE_SCHEMA,
+        STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA,
+    }:
         raise TrajectoryPackageError("unsupported trajectory package schema")
     package_digest = manifest.get("package_digest")
     if not isinstance(package_digest, str) or len(package_digest) != 64:
@@ -475,10 +532,11 @@ def load_trajectory_package(
         if manifest["source_hand_asset_profile"] != asset_provenance():
             raise TrajectoryPackageError("trajectory package source hand asset profile mismatch")
     arrays_metadata = manifest.get("arrays")
-    if not isinstance(arrays_metadata, dict) or set(arrays_metadata) != set(_ARRAY_FILES):
+    array_files = _array_files_for_schema(str(manifest["schema"]))
+    if not isinstance(arrays_metadata, dict) or set(arrays_metadata) != set(array_files):
         raise TrajectoryPackageError("trajectory package array manifest is incomplete")
     arrays: dict[str, NDArray[Any]] = {}
-    for name, expected_filename in _ARRAY_FILES.items():
+    for name, expected_filename in array_files.items():
         metadata = arrays_metadata[name]
         if not isinstance(metadata, dict) or metadata.get("file") != expected_filename:
             raise TrajectoryPackageError(f"trajectory package {name} file metadata is invalid")
@@ -500,7 +558,7 @@ def load_trajectory_package(
         raise TrajectoryPackageError("trajectory package offsets are invalid")
     total_frames = int(offsets[-1])
     for name, array in arrays.items():
-        if name in {"offsets", "q_ref_by_side"}:
+        if name in {"offsets", "q_ref_by_side", "q_state_ref_by_side"}:
             continue
         if len(array) != total_frames:
             raise TrajectoryPackageError(f"trajectory package {name} frame count mismatch")
@@ -518,6 +576,17 @@ def load_trajectory_package(
         or q_by_side.shape[1] != total_frames
     ):
         raise TrajectoryPackageError("trajectory package q_ref_by_side layout is invalid")
+    q_state_by_side = arrays.get("q_state_ref_by_side", q_by_side)
+    if (
+        q_state_by_side.ndim != 3
+        or q_state_by_side.shape != q_by_side.shape
+    ):
+        raise TrajectoryPackageError("trajectory package q_state_ref_by_side layout is invalid")
+    state_target_contract = (
+        RL_EPISODE_TARGET120_CONTRACT
+        if manifest["schema"] == STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA
+        else None
+    )
     primary_side = "right" if "right" in selected_hand_sides else selected_hand_sides[0]
     if primary_side not in hand_sides:
         raise TrajectoryPackageError("trajectory package primary hand is absent")
@@ -544,6 +613,10 @@ def load_trajectory_package(
             side: _immutable(q_by_side[side_index, start:stop])
             for side_index, side in enumerate(hand_sides)
         }
+        state_side_map = {
+            side: _immutable(q_state_by_side[side_index, start:stop])
+            for side_index, side in enumerate(hand_sides)
+        }
         trajectories.append(
             ReferenceTrajectory(
                 identity=TrajectoryIdentity(**record["identity"]),
@@ -551,6 +624,8 @@ def load_trajectory_package(
                 source_indices=_immutable(arrays["source_indices"][start:stop], dtype=np.int64),
                 timestamps=_immutable(arrays["timestamps"][start:stop]),
                 q_ref=side_map[primary_side],
+                q_state_ref=state_side_map[primary_side],
+                state_target_contract=state_target_contract,
                 object_pos_raw=_immutable(arrays["object_pos_raw"][start:stop]),
                 object_pos=_immutable(arrays["object_pos"][start:stop]),
                 object_quat_xyzw=_immutable(arrays["object_quat_xyzw"][start:stop]),
@@ -562,6 +637,7 @@ def load_trajectory_package(
                 ),
                 hand_sides=hand_sides,
                 q_ref_by_side=side_map,
+                q_state_ref_by_side=state_side_map,
                 selected_hand_sides=selected_hand_sides,
                 reference_fps=selection.get("reference_fps"),
                 control_fps=selection.get("control_fps"),

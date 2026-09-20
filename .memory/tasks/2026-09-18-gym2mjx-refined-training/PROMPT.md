@@ -1,14 +1,14 @@
 ## Objective
-Make the refined 12,200-row RL-episode Lance dataset usable by ManoRL, preserve the completed 1×-joint replay/training evidence, annotate every source row with reference-object movement onset, and launch a fresh mayonnaise campaign from the annotated data using pre60, early-phase120, a 0.15 m deviation threshold, and 2× joint residual increments/caps. Done means the source remains immutable, the high-confidence Mayo package is content-addressed and records edge holds, three Server1 seeds and one bounded Server2 canary cross durable checkpoints, and every run binds the intended clock/action/terminal contract.
+Make the refined RL-episode corpus train from its recorded actuator target track rather than replaying measured state as a command. Build a new immutable 120 Hz Lance dataset that preserves both `urdf_dof` measured state and `urdf_dof_target` actuator target from each provenance-pinned source RL row, then extend the ManoRL/MTP contract so initial conditions and evaluation use state while controller base commands use target. Recompile the four all-object shards and, after local replay plus 4096-env preflight passes, replace the current state-as-target baseline with fresh target-based 10,000-update training.
+
+Done means: all 12,200 rows retain order/UUID/source provenance; state, target and object pose are timestamp-resampled together to 120 Hz; motion onset is valid on the new clock; MTP/checkpoint metadata binds state-vs-target semantics; random multi-object replay demonstrates target-driven actual state against recorded state; four MTPs cover 20 supported non-scissor objects/117 pairs/11,700 trajectories; and four production shards start fresh only after preflight.
 
 ## Workbench
-1. Add an explicit refined-RL-episode import contract on `feat/gym2mjx` without weakening historical/generated-reference contracts.
-2. Compile and validate the six mayonnaise action groups, then run vectorized physical replay to completion and report success by action.
-3. Compile the intended training catalog, stage it on reliable Server1, and launch fresh training with joint multipliers 1.0.
-4. Preserve the stopped 1× run at checkpoint7600 and do not resume it under the new MDP.
-5. Derive sustained reference-object motion onset for all 12,200 rows, publish a separate annotated Lance dataset from Server1, and preserve per-row confidence/anomaly evidence.
-6. Compile high-confidence Mayo rows with exactly 60 resolved 120 Hz pre-steps, recording frame-zero edge holds when the source margin is shorter.
-7. Run fresh seeds with early-phase120, terminal distance0.15m, joint scale/cap multipliers2.0, and checkpoint-bound configuration.
+1. Add an explicit refined-RL state/target import contract without weakening historical/generated-reference contracts.
+2. Generate and validate a new target120 Lance dataset; never overwrite prior source or annotated Lance datasets.
+3. Preserve measured state and actuator target as distinct arrays in ReferenceTrajectory and MTP.
+4. Use measured state for initial qpos/ground-truth diagnostics and actuator target for controller commands plus RL residual.
+5. Recompile, replay, preflight, then switch formal training atomically after evidence supports the new contract.
 
 ## Context
 Repository worker: `/home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/feat-gym2mjx`.

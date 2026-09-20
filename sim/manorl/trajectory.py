@@ -45,6 +45,7 @@ LANCE_DECODE_CHUNK_SIZE = 128
 HAND_DATASET_PATH = Path(DEFAULT_HAND_DATASET_PATH)
 TRAJECTORY_IDENTITY_SCHEMA = "object_action_sequence"
 RL_EPISODE_REFERENCE_CONTRACT = "manorl.refined_rl_episode_reference.v1"
+RL_EPISODE_TARGET120_CONTRACT = "manorl.refined_rl_episode_state_target_120hz.v1"
 RL_EPISODE_RESAMPLING_ID = "timestamp_duration_linear_slerp_to_120hz_v1"
 GENERATED_CUBE1_DATASET_PATH = Path(
     "/mnt/nas-222-project/mocap/dataAugmentation/for_retargeting/new_all_with_keypoints/"
@@ -119,11 +120,16 @@ class ReferenceTrajectory:
     object_pos: NDArray[np.float64]
     object_quat_xyzw: NDArray[np.float64]
     object_z_shift: float
-    # ``q_ref`` is the primary/reference hand retained for the historical
-    # single-hand API.  New rows keep every detected side here so action
-    # routing can control one or both without relying on Lance list order.
+    # ``q_ref`` is the controller-target hand track retained for the historical
+    # single-hand API. ``q_state_ref`` is the measured physical state track.
+    # Legacy/raw rows omit the latter and explicitly resolve state == target;
+    # target120 RL rows preserve both so initialization/evaluation never reuse
+    # an actuator command as measured state.
     hand_sides: tuple[str, ...] = ("right",)
     q_ref_by_side: dict[str, NDArray[np.float64]] = field(default_factory=dict)
+    q_state_ref: NDArray[np.float64] | None = None
+    q_state_ref_by_side: dict[str, NDArray[np.float64]] = field(default_factory=dict)
+    state_target_contract: str | None = None
     selected_hand_sides: tuple[str, ...] = ()
     reference_fps: int | None = None
     control_fps: int | None = None
@@ -183,9 +189,32 @@ class ReferenceTrajectory:
         selected = canonical_hand_sides(selected)
         if not set(selected).issubset(set(sides)):
             raise ValueError("selected hand side is absent from the trajectory")
+        primary_side = "right" if "right" in selected else selected[0]
+        raw_state_map = dict(self.q_state_ref_by_side)
+        if not raw_state_map:
+            raw_state_map = dict(normalized_map)
+            if self.q_state_ref is not None:
+                raw_state_map[primary_side] = self.q_state_ref
+        normalized_state_map: dict[str, NDArray[np.float64]] = {}
+        for side, values in raw_state_map.items():
+            normalized = normalize_hand_side(str(side), allow_auto=False, allow_both=False)
+            array = np.asarray(values, dtype=np.float64)
+            if array.shape != self.q_ref.shape or not np.all(np.isfinite(array)):
+                raise ValueError(
+                    f"q_state_ref_by_side[{normalized!r}] must match q_ref and be finite"
+                )
+            normalized_state_map[normalized] = _immutable(array)
+        if set(normalized_state_map) != set(sides):
+            raise ValueError("hand_sides and q_state_ref_by_side keys do not match")
         object.__setattr__(self, "hand_sides", sides)
         object.__setattr__(self, "q_ref_by_side", normalized_map)
+        object.__setattr__(self, "q_state_ref_by_side", normalized_state_map)
+        object.__setattr__(self, "q_state_ref", normalized_state_map[primary_side])
         object.__setattr__(self, "selected_hand_sides", selected)
+        if self.state_target_contract not in (None, RL_EPISODE_TARGET120_CONTRACT):
+            raise ValueError("unsupported hand state/target reference contract")
+        if self.state_target_contract == RL_EPISODE_TARGET120_CONTRACT and not self.q_state_ref_by_side:
+            raise ValueError("target120 contract requires measured hand state references")
         if self.scene_object_types:
             scene_types = tuple(self.scene_object_types)
             active_object = self.identity.identity.rsplit("_", 2)[0]
@@ -279,6 +308,7 @@ class ReferenceTrajectory:
         for name in (
             "timestamps",
             "q_ref",
+            "q_state_ref",
             "object_pos_raw",
             "object_pos",
             "object_quat_xyzw",
@@ -305,11 +335,22 @@ class ReferenceTrajectory:
         )
 
     def q_ref_for(self, hand_side: str) -> NDArray[np.float64]:
+        """Return the controller-target track for one hand side."""
+
         side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
         try:
             return self.q_ref_by_side[side]
         except KeyError as exc:
-            raise KeyError(f"trajectory has no {side} hand reference") from exc
+            raise KeyError(f"trajectory has no {side} hand target reference") from exc
+
+    def q_state_ref_for(self, hand_side: str) -> NDArray[np.float64]:
+        """Return the measured physical-state track for one hand side."""
+
+        side = normalize_hand_side(hand_side, allow_auto=False, allow_both=False)
+        try:
+            return self.q_state_ref_by_side[side]
+        except KeyError as exc:
+            raise KeyError(f"trajectory has no {side} hand state reference") from exc
 
 
 def _interpolate_rows(
@@ -399,6 +440,10 @@ def resample_reference_trajectory(
         side: _immutable(_interpolate_hand_qpos(values, source_times, query_times))
         for side, values in trajectory.q_ref_by_side.items()
     }
+    q_state_ref_by_side = {
+        side: _immutable(_interpolate_hand_qpos(values, source_times, query_times))
+        for side, values in trajectory.q_state_ref_by_side.items()
+    }
     primary_side = (
         "right"
         if "right" in trajectory.selected_hand_sides
@@ -453,6 +498,8 @@ def resample_reference_trajectory(
         timestamps=_immutable(timestamp_origin + control_times),
         q_ref=q_ref_by_side[primary_side],
         q_ref_by_side=q_ref_by_side,
+        q_state_ref=q_state_ref_by_side[primary_side],
+        q_state_ref_by_side=q_state_ref_by_side,
         object_pos_raw=_immutable(object_pos_raw),
         object_pos=_immutable(object_pos),
         object_quat_xyzw=_immutable(object_quat_xyzw),
@@ -499,6 +546,10 @@ def resample_timestamped_reference_trajectory(
     q_ref_by_side = {
         side: _immutable(_interpolate_hand_qpos(values, source_times, query_times))
         for side, values in trajectory.q_ref_by_side.items()
+    }
+    q_state_ref_by_side = {
+        side: _immutable(_interpolate_hand_qpos(values, source_times, query_times))
+        for side, values in trajectory.q_state_ref_by_side.items()
     }
     primary_side = (
         "right"
@@ -549,6 +600,8 @@ def resample_timestamped_reference_trajectory(
         timestamps=_immutable(control_times),
         q_ref=q_ref_by_side[primary_side],
         q_ref_by_side=q_ref_by_side,
+        q_state_ref=q_state_ref_by_side[primary_side],
+        q_state_ref_by_side=q_state_ref_by_side,
         object_pos_raw=_immutable(object_pos_raw),
         object_pos=_immutable(object_pos),
         object_quat_xyzw=_immutable(object_quat_xyzw),
@@ -609,6 +662,10 @@ def window_reference_trajectory(
         side: _immutable(edge_hold(values))
         for side, values in trajectory.q_ref_by_side.items()
     }
+    q_state_ref_by_side = {
+        side: _immutable(edge_hold(values))
+        for side, values in trajectory.q_state_ref_by_side.items()
+    }
     primary_side = (
         "right"
         if "right" in trajectory.selected_hand_sides
@@ -641,6 +698,8 @@ def window_reference_trajectory(
         timestamps=_immutable(timestamps),
         q_ref=q_ref_by_side[primary_side],
         q_ref_by_side=q_ref_by_side,
+        q_state_ref=q_state_ref_by_side[primary_side],
+        q_state_ref_by_side=q_state_ref_by_side,
         object_pos_raw=_immutable(edge_hold(trajectory.object_pos_raw)),
         object_pos=_immutable(edge_hold(trajectory.object_pos)),
         object_quat_xyzw=_immutable(edge_hold(trajectory.object_quat_xyzw)),
@@ -1491,12 +1550,25 @@ def trajectory_from_rl_episode_row(
         raise ValueError("RL episode object state must be a mapping")
 
     timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
-    q_ref = np.asarray(hand.get("urdf_dof", ()), dtype=np.float64)
+    q_state_ref = np.asarray(hand.get("urdf_dof", ()), dtype=np.float64)
+    target_values = hand.get("urdf_dof_target")
+    state_target_contract = metadata.get("state_target_contract")
+    if target_values is None:
+        if state_target_contract is not None:
+            raise ValueError("RL episode declares state/target semantics but omits urdf_dof_target")
+        q_ref = q_state_ref
+    else:
+        if state_target_contract != RL_EPISODE_TARGET120_CONTRACT:
+            raise ValueError(
+                "RL episode urdf_dof_target requires the explicit target120 contract"
+            )
+        q_ref = np.asarray(target_values, dtype=np.float64)
     object_pos = np.asarray(state.get("pos", ()), dtype=np.float64)
     object_rotvec = np.asarray(state.get("rot_aa", ()), dtype=np.float64)
     expected_shapes = {
         "timestamp": timestamps.shape == (source_count,),
-        "urdf_dof": q_ref.shape == (source_count, JOINT_DOF),
+        "urdf_dof": q_state_ref.shape == (source_count, JOINT_DOF),
+        "urdf_dof_target": q_ref.shape == (source_count, JOINT_DOF),
         "object position": object_pos.shape == (source_count, 3),
         "object rotation": object_rotvec.shape == (source_count, 3),
     }
@@ -1505,7 +1577,8 @@ def trajectory_from_rl_episode_row(
         raise ValueError("invalid RL episode arrays: " + ", ".join(invalid))
     for name, values in (
         ("timestamp", timestamps),
-        ("urdf_dof", q_ref),
+        ("urdf_dof", q_state_ref),
+        ("urdf_dof_target", q_ref),
         ("object position", object_pos),
         ("object rotation", object_rotvec),
     ):
@@ -1574,6 +1647,7 @@ def trajectory_from_rl_episode_row(
                 raise ValueError("RL episode reference-motion annotation is inconsistent")
 
     immutable_q = _immutable(q_ref)
+    immutable_state_q = _immutable(q_state_ref)
     immutable_pos = _immutable(object_pos)
     identity = f"{pair.object_type}_{pair.action_id}_{row_index + 1:05d}"
     return ReferenceTrajectory(
@@ -1594,12 +1668,17 @@ def trajectory_from_rl_episode_row(
         source_indices=_immutable(np.arange(source_count), dtype=np.int64),
         timestamps=_immutable(timestamps),
         q_ref=immutable_q,
+        q_state_ref=immutable_state_q,
+        state_target_contract=(
+            RL_EPISODE_TARGET120_CONTRACT if target_values is not None else None
+        ),
         object_pos_raw=immutable_pos,
         object_pos=immutable_pos,
         object_quat_xyzw=_immutable(quaternion),
         object_z_shift=0.0,
         hand_sides=("right",),
         q_ref_by_side={"right": immutable_q},
+        q_state_ref_by_side={"right": immutable_state_q},
         selected_hand_sides=("right",),
         movement_start_step=movement_start,
         movement_end_step=movement_end,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -11,8 +12,13 @@ import torch
 
 from sim.manorl.checkpoint import CheckpointFormatError, load_skrl_checkpoint, save_skrl_checkpoint
 from sim.manorl.contracts import TrajectoryIdentity
-from sim.manorl.trajectory import ReferenceTrajectory, TrajectorySelection
+from sim.manorl.trajectory import (
+    RL_EPISODE_TARGET120_CONTRACT,
+    ReferenceTrajectory,
+    TrajectorySelection,
+)
 from sim.manorl.trajectory_package import (
+    STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA,
     TRAJECTORY_PACKAGE_SCHEMA,
     TrajectoryPackageError,
     assign_trajectory_catalog,
@@ -145,6 +151,46 @@ def test_package_round_trip_is_lance_free_and_mmap_assignable(tmp_path: Path) ->
         "cube1_01_001",
         "cube2_04_002",
     ]
+
+
+def test_state_target_package_round_trip_preserves_both_tracks(tmp_path: Path) -> None:
+    values = []
+    for trajectory in _catalog_values():
+        state_by_side = {
+            side: trajectory.q_ref_for(side) - 0.125
+            for side in trajectory.hand_sides
+        }
+        primary = state_by_side["right"]
+        values.append(
+            replace(
+                trajectory,
+                q_state_ref=primary,
+                q_state_ref_by_side=state_by_side,
+                state_target_contract=RL_EPISODE_TARGET120_CONTRACT,
+            )
+        )
+    package = write_trajectory_package(
+        tmp_path / "target120.mtp",
+        values,
+        selection=_selection(),
+        dataset_schema_digest="schema",
+        discovery_digest="discovery",
+        compiler={"rl_episode_reference": True},
+    )
+    catalog = load_trajectory_package(package)
+    assert catalog.manifest["schema"] == STATE_TARGET_TRAJECTORY_PACKAGE_SCHEMA
+    assert catalog.manifest["hand_reference_semantics"] == {
+        "q_ref_by_side": "actuator_position_target",
+        "q_state_ref_by_side": "measured_physical_state",
+        "contract": RL_EPISODE_TARGET120_CONTRACT,
+    }
+    expected = {item.identity.identity: item for item in values}
+    for actual in catalog.trajectories:
+        source = expected[actual.identity.identity]
+        assert actual.state_target_contract == RL_EPISODE_TARGET120_CONTRACT
+        np.testing.assert_array_equal(actual.q_ref, source.q_ref)
+        np.testing.assert_array_equal(actual.q_state_ref, source.q_state_ref)
+        assert not np.array_equal(actual.q_ref, actual.q_state_ref)
 
 
 def test_package_assignment_cycle_rotates_each_pair_slot_window(tmp_path: Path) -> None:

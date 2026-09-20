@@ -2400,9 +2400,26 @@ class MujocoManoEnvironment:
             )
             for side in self.hand_sides
         }
+        self.reference_state_q_by_side = {
+            side: np.stack(
+                [
+                    np.pad(
+                        _expand_legacy_hand_dofs(item.q_state_ref_for(side)),
+                        ((0, max_length - len(item.q_ref)), (0, 0)),
+                        mode="edge",
+                    )
+                    for item in self.trajectories
+                ]
+            )
+            for side in self.hand_sides
+        }
         self.reference_q = self.reference_q_by_side[self.primary_hand_side]
+        self.reference_state_q = self.reference_state_q_by_side[self.primary_hand_side]
         self.reference_q_model = np.concatenate(
             [self.reference_q_by_side[side] for side in self.model_hand_sides], axis=-1
+        )
+        self.reference_state_q_model = np.concatenate(
+            [self.reference_state_q_by_side[side] for side in self.model_hand_sides], axis=-1
         )
         self.reference_object_pos = pad("object_pos")
         self.reference_object_quat_xyzw = pad("object_quat_xyzw")
@@ -2511,7 +2528,7 @@ class MujocoManoEnvironment:
             self._object_init_xy_offsets = np.zeros((self.config.num_envs, 2), dtype=np.float64)
         for side_index, side in enumerate(self.model_hand_sides):
             start = side_index * self.hand_dof
-            qpos[:, start : start + self.hand_dof] = self.reference_q_by_side[side][:, 0]
+            qpos[:, start : start + self.hand_dof] = self.reference_state_q_by_side[side][:, 0]
         if getattr(self, "_unified_object_batch", False):
             # Inactive bodies retain native gravity but start high enough that
             # a bounded episode cannot reach the floor or hand workspace.

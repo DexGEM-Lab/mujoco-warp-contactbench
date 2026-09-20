@@ -8,6 +8,7 @@ import pytest
 
 from sim.manorl.trajectory import (
     RL_EPISODE_REFERENCE_CONTRACT,
+    RL_EPISODE_TARGET120_CONTRACT,
     RL_EPISODE_RESAMPLING_ID,
     TrajectorySelection,
     _discover_rl_episode_candidates,
@@ -67,6 +68,19 @@ def rl_episode_row(*, frames: int = 5, timestep: float = 0.005) -> dict[str, obj
     }
 
 
+def target120_rl_episode_row(*, frames: int = 5, timestep: float = 0.005) -> dict[str, object]:
+    row = rl_episode_row(frames=frames, timestep=timestep)
+    state = np.asarray(row["hands"][0]["urdf_dof"], dtype=np.float64)
+    target = state.copy()
+    target[:, 0] += np.linspace(0.0, 0.25, frames)
+    target[:, 6:] += 0.1
+    row["hands"][0]["urdf_dof_target"] = target.tolist()
+    row["trajectory_metadata"]["state_target_contract"] = (
+        RL_EPISODE_TARGET120_CONTRACT
+    )
+    return row
+
+
 def fixed_asset_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     from sim.manorl import assets
 
@@ -94,6 +108,43 @@ def test_rl_episode_decoder_uses_fixed_hand_and_preserves_world_coordinates(
     assert trajectory.identity.uuid == row["index"]["uuid"]
     assert trajectory.hand_sides == trajectory.selected_hand_sides == ("right",)
     assert (trajectory.movement_start_step, trajectory.movement_end_step) == (0, 4)
+
+
+def test_target120_decoder_separates_measured_state_and_actuator_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixed_asset_profile(monkeypatch)
+    row = target120_rl_episode_row()
+    trajectory = trajectory_from_rl_episode_row(
+        row, 1, row_index=0, dataset_path=tmp_path / "target120.lance"
+    )
+
+    np.testing.assert_array_equal(
+        trajectory.q_state_ref, row["hands"][0]["urdf_dof"]
+    )
+    np.testing.assert_array_equal(
+        trajectory.q_ref, row["hands"][0]["urdf_dof_target"]
+    )
+    assert trajectory.state_target_contract == RL_EPISODE_TARGET120_CONTRACT
+
+    resampled = resample_timestamped_reference_trajectory(
+        trajectory, reference_fps=120
+    )
+    assert not np.array_equal(resampled.q_ref, resampled.q_state_ref)
+    np.testing.assert_allclose(resampled.q_state_ref[0], trajectory.q_state_ref[0])
+    np.testing.assert_allclose(resampled.q_ref[-1], trajectory.q_ref[-1])
+
+
+def test_target_track_requires_explicit_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fixed_asset_profile(monkeypatch)
+    row = target120_rl_episode_row()
+    row["trajectory_metadata"].pop("state_target_contract")
+    with pytest.raises(ValueError, match="explicit target120 contract"):
+        trajectory_from_rl_episode_row(
+            row, 1, row_index=0, dataset_path=tmp_path / "invalid.lance"
+        )
 
 
 def test_rl_episode_decoder_consumes_reference_motion_annotation(
