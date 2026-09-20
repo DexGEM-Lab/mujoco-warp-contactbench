@@ -2301,7 +2301,11 @@ def _rl_episode_candidate_from_discovery_row(
     timestep = float(np.median(np.diff(timestamps)))
     sequence = row_index + 1
     source_provenance: dict[str, object] = {
-        "contract": RL_EPISODE_REFERENCE_CONTRACT,
+        "contract": (
+            RL_EPISODE_TARGET120_CONTRACT
+            if metadata.get("state_target_contract") == RL_EPISODE_TARGET120_CONTRACT
+            else RL_EPISODE_REFERENCE_CONTRACT
+        ),
         "source_rl_lance_path": source_path,
         "source_rl_version": source_version,
         "source_rl_row": source_row,

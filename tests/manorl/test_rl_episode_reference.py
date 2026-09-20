@@ -337,6 +337,15 @@ def test_rl_episode_discovery_filters_high_confidence_rows(tmp_path: Path) -> No
     assert rows[pairs[0]][0].row_index == 0
 
 
+def test_target120_discovery_binds_state_target_contract() -> None:
+    row = target120_rl_episode_row()
+    candidate = _rl_episode_candidate_from_discovery_row(row, row_index=17)
+
+    assert candidate is not None
+    assert candidate.source_provenance is not None
+    assert candidate.source_provenance["contract"] == RL_EPISODE_TARGET120_CONTRACT
+
+
 def test_rl_episode_discovery_records_observed_clock_and_source_provenance() -> None:
     row = rl_episode_row()
     candidate = _rl_episode_candidate_from_discovery_row(row, row_index=12100)

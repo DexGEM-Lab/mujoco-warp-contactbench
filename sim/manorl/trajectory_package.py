@@ -265,7 +265,10 @@ def write_trajectory_package(
                     f"source candidate provenance must be a mapping: {key!r}"
                 )
             normalized_provenance = dict(provenance)
-            if normalized_provenance.get("contract") != RL_EPISODE_REFERENCE_CONTRACT:
+            if normalized_provenance.get("contract") not in {
+                RL_EPISODE_REFERENCE_CONTRACT,
+                RL_EPISODE_TARGET120_CONTRACT,
+            }:
                 raise TrajectoryPackageError(
                     f"source candidate provenance contract is invalid: {key!r}"
                 )
