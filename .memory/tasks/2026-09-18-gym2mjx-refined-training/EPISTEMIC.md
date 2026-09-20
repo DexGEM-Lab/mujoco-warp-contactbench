@@ -1,20 +1,20 @@
 # Epistemic Model
 
 ## Phenomenon
-The refined RL rows preserve measured hand DoF state in `hands[].urdf_dof`, but the existing refinement dropped the source actuator command `urdf_dof_target`. ManoRL compiled measured state as `q_ref` and replayed it as a position-servo command. This applies a second dynamical lag to a track that was already the output of an upstream controller, so hand tracking falls behind before object tracking and terminal logic can be meaningful.
+The refined corpus had dropped source actuator targets and replayed measured `urdf_dof` state as a new position command, creating a second servo lag. This semantic error was upstream of hand/object tracking. A second independent difficulty remains: object reference begins at step60 while residual/deviation semantics begin at step120, so fast object trajectories can outrun physical contact before policy authority opens.
 
 ## Supported mechanism
-All40 provenance-pinned source Lance/version datasets expose both state and target for all12,200 rows. On cylinder7 action03, hand-only replay with contacts disabled shows state-as-target step60 errors of3.84cm wrist XYZ,0.131rad joint MAE and0.509rad max joint error. Driving with the source target reduces them to2.21cm,0.084rad and0.301rad. The residual gap is expected because source and MuJoCo servo dynamics differ; target remains the correct command semantics.
+All40 source Lance/version datasets contain `urdf_dof_target` for all12,200 rows. Target-driven hand-only replay reduces the critical cylinder7 step60 wrist error from3.84cm to2.21cm, joint MAE0.131rad to0.084rad, and max joint error0.509rad to0.301rad. The remaining mismatch reflects source-vs-MuJoCo servo differences.
 
-Timestamps are authoritative. The inspected source declares data_fps100 but has exact0.005s intervals (200Hz). State, target and object pose must be jointly resampled by timestamp to120Hz; wrist rotation coordinates are unwrapped before interpolation and object orientation uses SLERP.
+The corrected contract is dual-track: measured `q_state_ref` initializes physical qpos and defines replay ground truth; actuator `q_ref` drives controller targets and receives RL residual. Timestamp is authoritative:11,062 rows are200Hz and1,138 are120Hz, jointly resampled with object pose to120Hz.
 
-The correct runtime contract is dual-track: `q_ref` is actuator position target; `q_state_ref` is measured physical state. Initial qpos and tracking evaluation use state. Controller base target plus RL residual use target. Historical/raw trajectories explicitly retain state==target semantics; target120 artifacts use a new contract and MTP v3 so fallback cannot be silent.
+Persistent unified MJX-Warp workspaces support4096 env per shard. MTP v3 binds state/target semantics and is Lance-free at runtime. A5-update target preflight crossed checkpoints with22.2k transitions/s and no numerical/allocator faults.
 
 ## Ruled out
-The observed hand lag is not principally object complexity or contact reaction: it remains with the object hidden and hand contacts disabled. It is not a simple120/480Hz arithmetic mismatch: reference/control are120Hz and physics uses four480Hz substeps. The data semantic mismatch—state replayed as target—is upstream of object terminal failures.
+Hand lag is not caused only by object geometry/contact: it persists with object hidden and contacts disabled. It is not simple120/480Hz arithmetic error. Using target fixes hand-command semantics but does not automatically solve every object terminal because the early120/reference phase is independent.
 
 ## Current claim
-A one-row real-data target120 Lance smoke passed exact provenance joining,120Hz resampling, dual-track decode and pre60 windowing. All sources have target tracks, so full reconstruction is feasible without omissions. Current server training remains an intact state-as-target baseline until the new Lance, four MTPs and4096-env preflight pass.
+The corrected target120 Lance and four MTP v3 shards are published and validated. The old state-as-target baseline is stopped with checkpoints preserved. Four fresh target-based policies are training from update0 at4096 env,pre60,early120,0.15m terminal,joint2x,with errors0 and online monitoring.
 
 ## Most informative next observation
-Run the full12,200-row streaming target120 build. Any UUID/timestamp/state/object mismatch is a contract failure and must stop publication. After publication, random20 target-driven replay should be compared against recorded state, followed by four-shard MTP compilation and4096-env preflight before switching training.
+Compare reward/contact/success trajectories over the first several hundred target-based updates against the preserved baseline. If early terminal concentration remains near step120, test a separate phase-alignment experiment (policy/deviation opening at movement start or delayed object reference) without mutating the current target-semantic run.

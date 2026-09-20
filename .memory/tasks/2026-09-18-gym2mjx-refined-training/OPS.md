@@ -40,3 +40,19 @@
 **Intervention:** added explicit `manorl.refined_rl_episode_state_target_120hz.v1`; ReferenceTrajectory/MTP v3 carry distinct measured-state and target tracks; environment initial qpos uses state while controller uses target. Added streaming `tools/build_rl_episode_target120_lance.py`, with provenance joins and fail-closed equality checks.
 
 **Validation:** focused target decoder/package tests 22 passed; combined relevant tests 39 passed before unrelated historical-environment fixtures failed because `/mnt/nas-222-project/mocap_v2/...` is absent locally.
+
+## 2026-09-20T13:21:54+08:00 — target120 publication and production switch
+
+**Observation:** full streaming build completed12,200/12,200 rows in13m17s. Provenance joins verified source UUID/timestamp/measured state/object equality before transformation. Source clock counts:11,062 rows at200Hz and1,138 at120Hz. Output is strict120Hz with dual state/target tracks. Mean per-row state-target MAE0.05583; maximum row MAE0.48879. Motion detector on output clock:8541 high,2734 initial-transient-only,769 low-no-quiet,156 low-unconfirmed.
+
+**Artifacts:**
+- NAS Lance `/mnt/nas-222-projects/sunjieqiang/new_vla/mano_rl_refined_100_per_action_motion_target120_v1.lance` (v1,12,200 rows,972MiB).
+- Four MTP v3 digests: A `6b4ae659...`3100/31; B `062f75ee...`3000/30; C `cce1fcb2...`2600/26; D `6e7d3b13...`3000/30. All validated at4096 env with no Lance/PyArrow import.
+
+**Replay evidence:** same random20 identities show target-driven hand tracking improves substantially; object terminal improves partially, while early120/reference-phase mismatch remains a separate live mechanism.
+
+**Preflight:** Server2 GPU1 target120 shardD,4096 env,5 updates,983,040 transitions,EXIT0,22.2k/s,noOOM/NaN/traceback,checkpoints1–5. Sidecar binds `manorl.trajectory_package.v3`, target120 dataset,pre60/early120/0.15m/joint2x.
+
+**Production intervention:** stopped state-as-target baseline after preserving last checkpoints (A update881/checkpoint800;B895/800;C902/900;D972/950). Started fresh target-based shards from update0 at4096 env on Server1 GPUs0/2/3 and Server2 GPU0. Current updates41/42/43/32; errors0; reward approximately0.1049/0.0435/0.1158/0.0660. W&B runs A `8bvxg3zv`,B `gnqitbie`,C `svxqumhu`,D `r9vy1wq2`. Monitors log every60s.
+
+**Retention decision:** prior Lance/MTP/checkpoints retained as immutable state-as-target baseline; deletion has no training benefit and would destroy audit/rollback evidence.
