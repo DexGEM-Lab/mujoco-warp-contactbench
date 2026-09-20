@@ -33,8 +33,9 @@ def _layout_for_observation_dim(observation_dim: int) -> ObservationLayout:
 class PointNetEncoder(nn.Module):
     """Source PointNet: shared 3→64→128→256 MLP, max pool, 256→64 MLP."""
 
-    def __init__(self, device: str | torch.device = "cpu") -> None:
+    def __init__(self, device: str | torch.device = "cpu", *, points: int = POINT_COUNT) -> None:
         super().__init__()
+        self.points = int(points)
         self.point_mlp = nn.Sequential(
             nn.Linear(3, 64), nn.LayerNorm(64), nn.ReLU(),
             nn.Linear(64, 128), nn.LayerNorm(128), nn.ReLU(),
@@ -45,9 +46,9 @@ class PointNetEncoder(nn.Module):
         ).to(device)
 
     def forward(self, points: torch.Tensor) -> torch.Tensor:
-        if points.ndim != 3 or points.shape[1:] != (POINT_COUNT, 3):
-            raise ValueError("PointNet requires (batch, 64, 3) point clouds")
-        features = self.point_mlp(points.reshape(-1, 3)).reshape(len(points), POINT_COUNT, 256)
+        if points.ndim != 3 or points.shape[1:] != (self.points, 3):
+            raise ValueError(f"PointNet requires (batch, {self.points}, 3) point clouds")
+        features = self.point_mlp(points.reshape(-1, 3)).reshape(len(points), self.points, 256)
         return self.global_mlp(features.max(dim=1).values)
 
 

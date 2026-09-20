@@ -34,3 +34,36 @@ controller. The wrist integral and finger/wrist velocity feedforward must use
 the selected dt. Local repair inputs retain source-hand identity independently
 of physical replay hand. See `docs/local_contact_repair.md` for the archived43
 Cheyingtong runner and its terminal-grid hold (<one control interval).
+
+## Autonomy first-learner boundary
+The contact-conditioned autonomy M3 learner currently uses an ordinary single
+Gymnasium environment for honest N=1 CPU/GPU validation over the canonical
+MJX-Warp clock/contact producer. It uses skrl `RlGamesPPO` and canonical GAE with
+explicit finite-horizon termination; terminal observations are recorded before
+an explicit reset. This first learner is intentionally not a vectorization or
+generalization claim. Final autonomy acceptance requires a frozen checkpoint to
+consume a new held-out reference without per-reference retraining, manual masks,
+or special reward; max lift plus endpoint pose is insufficient.
+
+## v4 optimizer continuation boundary
+Autonomy v4 optimizer resume equality-gates physical clock, asset/package/ABI
+provenance and fixed training configuration. Warp physical state is not saved:
+continuation declares `full_start_new_episodes`, resets episode telemetry, and
+restores sampling RNG after reset. Cumulative PPO counters and Adam continue.
+See `docs/manorl_autonomy_v4.md` → “Continuing a v4 PPO run”.
+
+## v4 teacher supervision boundary
+Optional online teacher-action anchoring is post-PPO training supervision only;
+pre-step runtime labels cannot enter the physical adapter's execution path.
+Anchor-only Adam steps must clear gradients to `None` so value-only momentum
+cannot move critic parameters. Checkpoints record the complete teacher recipe;
+old absent metadata means disabled anchoring. See `docs/manorl_autonomy_v4.md`
+→ “Optional online teacher-action anchor”.
+
+## v4 multi-reference supervision boundary
+`--all-train-references` uses fixed round-robin TRAIN assignment; each env's
+reference length drives progress/done and its frame0 state drives subset reset.
+Contact arenas remain global. Teacher labels gate squeeze on the current
+assigned reference's maximum proximity*confidence*valid >=0.5, never frame200.
+Enabled frame-gated anchor checkpoints require model-only transfer to this
+recipe; disabled old recipes still resume disabled. See canonical v4 docs.
