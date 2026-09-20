@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any
 
@@ -89,10 +90,31 @@ def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any
     import scripts.eval.mjx_skin.manorl_mjx_warp_runtime as runtime_module
     from scripts.eval.mjx_skin import consumer_visual
 
-    sys.modules["scripts.eval.manorl_mjx_warp_runtime"] = runtime_module
-    runtime = native._runtime()
-    assets = runtime["assets"]
-    contracts = runtime["contracts"]
+    from sim.manorl import assets, contracts
+
+    commit = subprocess.check_output(
+        ["git", "-C", str(args.manorl_root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if commit != args.manorl_commit:
+        raise RuntimeError(f"ManoRL source {commit} != requested {args.manorl_commit}")
+    status = subprocess.check_output(
+        ["git", "-C", str(args.manorl_root), "status", "--porcelain"], text=True
+    ).strip()
+    if status:
+        raise RuntimeError(f"ManoRL source is dirty: {status.splitlines()[:8]}")
+    if contracts.JOINT_DOF != 28 or tuple(contracts.JOINT_NAMES_28) != tuple(
+        contracts.JOINT_NAMES
+    ):
+        raise RuntimeError("atomic replay requires the canonical right-hand 28D ABI")
+    # The general ManoRL branch retains its older default clock. This dataset
+    # and the production State45 runtime are explicitly 480 Hz / four substeps;
+    # every compilation below therefore receives 1/480 rather than a default.
+    native._RUNTIME = {
+        "root": args.manorl_root.resolve(),
+        "assets": assets,
+        "contracts": contracts,
+        "commit": commit,
+    }
     assets.DEXSTREAM_ROOT = args.asset_root.resolve()
 
     # The benchmark renderer was written against the older Client keyword while
@@ -104,16 +126,19 @@ def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any
         original_validate = assets.validate_unified_compiled_model
 
         def compile_compat(*positional: Any, object_object_collisions: bool = False, **kwargs: Any):
+            kwargs.setdefault("physics_timestep", 1 / PHYSICS_HZ)
             return original_compile(
                 *positional, object_collisions=object_object_collisions, **kwargs
             )
 
         def build_compat(*positional: Any, object_object_collisions: bool = False, **kwargs: Any):
+            kwargs.setdefault("physics_timestep", 1 / PHYSICS_HZ)
             return original_build(
                 *positional, object_collisions=object_object_collisions, **kwargs
             )
 
         def validate_compat(*positional: Any, object_object_collisions: bool = False, **kwargs: Any):
+            kwargs.setdefault("physics_timestep", 1 / PHYSICS_HZ)
             return original_validate(
                 *positional, object_collisions=object_object_collisions, **kwargs
             )
@@ -136,6 +161,7 @@ def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any
         }
 
     consumer_visual._inject_consumer_skin = existing_skin
+    sys.modules["scripts.eval.manorl_mjx_warp_runtime"] = runtime_module
     return native, visual, runtime_module, assets, contracts
 
 
