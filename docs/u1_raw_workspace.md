@@ -50,8 +50,8 @@ and new command acknowledgments or rejections. New sessions also expose native
 last-substep contact forces on the manipulated object (hand versus other bodies),
 its weight, FK fingertip positions in object coordinates, and thumb/index tip
 distance. Force is measured separately from the CPU geometric contact witnesses;
-pose is post-integration, while native force is from the preceding480Hz substep. A paused unchanged state does not
-spam output. Restore/rewind is marked explicitly; stale output and process exit
+pose is post-integration, while native force is from the preceding480Hz substep.
+A paused unchanged state does not spam output. Restore/rewind is marked explicitly; stale output and process exit
 are surfaced. `--once` gives one snapshot. The UI publishes snapshots rather
 than every physics step: this log is for live diagnosis, not full-rate acceptance.
 Geometry contacts do not prove support force, handle insertion, or a stable grasp.
@@ -85,3 +85,46 @@ approach offsets: four non-thumb fingers through the handle, thumb outside.
 Exported candidates carry source identity and are explicitly unaccepted until
 full frame0 U1 validation and independent replay. Workspace readiness does not
 establish repaired grasp or lift.
+
+## Reproducible row82 closed-grip candidate
+
+`recipes/u1_pitcher_row82.json` records a locally validated fixed-target candidate
+for the pinned Sept15 v4 row82. Rebuild it without running another optimization:
+
+```bash
+PYTHONPATH=. python -m tools.build_u1_pitcher_reference \
+  --dataset "$RAW_LANCE" --asset-root "$ASSET_ROOT" \
+  --asset-manifest "$ASSET_MANIFEST" \
+  --recipe recipes/u1_pitcher_row82.json --output outputs/row82_rebuilt
+```
+
+The builder verifies the source UUID/frame count, manifest SHA, and exact target
+array SHA. It fails explicitly if reconstruction changes. The frozen target hash
+is `81faf6e05c4173de79e5007c61a310506ad8c389be4458ebc2242f072a580e39`.
+The rebuilt target can be opened with the viewer's existing `--target` option.
+
+The mechanism is a held finger grasp, not tighter wrist tracking. Native damping
+and object-weight compensation are encoded into absolute targets. After frame400,
+the acquired finger targets are held; a fixed Jacobian-derived thumb/index closing
+preload maintains real distal-surface contact. Reference wrist rotations and timing
+continue through pouring. Smooth XYZ target registration places the pouring rim
+over the bowl and the pitcher back at its source location. The target schedule
+opens the thumb before the four fingers. Native gains, friction, mass, geometry,
+gravity and solver parameters are unchanged; no object state is forced after
+recorded frame0 in either accepted run.
+
+Two fresh local U1 replays lifted15.3cm, exceeded90deg during intentional pouring,
+returned upright, and fully released. Final location errors were4.7/4.1mm, final
+world tilt0.45deg, and full source-relative orientation errors13.4/13.7deg. Both
+passed the established physical gates and the added fingertip-contact and pouring
+rim-position checks. Evidence is under `outputs/row82_reference_grip_hold_v1/`:
+`validation.json`, `aligned01/`, `independent01/`, and `independent_storyboard.png`.
+The image shows measured independent-replay states, not fitted geometry.
+
+World tilt during pouring is intended. Grasp slip is measured relative to the
+hand; raw-reference wrist error includes intentional position registration and is
+not an acceptance gate. Fingertip landmark distance does not establish surface
+contact, and fingertip contact alone does not establish that the handle is inside
+the grasp. The rim check uses a collision-mesh upper-rim proxy, not liquid
+simulation. These two local runs do not establish cross-GPU robustness or H200
+parity. No existing Lance was changed or republished by this candidate repair.
