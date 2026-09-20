@@ -38,6 +38,29 @@ def test_rejects_invalid_or_nonjoining_edits(fault):
     with pytest.raises(ValueError): edit_window(base, recipe)
 
 
+def test_u1_rejects_default_ccd_iterations():
+    from types import SimpleNamespace
+    import mujoco as mj
+    from sim.manorl.local_contact_repair import MODEL_FIELDS
+    from tools.u1_placement_workspace import assert_u1
+    model=SimpleNamespace(nu=28,na=0,opt=SimpleNamespace(
+        timestep=1/480,cone=mj.mjtCone.mjCONE_PYRAMIDAL,impratio=1,ccd_iterations=16))
+    for field in MODEL_FIELDS:
+        setattr(model,field,np.zeros((28,10)) if field.startswith('actuator_') and field.endswith('prm') else np.zeros(1))
+    model.actuator_dyntype=np.full(28,mj.mjtDyn.mjDYN_NONE)
+    model.actuator_gaintype=np.full(28,mj.mjtGain.mjGAIN_FIXED)
+    model.actuator_biastype=np.full(28,mj.mjtBias.mjBIAS_AFFINE)
+    model.actuator_gainprm[:,0]=100
+    model.actuator_biasprm[:,1]=-100
+    inp=SimpleNamespace(hz=120,manifest={'native':{k:getattr(model,k).copy() for k in MODEL_FIELDS}})
+    contract=assert_u1(model,inp)
+    assert contract['ccd_iterations']==16
+    assert contract['single_world_warp_capacity']=={'nconmax':1024,'nccdmax':256,'njmax':4096}
+    model.opt.ccd_iterations=35
+    with pytest.raises(AssertionError,match='CCD16'):
+        assert_u1(model,inp)
+
+
 def test_interpolation_has_no_overshoot():
     base, recipe = case()
     out = edit_window(base, recipe)

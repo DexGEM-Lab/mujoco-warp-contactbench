@@ -20,10 +20,12 @@ def load_raw_source(dataset, version, row_number, asset_root, asset_manifest):
     from sim.manorl import assets
     from sim.manorl.local_contact_repair import MODEL_FIELDS
     from tools.u1_placement_workspace import assert_u1
+    from tools.run_uniform_direct_parent_canary import DIRECT_CCD_ITERATIONS
 
     names = tuple(sorted(source['names']))
     _, model = assets.compile_unified_model(object_types=names, object_collisions=True,
                                             hand_side='right', physics_timestep=1/480)
+    model.opt.ccd_iterations = DIRECT_CCD_ITERATIONS
     if model.nu != 28 or model.nq != 28 + 7*len(names) or any(
             model.body(i).name.startswith('left_') for i in range(model.nbody)):
         raise ValueError('raw workspace requires exactly one right 28-DoF hand')

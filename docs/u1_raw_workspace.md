@@ -6,7 +6,11 @@
 recorded right-hand slot, and adds only the common scene grounding shift.
 An optional `--target /path/to/target.npy` loads an explicit finite `[frames,28]`
 U1 candidate; source poses remain the comparison reference. It never writes
-Lance or asset files.
+Lance or asset files. The native model explicitly sets CCD iterations to16;
+single-world Warp capacities are contacts1024, CCD256 and constraints4096,
+matching the formal replay configuration. Earlier local diagnostic runs used
+MuJoCo's default CCD35 and capacities512/512/4000; do not label those as
+fully matching the formal configuration or reuse their live checkpoints.
 
 ```bash
 DISPLAY=:1 PYTHONPATH=. python tools/view_u1_repair.py \

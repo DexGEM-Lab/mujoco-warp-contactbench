@@ -14,7 +14,9 @@ import numpy as np
 from sim.manorl.local_contact_repair import MODEL_FIELDS, array_sha, dump, sha
 from tools.fit_uniform_direct_parent import metrics_for
 from tools.pilot_start_augmentation import reconstruct
-from tools.run_uniform_direct_parent_canary import compile_model, replay_direct
+from tools.run_uniform_direct_parent_canary import (
+    compile_model, replay_direct, DIRECT_CCD_ITERATIONS, DIRECT_WARP_CAPACITY,
+)
 
 
 def edit_window(base, recipe):
@@ -50,6 +52,7 @@ def assert_u1(model, inp):
     assert inp.hz == 120 and model.nu == 28
     assert model.opt.timestep == 1/480
     assert model.opt.cone == mj.mjtCone.mjCONE_PYRAMIDAL and model.opt.impratio == 1
+    assert model.opt.ccd_iterations == DIRECT_CCD_ITERATIONS, 'U1 requires the formal CCD16 contract'
     assert model.na == 0
     assert np.all(model.actuator_dyntype == mj.mjtDyn.mjDYN_NONE)
     assert np.all(model.actuator_gaintype == mj.mjtGain.mjGAIN_FIXED)
@@ -60,7 +63,8 @@ def assert_u1(model, inp):
     return dict(setting='U1', control_hz=120, physics_hz=480, substeps=4,
                 cone='pyramidal', impratio=1, indexing='arrival', frame0='prestep',
                 actuator='native_position', post_frame0_state_writes=False,
-                hidden_controller_state=False)
+                hidden_controller_state=False, ccd_iterations=DIRECT_CCD_ITERATIONS,
+                single_world_warp_capacity=dict(DIRECT_WARP_CAPACITY))
 
 
 def run(a):

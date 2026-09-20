@@ -26,6 +26,9 @@ SETTINGS = {
     "U2": {"cone": "elliptic", "impratio": 100.0},
 }
 TARGET_KINDS = ("first", "mean", "last", "teacher", "teacher-lead1")
+# Same single-world capacities and CCD iterations as the formal 120/480 replay.
+DIRECT_CCD_ITERATIONS = 16
+DIRECT_WARP_CAPACITY = {"nconmax": 1024, "nccdmax": 256, "njmax": 4096}
 
 
 def compile_model(bundle: Path, asset_root: Path, inp, setting: str):
@@ -40,6 +43,7 @@ def compile_model(bundle: Path, asset_root: Path, inp, setting: str):
     _, model = assets.compile_unified_model(
         object_types=names, object_collisions=True, physics_timestep=1 / 480
     )
+    model.opt.ccd_iterations = DIRECT_CCD_ITERATIONS
     if setting == "U1":
         model.opt.cone = mj.mjtCone.mjCONE_PYRAMIDAL
         model.opt.impratio = 1.0
@@ -101,7 +105,7 @@ def replay_direct(inp, model, target: np.ndarray) -> dict[str, np.ndarray]:
     wp.init()
     wp.set_device("cuda:0")
     wm = mw.put_model(model)
-    wd = mw.put_data(model, data, nworld=1, nconmax=512, nccdmax=512, njmax=4000)
+    wd = mw.put_data(model, data, nworld=1, **DIRECT_WARP_CAPACITY)
 
     def step4():
         for _ in range(4):

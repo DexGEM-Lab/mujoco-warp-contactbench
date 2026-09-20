@@ -54,7 +54,8 @@ def test_adapter_preserves_explicit_identity_and_profile(source,monkeypatch,tmp_
     dataset=Mock(return_value=ds); monkeypatch.setattr(lance,'dataset',dataset)
     activate=Mock(return_value=manifest);monkeypatch.setattr(raw,'activate_hand_profile',activate)
     model=SimpleNamespace(nu=28,nq=35,nv=34,nbody=1,body=lambda i:SimpleNamespace(name='world'),
-                          joint=lambda n:SimpleNamespace(qposadr=[28]))
+                          joint=lambda n:SimpleNamespace(qposadr=[28]),
+                          opt=SimpleNamespace(ccd_iterations=35))
     for field in MODEL_FIELDS:setattr(model,field,np.zeros(1))
     monkeypatch.setattr(assets,'compile_unified_model',lambda **kwargs:(None,model))
     monkeypatch.setattr(assets,'asset_provenance',lambda:{'pinned':True})
@@ -66,6 +67,7 @@ def test_adapter_preserves_explicit_identity_and_profile(source,monkeypatch,tmp_
     assert provenance['index']['uuid']=='identity' and provenance['row']==82 and provenance['dataset_version']==4
     assert provenance['hand_side']=='right' and inp.hz==120
     assert target.shape==(3,28) and teacher['qpos'].shape==(3,35)
+    assert model.opt.ccd_iterations == 16  # never silently retain MuJoCo's default35
     np.testing.assert_array_equal(inp.initial['qpos'],teacher['qpos'][0])
     np.testing.assert_array_equal(target,teacher['qpos'][:,:28])
     check.assert_called_once_with(model,inp)

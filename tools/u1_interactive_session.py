@@ -56,7 +56,7 @@ class Session:
         import mujoco as mj
         import warp as wp
         from mujoco.mjx.third_party import mujoco_warp as mw
-        from tools.u1_placement_workspace import assert_u1
+        from tools.u1_placement_workspace import assert_u1, DIRECT_WARP_CAPACITY
         from sim.manorl.mjx_sim import command_target
         self.contract = assert_u1(model, inp)
         self.mj, self.wp, self.mw = mj, wp, mw
@@ -83,7 +83,7 @@ class Session:
         mj.mj_forward(model, self.cpu)
         wp.init(); wp.set_device('cuda:0')
         self.wm = mw.put_model(model)
-        self.data = mw.put_data(model, self.cpu, nworld=1, nconmax=512, nccdmax=512, njmax=4000)
+        self.data = mw.put_data(model, self.cpu, nworld=1, **DIRECT_WARP_CAPACITY)
         initial = self.checkpoint()
         self._step4()
         with wp.ScopedCapture() as capture:
