@@ -36,3 +36,19 @@ def test_complete_workspace_restore(monkeypatch):
     assert s.frame==1030 and s.edits==[dict(joint=6,value=.1)]
     np.testing.assert_array_equal(s.target,np.ones((1100,28)))
     for k,b in s.data.items():np.testing.assert_array_equal(b.numpy(),cp['buffers'][k])
+
+
+def test_arrival_index_advances_once_without_integrating_target_zero(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import sim.manorl.mjx_sim as runtime
+    control=Mock(side_effect=lambda target,*args:target)
+    monkeypatch.setattr(runtime,'command_target',control)
+    s=Session.__new__(Session)
+    s.frame=0; s.target=np.arange(84,dtype=float).reshape(3,28)
+    s.model=SimpleNamespace(jnt_range=np.tile([-100,100],(28,1)))
+    s.data=SimpleNamespace(qpos=SimpleNamespace(numpy=lambda:np.zeros((1,28))),ctrl=SimpleNamespace(assign=Mock()))
+    s.graph=object();s.wp=SimpleNamespace(capture_launch=Mock())
+    assert s.step() and s.frame==1
+    np.testing.assert_array_equal(control.call_args.args[0],s.target[1])
+    s.wp.capture_launch.assert_called_once_with(s.graph)

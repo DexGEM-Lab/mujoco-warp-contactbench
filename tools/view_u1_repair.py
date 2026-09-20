@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live A_row035 U1 grasp/carry/release workbench; no state-forcing controls."""
+"""Live native U1 grasp/carry/release workbench; no state-forcing controls."""
 import argparse
 from datetime import datetime, timezone
 import json
@@ -27,7 +27,7 @@ class Workspace:
         (self.output/'command_history').mkdir()
         self.queue=Queue();self.running=False;self.budget=args.checkpoint
         self.auto_save=True;self.saved=None;self.last_draw=0.;self.last_step=0.
-        self.root=tk.Tk();self.root.title('A_row035 | native U1 | grasp → carry → release')
+        self.root=tk.Tk();self.root.title(f'{args.label} | native U1 | grasp → carry → release')
         self.root.geometry('850x950+10+30')
         self.status=tk.StringVar(value='Frame0 physical replay to checkpoint…')
         ttk.Label(self.root,textvariable=self.status,wraplength=820).pack(fill='x')
@@ -102,7 +102,7 @@ class Workspace:
                 scene.ngeom+=1
         self.viewer.sync(state_only=True)
         self.status.set(f"U1 frame {s.frame}/{len(s.target)-1} | {'PLAY' if self.running else 'PAUSED' if not self.budget else 'STEPPING'} | links {state['hand_links']} | tilt {state['object_tilt_deg']:.2f}°")
-        shown={k:state[k] for k in ('contact_count','ray_count','object_position','object_quaternion_wxyz','hand_object_transform','teacher_hand_object_transform','current_28d','desired_28d')}
+        shown={k:state[k] for k in ('contact_count','ray_count','object_position','object_quaternion_wxyz','hand_object_transform','teacher_hand_object_transform','teacher_hand_links','contacts','teacher_contacts','current_28d','desired_28d')}
         self.text.delete('1.0','end');self.text.insert('end',json.dumps(shown,indent=1))
         state.update(running=self.running,remaining_steps=self.budget,checkpoint_frame=None if self.saved is None else self.saved['frame'],pid=os.getpid())
         p=self.output/'state.json';tmp=p.with_suffix('.tmp');tmp.write_text(json.dumps(state,indent=2));tmp.replace(p)
@@ -140,17 +140,33 @@ class Workspace:
 
 
 def main():
-    from tools.pilot_start_augmentation import reconstruct
-    from tools.run_uniform_direct_parent_canary import compile_model
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle','asset-root','target','output'):p.add_argument('--'+name,type=Path,required=True)
+    for name in ('asset-root','output'):p.add_argument('--'+name,type=Path,required=True)
+    for name in ('bundle','target','dataset','asset-manifest'):p.add_argument('--'+name,type=Path)
+    p.add_argument('--version',type=int)
+    p.add_argument('--row',type=int)
     p.add_argument('--checkpoint',type=int,default=1030)
-    a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
-    inp,_,_,teacher,provenance=reconstruct(a.bundle,'A_row035')
-    _,model=compile_model(a.bundle,a.asset_root,inp,'U1')
-    s=Session(inp,model,np.load(a.target,allow_pickle=False),teacher)
+    a=p.parse_args()
+    if a.dataset is not None:
+        if a.version is None or a.row is None or a.asset_manifest is None or a.bundle or a.target:
+            p.error('raw mode requires --version --row --asset-manifest and excludes --bundle/--target')
+        from tools.u1_raw_source import load_raw_source
+        inp,model,target,teacher,provenance=load_raw_source(a.dataset,a.version,a.row,a.asset_root,a.asset_manifest)
+        a.label=f'raw v{a.version} row{a.row}'
+    else:
+        if not a.bundle or not a.target or a.version is not None or a.row is not None or a.asset_manifest:
+            p.error('historical mode requires --bundle --target and excludes raw arguments')
+        from tools.pilot_start_augmentation import reconstruct
+        from tools.run_uniform_direct_parent_canary import compile_model
+        inp,_,_,teacher,provenance=reconstruct(a.bundle,'A_row035')
+        _,model=compile_model(a.bundle,a.asset_root,inp,'U1')
+        target=np.load(a.target,allow_pickle=False)
+        a.label='A_row035'
+    parse_command(dict(action='goto',frame=a.checkpoint),len(target))
+    a.output.mkdir(parents=True,exist_ok=False)
+    s=Session(inp,model,target,teacher,provenance)
     integer_checkpoint=parse_command(dict(action='goto',frame=a.checkpoint),len(s.target))
-    (a.output/'source.json').write_text(json.dumps(dict(target=str(a.target.resolve()),source=provenance,contract=s.contract),indent=2))
+    (a.output/'source.json').write_text(json.dumps(dict(target=str(a.target.resolve()) if a.target else 'recorded_right_qpos_grounded',source=provenance,contract=s.contract),indent=2))
     w=Workspace(a,s)
     print('WORKSPACE_READY DISPLAY',os.environ.get('DISPLAY'),flush=True)
     w.root.mainloop()

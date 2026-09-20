@@ -52,7 +52,7 @@ def device_arrays(obj, prefix=''):
 
 
 class Session:
-    def __init__(self, inp, model, target, teacher):
+    def __init__(self, inp, model, target, teacher, provenance=None):
         import mujoco as mj
         import warp as wp
         from mujoco.mjx.third_party import mujoco_warp as mw
@@ -66,7 +66,10 @@ class Session:
             raise ValueError('target must be finite [frames,28]')
         self.target = self.base.copy()
         self.edits = []
+        self.provenance = deepcopy(provenance or {})
         self.teacher = teacher
+        if np.shape(teacher['qpos']) != (inp.frames, model.nq) or not np.isfinite(teacher['qpos']).all():
+            raise ValueError('teacher must be finite [frames,nq]')
         self.frame = 0
         self.names = inp.arrays['scene_object_names'].tolist()
         self.active = inp.metrics['source_metadata']['active_object']
@@ -114,7 +117,7 @@ class Session:
         snapshot = self.checkpoint()
         np.savez_compressed(folder/'state.npz', **snapshot['buffers'], target=snapshot['target'])
         (folder/'workspace.json').write_text(json.dumps(dict(frame=self.frame, edits=self.edits,
-            buffers=list(snapshot['buffers']), diagnostic_only=True), indent=2))
+            buffers=list(snapshot['buffers']), source=self.provenance, contract=self.contract, diagnostic_only=True), indent=2))
         return snapshot
 
     def offset(self, m):
@@ -163,9 +166,17 @@ class Session:
         oR = d.xmat[self.object_body].reshape(3,3)
         relative = dict(position=(hR.T@(d.xpos[self.object_body]-d.xpos[self.hand_body])).tolist(),
                         rotation=(hR.T@oR).tolist())
-        td = mj.MjData(m); td.qpos[:] = self.teacher['qpos'][self.frame]; mj.mj_kinematics(m,td)
+        td = mj.MjData(m); td.qpos[:] = self.teacher['qpos'][self.frame]; mj.mj_forward(m,td)
+        teacher_contacts=[]
+        for c in td.contact[:td.ncon]:
+            b1,b2 = int(m.geom_bodyid[c.geom1]),int(m.geom_bodyid[c.geom2])
+            if self.object_body in (b1,b2):
+                teacher_contacts.append(dict(link=m.body(b2 if b1==self.object_body else b1).name,
+                                             position=c.pos.tolist(), distance=float(c.dist)))
         tR=td.xmat[self.hand_body].reshape(3,3)
-        return dict(frame=self.frame, target_cursor=self.frame, physics_seconds=float(self.data.time.numpy()[0]),
+        return dict(teacher_contacts=teacher_contacts,
+            teacher_hand_links=sorted({c['link'] for c in teacher_contacts if c['link'] not in self.names+['world']}),
+            frame=self.frame, target_cursor=self.frame, physics_seconds=float(self.data.time.numpy()[0]),
             qpos=d.qpos.tolist(), current_28d=d.qpos[:28].tolist(), desired_28d=self.target[self.frame].tolist(),
             applied_ctrl=d.ctrl.tolist(), contacts=contacts, hand_links=links, contact_count=len(contacts),
             hand_contact_count=sum(c['link'] in links for c in contacts), ray_count=len({x.split('_')[0] for x in links}),
@@ -178,7 +189,7 @@ class Session:
     def export(self, folder):
         folder=Path(folder); folder.mkdir(parents=True,exist_ok=False)
         np.save(folder/'target.npy',self.target)
-        (folder/'provenance.json').write_text(json.dumps(dict(contract=self.contract, edits=self.edits,
+        (folder/'provenance.json').write_text(json.dumps(dict(contract=self.contract, source=self.provenance, edits=self.edits,
             accepted=False, status='Requires full frame0 U1 validation and independent replay'),indent=2))
 
 
