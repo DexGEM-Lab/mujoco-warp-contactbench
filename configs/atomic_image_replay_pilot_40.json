@@ -1,0 +1,16 @@
+{
+  "contract": "manorl.atomic-image-replay-selection.v1",
+  "dataset_contract": "manorl_cheyingtong_unified_compact_v1",
+  "dataset_version": 2,
+  "selection_method": "five row indices evenly spaced over each action's dataset-order population; deterministic, no replay outcome selection",
+  "actions": {
+    "001": [0, 39, 78, 118, 157],
+    "002": [158, 178, 199, 220, 240],
+    "003": [377, 592, 1358, 1572, 1787],
+    "004": [241, 275, 309, 342, 376],
+    "005": [725, 763, 802, 841, 879],
+    "006": [880, 1803, 1843, 1882, 1922],
+    "007": [912, 960, 1009, 1266, 1794],
+    "009": [1040, 1084, 1128, 1203, 1247]
+  }
+}
