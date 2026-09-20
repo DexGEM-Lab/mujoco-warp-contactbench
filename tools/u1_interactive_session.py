@@ -51,6 +51,36 @@ def device_arrays(obj, prefix=''):
             yield from device_arrays(value, path+'.')
 
 
+def native_object_forces(session):
+    """Last native Warp substep forces exerted ON the selected object, by other body."""
+    wp, model, data = session.wp, session.model, session.data
+    count = int(data.nacon.numpy().ravel()[0])
+    if count >= data.contact.geom.shape[0]:
+        raise RuntimeError('native contact capacity reached')
+    if not count:
+        return {}, [0., 0., 0.]
+    ids = wp.array(np.arange(count, dtype=np.int32), dtype=wp.int32)
+    forces = wp.zeros(count, dtype=wp.spatial_vector)
+    session.mw.contact_force(session.wm, data, ids, True, forces)
+    values = forces.numpy()
+    pairs = data.contact.geom.numpy()[:count]
+    summed = {}
+    for pair, wrench in zip(pairs, values):
+        b1, b2 = (int(model.geom_bodyid[int(g)]) for g in pair)
+        if session.object_body not in (b1, b2):
+            continue
+        if b2 == session.object_body:
+            other, sign = b1, 1.
+        else:
+            other, sign = b2, -1.
+        name = model.body(other).name
+        summed.setdefault(name, np.zeros(3))
+        summed[name] += sign * wrench[:3]
+    adr = int(model.joint(session.active + '_free').dofadr[0])
+    total = data.qfrc_constraint.numpy()[0, adr:adr+3]
+    return {k: v.tolist() for k, v in summed.items()}, total.tolist()
+
+
 class Session:
     def __init__(self, inp, model, target, teacher, provenance=None):
         import mujoco as mj
@@ -74,6 +104,10 @@ class Session:
         self.names = inp.arrays['scene_object_names'].tolist()
         self.active = inp.metrics['source_metadata']['active_object']
         self.object_body = model.body(self.active).id
+        from sim.manorl.environment import _FINGERTIP_NAMES, _FINGERTIP_LOCAL_OFFSETS
+        self.tip_names = tuple(_FINGERTIP_NAMES)
+        self.tip_offsets = _FINGERTIP_LOCAL_OFFSETS.copy()
+        self.tip_bodies = [model.body(name).id for name in self.tip_names]
         # Wrist root of right hand, identified from the first actuated joint.
         self.hand_body = int(model.jnt_bodyid[5])
         self.cpu = mj.MjData(model)
@@ -181,7 +215,22 @@ class Session:
                 teacher_contacts.append(dict(link=m.body(b2 if b1==self.object_body else b1).name,
                                              position=c.pos.tolist(), distance=float(c.dist)))
         tR=td.xmat[self.hand_body].reshape(3,3)
-        return dict(teacher_contacts=teacher_contacts,
+        tip_world=np.asarray([d.xpos[b]+d.xmat[b].reshape(3,3)@off
+                              for b,off in zip(self.tip_bodies,self.tip_offsets)])
+        tip_local=(tip_world-d.xpos[self.object_body])@oR
+        native_forces,native_total=native_object_forces(self)
+        hand_force=np.zeros(3); other_force=np.zeros(3)
+        for name,force in native_forces.items():
+            if name in self.names+['world']:other_force+=np.asarray(force)
+            else:hand_force+=np.asarray(force)
+        return dict(native_force_boundary='last480Hz substep; pose is post-integration',
+            native_force_by_body_N=native_forces, native_hand_force_on_object_N=hand_force.tolist(),
+            native_other_force_on_object_N=other_force.tolist(),
+            native_total_constraint_object_force_N=native_total,
+            object_weight_N=float(-m.body_mass[self.object_body]*m.opt.gravity[2]),
+            fingertip_object_positions_m={name:tip_local[i].tolist() for i,name in enumerate(self.tip_names)},
+            thumb_index_tip_distance_m=float(np.linalg.norm(tip_world[0]-tip_world[1])),
+            qvel=d.qvel.tolist(), teacher_contacts=teacher_contacts,
             teacher_hand_links=sorted({c['link'] for c in teacher_contacts if c['link'] not in self.names+['world']}),
             frame=self.frame, target_cursor=self.frame, physics_seconds=float(self.data.time.numpy()[0]),
             qpos=d.qpos.tolist(), current_28d=d.qpos[:28].tolist(), desired_28d=self.target[self.frame].tolist(),

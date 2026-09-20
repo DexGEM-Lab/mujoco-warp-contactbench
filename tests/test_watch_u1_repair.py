@@ -55,6 +55,18 @@ def test_relative_transform_error_and_forward_sample_motion():
     assert "delta_since_sample=2.00mm" in format_state(after, before)
 
 
+def test_native_force_and_aperture_tip_coordinates_are_explicit():
+    s=sample();s.update(native_hand_force_on_object_N=[0,0,12.6],
+        native_other_force_on_object_N=[0,0,0],object_weight_N=12.56,
+        fingertip_object_positions_m={n:[.08,-.025,.03] for n in
+            ('thumb_ip','index_dip','middle_dip','ring_dip','pinky_dip')},
+        thumb_index_tip_distance_m=.022)
+    text=format_state(s)
+    assert 'native_last_substep hand_Fz=+12.60N other_Fz=+0.00N weight=12.56N' in text
+    assert 'FK_four_tip_object_y_mm=-25.0,-25.0,-25.0,-25.0' in text
+    assert 'thumb_index_tip_distance=22.0mm' in text
+
+
 def test_edits_are_printed_only_when_changed():
     before = sample()
     after = sample()

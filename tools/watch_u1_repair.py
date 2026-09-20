@@ -65,6 +65,16 @@ def format_state(state, previous=None):
         f"servo_ctrl_minus_q_xyz=({servo_mm[0]:+.1f},{servo_mm[1]:+.1f},{servo_mm[2]:+.1f})mm "
         f"source_links={','.join(state.get('teacher_hand_links', [])) or '-'}"
     )
+    if 'native_hand_force_on_object_N' in state:
+        fhand=state['native_hand_force_on_object_N'][2]
+        fother=state['native_other_force_on_object_N'][2]
+        weight=state['object_weight_N']
+        text += f'\n  native_last_substep hand_Fz={fhand:+.2f}N other_Fz={fother:+.2f}N weight={weight:.2f}N'
+    if 'fingertip_object_positions_m' in state:
+        tips=state['fingertip_object_positions_m']
+        depths=[tips[n][1]*1000 for n in ('index_dip','middle_dip','ring_dip','pinky_dip')]
+        text += ('\n  FK_four_tip_object_y_mm='+','.join(f'{v:+.1f}' for v in depths)
+                 + f" thumb_index_tip_distance={state['thumb_index_tip_distance_m']*1000:.1f}mm")
     if previous is None or state["edits"] != previous["edits"]:
         text += "\n  edits=" + ("; ".join(edit_text(e) for e in state["edits"]) or "none")
     return text
@@ -100,7 +110,8 @@ def main():
     stale = False
     unreadable = False
     emit("U1 LIVE TELEMETRY | observed state snapshots only; no physics/control writes")
-    emit("contacts/floor/penetration = CPU geometry, NOT force/support/force-closure proof; "
+    emit("contacts/floor/penetration = CPU geometry; force if present = native last substep. "
+         "Neither contact counts nor FK tip coordinates prove a stable grasp. "
          "relative_pose compares live to source; servo error is ctrl minus q, NOT tracking error")
     try:
         while True:

@@ -46,7 +46,11 @@ PYTHONPATH=. python -m tools.watch_u1_repair \
 It prints on published state changes: frame/checkpoint, object pose/tilt and
 motion since the previous sample, contacting links, maximum geometric
 penetration, source-relative hand/object pose error, actual servo target error,
-and new command acknowledgments or rejections. A paused unchanged state does not
+and new command acknowledgments or rejections. New sessions also expose native
+last-substep contact forces on the manipulated object (hand versus other bodies),
+its weight, FK fingertip positions in object coordinates, and thumb/index tip
+distance. Force is measured separately from the CPU geometric contact witnesses;
+pose is post-integration, while native force is from the preceding480Hz substep. A paused unchanged state does not
 spam output. Restore/rewind is marked explicitly; stale output and process exit
 are surfaced. `--once` gives one snapshot. The UI publishes snapshots rather
 than every physics step: this log is for live diagnosis, not full-rate acceptance.
