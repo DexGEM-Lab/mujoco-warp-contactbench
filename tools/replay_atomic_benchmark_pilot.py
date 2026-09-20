@@ -127,20 +127,23 @@ def configure_modules(args: argparse.Namespace) -> tuple[Any, Any, Any, Any, Any
 
         def compile_compat(*positional: Any, object_object_collisions: bool = False, **kwargs: Any):
             kwargs.setdefault("physics_timestep", 1 / PHYSICS_HZ)
+            collisions = bool(kwargs.pop("object_collisions", object_object_collisions))
             return original_compile(
-                *positional, object_collisions=object_object_collisions, **kwargs
+                *positional, object_collisions=collisions, **kwargs
             )
 
         def build_compat(*positional: Any, object_object_collisions: bool = False, **kwargs: Any):
             kwargs.setdefault("physics_timestep", 1 / PHYSICS_HZ)
+            collisions = bool(kwargs.pop("object_collisions", object_object_collisions))
             return original_build(
-                *positional, object_collisions=object_object_collisions, **kwargs
+                *positional, object_collisions=collisions, **kwargs
             )
 
         def validate_compat(*positional: Any, object_object_collisions: bool = False, **kwargs: Any):
             kwargs.setdefault("physics_timestep", 1 / PHYSICS_HZ)
+            collisions = bool(kwargs.pop("object_collisions", object_object_collisions))
             return original_validate(
-                *positional, object_collisions=object_object_collisions, **kwargs
+                *positional, object_collisions=collisions, **kwargs
             )
 
         assets.compile_unified_model = compile_compat
