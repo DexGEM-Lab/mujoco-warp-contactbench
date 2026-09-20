@@ -72,7 +72,10 @@ command inbox (`commands/*.json`). Example commands:
 ```
 
 Offsets alter future absolute targets with smooth zero-ended windows and joint
-limit checks; they never force object or hand states. Restore before comparing
+limit checks; they never force object or hand states. Raw references sometimes
+contain values outside native limits; native `command_target` resolves them on
+execution. Local edits cannot introduce or worsen a violation, but unchanged
+out-of-range samples elsewhere do not block a valid local edit. Restore before comparing
 branches. For row82, inspect frames230–270 and adjust only bounded wrist/finger
 approach offsets: four non-thumb fingers through the handle, thumb outside.
 Exported candidates carry source identity and are explicitly unaccepted until

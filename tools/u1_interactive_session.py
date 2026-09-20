@@ -127,8 +127,15 @@ class Session:
         proposed = self.target.copy()
         proposed[:,m['joint']] += m['value'] * window_offset(len(proposed), m['start'],m['end'],m['ramp'])
         lo, hi = self.model.jnt_range[m['joint']]
-        if np.any(proposed[:,m['joint']] < lo) or np.any(proposed[:,m['joint']] > hi):
-            raise ValueError('edit exceeds joint limits; reduce offset')
+        # Raw references may already exceed limits outside the edit window. Those
+        # values are resolved by command_target, and must not reject an unrelated
+        # local edit. Reject newly introduced/worsened violations anywhere.
+        old_values=self.target[:,m['joint']]
+        new_values=proposed[:,m['joint']]
+        old_violation=np.maximum(np.maximum(lo-old_values,old_values-hi),0)
+        new_violation=np.maximum(np.maximum(lo-new_values,new_values-hi),0)
+        if np.any(new_violation > old_violation + 1e-12):
+            raise ValueError('edit introduces or worsens joint-limit violations; reduce offset')
         self.target = proposed
         self.edits.append(m)
 

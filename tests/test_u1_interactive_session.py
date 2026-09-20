@@ -38,6 +38,32 @@ def test_complete_workspace_restore(monkeypatch):
     for k,b in s.data.items():np.testing.assert_array_equal(b.numpy(),cp['buffers'][k])
 
 
+def test_local_edit_is_not_blocked_by_unrelated_raw_limit_violation():
+    from types import SimpleNamespace
+    s=Session.__new__(Session);s.frame=10;s.edits=[]
+    s.target=np.full((100,28),.5);s.target[0,14]=-.1
+    s.model=SimpleNamespace(jnt_range=np.tile([0.,1.],(28,1)))
+    before=s.target.copy()
+    s.offset({'action':'offset','joint':14,'value':.05,'start':10,'end':30,'ramp':5})
+    assert s.target[0,14]==-.1
+    assert s.target[20,14]==.55
+    np.testing.assert_array_equal(s.target[:11],before[:11])
+    np.testing.assert_array_equal(s.target[30:],before[30:])
+    with pytest.raises(ValueError,match='worsens'):
+        s.offset({'action':'offset','joint':14,'value':.6,'start':10,'end':30,'ramp':5})
+
+
+def test_edit_cannot_deepen_existing_limit_violation():
+    from types import SimpleNamespace
+    s=Session.__new__(Session);s.frame=10;s.edits=[]
+    s.target=np.full((100,28),.5);s.target[10:31,11]=-.1
+    s.model=SimpleNamespace(jnt_range=np.tile([0.,1.],(28,1)))
+    with pytest.raises(ValueError,match='worsens'):
+        s.offset({'action':'offset','joint':11,'value':-.01,'start':10,'end':30,'ramp':5})
+    s.offset({'action':'offset','joint':11,'value':.05,'start':10,'end':30,'ramp':5})
+    assert s.target[20,11]==-.05
+
+
 def test_arrival_index_advances_once_without_integrating_target_zero(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
