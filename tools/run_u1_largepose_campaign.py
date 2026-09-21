@@ -26,11 +26,12 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from sim.manorl.approach_prefix import _discrete_c1_prefix
 from sim.manorl.u1_campaign import Ledger, array_sha, child_uuid, digest, file_sha, write_json
 from tools.u1_campaign_registry import load_parent
 from tools.u1_interactive_session import Session
 
-VERSION = 'u1-four-action-largepose-v2-upper-hemisphere'
+VERSION = 'u1-four-action-largepose-v3-exact-discrete-c1'
 ACTIONS = ('003', '006', '007', '009')
 RADII_MM = (50, 100, 150)
 ROT_AXES = (0, 1, 2)  # floating-root intrinsic XYZ: roll, pitch, yaw
@@ -96,17 +97,33 @@ def prefix_envelope(frames, delta):
     return envelope[:, None] * np.asarray(delta, dtype=float)[None, :]
 
 
-def make_target(base, delta, prefix_frames):
-    prefix = np.repeat(base[:1], prefix_frames, axis=0)
-    offsets = prefix_envelope(prefix_frames, delta)
-    # Historical approach_prefix contract: an endpoint-smooth +4cm vertical arc
-    # avoids sweeping the hand through the table/object while converging. The
-    # arc is zero at both endpoints with zero first/second derivative.
-    phase = np.arange(prefix_frames, dtype=float) / float(prefix_frames - 1)
-    offsets[:, 2] += .04 * 64.0 * phase**3 * (1.0 - phase)**3
-    prefix[:, :6] += offsets
+def make_target(base, delta, prefix_frames, reference_first_two=None):
+    """Historical C1 join against the state reference, then full parent control.
+
+    The historical prefix joins the reference trajectory, not the controller's
+    servo-lead target derivative. Wrist6D uses reference q0/q1. Fingers are not
+    perturbed and remain at the parent's frame0 control throughout the prefix.
+    """
+    reference = np.asarray(base[:2] if reference_first_two is None else reference_first_two,
+                           dtype=np.float64)
+    if reference.shape != (2, 28):
+        raise ValueError('reference_first_two must be [2,28]')
+    start = reference[0].copy(); start[:6] += np.asarray(delta, dtype=float)
+    prefix = np.repeat(np.asarray(base[:1], dtype=np.float64), prefix_frames, axis=0)
+    prefix[:, :3] = _discrete_c1_prefix(
+        start[:3], reference[:, :3], frames=prefix_frames, dt=1/120,
+        vertical_arc_height=.04)
+    prefix[:, 3:6] = _discrete_c1_prefix(
+        start[3:6], reference[:, 3:6], frames=prefix_frames, dt=1/120)
+    prefix = prefix.astype(base.dtype)
     target = np.concatenate([prefix, base], axis=0)
-    assert target[prefix_frames:].tobytes() == base.tobytes()
+    np.testing.assert_array_equal(target[prefix_frames:], base)
+    np.testing.assert_allclose(target[prefix_frames-1, :6],
+                               2*reference[0, :6]-reference[1, :6], atol=2e-7, rtol=0)
+    np.testing.assert_allclose(target[prefix_frames, :6]-target[prefix_frames-1, :6],
+                               reference[1, :6]-reference[0, :6], atol=3e-7, rtol=0)
+    np.testing.assert_array_equal(target[:prefix_frames, 6:],
+                                  np.repeat(base[:1, 6:], prefix_frames, axis=0))
     return target
 
 
@@ -246,7 +263,8 @@ class LargePoseRuntime:
 
     def replay(self, delta, prefix_frames, folder, frozen=None):
         folder = Path(folder)
-        target = make_target(self.base, delta, prefix_frames)
+        target = make_target(self.base, delta, prefix_frames,
+                             reference_first_two=self.teacher['qpos'][:2, :28])
         if frozen is not None:
             target = np.load(frozen, allow_pickle=False)
         q0 = self.I.initial['qpos'].copy(); q0[:6] += delta

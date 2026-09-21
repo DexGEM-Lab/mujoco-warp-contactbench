@@ -54,12 +54,11 @@ def test_prefix_envelope_endpoints():
     env = prefix_envelope(PREFIX_FRAMES, delta)
     np.testing.assert_allclose(env[0], delta, rtol=1e-12)
     np.testing.assert_allclose(env[-1], 0.0, atol=1e-15)
-    # make_target adds the historical endpoint-smooth 4cm vertical arc.
+    # Constant parent isolates the historical endpoint-smooth 4cm vertical arc.
     base = np.zeros((2, 28), dtype=float)
     target = make_target(base, delta, PREFIX_FRAMES)
-    z_residual = target[:PREFIX_FRAMES, 2] - env[:, 2]
-    assert abs(z_residual[0]) < 1e-15 and abs(z_residual[-1]) < 1e-15
-    np.testing.assert_allclose(z_residual.max(), .04, rtol=3e-4)
+    assert abs(target[0, 2]) < 1e-15 and abs(target[PREFIX_FRAMES-1, 2]) < 1e-15
+    np.testing.assert_allclose(target[:PREFIX_FRAMES, 2].max(), .04, rtol=3e-4)
     # Quintic has zero slope at both endpoints; first finite difference is O(dt^2).
     slope0 = env[1] - env[0]
     slope1 = env[-1] - env[-2]
@@ -72,5 +71,10 @@ def test_make_target_suffix_byte_exact():
     target = make_target(base, delta, PREFIX_FRAMES)
     assert target.shape == (PREFIX_FRAMES + 641, 28)
     assert target[PREFIX_FRAMES:].tobytes() == base.tobytes()
-    np.testing.assert_array_equal(target[:, 6:], np.concatenate(
-        [np.repeat(base[:1], PREFIX_FRAMES, axis=0), base], axis=0)[:, 6:])
+    np.testing.assert_allclose(target[PREFIX_FRAMES-1, :6],
+                               2*base[0, :6]-base[1, :6], atol=2e-7, rtol=0)
+    np.testing.assert_allclose(target[PREFIX_FRAMES, :6]-target[PREFIX_FRAMES-1, :6],
+                               target[PREFIX_FRAMES+1, :6]-target[PREFIX_FRAMES, :6], atol=3e-7, rtol=0)
+    np.testing.assert_allclose(target[0, :6], base[0, :6]+delta, atol=1e-7, rtol=0)
+    np.testing.assert_array_equal(target[:PREFIX_FRAMES, 6:],
+                                  np.repeat(base[:1, 6:], PREFIX_FRAMES, axis=0))
