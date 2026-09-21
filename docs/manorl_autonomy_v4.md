@@ -72,7 +72,9 @@ It takes four `mjx.step` calls and then exactly one
 The object COM/origin and anchor-point formulas use `xipos`, `subtree_com` and
 `cvel`; anchor velocity includes the required co-rotating `-omega_O×delta` term.
 
-Reward evaluates `s(t+1)` against `ref(t+1)`. The three object tracking terms
+The complete reward reference — every term, scale, gate, curve, threshold,
+termination condition and the measured per-phase calibration — is
+`docs/manorl_autonomy_v4_reward.md`. In brief: reward evaluates `s(t+1)` against `ref(t+1)`. The three object tracking terms
 are **log-shaped ramps** of their error, not exponentials, Gaussians or
 piecewise polynomials:
 
