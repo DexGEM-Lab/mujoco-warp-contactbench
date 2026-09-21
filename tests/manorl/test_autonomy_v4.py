@@ -104,7 +104,7 @@ def test_reward_boundaries_clipped_action_and_reason_bits():
     jax=pytest.importorskip("jax"); j=jax.numpy; cache=_cache(); s=_state(); r=compute_reward(s,_contact(),cache,j.asarray([0]),j.full((1,28),2.))
     # Synthetic reference is stationary: object terms retain precisely 1%.
     np.testing.assert_allclose(np.asarray(r.action),[-.002],atol=1e-7); np.testing.assert_allclose(np.asarray(r.object_position),[.006],atol=1e-6)
-    np.testing.assert_allclose(np.asarray(r.object_velocity),[.0005],atol=1e-7)
+    np.testing.assert_allclose(np.asarray(r.object_velocity),[.004],atol=1e-7)
     np.testing.assert_allclose(np.asarray(r.hand_relative),[.125],atol=1e-6); np.testing.assert_allclose(np.asarray(r.geometry),[1.2],atol=1e-6); assert not bool(r.done[0])
     fallen=s._replace(object_bottom=j.asarray([-.06])); f=compute_reward(fallen,_contact(),cache,j.asarray([0]),j.zeros((1,28))); assert int(f.reason[0])&4 and np.isclose(np.asarray(f.severe)[0],-75)
 
@@ -124,9 +124,9 @@ def test_reference_speed_motion_gate_is_exact_and_independent_of_actual_speed():
     np.testing.assert_allclose(np.asarray(r_still.object_position),[.006],atol=1e-6)
     np.testing.assert_allclose(np.asarray(r_linear.object_position),[.6],atol=1e-6)
     np.testing.assert_allclose(np.asarray(r_angular.object_position),[.303],atol=1e-6)
-    # Object velocity carries its own 0.5 coefficient (native max 0.1 -> 0.05).
-    np.testing.assert_allclose(np.asarray(r_still.object_velocity),[.0005],atol=1e-7)
-    np.testing.assert_allclose(np.asarray(r_linear.object_velocity),[.5*.1*np.exp(-(.10/.25)**2)],rtol=1e-4,atol=1e-7)
+    # Object velocity carries its own 4.0 coefficient (native max 0.1 -> 0.4).
+    np.testing.assert_allclose(np.asarray(r_still.object_velocity),[.004],atol=1e-7)
+    np.testing.assert_allclose(np.asarray(r_linear.object_velocity),[4.*.1*np.exp(-(.10/.25)**2)],rtol=1e-4,atol=1e-7)
     # A changed actual speed changes the velocity-match term, but never the gate.
     fast_actual=state._replace(object_v_com=j.asarray([[100.,0.,0.]]),object_w=j.asarray([[100.,0.,0.]]))
     r_fast_actual=compute_reward(fast_actual,_contact(),linear,j.asarray([0]),action)

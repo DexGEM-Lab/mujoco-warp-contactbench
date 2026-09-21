@@ -95,9 +95,10 @@ from `0.01` to `0.75`; position and velocity keep `w_obj`, and a moving or
 transitioning reference keeps `w_obj` for all three. At exactly 45 deg the
 unweighted rotation term is `-0.1` (its linear segment's floor onset), so the
 override turns a persistent gross twist during a static hold from `-0.001` to
-`-0.075` per control. Within the gate, object world position and object world
-COM/angular velocity both carry coefficient `0.5` (native maxima `1.2 -> 0.6`
-and `0.1 -> 0.05` at full gate); the rotation term keeps unit coefficient.
+`-0.075` per control. Within the gate, object world position carries coefficient `0.5` (native
+maximum `1.2 -> 0.6` at full gate) and object world COM/angular velocity
+carries coefficient `4.0` (native maximum `0.1 -> 0.4`); the rotation term
+keeps unit coefficient.
 Hand--object relative pose
 has coefficient `0.125`; feasible fingers retain `0.2`; reference-contact
 anchor correspondence has coefficient `1.2`; action penalty remains
@@ -108,7 +109,7 @@ the other terms. It has no force-magnitude, table-contact, slip, or hidden
 contact reward. Reasons are complete=1, deviation=2, fallen=4, nonfinite=8.
 
 The exact parameter set is emitted as
-`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-pos-vel.v1`
+`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-position.quadruple-object-velocity.v1`
 in new training provenance/config and frozen-evaluation provenance. It is deliberately
 separate from the model ABI: an old frozen checkpoint can load, but an
 evaluation performed with this runtime reports the new reward and must not be

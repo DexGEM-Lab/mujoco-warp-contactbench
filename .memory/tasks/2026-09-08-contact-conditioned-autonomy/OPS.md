@@ -447,3 +447,13 @@ Tests: the reference-speed gate test now asserts `.006 / .6 / .303` for the thre
 Measured effect on the immutable successful trace (offline): object position `91.922 -> 45.961`, object velocity `9.077 -> 4.538`, giving a new production total of **206.507721** (v3 302.065135 minus 45.961 position, 4.538 velocity and 45.058 static-rotation override). Phase totals under the new configuration: approach, lift and lower keep their v3 values scaled on the two halved terms, and the rest phase remains negative from the rotation override.
 
 Playground updated to match: object position and velocity default coefficients `0.5`, production anchor now **206.5077209713** recomputed and asserted inside `build_data.py` before writing, historical v3 anchor 302.065135 preserved, both verified headless in the rebuilt 6.5 MB single-file bundle.
+
+## 2026-09-21T18:05:00+08:00 — Object velocity coefficient corrected to 4.0 (user correction)
+
+User corrected the previous instruction: the object velocity coefficient is **4.0**, not 0.5. Object position stays at 0.5. `REWARD_OBJECT_VELOCITY_COEF=4.0` now scales the native velocity formula (native max `0.1 -> 0.4` at full gate, 8x the value set an hour earlier). Reward parameter provenance id is now `manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-position.quadruple-object-velocity.v1`. Nine-term structural ABI unchanged.
+
+Tests updated to the corrected arithmetic: static gate velocity `.004`, full-gate velocity `4.0*.1*exp(-(.10/.25)^2)`, and the large-actual-speed mismatch still driving the velocity term to zero. Focused CPU suite: **120 passed**.
+
+Measured effect on the immutable successful trace: object velocity `9.077 -> 36.307`, object position `91.922 -> 45.961`, rotation override `-45.058`, giving a production total of **238.276694** (from 302.065135). Phase totals: approach 88.024 (0.4315/step), lift 70.686 (1.0710), lower 84.444 (1.2238), rest -4.877 (-0.0245). Term shares of the total: fingers 39.2%, geometry 28.8%, object position 19.3%, object velocity 15.2%, hand-relative 9.6%, object rotation -12.3%. The velocity term now contributes 18.1 of the lower-phase total and is the third largest term in that phase.
+
+Playground updated: object velocity default `4.0` with slider range widened to `[0,8]`, production anchor now **238.276694** (asserted inside `build_data.py` before writing), v3 anchor 302.065135 unchanged; both verified headless in the rebuilt bundle.

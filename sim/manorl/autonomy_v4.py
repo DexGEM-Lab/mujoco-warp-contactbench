@@ -26,7 +26,7 @@ REWARD_MOTION_GATE_HIGH=0.10      # full weight above this reference speed (m/s)
 REWARD_MOTION_STATIC_WEIGHT=0.01  # object terms preserve 1% on a still reference
 REWARD_MOTION_RADIUS=0.04330042412758056  # cube2 max collision-vertex radius about COM (m)
 REWARD_OBJECT_POSITION_COEF=0.5    # object world position tracking, non-static full weight
-REWARD_OBJECT_VELOCITY_COEF=0.5    # object world velocity tracking, non-static full weight
+REWARD_OBJECT_VELOCITY_COEF=4.0    # object world velocity tracking, non-static full weight
 REWARD_HAND_RELATIVE_COEF=0.125   # palm-object relative pose
 REWARD_GEOMETRY_COEF=1.2          # contact anchor correspondence
 REWARD_SEVERE_PENALTY=75.0        # deviation / fall / non-finite, applied once
@@ -42,7 +42,7 @@ def motion_gate_weight(v_eff):
 
 def reward_parameters(object_radius: float = REWARD_MOTION_RADIUS) -> dict[str, object]:
     """JSON-safe reward provenance for training and frozen-evaluation artifacts."""
-    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-pos-vel.v1",
+    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-position.quadruple-object-velocity.v1",
             "object_tracking": {"motion_source": "reference_object_com_linear_and_angular_velocity",
                                 "effective_speed": "sqrt(norm(v_ref_com)^2 + (object_radius_m * norm(omega_ref))^2)",
                                 "object_radius_m": float(object_radius),
