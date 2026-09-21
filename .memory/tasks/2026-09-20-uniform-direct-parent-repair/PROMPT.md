@@ -103,3 +103,15 @@ stop after baseline with its exact failure and a concrete next experiment.
 
 ## Authorized fast direct120 v2 continuation
 Starting committed9dc54cb and v1 artifacts, one fixed-wrist local shallow acquisition solve before206, four nonthumb before delayed thumb. Preserve row130 wrist/object and full task timeline. Exactly one focused nominal MJX-Warp frame0 replay; stop first failed boundary, no variants. Only focused success permits full and fresh-process repeat. Unique outputs/action005_direct120_v2; no changes to unrelated largepose files.
+
+## Current resumed objective: finish and publish strict-C1 exact640
+Action005 work remains paused and excluded. Resume the completed v3 strict-C1
+production for actions003/006/007/009: exactly160 selected/action and640 total.
+Merge disjoint003/006 shards without changing artifacts; verify every canonical
+artifact against its ledger SHA; require two accepted frozen-control replays with
+distinct PIDs, zero solved-force prefix contacts, exact strict-C1 identities and
+byte-exact parent suffixes. Export a new self-contained640-row Lance, perform
+full source-bound row readback, build a per-UUID visualization layout with zero
+unresolved background clearances, and atomically publish to a new NAS directory.
+The existing1,923-row dataset and all v1/v2/005 evidence remain immutable. No
+subagents for this resumed publication work.
