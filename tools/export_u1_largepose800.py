@@ -573,6 +573,11 @@ def export(args) -> dict:
     args.output.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(args.action005_registry, args.output / "action005_registry.json")
     shutil.copyfile(args.action005_plan, args.output / "action005_plan.json")
+    parent_validation = args.action005_registry.parent / "parent_registry_validation.json"
+    require(parent_validation.is_file(), "missing action005 parent validation")
+    shutil.copyfile(
+        parent_validation, args.output / "action005_parent_validation.json"
+    )
     for name in ("manifest.json", "validation.json", "publication.json"):
         shutil.copyfile(args.exact640 / name, args.output / ("source640_" + name))
     write_json(args.output / "action005_rejections.json", audit)
@@ -593,6 +598,7 @@ def export(args) -> dict:
         "action005_registry_digest": json.loads(args.action005_registry.read_text())["digest"],
         "action005_plan_sha256": file_sha(args.action005_plan),
         "action005_plan_digest": plan["digest"],
+        "action005_parent_validation_sha256": file_sha(parent_validation),
     }
     write_json(args.output / "manifest.json", manifest)
     lance.write_dataset(
@@ -634,6 +640,11 @@ def validate(args) -> dict:
     require(
         json.loads((args.output / "action005_rejections.json").read_text()) == audit,
         "action005 rejection audit",
+    )
+    require(
+        file_sha(args.output / "action005_parent_validation.json")
+        == manifest["action005_parent_validation_sha256"],
+        "action005 parent validation snapshot",
     )
     source_dataset = lance.dataset(str(args.exact640 / "compact.lance"))
     for output_index in range(800):

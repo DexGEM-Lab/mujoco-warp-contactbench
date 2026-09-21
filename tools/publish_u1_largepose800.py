@@ -129,6 +129,9 @@ def main() -> None:
 
     manifest = json.loads((staging / "manifest.json").read_text())
     validation = json.loads((staging / "validation.json").read_text())
+    parent_validation = json.loads(
+        (staging / "action005_parent_validation.json").read_text()
+    )
     offsets = json.loads((staging / "background_offsets.json").read_text())
     layout = json.loads((staging / "visualization_layout.json").read_text())
     require(manifest["contract"] == CONTRACT, "manifest contract")
@@ -136,6 +139,13 @@ def main() -> None:
     require(manifest["ordered_uuids"] == uuids, "manifest UUID order")
     require(validation["validated"] is True and validation["rows"] == 800, "validation")
     require(validation["counts"] == EXPECTED_COUNTS, "validated action quotas")
+    require(
+        parent_validation["validated"] is True
+        and parent_validation["parents"] == 10
+        and parent_validation["registry_digest"]
+        == manifest["action005_registry_digest"],
+        "action005 parent validation",
+    )
     require(offsets["lance"] == "compact.lance", "offset Lance path")
     require(set(offsets["report_by_action"]) == set(ACTIONS), "offset action coverage")
     require(
@@ -187,6 +197,7 @@ This directory contains 800 newly generated Cheyingtong right-hand trajectories:
 - Lance: `compact.lance` (version 1, 800 rows)
 - source-bound validation: `validation.json`
 - deterministic action005 plan/registry: `action005_plan.json`, `action005_registry.json`
+- parent qualification: `action005_parent_validation.json`
 - runnable action005 parent bundles: `parents/row00` through `parents/row09`
 - visualization layout and clearances: `visualization_layout.json`, `background_offsets.json`
 - file hashes: `sha256.json`
