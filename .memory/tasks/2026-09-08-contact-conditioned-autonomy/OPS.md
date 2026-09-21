@@ -423,3 +423,17 @@ Exact new-score recomputation on the fixed trace (positions and quaternions reco
 Local ignored artifact `outputs/manorl/contact_conditioned_autonomy/reward-playground/` updated: `build_palm_pose.py` performs and validates the FK recovery; `build_data.py` now emits `palm_pos_err_m` / `palm_ang_err_rad` plus both anchors; `index.html` gained the `hand_world` term (ungated, coefficient 0.6), the object position coefficient default of 0.5, a checked static-rotation-override control, a production preset, and a dual-anchor reconciliation that verifies **both** 302.065135 (v3) and 375.703686 (production) in-browser. The single-file bundle was rebuilt (`manorl-reward-playground-cube2_02_2833.html`, 6.5 MB) and verified headless: production 375.704 / per-step 0.6983, v3 preset 302.065, and at control 430 the static rotation override fires (80.3 deg) with palm error 6.97 cm / 2.7 deg.
 
 Two real JavaScript defects were found and fixed during verification: the unary-minus-before-exponentiation form `-(x)**2` is a SyntaxError in JavaScript and aborted all page rendering, and the new term initially read a non-existent `base.hand_world` key. Inline-script parse checking plus DOM assertions on both presets are the checks that caught them.
+
+## 2026-09-21T17:35:00+08:00 — Hand-world term removed on user judgment
+
+User judged the hand-world tracking term unreasonable and asked for its removal from both the reward code and the local playground. Removed by an exact `git revert` of `baf58a6` (commit `f26b9bf`), verified by an empty diff against `baf58a6^` for `sim/`, `tests/`, `docs/`, `tools/`. The OPS file was deliberately kept (append-only evidence) rather than reverted.
+
+Consequence for the other half of that change: the object position coefficient returns to `1.0`. The halving existed only to fund the removed term, so leaving it at `0.5` would have been an unmotivated change to object-tracking strength. The static-reference rotation override from `8fcc9af` is retained unchanged.
+
+State after removal: reward is the v3 reference-speed-gated contact-priority set plus the static rotation override; `V4Reward` and `REWARD_NAMES` return to 9 terms; the reward parameter provenance id returns to `manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.v1`. Focused CPU suite: 120 passed.
+
+Playground updated to match: hand-world term, its coefficient control and its preset removed; object position default restored to `1.0`; production preset is now "v3 weights plus the static rotation override" with an independently verified anchor of **257.007293492** (v3's 302.065135 minus the override's 45.057841), and the historical v3 anchor 302.065135 remains checkable. `build_data.py` now recomputes and asserts the production anchor from the trace before writing. Both anchors verified headless; the rebuilt single-file bundle is 6.5 MB.
+
+The FK-recovered palm pose is retained in the playground as a **diagnostic display only** (palm error cm / degrees in the current-frame line). It is no longer a reward input; the earlier finding that the recovery is bit-exact and that palm orientation error is small (mean 2.6 deg, max 6.3 deg) remains valid evidence.
+
+Measured effect of the surviving design on the immutable successful trace: production 257.007293 vs v3 302.065135, the whole difference being the static rotation override, which fires on 136 controls in 403-538 and drives the rest-phase total from +42.132 (v3) to **-2.926**.
