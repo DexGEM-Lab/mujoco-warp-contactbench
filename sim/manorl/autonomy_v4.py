@@ -32,6 +32,25 @@ REWARD_GEOMETRY_COEF=1.2          # contact anchor correspondence
 REWARD_SEVERE_PENALTY=75.0        # deviation / fall / non-finite, applied once
 REWARD_STATIC_ROT_ERROR_DEG=45.0  # static-reference rotation error escaping the gate
 REWARD_STATIC_ROT_WEIGHT=0.75     # rotation gate weight once the static error threshold is exceeded
+# Log-shaped error->reward curves for the three object tracking terms.
+# L(e)=clip(log1p(e/s)/log1p(D/s),0,1) with s=e50^2/(D-2*e50) so L(e50)=0.5 exactly.
+# e50 is the error that keeps half the reward; D is the error where it reaches zero.
+REWARD_POSITION_HALF_M=0.015     # per-axis 1.5 cm keeps half of the position term
+REWARD_POSITION_HORIZON_M=0.10   # 10 cm = deviation termination threshold
+REWARD_VELOCITY_HALF=0.5         # combined normalized velocity error at half reward
+REWARD_VELOCITY_HORIZON=2.5      # normalized error at zero
+REWARD_ROTATION_HALF_DEG=25.0    # orientation error at half of the rotation range
+REWARD_ROTATION_HORIZON_DEG=90.0 # orientation error at the floor
+REWARD_ROTATION_MAX=0.3          # alignment bonus at zero error
+REWARD_ROTATION_MIN=-0.5         # floor beyond the horizon
+
+def log_fraction(u, half, horizon):
+    """Normalized log ramp: 0 at u=0, exactly 0.5 at u=half, 1 at u>=horizon."""
+    import jax.numpy as j
+    if not (0.0 < half < horizon / 2.0):
+        raise ValueError("log curve requires 0 < half < horizon/2")
+    s = half * half / (horizon - 2.0 * half)
+    return j.clip(j.log1p(j.maximum(j.asarray(u), 0.0) / s) / j.log1p(horizon / s), 0.0, 1.0)
 
 def motion_gate_weight(v_eff):
     """Smooth 1%->100% object-tracking weight from REFERENCE effective speed only."""
@@ -42,7 +61,7 @@ def motion_gate_weight(v_eff):
 
 def reward_parameters(object_radius: float = REWARD_MOTION_RADIUS) -> dict[str, object]:
     """JSON-safe reward provenance for training and frozen-evaluation artifacts."""
-    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-position.quadruple-object-velocity.v1",
+    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-position.quadruple-object-velocity.log-curves.v1",
             "object_tracking": {"motion_source": "reference_object_com_linear_and_angular_velocity",
                                 "effective_speed": "sqrt(norm(v_ref_com)^2 + (object_radius_m * norm(omega_ref))^2)",
                                 "object_radius_m": float(object_radius),
@@ -62,6 +81,16 @@ def reward_parameters(object_radius: float = REWARD_MOTION_RADIUS) -> dict[str, 
                              "fingers": 0.2, "geometry": REWARD_GEOMETRY_COEF,
                              "action": -0.002, "survival": 0.001,
                              "severe_failure": -REWARD_SEVERE_PENALTY},
+            "tracking_curves": {
+                "family": "log ramp: value = A*(1 - log1p(e/s)/log1p(D/s)); monotone, no flat top",
+                "object_position": {"variable": "per-axis absolute error", "half_m": REWARD_POSITION_HALF_M,
+                                    "horizon_m": REWARD_POSITION_HORIZON_M, "axis_weights": [0.2, 0.2, 0.8]},
+                "object_velocity": {"variable": "sqrt(sum(((v-v_ref)/0.25)^2)+sum(((w-w_ref)/2)^2))",
+                                    "half": REWARD_VELOCITY_HALF, "horizon": REWARD_VELOCITY_HORIZON},
+                "object_rotation": {"variable": "shortest angle vs reference (deg)",
+                                    "half_deg": REWARD_ROTATION_HALF_DEG,
+                                    "horizon_deg": REWARD_ROTATION_HORIZON_DEG,
+                                    "value_at_zero": REWARD_ROTATION_MAX, "floor": REWARD_ROTATION_MIN}},
             "severe_conditions": ["object_position_deviation_gt_0.10_m", "object_bottom_below_table_minus_0.05_m", "nonfinite_physics_or_contact"]}
 
 class V4Physical(NamedTuple):
@@ -589,9 +618,9 @@ def compute_reward(physical: V4Physical, contact: V4Contact, cache: ReferenceCac
     import jax.numpy as j
     i=_gather(cache,index,env_ref=env_ref); C=lambda x:j.asarray(x); target_p=C(cache.object_origin)[i]; target_q=C(cache.object_quat_xyzw)[i]
     dp=physical.object_origin-target_p
-    pos=REWARD_OBJECT_POSITION_COEF*(.2*j.exp(-40*j.abs(dp[:,0]))+.2*j.exp(-40*j.abs(dp[:,1]))+.8*j.exp(-40*j.abs(dp[:,2])))
-    deg=shortest_angle(physical.object_quat_xyzw,target_q)*180/j.pi; rotvalue=j.where(deg<=20,1-.00125*deg**2,j.where(deg<=90,-.00003175*(deg-20)**2-.019206*(deg-20)+.5,-1.)); rot=.4*rotvalue-.1
-    vel=REWARD_OBJECT_VELOCITY_COEF*.1*j.exp(-j.sum(((physical.object_v_com-C(cache.object_v_com)[i])/.25)**2,axis=-1)-j.sum(((physical.object_w-C(cache.object_w)[i])/2.)**2,axis=-1))
+    pos=REWARD_OBJECT_POSITION_COEF*(.2*(1.-log_fraction(j.abs(dp[:,0]),REWARD_POSITION_HALF_M,REWARD_POSITION_HORIZON_M))+.2*(1.-log_fraction(j.abs(dp[:,1]),REWARD_POSITION_HALF_M,REWARD_POSITION_HORIZON_M))+.8*(1.-log_fraction(j.abs(dp[:,2]),REWARD_POSITION_HALF_M,REWARD_POSITION_HORIZON_M)))
+    deg=shortest_angle(physical.object_quat_xyzw,target_q)*180/j.pi; rotvalue=1.-log_fraction(deg,REWARD_ROTATION_HALF_DEG,REWARD_ROTATION_HORIZON_DEG); rot=REWARD_ROTATION_MIN+(REWARD_ROTATION_MAX-REWARD_ROTATION_MIN)*rotvalue
+    vel=REWARD_OBJECT_VELOCITY_COEF*(.1*(1.-log_fraction(j.sqrt(j.sum(((physical.object_v_com-C(cache.object_v_com)[i])/.25)**2,axis=-1)+j.sum(((physical.object_w-C(cache.object_w)[i])/2.)**2,axis=-1)),REWARD_VELOCITY_HALF,REWARD_VELOCITY_HORIZON)))
     rel=quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-physical.object_origin); rrel=quat_unrotate(target_q,C(cache.palm_origin)[i]-target_p); relq=quat_mul(quat_conj(physical.object_quat_xyzw),physical.palm_quat_xyzw); rrelq=quat_mul(quat_conj(target_q),C(cache.palm_quat_xyzw)[i]); hand=REWARD_HAND_RELATIVE_COEF*j.exp(-j.sum(((rel-rrel)/.04)**2,axis=-1)-(shortest_angle(relq,rrelq)/.35)**2)
     fingers=.2*j.exp(-j.mean((physical.q_raw[:,6:]-C(cache.q_feasible)[i][:,6:])**2,axis=-1)/.35**2)
     _,_,delta,_=anchor_delta_and_velocity(physical,C(cache.region_anchor_hand)[i],C(cache.region_anchor_object)[i]); e=delta-C(cache.delta_ref)[i]; weight=C(cache.proximity)[i]*C(cache.confidence)[i]*C(cache.valid)[i]; geometry=REWARD_GEOMETRY_COEF*j.sum(weight*j.exp(-j.sum(e*e,axis=-1)/.01**2),axis=-1)/j.maximum(j.sum(weight,axis=-1),1.)

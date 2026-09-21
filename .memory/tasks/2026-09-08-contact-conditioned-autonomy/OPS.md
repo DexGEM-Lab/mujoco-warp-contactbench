@@ -457,3 +457,27 @@ Tests updated to the corrected arithmetic: static gate velocity `.004`, full-gat
 Measured effect on the immutable successful trace: object velocity `9.077 -> 36.307`, object position `91.922 -> 45.961`, rotation override `-45.058`, giving a production total of **238.276694** (from 302.065135). Phase totals: approach 88.024 (0.4315/step), lift 70.686 (1.0710), lower 84.444 (1.2238), rest -4.877 (-0.0245). Term shares of the total: fingers 39.2%, geometry 28.8%, object position 19.3%, object velocity 15.2%, hand-relative 9.6%, object rotation -12.3%. The velocity term now contributes 18.1 of the lower-phase total and is the third largest term in that phase.
 
 Playground updated: object velocity default `4.0` with slider range widened to `[0,8]`, production anchor now **238.276694** (asserted inside `build_data.py` before writing), v3 anchor 302.065135 unchanged; both verified headless in the rebuilt bundle.
+
+## 2026-09-21T18:40:00+08:00 — Log-shaped tracking curves for position, velocity, rotation
+
+User asked for the error->reward mapping of the three object tracking terms to be logarithmic rather than linear/flat, i.e. small errors must be worth much more, not equal reward per interval. Implemented a single normalized log ramp for all three:
+
+`L(e) = clip(log1p(e/s)/log1p(D/s), 0, 1)`, `s = e50^2/(D - 2*e50)` so `L(e50) = 0.5` exactly; value `= A*(1-L)` for position and velocity, and `MIN + (MAX-MIN)*(1-L)` for orientation with MAX 0.3 / MIN -0.5.
+
+Parameters chosen from the measured failure of the old curves (position exponential: 0.40/cm at zero but only 13.5% left at 5 cm; velocity Gaussian: exactly zero gradient at zero error and negligible beyond u=2; rotation: zero slope at 0 deg then a nearly constant 0.008/deg, i.e. equal reward per equal interval):
+
+| term | e50 | D | rationale |
+|---|---:|---:|---|
+| position | 1.5 cm | 10 cm | D = deviation termination threshold, so the term reaches zero exactly when the episode terminates for deviation |
+| velocity | 0.5 | 2.5 | same combined normalized variable as before, so the linear/angular trade-off is untouched |
+| rotation | 25 deg | 90 deg | steep top; keeps the +0.3 / -0.5 endpoints |
+
+Provenance id `...half-object-position.quadruple-object-velocity.log-curves.v1`; the parameter object now carries a `tracking_curves` block with each e50/horizon. Nine-term ABI unchanged.
+
+A double-counting bug was caught by the tests while writing this: the per-axis weights 0.2/0.2/0.8 already sum to the native 1.2 maximum, so an extra `1.2*` factor made the full-gate position maximum 0.72 instead of 0.6. Fixed before commit; the same bug had briefly produced a wrong 209.03 playground anchor that is now 200.243056.
+
+Tests: new `test_tracking_curves_are_log_shaped_with_documented_half_and_horizon` asserts L(0)=0, L(e50)=0.5, L(>=D)=1, monotonicity, no flat top (0->5 deg costs more than 0.8*0.05 of the rotation range), rotation endpoints and half point, that position reaches zero at the horizon, and the single-axis e50 halving. The static-override test's rotation helper now uses the log curve. Focused CPU suite: **121 passed**.
+
+Measured effect on the immutable successful trace: position `45.961 -> 43.948`, velocity `36.307 -> 25.765`, rotation `-29.257 -> -54.736`, production total **200.243056** (from 302.065135 for v3). Phase totals: approach 84.022 (0.4119/step), lift 58.844 (0.8916), lower 66.841 (0.9687), rest -9.464 (-0.0476); the rest phase is dominated by the rotation override on the released object. Orientation now crosses zero reward at ~16 deg instead of ~33 deg and is -0.27 at 45 deg instead of -0.10, so the rotation term is materially stricter in the middle range while position and velocity keep a longer tail.
+
+Playground updated: a curve-family selector (log production vs historic exponential/Gaussian/piecewise) drives the per-frame values from the raw errors (`obj_axis_err_m`, `vel_u`, `rot_deg`, all emitted by `build_data.py`), and both anchors are shape-aware — 200.243056 for the log production preset and 302.065135 for the historic v3 preset. Both verified headless; bundle rebuilt (6.5 MB).

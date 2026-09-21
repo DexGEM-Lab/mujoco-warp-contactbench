@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from dataclasses import replace
 from sim.manorl.autonomy_contracts import RAW_OBSERVATION_DIM, ENCODED_OBSERVATION_DIM, raw_observation_slices, encoded_observation_slices, validate_v4_checkpoint_metadata, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID, REWARD_CONTRACT_ID, ACTION_CONTRACT_ID
-from sim.manorl.autonomy_v4 import ReferenceCacheV4, V4Physical, V4Contact, anchor_delta_and_velocity, build_raw_observation, compute_reward, encode_observation, motion_gate_weight, quat_rotate, rot6, shortest_angle, reduce_pyramidal_contacts_v4
+from sim.manorl.autonomy_v4 import ReferenceCacheV4, V4Physical, V4Contact, anchor_delta_and_velocity, build_raw_observation, compute_reward, encode_observation, motion_gate_weight, quat_rotate, rot6, shortest_angle, reduce_pyramidal_contacts_v4, log_fraction, REWARD_POSITION_HALF_M, REWARD_POSITION_HORIZON_M, REWARD_VELOCITY_HALF, REWARD_VELOCITY_HORIZON, REWARD_ROTATION_HALF_DEG, REWARD_ROTATION_HORIZON_DEG, REWARD_ROTATION_MAX, REWARD_ROTATION_MIN
 
 
 def _cache(T=25):
@@ -126,7 +126,7 @@ def test_reference_speed_motion_gate_is_exact_and_independent_of_actual_speed():
     np.testing.assert_allclose(np.asarray(r_angular.object_position),[.303],atol=1e-6)
     # Object velocity carries its own 4.0 coefficient (native max 0.1 -> 0.4).
     np.testing.assert_allclose(np.asarray(r_still.object_velocity),[.004],atol=1e-7)
-    np.testing.assert_allclose(np.asarray(r_linear.object_velocity),[4.*.1*np.exp(-(.10/.25)**2)],rtol=1e-4,atol=1e-7)
+    np.testing.assert_allclose(np.asarray(r_linear.object_velocity),[4.*.1*(1.-float(log_fraction(.10/.25,REWARD_VELOCITY_HALF,REWARD_VELOCITY_HORIZON)))],rtol=1e-4,atol=1e-7)
     # A changed actual speed changes the velocity-match term, but never the gate.
     fast_actual=state._replace(object_v_com=j.asarray([[100.,0.,0.]]),object_w=j.asarray([[100.,0.,0.]]))
     r_fast_actual=compute_reward(fast_actual,_contact(),linear,j.asarray([0]),action)
@@ -136,10 +136,8 @@ def test_reference_speed_motion_gate_is_exact_and_independent_of_actual_speed():
 def test_static_reference_rotation_override_escapes_motion_gate():
     jax=pytest.importorskip("jax"); j=jax.numpy
     def rot_base(deg):
-        if deg<=20: rv=1-.00125*deg**2
-        elif deg<=90: rv=-.00003175*(deg-20)**2-.019206*(deg-20)+.5
-        else: rv=-1.
-        return .4*rv-.1
+        L=float(log_fraction(deg,REWARD_ROTATION_HALF_DEG,REWARD_ROTATION_HORIZON_DEG))
+        return REWARD_ROTATION_MIN+(REWARD_ROTATION_MAX-REWARD_ROTATION_MIN)*(1.-L)
     def rot_state(deg):
         h=np.deg2rad(deg)/2; q=np.array([0.,0.,np.sin(h),np.cos(h)])
         return _state()._replace(object_quat_xyzw=j.asarray(q[None]))
@@ -165,6 +163,39 @@ def test_static_reference_rotation_override_escapes_motion_gate():
     # Position and velocity terms never see the rotation override.
     np.testing.assert_allclose(np.asarray(r60.object_position),np.asarray(r30.object_position),atol=1e-7)
     np.testing.assert_allclose(np.asarray(r60.object_velocity),np.asarray(r30.object_velocity),atol=1e-7)
+
+def test_tracking_curves_are_log_shaped_with_documented_half_and_horizon():
+    jax=pytest.importorskip("jax"); j=jax.numpy
+    # The log ramp keeps exactly half at e50 and reaches zero at the horizon.
+    for half,horizon in ((REWARD_POSITION_HALF_M,REWARD_POSITION_HORIZON_M),(REWARD_VELOCITY_HALF,REWARD_VELOCITY_HORIZON),(REWARD_ROTATION_HALF_DEG,REWARD_ROTATION_HORIZON_DEG)):
+        L=np.asarray(log_fraction(j.asarray([0.,half*0.5,half,horizon*0.9,horizon,horizon*2.]),half,horizon))
+        np.testing.assert_allclose(L[0],0.,atol=1e-7); np.testing.assert_allclose(L[2],0.5,atol=1e-6)
+        np.testing.assert_allclose(L[4:],[1.,1.],atol=1e-7)
+        assert np.all(np.diff(L)>=0), "curve must be monotone"
+        # no flat top: the first step already moves as much as a mid-range step
+        assert L[1]-L[0] > 0
+    cache=_cache(); contact=_contact(); action=j.zeros((1,28)); idx=j.asarray([0])
+    moving=replace(cache,object_v_com=np.tile([.2,0.,0.],(len(cache.q_feasible),1)))
+    def rot_state(deg):
+        h=np.deg2rad(deg)/2; return _state()._replace(object_quat_xyzw=j.asarray([[0.,0.,np.sin(h),np.cos(h)]]))
+    # rotation endpoints and the half point are preserved at full gate
+    r0=compute_reward(rot_state(0.),contact,moving,idx,action); r25=compute_reward(rot_state(25.),contact,moving,idx,action)
+    r90=compute_reward(rot_state(90.),contact,moving,idx,action); r120=compute_reward(rot_state(120.),contact,moving,idx,action)
+    np.testing.assert_allclose(np.asarray(r0.object_rotation),[REWARD_ROTATION_MAX],atol=1e-5)
+    np.testing.assert_allclose(np.asarray(r90.object_rotation),[REWARD_ROTATION_MIN],atol=1e-4)
+    np.testing.assert_allclose(np.asarray(r120.object_rotation),[REWARD_ROTATION_MIN],atol=1e-4)
+    np.testing.assert_allclose(np.asarray(r25.object_rotation),[(REWARD_ROTATION_MAX+REWARD_ROTATION_MIN)/2],atol=1e-4)
+    # the top is no longer flat: 0->5 deg must cost strictly more than the old
+    # quadratic top (which lost only 1-0.00125*25 = 3.1% of the range)
+    r5=compute_reward(rot_state(5.),contact,moving,idx,action)
+    assert (REWARD_ROTATION_MAX-float(np.asarray(r5.object_rotation)[0])) > 0.8*0.05
+    # position: a single-axis error at e50 halves that axis' contribution
+    off=_state()._replace(object_origin=j.asarray([[REWARD_POSITION_HALF_M,0.,0.]]))
+    rp=compute_reward(off,contact,moving,idx,action)
+    np.testing.assert_allclose(np.asarray(rp.object_position),[.5*(.2*.5+.2+.8)],rtol=1e-4,atol=1e-6)
+    far=_state()._replace(object_origin=j.asarray([[REWARD_POSITION_HORIZON_M,0.,0.]]))
+    rf=compute_reward(far,contact,moving,idx,action)
+    np.testing.assert_allclose(np.asarray(rf.object_position),[.5*(.2*0.+.2+.8)],rtol=1e-4,atol=1e-6)
 
 def test_v4_checkpoint_rejects_legacy_metadata():
     validate_v4_checkpoint_metadata({"checkpoint_format":CHECKPOINT_FORMAT,"observation_contract":OBSERVATION_CONTRACT_ID,"reward_contract":REWARD_CONTRACT_ID,"action_contract":ACTION_CONTRACT_ID})

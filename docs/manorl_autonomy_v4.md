@@ -72,10 +72,32 @@ It takes four `mjx.step` calls and then exactly one
 The object COM/origin and anchor-point formulas use `xipos`, `subtree_com` and
 `cvel`; anchor velocity includes the required co-rotating `-omega_O×delta` term.
 
-Reward evaluates `s(t+1)` against `ref(t+1)`. The raw object terms are the
-axis-position total `1.2`, shortest-angle piecewise orientation, and world
-COM/angular-velocity match. All three are multiplied by the same **reference
-motion gate**, never by actual-object speed:
+Reward evaluates `s(t+1)` against `ref(t+1)`. The three object tracking terms
+are **log-shaped ramps** of their error, not exponentials, Gaussians or
+piecewise polynomials:
+
+\[
+L(e)=\operatorname{clip}\!\left(\frac{\log(1+e/s)}{\log(1+D/s)},0,1\right),
+\qquad s=\frac{e_{50}^2}{D-2e_{50}},
+\]
+
+so `L(0)=0`, `L(e50)=0.5` exactly and `L>=D = 1`. The value is `A·(1-L)` for
+position and velocity; orientation is `MIN + (MAX-MIN)·(1-L)` with
+`MAX=0.3` and `MIN=-0.5`. Per-term parameters:
+
+| term | error variable | e50 | D | note |
+|---|---|---:|---:|---|
+| `object_position` | per-axis absolute error | 1.5 cm | 10 cm | D equals the deviation termination threshold; axis weights 0.2/0.2/0.8 unchanged |
+| `object_velocity` | `sqrt(Σ((v-vref)/0.25)² + Σ((w-wref)/2)²)` | 0.5 | 2.5 | same normalization as before, only the curve changed |
+| `object_rotation` | shortest angle vs reference | 25 deg | 90 deg | keeps +0.3 at 0 deg and the -0.5 floor |
+
+A log ramp has no flat top and no dead tail: the marginal reward is largest at
+zero error and decays algebraically rather than exponentially. Consequences
+worth knowing: orientation reaches zero reward at ~16 deg instead of ~33 deg
+and -0.27 at 45 deg instead of -0.10, while position and velocity keep more
+reward at large errors (position is 19% of max at 5 cm instead of 13.5%;
+velocity 7.5% at normalised u=2 instead of 1.8%). All three are multiplied by
+the same **reference motion gate**, never by actual-object speed:
 
 \[
 v_{\mathrm{eff}}=\sqrt{\lVert v_{\mathrm{ref,COM}}\rVert^2+
@@ -95,10 +117,9 @@ from `0.01` to `0.75`; position and velocity keep `w_obj`, and a moving or
 transitioning reference keeps `w_obj` for all three. At exactly 45 deg the
 unweighted rotation term is `-0.1` (its linear segment's floor onset), so the
 override turns a persistent gross twist during a static hold from `-0.001` to
-`-0.075` per control. Within the gate, object world position carries coefficient `0.5` (native
-maximum `1.2 -> 0.6` at full gate) and object world COM/angular velocity
-carries coefficient `4.0` (native maximum `0.1 -> 0.4`); the rotation term
-keeps unit coefficient.
+`-0.075` per control. Within the gate, object world position carries coefficient `0.5` (full-gate
+maximum 0.6) and object world COM/angular velocity carries coefficient `4.0`
+(full-gate maximum 0.4); the rotation term keeps unit coefficient.
 Hand--object relative pose
 has coefficient `0.125`; feasible fingers retain `0.2`; reference-contact
 anchor correspondence has coefficient `1.2`; action penalty remains
@@ -109,7 +130,7 @@ the other terms. It has no force-magnitude, table-contact, slip, or hidden
 contact reward. Reasons are complete=1, deviation=2, fallen=4, nonfinite=8.
 
 The exact parameter set is emitted as
-`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-position.quadruple-object-velocity.v1`
+`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-position.quadruple-object-velocity.log-curves.v1`
 in new training provenance/config and frozen-evaluation provenance. It is deliberately
 separate from the model ABI: an old frozen checkpoint can load, but an
 evaluation performed with this runtime reports the new reward and must not be
