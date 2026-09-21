@@ -137,11 +137,21 @@ units (<2mm/s linear and<0.02rad/s angular for bottle and bowl); a mixed6D norm
 was rejected because it conflates metres/second with radians/second and changed
 with the final contact phase despite stable support.
 
-The mechanism now survives both parent families and the hardest sampled radius.
-Rows0 and5 each pass two nominal processes under byte-identical frozen controls.
-Their physical traces diverge after contact but both retain the task semantics,
-which is the intended independent-replay criterion. A15cm/30deg strict-C1 child
-from each family also passed twice on its first reserve candidate with zero
-solved-force prefix contact. The remaining live uncertainty is parent-specific:
-qualify the other eight rows before formal160 production; do not infer their
-acceptance solely from family similarity.
+The ten parents are now physically qualified, but the evidence changed the
+parent mechanism in two important ways. Row7 proved that single-sample contact
+qvel is not a valid settling measure: direct pose excursion stayed microscopic
+while one process emitted a transient velocity spike. Settlement therefore uses
+p95 speed together with direct terminal position/orientation excursion; maxima
+remain reported as diagnostics. Row9 exposed a real instability instead: the
+same frozen controls released an upright bottle in one process and a side-lying
+bottle in the other. The divergence grew only after final finger withdrawal.
+Repeating each existing control frame520–560 twice reduced withdrawal speed and
+made four independent processes settle upright while preserving every source
+control in order. This is a documented time schedule, not a target-value repair.
+
+The formal registry now binds ten unique complete-scene parents. A maximum-radius
+strict-C1 row9 child also passed twice, so the repaired terminal release survives
+the augmentation join. The live uncertainty has moved from parent validity to
+reserve consumption across the160 global slots. Production uses disjoint
+single-writer shards; any exhausted slot invalidates the campaign rather than
+shrinking the perturbation.
