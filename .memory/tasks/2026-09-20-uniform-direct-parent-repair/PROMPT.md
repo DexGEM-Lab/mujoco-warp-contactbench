@@ -128,3 +128,16 @@ direct target-DOF viewer to reconstruct all declared scene objects, validate a
 real two-object GPU reset/replay, and leave parent126/128 alternating visibly on
 local DISPLAY=:1. This source inspection does not qualify005 for nominal-U1 or
 add it to the published exact640.
+
+## Current action005 augmentation and five-action export
+The standardized action005 Lance contains ten distinct parents; use all ten,
+not one selected representative. Produce exactly sixteen accepted children per
+parent and160 action005 children total. Across those160 children preserve the
+same global large-pose plan used by each published action:5/10/15cm translation,
+eight azimuth sectors, six signed ±30° wrist rotations,144 base cells plus16
+extra draws, sixteen fixed same-cell reserve candidates, a120-frame strict
+physical-reference discrete-C1 prefix, solved native prefix-force rejection and
+two independent frozen-control physical replays. Retain both mayonnaisebottle
+and bowl and bind every child to its exact parent UUID. Preserve the published
+exact640; merge the accepted005 rows with it into a new five-action exact800
+Lance with160 rows/action and real audit evidence. No subagents.

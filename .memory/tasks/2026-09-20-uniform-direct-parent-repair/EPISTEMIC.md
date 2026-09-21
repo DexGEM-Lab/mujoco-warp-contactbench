@@ -105,3 +105,43 @@ reset all generalized coordinates exactly after stepping. DISPLAY=:1 shows the
 bowl and bottle together while directly applying the stored28D targets. This
 establishes replay usability only; it does not establish strict-U1 lineage or
 formal action005 acceptance.
+
+## Active ten-parent action005 augmentation model
+
+All ten standardized rows are now the parent population. Each contributes
+exactly16 accepted children; the complete160-child action005 set, rather than
+each individual parent, carries the same144-base+16-extra large-pose distribution
+as the published actions. Slot-to-parent assignment must be frozen and balanced,
+and every child UUID must bind its exact repaired parent UUID.
+
+The two-object model is not a new physics setting: pinned asset compilation
+matches the existing U1 hash exactly. The compact row is still input rather than
+acceptance evidence. Each row therefore needs a complete arrival-indexed nominal
+replay and a separate frozen-control replay. Frame0 is prestep; its stored target
+may be materially outside a joint limit and is never integrated. Replace only
+that inert frame0 value with the native executed target. Retain frames1+ exactly:
+a float32 endpoint can lie about1e-8 beyond the float64 limit while mapping back
+to the identical float32 native control, so eligibility is executed equivalence
+within1e-6 rather than a literal float64 inequality. Use the accepted first
+replay's physical qpos as the strict-C1 teacher. Use its
+physical object tracks as the child reference so the passive bowl and active
+bottle share one actual two-object world.
+
+Row0 supports this mechanism: full U1 replay matches the recorded bottle path
+to1.341mm, passes pickup/place/release gates and reaches104.636deg tilt before
+returning upright. Formal005 gates should preserve this observed mechanism:
+multifinger airborne support, at least90deg pour, peak pose over and above the
+bowl, upright supported release, exact controls and no solved prefix-force
+contact. Settling is measured over the terminal200ms with separate physical
+units (<2mm/s linear and<0.02rad/s angular for bottle and bowl); a mixed6D norm
+was rejected because it conflates metres/second with radians/second and changed
+with the final contact phase despite stable support.
+
+The mechanism now survives both parent families and the hardest sampled radius.
+Rows0 and5 each pass two nominal processes under byte-identical frozen controls.
+Their physical traces diverge after contact but both retain the task semantics,
+which is the intended independent-replay criterion. A15cm/30deg strict-C1 child
+from each family also passed twice on its first reserve candidate with zero
+solved-force prefix contact. The remaining live uncertainty is parent-specific:
+qualify the other eight rows before formal160 production; do not infer their
+acceptance solely from family similarity.
