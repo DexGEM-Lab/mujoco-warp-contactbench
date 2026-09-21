@@ -65,3 +65,16 @@ processes with identical frozen controls and distinct positive PIDs.
 
 No exhausted slot may be replaced by a smaller perturbation, another cell, or a
 padded failure.
+
+## Production outcome
+
+All 160 slots passed without exhaustion. The canonical set has exactly16 children
+per parent,54/53/53 rows at5/10/15cm,20 rows per azimuth sector, and the frozen
+27/27/27/27/26/26 signed-rotation totals. Fifty failed reserve candidates remain
+in the audit; they are physical negative evidence rather than padded rows. The
+canonical ledger SHA-256 is
+`f1b8d742b2f50694e854c9f6ade4ee83a0423f6b35c6da7fbd6eaabc5fa1f944`.
+
+The exact800 source audit rehashed every selected artifact and the immutable
+exact640 publication before export. Its plan digest is
+`0a6224658551e73f9cf0ba4d554de747b8ea7e4deb0ea6e6c1da2721a6194e93`.
