@@ -820,6 +820,9 @@ def main() -> None:
     parser.add_argument("--scene", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--contact-capacity-per-world", type=int, default=1024)
+    parser.add_argument("--constraint-capacity", type=int, default=4096)
+    parser.add_argument("--ccd-contacts-per-world", type=int, default=256)
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError(f"output must be fresh: {args.output}")
@@ -843,6 +846,9 @@ def main() -> None:
         contracts=contracts,
         consumer_visual=consumer_visual,
         decorative_scene_spec=args.scene,
+        contact_capacity_per_world=args.contact_capacity_per_world,
+        constraint_capacity=args.constraint_capacity,
+        ccd_contacts_per_world=args.ccd_contacts_per_world,
     )
     provenance = {
         "dataset": str(args.dataset),

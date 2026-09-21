@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import inspect
 import numpy as np
 import pytest
 
 from tools.replay_atomic_benchmark_pilot import (
     decode_row,
+    run_physics,
     static_layout,
     validate_gpu_binding,
     wxyz,
@@ -83,6 +85,13 @@ def test_static_layout_excludes_physical_objects() -> None:
 
 def test_wxyz_identity() -> None:
     np.testing.assert_allclose(wxyz([0, 0, 0]), [1, 0, 0, 0])
+
+
+def test_run_physics_exposes_allocation_only_capacity_overrides() -> None:
+    parameters = inspect.signature(run_physics).parameters
+    assert parameters["contact_capacity_per_world"].default == 1024
+    assert parameters["constraint_capacity"].default == 4096
+    assert parameters["ccd_contacts_per_world"].default == 256
 
 
 def test_compute_and_egl_gpu_binding_must_match(monkeypatch) -> None:
