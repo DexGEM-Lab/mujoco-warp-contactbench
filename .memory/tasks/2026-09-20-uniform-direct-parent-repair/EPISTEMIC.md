@@ -21,13 +21,15 @@ canonical ledgers;007/009 were canonical runs. The existing1,923-row dataset and
 all invalid/diagnostic campaigns remain unchanged. Evidence: OPS.md entry
 `2026-09-21T20:45:08+08:00`.
 
-A hidden Lance v1 contains640 rows with exact action quotas, manifest order
-parity and contract `u1_four_action_largepose640_c1_native_v1`. Enhanced
-validation has passed all640 artifact sets/hashes, both replay streams and every
-native frame, followed by exact Arrow-normalized reconstruction/readback of all
-640 Lance rows. It is not yet published. The006 movement interval is source v4
-row82 pitcherbase367..1092, shifted to487..1212 by the prefix; the other shifted
-intervals are003 240..510,007 193..350,009 309..521.
+The dataset is published at
+`/mnt/nas-222-project/mocap_v2/lance_datasets/manorl_cheyingtong_u1_largepose_4x160_c1_20260921`.
+Lance v1 contains640 rows with exact action quotas, manifest/layout order parity
+and contract `u1_four_action_largepose640_c1_native_v1`. Enhanced validation
+passed all640 artifact sets/hashes, both replay streams and every native frame,
+then exact Arrow-normalized reconstruction/readback of all640 Lance rows. The006
+movement interval is source v4 row82 pitcherbase367..1092, shifted to487..1212
+by the prefix; the other shifted intervals are003 240..510,007 193..350,009
+309..521.
 
 ## Audit model
 
@@ -57,13 +59,20 @@ executed-control hashes are identical.
 - A validator that compares decoded content without checking ledger artifact
   coverage/SHA is insufficient and was stopped before producing validation.json.
 
-## Remaining uncertainty and next discriminating result
+## Final visualization and publication claim
 
-All640 artifact and full-row checks pass. The mesh-accurate per-UUID nine-object
-visualization solver is active after restoring the real778614d Git metadata on
-Server1; its first launch failed before output because the server snapshot had
-asset bytes but no Git identity. Publication is permitted only if the solver
-reports zero unresolved clearances and the generated layout, registry/setting
-snapshots, final hashes and atomic rename all pass. Any unresolved UUID/object is
-the next question; there is no fallback to reduced perturbations, old children,
-or partial output.
+Mesh-accurate per-UUID nine-object clearance uses the real pinned778614d asset
+Git identity and file manifest. The initial15cm search left seven006 egg_cup
+pairs unresolved. A discriminating extension kept the original16 directions and
+candidate order but added18/20/25/30cm radii: five resolved at18cm and two at
+20cm, while every prior offset remained unchanged. The final layout has640
+UUIDs, nine objects each,480 rows with background offsets and zero unresolved
+pairs. The initial seven failures remain in `background_offsets_initial.json`.
+
+Publication generated registry/setting snapshots and a14-file SHA manifest,
+then used a same-filesystem atomic rename. Final-path readback verified Lance v1,
+640 unique UUIDs in manifest/layout order, action counts160 each, every recorded
+file SHA, the SHA sidecar, and absence of the hidden staging source. The final
+`sha256.json` digest is
+`4004504f838aa866993680b901c0f767251cae2caef605154d27008630d9036a`.
+Action005 remains intentionally outside this claim.
