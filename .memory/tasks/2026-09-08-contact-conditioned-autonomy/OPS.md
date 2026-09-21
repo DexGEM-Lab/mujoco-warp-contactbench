@@ -437,3 +437,13 @@ Playground updated to match: hand-world term, its coefficient control and its pr
 The FK-recovered palm pose is retained in the playground as a **diagnostic display only** (palm error cm / degrees in the current-frame line). It is no longer a reward input; the earlier finding that the recovery is bit-exact and that palm orientation error is small (mean 2.6 deg, max 6.3 deg) remains valid evidence.
 
 Measured effect of the surviving design on the immutable successful trace: production 257.007293 vs v3 302.065135, the whole difference being the static rotation override, which fires on 136 controls in 403-538 and drives the rest-phase total from +42.132 (v3) to **-2.926**.
+
+## 2026-09-21T17:50:00+08:00 — Object position and velocity coefficients halved
+
+User instruction: at non-static full weight, the object **position** and object **velocity** terms each become half of their current value. Implemented as `REWARD_OBJECT_POSITION_COEF=0.5` and `REWARD_OBJECT_VELOCITY_COEF=0.5` applied to the native formulas (position native max `1.2 -> 0.6`, velocity native max `0.1 -> 0.05`). The rotation term keeps unit coefficient plus the retained static-reference override. Reward parameter provenance id is now `manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.half-object-pos-vel.v1`, and the coefficients dict records both new coefficients. Structural reward ABI is unchanged (still nine terms), so old frozen checkpoints remain evaluable.
+
+Tests: the reference-speed gate test now asserts `.006 / .6 / .303` for the three gate states plus velocity `.0005` at the static gate and `.5*.1*exp(-(.10/.25)^2)` at full gate, and that a large actual-speed mismatch drives the velocity term to zero while leaving the position term and the gate untouched; `test_reward_boundaries...` asserts position `.006` and velocity `.0005`; the multi-reference own-speed test asserts `[.006,.6]`. Focused CPU suite: **120 passed**.
+
+Measured effect on the immutable successful trace (offline): object position `91.922 -> 45.961`, object velocity `9.077 -> 4.538`, giving a new production total of **206.507721** (v3 302.065135 minus 45.961 position, 4.538 velocity and 45.058 static-rotation override). Phase totals under the new configuration: approach, lift and lower keep their v3 values scaled on the two halved terms, and the rest phase remains negative from the rotation override.
+
+Playground updated to match: object position and velocity default coefficients `0.5`, production anchor now **206.5077209713** recomputed and asserted inside `build_data.py` before writing, historical v3 anchor 302.065135 preserved, both verified headless in the rebuilt 6.5 MB single-file bundle.
