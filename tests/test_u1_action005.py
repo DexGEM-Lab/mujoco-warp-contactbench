@@ -7,6 +7,7 @@ from sim.manorl.u1_action005 import (
     action005_child_uuid,
     action005_gate_values,
     canonical_parent_target,
+    schedule_parent_target,
     validate_parent_assignment,
 )
 from tools.export_u1_largepose800 import (
@@ -29,6 +30,21 @@ def test_ten_parent_assignment_is_balanced_and_complete() -> None:
     assert {row: len(slots) for row, slots in assigned.items()} == {
         row: 16 for row in range(10)
     }
+
+
+def test_row9_schedule_preserves_every_source_target_in_order() -> None:
+    source = np.arange(742 * 28, dtype=np.float64).reshape(742, 28)
+
+    scheduled, index, contract = schedule_parent_target(9, source)
+
+    assert scheduled.shape == (783, 28)
+    np.testing.assert_array_equal(scheduled, source[index])
+    np.testing.assert_array_equal(np.unique(index), np.arange(742))
+    assert np.all(np.diff(index) >= 0)
+    assert contract["source_interval_inclusive"] == [520, 560]
+    identity, identity_index, _ = schedule_parent_target(8, source)
+    np.testing.assert_array_equal(identity, source)
+    np.testing.assert_array_equal(identity_index, np.arange(742))
 
 
 def test_child_uuid_binds_exact_parent() -> None:

@@ -26,6 +26,7 @@ from sim.manorl.u1_action005 import (
     action005_trace_gates,
     canonical_parent_target,
     require_setting,
+    schedule_parent_target,
     source_parent_input,
 )
 from sim.manorl.u1_campaign import array_sha, digest, file_sha, write_json
@@ -88,7 +89,22 @@ def _candidate(args, row_index: int):
     fingerprint = require_setting(
         model, tuple(source.scene_object_types), args.asset_manifest
     )
-    target = canonical_parent_target(source, model)
+    canonical_target = canonical_parent_target(source, model)
+    target, source_frame_index, target_schedule = schedule_parent_target(
+        row_index, canonical_target
+    )
+    if len(target) != source.frames:
+        inp.frames = len(target)
+        inp.arrays["source_target_frame_index"] = source_frame_index
+        for key in ("source_object_pos", "source_object_quat_xyzw"):
+            inp.arrays[key] = inp.arrays[key][source_frame_index]
+        source_teacher["qpos"] = source_teacher["qpos"][source_frame_index]
+    movement_start = int(
+        np.flatnonzero(source_frame_index == source.movement_start)[0]
+    )
+    movement_end = int(
+        np.flatnonzero(source_frame_index == source.movement_end)[-1]
+    )
     row = _source_row(args.dataset, args.dataset_version, row_index)
     metadata = row["trajectory_metadata"]
     provenance = row["provenance"]
@@ -96,7 +112,8 @@ def _candidate(args, row_index: int):
         "row_id": source.generated_uuid,
         "parent_row": row_index,
         "parent_uuid": source.generated_uuid,
-        "frames": source.frames,
+        "frames": len(target),
+        "source_frames": source.frames,
         "names": list(source.scene_object_types),
         "semantics": PARENT_SEMANTICS,
         "contract": contract,
@@ -105,8 +122,12 @@ def _candidate(args, row_index: int):
         "metrics": inp.metrics,
         "movement": {
             "object_name": source.object_type,
-            "start_frame": source.movement_start,
-            "end_frame": source.movement_end,
+            "start_frame": movement_start,
+            "end_frame": movement_end,
+        },
+        "target_schedule": {
+            **target_schedule,
+            "source_frame_index_sha256": array_sha(source_frame_index),
         },
         "mano_shape": metadata["mano_hand_shapes"][0],
         "source": {
@@ -150,7 +171,7 @@ def _run_replay(args, row_index: int, output: Path, frozen: Path | None):
         if frozen is not None
         else runtime.base.copy()
     )
-    if target.shape != (source.frames, 28):
+    if target.shape != (runtime.p["frames"], 28):
         raise ValueError("frozen parent target shape changed")
     q0 = runtime.I.initial["qpos"].copy()
     return runtime._replay(target, q0, 0, output)
@@ -183,6 +204,8 @@ def _bundle_from_qualification(
         raise ValueError("parent replays did not use distinct processes")
     first_target = np.load(qualification / "first/target.npy", allow_pickle=False)
     second_target = np.load(qualification / "second/target.npy", allow_pickle=False)
+    if first_target.shape != (runtime.p["frames"], 28):
+        raise ValueError("qualification target does not match current parent schedule")
     if not np.array_equal(first_target, second_target):
         raise ValueError("parent frozen targets differ")
     with np.load(qualification / "first/trace.npz", allow_pickle=False) as trace:
@@ -192,6 +215,8 @@ def _bundle_from_qualification(
     with np.load(qualification / "second/trace.npz", allow_pickle=False) as trace:
         second_qpos = trace["qpos"].copy()
         second_qvel = trace["qvel"].copy()
+    if first_qpos.shape != (runtime.p["frames"], runtime.m.nq):
+        raise ValueError("qualification trace does not match current parent schedule")
     if not np.array_equal(first_ctrl, first_target):
         raise ValueError("parent trace controls differ from frozen target")
     reproducibility = {
@@ -211,6 +236,9 @@ def _bundle_from_qualification(
         quaternions.append(first_qpos[:, address + 3 : address + 7][:, [1, 2, 3, 0]])
     parent_arrays = {
         "scene_object_names": np.asarray(names),
+        "source_target_frame_index": runtime.I.arrays[
+            "source_target_frame_index"
+        ],
         "source_object_pos": np.stack(positions, axis=1),
         "source_object_quat_xyzw": np.stack(quaternions, axis=1),
     }
@@ -228,6 +256,10 @@ def _bundle_from_qualification(
             for field in runtime.I.manifest["native"]
         },
     )
+    canonical_source_target = canonical_parent_target(source, runtime.m)
+    source_frame_index = runtime.I.arrays["source_target_frame_index"]
+    if not np.array_equal(runtime.base, canonical_source_target[source_frame_index]):
+        raise ValueError("scheduled parent target changed source control values")
     evidence = {
         "schema": "u1-action005-parent-qualification-v1",
         "parent_row": row_index,
@@ -249,13 +281,18 @@ def _bundle_from_qualification(
         },
         "qualification_artifacts": _artifact_hashes(qualification),
         "requested_source_target_sha256": array_sha(source.target_qpos),
-        "canonical_parent_target_sha256": array_sha(runtime.base),
+        "canonical_source_target_sha256": array_sha(canonical_source_target),
+        "scheduled_parent_target_sha256": array_sha(runtime.base),
         "frozen_parent_target_sha256": array_sha(first_target),
+        "target_schedule": runtime.p["target_schedule"],
+        "all_source_control_frames_preserved": bool(
+            np.array_equal(np.unique(source_frame_index), np.arange(source.frames))
+        ),
         "frame0_only_canonicalization": bool(
-            np.array_equal(runtime.base[1:], source.target_qpos[1:])
+            np.array_equal(canonical_source_target[1:], source.target_qpos[1:])
         ),
         "frame0_max_change": float(
-            np.max(np.abs(runtime.base[0] - source.target_qpos[0]))
+            np.max(np.abs(canonical_source_target[0] - source.target_qpos[0]))
         ),
     }
     write_json(bundle / "evidence.json", evidence)

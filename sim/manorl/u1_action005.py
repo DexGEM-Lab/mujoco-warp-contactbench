@@ -23,6 +23,9 @@ SETTLED_LINEAR_P95_MPS = 0.002
 SETTLED_ANGULAR_P95_RADPS = 0.02
 SETTLED_POSITION_EXCURSION_M = 0.0005
 SETTLED_ORIENTATION_EXCURSION_RAD = np.deg2rad(0.5)
+ROW9_RELEASE_SLOWDOWN_INTERVAL = (520, 560)
+ROW9_RELEASE_REPEAT = 2
+ROW9_RELEASE_CONTRACT = "row9-terminal-release-time-dilation-v1"
 
 # Frozen optimal assignment of the existing global 160-slot plan to ten parent
 # rows. Each parent receives 16 slots, exactly two from every azimuth sector,
@@ -176,6 +179,50 @@ def canonical_parent_target(source, model) -> np.ndarray:
     return target
 
 
+def schedule_parent_target(
+    parent_row: int, target: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Preserve every source control while slowing row9's marginal release."""
+
+    source = np.asarray(target)
+    if source.ndim != 2 or source.shape[1] != 28:
+        raise ValueError("parent target must be [frames,28]")
+    if parent_row != 9:
+        index = np.arange(len(source), dtype=np.int64)
+        contract = {
+            "contract": "source-target-identity-v1",
+            "source_frames": len(source),
+            "scheduled_frames": len(source),
+        }
+        return source.copy(), index, contract
+    start, end = ROW9_RELEASE_SLOWDOWN_INTERVAL
+    if not 0 < start <= end < len(source) - 1:
+        raise ValueError("row9 release interval outside source target")
+    index = np.concatenate(
+        [
+            np.arange(start, dtype=np.int64),
+            np.repeat(
+                np.arange(start, end + 1, dtype=np.int64), ROW9_RELEASE_REPEAT
+            ),
+            np.arange(end + 1, len(source), dtype=np.int64),
+        ]
+    )
+    if not np.array_equal(np.unique(index), np.arange(len(source))):
+        raise ValueError("row9 schedule must preserve every source frame")
+    contract = {
+        "contract": ROW9_RELEASE_CONTRACT,
+        "source_frames": len(source),
+        "scheduled_frames": len(index),
+        "source_interval_inclusive": [start, end],
+        "repeat_each": ROW9_RELEASE_REPEAT,
+        "mechanism": (
+            "halve terminal finger-withdrawal speed after world contact while "
+            "preserving every source target sample in its original order"
+        ),
+    }
+    return source[index].copy(), index, contract
+
+
 def source_parent_input(source, model) -> tuple[SimpleNamespace, dict[str, np.ndarray]]:
     """Build the qualification input and complete recorded teacher from one row."""
 
@@ -196,6 +243,7 @@ def source_parent_input(source, model) -> tuple[SimpleNamespace, dict[str, np.nd
         teacher_qpos[:, address + 3 : address + 7] = quaternion[:, [3, 0, 1, 2]]
     arrays = {
         "scene_object_names": np.asarray(names),
+        "source_target_frame_index": np.arange(source.frames, dtype=np.int64),
         "source_object_pos": np.transpose(source.scene_object_position, (1, 0, 2)),
         "source_object_quat_xyzw": np.transpose(
             source.scene_object_quaternion_xyzw, (1, 0, 2)
