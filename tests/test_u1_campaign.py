@@ -2,6 +2,15 @@ import json
 import numpy as np
 import pytest
 from sim.manorl.u1_campaign import plan, perturb, child_uuid, Ledger, digest, verify_signed, file_sha
+from tools.run_u1_campaign_shard import assigned_slots
+
+def test_shard_partition_is_exact_and_disjoint():
+    p=plan('registry')
+    groups=[assigned_slots(p['slots'],21,i,4) for i in range(4)]
+    flat=[x['slot'] for group in groups for x in group]
+    assert sorted(flat)==list(range(21,160))
+    assert len(flat)==len(set(flat))
+    assert all((x['slot']-21)%4==i for i,group in enumerate(groups) for x in group)
 
 def test_balanced_unique_plan():
     p=plan('parent'); verify_signed(p)
