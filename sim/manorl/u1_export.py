@@ -135,6 +135,28 @@ def schema():
     for name,typ in [('physical',pa.struct([(k,pa.list_(pa.list_(pa.float64()))) for k in ('qpos','qvel','ctrl')])),('native_contacts',pa.list_(pa.string())),('lineage_json',pa.string()),('teacher_qpos',pa.list_(pa.list_(pa.float64()))),('reference_objects_json',pa.string())]: s=s.append(pa.field(name,typ))
     return s.with_metadata({**s.metadata, b'schema_version':CONTRACT.encode(), b'native_force_boundary':BOUNDARY.encode()})
 
+def movement_record(parent, active, frames):
+    """Resolve the one real manipulated-object interval without relabeling lineage."""
+    source_meta=parent['metrics'].get('source_metadata',{})
+    moves=source_meta.get('object_move')
+    if not moves:
+        moves=parent.get('source',{}).get('formal_info',{}).get('movement')
+        moves=[moves] if moves else None
+    if not moves:
+        source=parent.get('source',{})
+        if source.get('mode')=='full_row847_targets_mapped_to_current_bottle_initial_pose':
+            binding=source['source']; dataset=Path(binding['dataset']); version=int(binding['version']); row=int(binding['row'])
+        elif source.get('mode')=='raw':
+            dataset=Path(source['dataset']); version=int(source['dataset_version']); row=int(source['row'])
+        else: raise ValueError('missing movement lineage: '+parent['action'])
+        import lance
+        metadata=lance.dataset(str(dataset),version=version).take([row],columns=['trajectory_metadata']).to_pylist()[0]['trajectory_metadata']
+        moves=metadata['trajectory_info']['object_move']
+    require(isinstance(moves,list) and len(moves)==1,'exactly one movement interval required')
+    move=dict(moves[0]); require(move['object_name']==active,'movement active object mismatch')
+    start,end=int(move['start_frame']),int(move['end_frame']); require(0<=start<=end<frames,'movement frame range')
+    return dict(object_name=active,start_frame=start,end_frame=end)
+
 def make_row(registry_path, record, planned):
     import mujoco as mj
     from scipy.spatial.transform import Rotation as R
@@ -182,4 +204,5 @@ def make_row(registry_path, record, planned):
     # Shape is metadata, never infer donor hand identity. Read the pinned Cheyingtong profile.
     if shape is None:
         shape=r['parents']['003']['source']['formal_info']['betas']
-    return dict(index=dict(uuid=record['uuid'],seed_uuid=p['parent_uuid'],capMachine='native-U1',operator='cheyingtong',scene=','.join(p['names']),is_generated=True),trajectory_metadata=dict(data_fps=120,total_frames=n,gesture=record['action']+'-'+p['semantics'],hand_names=['right'],hand_slots=['right','left'],object_names=p['names'],mano_hand_shapes=[shape],trajectory_info=dict(object_move=[])),timestamp=(np.arange(n)/120).tolist(),hands=[hand,dict(hand_name=None,**{k:[] for k in hand if k!='hand_name'})],objects=objects,contact=contacts,reference=dict(source_frame_index=list(range(n)),hand_urdf_dof=teacher['qpos'][:,:28].tolist(),object_pos=I.arrays['source_object_pos'][:,oi].tolist(),object_rot_aa=R.from_quat(I.arrays['source_object_quat_xyzw'][:,oi]).as_rotvec().tolist()),command_reference_index=list(range(1,n)),command_source_frame_index=list(range(1,n)),provenance=dict(contract=CONTRACT,source_contract=SYNTHETIC_LANCE_CONTRACT,force_contract=FORCE_DIRECTION_CONTRACT,reference_fps=120,control_fps=120,control_timestep_seconds=1/120,physics_fps=480,physics_timestep_seconds=1/480,physics_substeps_per_control=4,policy_mode='frozen_native_position',checkpoint_metadata_sha256=digest(lineage),warp_ccd_iterations=16,warp_ccd_contacts_per_world=256,seed=planned['seed'],episode_index=record['slot'],generation_attempt=record['candidate']['ordinal']+1,augmentation_identity=record['uuid']),physical={k:a.tolist() for k,a in physical.items()},native_contacts=lines,lineage_json=json.dumps(lineage,sort_keys=True),teacher_qpos=teacher['qpos'].tolist(),reference_objects_json=json.dumps({k:I.arrays[k].tolist() for k in ('scene_object_names','source_object_pos','source_object_quat_xyzw')},sort_keys=True))
+    move=movement_record(p,active,n)
+    return dict(index=dict(uuid=record['uuid'],seed_uuid=p['parent_uuid'],capMachine='native-U1',operator='cheyingtong',scene=','.join(p['names']),is_generated=True),trajectory_metadata=dict(data_fps=120,total_frames=n,gesture=record['action']+'-'+p['semantics'],hand_names=['right'],hand_slots=['right','left'],object_names=p['names'],mano_hand_shapes=[shape],trajectory_info=dict(object_move=[move])),timestamp=(np.arange(n)/120).tolist(),hands=[hand,dict(hand_name=None,**{k:[] for k in hand if k!='hand_name'})],objects=objects,contact=contacts,reference=dict(source_frame_index=list(range(n)),hand_urdf_dof=teacher['qpos'][:,:28].tolist(),object_pos=I.arrays['source_object_pos'][:,oi].tolist(),object_rot_aa=R.from_quat(I.arrays['source_object_quat_xyzw'][:,oi]).as_rotvec().tolist()),command_reference_index=list(range(1,n)),command_source_frame_index=list(range(1,n)),provenance=dict(contract=CONTRACT,source_contract=SYNTHETIC_LANCE_CONTRACT,force_contract=FORCE_DIRECTION_CONTRACT,reference_fps=120,control_fps=120,control_timestep_seconds=1/120,physics_fps=480,physics_timestep_seconds=1/480,physics_substeps_per_control=4,policy_mode='frozen_native_position',checkpoint_metadata_sha256=digest(lineage),warp_ccd_iterations=16,warp_ccd_contacts_per_world=256,seed=planned['seed'],episode_index=record['slot'],generation_attempt=record['candidate']['ordinal']+1,augmentation_identity=record['uuid']),physical={k:a.tolist() for k,a in physical.items()},native_contacts=lines,lineage_json=json.dumps(lineage,sort_keys=True),teacher_qpos=teacher['qpos'].tolist(),reference_objects_json=json.dumps({k:I.arrays[k].tolist() for k in ('scene_object_names','source_object_pos','source_object_quat_xyzw')},sort_keys=True))

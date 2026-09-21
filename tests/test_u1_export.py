@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from sim.manorl.u1_campaign import plan, child_uuid
-from sim.manorl.u1_export import select_records, checked_hashes, native_frame, world_force, make_row, schema
+from sim.manorl.u1_export import select_records, checked_hashes, native_frame, world_force, make_row, schema, movement_record
 
 
 def ledger():
@@ -39,6 +39,19 @@ def test_native_transform_and_sign():
     with pytest.raises(ValueError): native_frame(dict(raw,worldid=[1]),0,2)
 
 
+def test_movement_record_contract():
+    parent={'action':'003','metrics':{'source_metadata':{'object_move':[{'object_name':'bowl','start_frame':12,'end_frame':34}]}},'source':{}}
+    assert movement_record(parent,'bowl',100)=={'object_name':'bowl','start_frame':12,'end_frame':34}
+    parent={'action':'003','metrics':{'source_metadata':{}},'source':{'formal_info':{'movement':{'object_name':'bowl','start_frame':2,'end_frame':9}}}}
+    assert movement_record(parent,'bowl',10)['end_frame']==9
+    for bad in [
+        {'action':'003','metrics':{'source_metadata':{'object_move':[]}},'source':{}},
+        {'action':'003','metrics':{'source_metadata':{'object_move':[{'object_name':'wrong','start_frame':1,'end_frame':2}]}},'source':{}},
+        {'action':'003','metrics':{'source_metadata':{'object_move':[{'object_name':'bowl','start_frame':1,'end_frame':10}]}},'source':{}},
+    ]:
+        with pytest.raises(ValueError): movement_record(bad,'bowl',10)
+
+
 def test_real_smoke_row(tmp_path):
     root=Path('outputs/u1_contact_capture_smoke/003/zero')
     registry=Path('outputs/u1_5x160_registry_v3/registry.json')
@@ -55,6 +68,7 @@ def test_real_smoke_row(tmp_path):
     assert len(row['contact'])==641
     assert len(row['command_reference_index'])==640
     assert row['hands'][1]['hand_name'] is None
+    assert row['trajectory_metadata']['trajectory_info']['object_move']==[{'object_name':'bowl','start_frame':120,'end_frame':390}]
     assert np.array_equal(row['physical']['qpos'],np.load(root/'trace.npz')['qpos'])
     table=pa.Table.from_pylist([row],schema=schema())
     lance.write_dataset(table,str(tmp_path/'smoke.lance'))

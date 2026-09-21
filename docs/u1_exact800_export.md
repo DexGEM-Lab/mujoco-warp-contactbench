@@ -35,6 +35,12 @@ it rather than silently dropping evidence. The existing compact schema is reused
 its writer cannot preserve these additional fields, so a one-row-batch Arrow
 stream writes the extended schema.
 
+Every row carries exactly one `trajectory_info.object_move` interval for the
+registry active object. Formal/historical parents reuse their bounded movement
+metadata; alternate005 and raw006 read the explicitly bound donor/source Lance
+metadata. Export fails if the interval is missing, names the wrong object or
+escapes the generated frame range.
+
 Every physical field comes from the second replay. Time is frame/120; commands
 map arrivals1..N−1. The inactive left slot is empty. All model objects retain
 registry order. Keypoints use the existing16-link-plus5-tip convention and pinned
