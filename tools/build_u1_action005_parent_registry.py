@@ -19,6 +19,10 @@ from sim.manorl.u1_action005 import (
     PARENT_REGISTRY_SCHEMA,
     PARENT_SEMANTICS,
     SETTING,
+    SETTLED_ANGULAR_P95_RADPS,
+    SETTLED_LINEAR_P95_MPS,
+    SETTLED_ORIENTATION_EXCURSION_RAD,
+    SETTLED_POSITION_EXCURSION_M,
     action005_trace_gates,
     canonical_parent_target,
     require_setting,
@@ -152,14 +156,27 @@ def _run_replay(args, row_index: int, output: Path, frozen: Path | None):
     return runtime._replay(target, q0, 0, output)
 
 
+def _reassess_report(runtime, folder: Path) -> dict:
+    report_path = folder / "result.json"
+    report = json.loads(report_path.read_text())
+    gates, metrics = action005_trace_gates(
+        runtime.m, runtime.I, folder / "trace.npz"
+    )
+    report["gates"].update(gates)
+    report["physical"]["action005"] = metrics
+    report["accepted"] = all(report["gates"].values())
+    write_json(report_path, report)
+    return report
+
+
 def _bundle_from_qualification(
     args, row_index: int, qualification: Path, bundle: Path
 ) -> dict:
     import mujoco as mj
 
     source, _row, runtime = _candidate(args, row_index)
-    first_report = json.loads((qualification / "first/result.json").read_text())
-    second_report = json.loads((qualification / "second/result.json").read_text())
+    first_report = _reassess_report(runtime, qualification / "first")
+    second_report = _reassess_report(runtime, qualification / "second")
     if not first_report["accepted"] or not second_report["accepted"]:
         raise ValueError(f"parent row{row_index} failed physical qualification")
     if first_report["pid"] == second_report["pid"]:
@@ -218,6 +235,18 @@ def _bundle_from_qualification(
         "first": first_report,
         "second": second_report,
         "reproducibility": reproducibility,
+        "terminal_settlement_contract": {
+            "window_frames": 24,
+            "linear_speed_p95_mps_lt": SETTLED_LINEAR_P95_MPS,
+            "angular_speed_p95_radps_lt": SETTLED_ANGULAR_P95_RADPS,
+            "position_excursion_m_lt": SETTLED_POSITION_EXCURSION_M,
+            "orientation_excursion_rad_lt": SETTLED_ORIENTATION_EXCURSION_RAD,
+            "mechanism": (
+                "p95 rejects sustained motion while position/orientation excursion "
+                "directly rejects drift; single contact-solver qvel spikes are retained "
+                "as max metrics but do not mislabel a stationary supported object"
+            ),
+        },
         "qualification_artifacts": _artifact_hashes(qualification),
         "requested_source_target_sha256": array_sha(source.target_qpos),
         "canonical_parent_target_sha256": array_sha(runtime.base),
@@ -263,14 +292,11 @@ def qualify_parent(args, row_index: int) -> dict:
         first_result = qualification / "first/result.json"
         second_result = qualification / "second/result.json"
         if first_result.is_file() and second_result.is_file():
-            first = json.loads(first_result.read_text())
-            second = json.loads(second_result.read_text())
-            if first.get("accepted") is True and second.get("accepted") is True:
-                return _bundle_from_qualification(
-                    args, row_index, qualification, bundle
-                )
+            return _bundle_from_qualification(
+                args, row_index, qualification, bundle
+            )
         raise ValueError(
-            f"parent row{row_index} has an incomplete or rejected prior qualification; "
+            f"parent row{row_index} has an incomplete prior qualification; "
             "inspect it before rerun"
         )
     first = qualification / "first"

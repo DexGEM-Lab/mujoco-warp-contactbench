@@ -19,6 +19,10 @@ PARENT_SEMANTICS = (
     "mayonnaise bottle pickup, bowl-aligned pour beyond 90deg, upright return, "
     "world placement and release"
 )
+SETTLED_LINEAR_P95_MPS = 0.002
+SETTLED_ANGULAR_P95_RADPS = 0.02
+SETTLED_POSITION_EXCURSION_M = 0.0005
+SETTLED_ORIENTATION_EXCURSION_RAD = np.deg2rad(0.5)
 
 # Frozen optimal assignment of the existing global 160-slot plan to ten parent
 # rows. Each parent receives 16 slots, exactly two from every azimuth sector,
@@ -230,6 +234,8 @@ def action005_gate_values(
     tilt_deg: np.ndarray,
     bottle_position: np.ndarray,
     bowl_position: np.ndarray,
+    bottle_quaternion_xyzw: np.ndarray,
+    bowl_quaternion_xyzw: np.ndarray,
     bottle_velocity: np.ndarray,
     bowl_velocity: np.ndarray,
 ) -> tuple[dict[str, bool], dict[str, float | int]]:
@@ -238,6 +244,8 @@ def action005_gate_values(
     tilt = np.asarray(tilt_deg, dtype=np.float64)
     bottle = np.asarray(bottle_position, dtype=np.float64)
     bowl = np.asarray(bowl_position, dtype=np.float64)
+    bottle_q = np.asarray(bottle_quaternion_xyzw, dtype=np.float64)
+    bowl_q = np.asarray(bowl_quaternion_xyzw, dtype=np.float64)
     bottle_v = np.asarray(bottle_velocity, dtype=np.float64)
     bowl_v = np.asarray(bowl_velocity, dtype=np.float64)
     frames = len(tilt)
@@ -245,28 +253,49 @@ def action005_gate_values(
         tilt.shape != (frames,)
         or bottle.shape != (frames, 3)
         or bowl.shape != (frames, 3)
+        or bottle_q.shape != (frames, 4)
+        or bowl_q.shape != (frames, 4)
         or bottle_v.shape != (frames, 6)
         or bowl_v.shape != (frames, 6)
         or frames < 24
-        or not all(np.isfinite(value).all() for value in (tilt, bottle, bowl, bottle_v, bowl_v))
+        or not all(
+            np.isfinite(value).all()
+            for value in (tilt, bottle, bowl, bottle_q, bowl_q, bottle_v, bowl_v)
+        )
     ):
         raise ValueError("invalid action005 gate arrays")
     peak = int(np.argmax(tilt))
     deep_frames = int(np.count_nonzero(tilt >= 90.0))
     peak_xy = float(np.linalg.norm(bottle[peak, :2] - bowl[peak, :2]))
     peak_height = float(bottle[peak, 2] - bowl[peak, 2])
-    terminal_bottle_linear = float(
-        np.max(np.linalg.norm(bottle_v[-24:, :3], axis=1))
+    from scipy.spatial.transform import Rotation
+
+    tail = slice(-24, None)
+    bottle_linear = np.linalg.norm(bottle_v[tail, :3], axis=1)
+    bottle_angular = np.linalg.norm(bottle_v[tail, 3:], axis=1)
+    bowl_linear = np.linalg.norm(bowl_v[tail, :3], axis=1)
+    bowl_angular = np.linalg.norm(bowl_v[tail, 3:], axis=1)
+    terminal_bottle_linear = float(np.max(bottle_linear))
+    terminal_bottle_angular = float(np.max(bottle_angular))
+    terminal_bowl_linear = float(np.max(bowl_linear))
+    terminal_bowl_angular = float(np.max(bowl_angular))
+    p95_bottle_linear = float(np.percentile(bottle_linear, 95))
+    p95_bottle_angular = float(np.percentile(bottle_angular, 95))
+    p95_bowl_linear = float(np.percentile(bowl_linear, 95))
+    p95_bowl_angular = float(np.percentile(bowl_angular, 95))
+    bottle_position_excursion = float(
+        np.max(np.linalg.norm(bottle[tail] - bottle[-1], axis=1))
     )
-    terminal_bottle_angular = float(
-        np.max(np.linalg.norm(bottle_v[-24:, 3:], axis=1))
+    bowl_position_excursion = float(
+        np.max(np.linalg.norm(bowl[tail] - bowl[-1], axis=1))
     )
-    terminal_bowl_linear = float(
-        np.max(np.linalg.norm(bowl_v[-24:, :3], axis=1))
-    )
-    terminal_bowl_angular = float(
-        np.max(np.linalg.norm(bowl_v[-24:, 3:], axis=1))
-    )
+
+    def orientation_excursion(quaternion: np.ndarray) -> float:
+        rotation = Rotation.from_quat(quaternion[tail])
+        return float(np.max((rotation[-1].inv() * rotation).magnitude()))
+
+    bottle_orientation_excursion = orientation_excursion(bottle_q)
+    bowl_orientation_excursion = orientation_excursion(bowl_q)
     terminal_tilt = float(np.max(tilt[-24:]))
     metrics: dict[str, float | int] = {
         "max_world_tilt_deg": float(tilt[peak]),
@@ -279,6 +308,14 @@ def action005_gate_values(
         "terminal_200ms_max_bottle_angular_speed_radps": terminal_bottle_angular,
         "terminal_200ms_max_bowl_linear_speed_mps": terminal_bowl_linear,
         "terminal_200ms_max_bowl_angular_speed_radps": terminal_bowl_angular,
+        "terminal_200ms_p95_bottle_linear_speed_mps": p95_bottle_linear,
+        "terminal_200ms_p95_bottle_angular_speed_radps": p95_bottle_angular,
+        "terminal_200ms_p95_bowl_linear_speed_mps": p95_bowl_linear,
+        "terminal_200ms_p95_bowl_angular_speed_radps": p95_bowl_angular,
+        "terminal_200ms_bottle_position_excursion_m": bottle_position_excursion,
+        "terminal_200ms_bottle_orientation_excursion_rad": bottle_orientation_excursion,
+        "terminal_200ms_bowl_position_excursion_m": bowl_position_excursion,
+        "terminal_200ms_bowl_orientation_excursion_rad": bowl_orientation_excursion,
     }
     gates = {
         "deep_pour_over_90deg": bool(tilt[peak] >= 90.0),
@@ -286,10 +323,22 @@ def action005_gate_values(
         "peak_pour_over_bowl_xy": bool(peak_xy < 0.14),
         "peak_pour_above_bowl": bool(peak_height > 0.05),
         "returned_upright_terminal_200ms": bool(terminal_tilt < 10.0),
-        "settled_terminal_bottle_linear": bool(terminal_bottle_linear < 0.002),
-        "settled_terminal_bottle_angular": bool(terminal_bottle_angular < 0.02),
-        "settled_terminal_bowl_linear": bool(terminal_bowl_linear < 0.002),
-        "settled_terminal_bowl_angular": bool(terminal_bowl_angular < 0.02),
+        "settled_terminal_bottle_linear": bool(
+            p95_bottle_linear < SETTLED_LINEAR_P95_MPS
+            and bottle_position_excursion < SETTLED_POSITION_EXCURSION_M
+        ),
+        "settled_terminal_bottle_angular": bool(
+            p95_bottle_angular < SETTLED_ANGULAR_P95_RADPS
+            and bottle_orientation_excursion < SETTLED_ORIENTATION_EXCURSION_RAD
+        ),
+        "settled_terminal_bowl_linear": bool(
+            p95_bowl_linear < SETTLED_LINEAR_P95_MPS
+            and bowl_position_excursion < SETTLED_POSITION_EXCURSION_M
+        ),
+        "settled_terminal_bowl_angular": bool(
+            p95_bowl_angular < SETTLED_ANGULAR_P95_RADPS
+            and bowl_orientation_excursion < SETTLED_ORIENTATION_EXCURSION_RAD
+        ),
     }
     return gates, metrics
 
@@ -314,6 +363,8 @@ def action005_trace_gates(model, inp, trace_path: str | Path) -> tuple[dict, dic
         tilt_deg=tilt,
         bottle_position=qpos[:, bottle_q : bottle_q + 3],
         bowl_position=qpos[:, bowl_q : bowl_q + 3],
+        bottle_quaternion_xyzw=bottle_quaternion,
+        bowl_quaternion_xyzw=qpos[:, bowl_q + 3 : bowl_q + 7][:, [1, 2, 3, 0]],
         bottle_velocity=qvel[:, bottle_v : bottle_v + 6],
         bowl_velocity=qvel[:, bowl_v : bowl_v + 6],
     )

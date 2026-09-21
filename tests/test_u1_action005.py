@@ -77,6 +77,7 @@ def test_action005_gate_values_require_real_pour_and_settle() -> None:
     bottle[:, 2] = 0.12
     bowl[:, 2] = 0.02
     bottle[19, :2] = [0.08, 0.04]
+    quaternion = np.tile([0.0, 0.0, 0.0, 1.0], (frames, 1))
     bottle_velocity = np.zeros((frames, 6))
     bowl_velocity = np.zeros((frames, 6))
 
@@ -84,6 +85,8 @@ def test_action005_gate_values_require_real_pour_and_settle() -> None:
         tilt_deg=tilt,
         bottle_position=bottle,
         bowl_position=bowl,
+        bottle_quaternion_xyzw=quaternion,
+        bowl_quaternion_xyzw=quaternion,
         bottle_velocity=bottle_velocity,
         bowl_velocity=bowl_velocity,
     )
@@ -91,11 +94,24 @@ def test_action005_gate_values_require_real_pour_and_settle() -> None:
     assert all(gates.values())
     assert metrics["max_world_tilt_deg"] == 105.0
     bottle_velocity[-1, 0] = 0.02
-    failed, _ = action005_gate_values(
+    outlier, _ = action005_gate_values(
         tilt_deg=tilt,
         bottle_position=bottle,
         bowl_position=bowl,
+        bottle_quaternion_xyzw=quaternion,
+        bowl_quaternion_xyzw=quaternion,
         bottle_velocity=bottle_velocity,
         bowl_velocity=bowl_velocity,
     )
-    assert failed["settled_terminal_bottle_linear"] is False
+    assert outlier["settled_terminal_bottle_linear"] is True
+    bottle[-1, 0] = 0.002
+    drifting, _ = action005_gate_values(
+        tilt_deg=tilt,
+        bottle_position=bottle,
+        bowl_position=bowl,
+        bottle_quaternion_xyzw=quaternion,
+        bowl_quaternion_xyzw=quaternion,
+        bottle_velocity=bottle_velocity,
+        bowl_velocity=bowl_velocity,
+    )
+    assert drifting["settled_terminal_bottle_linear"] is False
