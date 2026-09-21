@@ -279,3 +279,12 @@ episodes.** Localized blocker remains middle unloading under thumb-dominated
 load, not absent lower leverage.
 
 Initial launch into prior tmux session failed because that session no longer existed; new managed session feat-uniform-direct-parent-repair-005-balance ran the sole v3 physics episode.
+
+## 2026-09-21T15:39:50+08:00 — v4 reconstruction contract and prediction
+- Historical v3 contains qpos/qvel/ctrl, not full native buffers. Supervisor approved one exact-target prefix reconstruction at current HEAD9890d25; unrelated descendant left intact. Predetermined tolerances: qpos1e-6,qvel1e-4,ctrl exact; every archived force within0.02N+1% and same0.2N bearing mask. Any mismatch stops before probes.
+- Planned compact basis: thumb/middle normal and axial signed-distance gradients, central +/-0.004 and +/-0.002rad;8-frame continuation and last4-frame mean force/gap/wrench, quadratic relative-rotation acceleration. Predicted thumb unloading plus middle loading if smooth compliance dominates; scale/symmetry discrepancy>30% or condition>1000 rejects inversion. Raw contacts and exact native buffers preserved under v4.
+
+## 2026-09-21T15:43:46+08:00 — reconstruction mismatch; stopped before probes
+- One frame0 frozen-v3 prefix completed409. Controls bitwise; qpos max0.0008723437786102295 at409 coordinate33, qvel0.1016545295715332 at291 coordinate33. Both first exceed prescribed tolerance at29. Force masks differ266/267/269/273/274/288;40 force samples fail0.02N+1%.380 index3.47321859 versus3.40321302N.400/409 force errors0.0100861/0.00998116N pass.
+- Full buffers380/400/409 saved but not qualified. Zero probes/inverse/candidate replay/full passes/repeats. No applied forces/post-frame0 writes during reconstruction. Numerical source not isolated.
+- v4 artifacts and sibling_native.log preserved; tool renamed reconstruct_action005_native after failure, unexecuted probe code removed.20 focused tests pass. Docs include reproduction command. No unrelated changes.

@@ -1,18 +1,16 @@
 # Current model
 
-## Objective and boundary
-Only nominal-U1 A030005 repair. Original pickup→over-bowl→deep inversion→return→place→release timeline remains mandatory. Largepose/other actions untouched. No accepted full005 or two-pass stream exists.
+## Objective
+Only nominal-U1 A030005, preserving pickup→over-bowl→deep inversion→return→place→release. Zero complete passes/repeats. Other actions and largepose untouched.
 
-## Mechanism
-Donor axial-coordinate matching was the wrong invariant. The former70deg pinky axial error is extra lower leverage. Removing this constraint closes its+0.460mm gap to−0.400mm while retaining93.743mm span, opposed normals and17.195mm/10.993deg wrist correction. Continuous neighboring-frame surface fitting preserves50–90deg geometric topology; the whole path still has24 shallow-contact audit violations.
+## Supported mechanism
+Sliding topology preserves ring/pinky leverage (~80.9mm at418), unlike fixed donor patches. V3 still loses middle at410: thumb9.212N/1.617mm penetration, middle0N, relative acceleration81.23deg/s² at418. Geometric target displacement does not realize predicted contact geometry under coupled spring/contact loading. Static reserve is not realized wrench balance.
 
-Single native v2 trial preserves ring/pinky bearing and80.826mm actual span at418, where v1 lost lower contacts before418. Yet middle unloads at402; at418 its gap is+0.017mm and thumb penetration1.656mm. Relative rotation still accelerates87.444deg/s² despite unsaturated friction (max utilization0.704). Static wrench capacity is not realized force balance. Fixed donor servo deflection plus kinematic surface closure does not enforce balanced load or contact sequence. In recorded acquisition window thumb bears before middle/ring/pinky: target ramp order is not physical acquisition.
+## Current boundary
+V4 requested native sensitivities from complete v3 checkpoints. Historical v3 saved qpos/qvel/ctrl only. Approved fail-closed frozen-prefix reconstruction fails despite bitwise controls/matching initial states/U1 setting. qpos/qvel first exceed1e-6/1e-4 at29; maxima0.000872344/0.101655. Six acquisition frames change0.2N bearing masks. Frame380 force discrepancy0.070006N fails0.02N+1%;400/409 forces pass but cannot establish state identity. Numerical divergence source is not isolated. Historical compiled-model hash unavailable; v4 saves its model/hash.
 
-## Decision
-Focused contract failed; no full/repeat/video is justified. Localized next question is how to acquire all four fingers before thumb and maintain middle bearing without overloading thumb, using bounded frozen reference-conditioned targets. No broad sweep performed.
+## Decision and remaining question
+Zero sensitivity probes/inverse/candidate replay. V4 complete native checkpoints380/400/409 represent a different reconstruction, not qualified historical v3 states. No derivative sign/rank/conditioning claim is justified. Single blocker: historical native states unavailable and reconstruction fails identity. Forward motion requires historical buffers or explicitly revised state-provenance contract, not silently relaxed tolerances/retries.
 
 ## Evidence
-Latest OPS entry and docs/action005_reference_contact_diagnostic.md; outputs/action005_reference_contacts_v2. Raw native result retains an aggregation bug (missing middle zeroed span/opposition); audit.json corrects only those derived fields from preserved native contacts. Exact index–pinky span survives, complete four-finger axial order is unknown. Runtime finite/canonical underc6db552f..., maximum applied discrepancy1.184e−7, capacities25/58/128, no external force/post-frame0 episode state write. All prior artifacts retained.
-
-## Authorized balance intervention resolves next hypothesis negatively
-One geometry-derived thumb/middle-only control correction produced correct offline−0.9/−0.4mm gaps but did not realize them dynamically. V3 first interval sample418 retains ring/pinky1.585/2.078N and80.888mm span; middlezero, thumb1.617mm penetration, acceleration81.232deg/s². First middlezero after380 at410. Geometry-to-target displacement is attenuated by coupled servo/contact loading; merely closing the geometric gap is not equivalent to establishing bearing. No additional intervention authorized; stop. V3 artifacts and latest OPS preserve evidence. Zero full runs or frozen repeats.
+Latest OPS and diagnostic doc; outputs/action005_reference_contacts_v2/v3 preserved; v4 contains model/buffers/comparisons/raw trace/contacts/divergence. Planned central probes were not run.20 focused tests pass.

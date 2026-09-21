@@ -110,3 +110,54 @@ Run the same CLI with `--output outputs/action005_reference_contacts_v3
 capacity25/58/128, control error1.184e−7. **Two complete passes: no; zero full
 episodes.** Localized blocker remains middle unloading under thumb-dominated
 load, not absent lower leverage.
+
+## V4: reconstruction fails before sensitivity identification
+
+V3 preserved qpos/qvel/ctrl, not full native-buffer checkpoints. An authorized
+substitute reconstructed its frozen target once from frame0, saving all native
+buffers at380/400/409. **The reconstruction failed qualification; no sensitivity
+probes, inverse correction or candidate replay ran.**
+
+Controls are bitwise equal through409; initial states and U1 setting hash match.
+All four substeps retained zero external forces, with no post-frame0 state
+writes. Historical compiled model bytes were not saved: the setting fingerprint
+is the historical model comparison boundary. V4 saves its compiled model/hash.
+
+| Quantity | Maximum archive difference | Predetermined tolerance |
+|---|---:|---:|
+| qpos, mixed native coordinates |0.000872344 at409, coordinate33|0.000001|
+| qvel, mixed native coordinates |0.101655 at291, coordinate33|0.0001|
+| ctrl |0, bitwise equal|0|
+
+Both state tolerances first fail at29. Bearing masks (>0.2N) differ at
+266/267/269/273/274/288;40 force samples fail0.02N+1% per-finger tolerance.
+At380 index force is3.473219N versus archived3.403213N.400/409 maximum force
+differences0.010086/0.009981N pass, but late force agreement cannot establish
+identity of the underlying state/contact history.
+
+Predicted versus observed: identical controls were expected to reconstruct
+v3 within the established local restore tolerances. They did not. This is
+consistent with native replay variability; its numerical source was not
+isolated. No derivative sign/rank/conditioning conclusion follows. Planned
+±0.004/±0.002rad,8-frame probes were not run; there is no predicted correction
+or realized correction comparison. Complete passes:0; frozen repeats:0.
+
+**Single blocker:** historical full-native states are unavailable and their
+reconstruction fails the approved identity tolerance. V4 checkpoints belong
+to this different reconstruction, not qualified historical v3 states.
+
+`outputs/action005_reference_contacts_v4/` contains manifest/model/hash,
+`checkpoint_{380,400,409}/{state.npz,workspace.json}`, reconstruction trace and
+raw telemetry, `reconstruction.json`, `divergence.json`, `result.json`.
+Sibling `_native.log` preserves the run. The original tool name
+`identify_action005_wrench` was changed to `reconstruct_action005_native` after
+the gate failed; the unexecuted probe code was removed. No second physics run.
+HEAD9890d25 is an unrelated descendant of7de8fa9, preserved untouched.
+
+Reproduce reconstruction only with a fresh output directory:
+```sh
+PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
+  -m tools.reconstruct_action005_native --output outputs/action005_reconstruction_NEW
+```
+Seven new tests enforce whole-prefix comparison, exact controls, nonfinite
+rejection and bearing-mask preservation. All20 scoped005 tests pass.

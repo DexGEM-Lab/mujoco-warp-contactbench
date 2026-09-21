@@ -66,3 +66,7 @@ Restore only 005-owned paths in a new commit; never rewrite ca9823a/37e3096 or t
 
 ## Mid-run authorized single load-balance correction
 After v2, exactly one thumb-opening/middle-closing correction is permitted, geometry-derived, smooth before380, taper with grip, wrist/index/ring/pinky unchanged. Rerun focused once; stop if false. No sweep.
+
+## Authorized v4 native target-to-wrench identification
+Only005: reconstruct frozen-v3 nominal-U1 prefix, identify compact thumb/middle central sensitivities at380/400/409, then at most one inverse correction/focused replay if controllable. Preserve wrist/index/ring/pinky/reference timing. Stop on discontinuity/rank deficiency/wrong sign; full A030 and independent repeat only after focused invariants pass. No sweeps, other actions or augmentation. Preserve v2/v3 and unrelated largepose paths.
+Supervisor approved HEAD9890d25 (unrelated descendant of7de8fa9) and reconstruction because historical full-native buffers do not exist. Compare every archived qpos/qvel/ctrl frame through409 at1e-6/1e-4/0 tolerances and bearing forces at0.02N+1%; fail closed on mismatch. Accepted reconstructed checkpoints are diagnostic only, never called historical original states.
