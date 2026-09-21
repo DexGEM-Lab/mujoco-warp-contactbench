@@ -94,6 +94,7 @@ This directory contains 640 newly generated Cheyingtong right-hand trajectories:
 - rejected attempts retained as evidence: `rejections.json`
 - per-UUID visualization layout: `visualization_layout.json`
 - visualization clearance solver output: `background_offsets.json`
+- initial seven unresolved clearance cases: `background_offsets_initial.json`
 - file hashes: `sha256.json`
 
 Every accepted child has two accepted frozen-control U1 replays with distinct
@@ -128,13 +129,16 @@ not part of the recorded physics.
     for old in (hash_path, hash_sidecar):
         if old.exists():
             old.unlink()
-    hashes = {
-        str(path.relative_to(staging)): file_sha(path)
+    files = [
+        path
         for path in sorted(staging.rglob("*"))
         if path.is_file() and path not in (hash_path, hash_sidecar)
-    }
+    ]
+    print(json.dumps({"phase": "publish", "step": "hash_start", "files": len(files)}), flush=True)
+    hashes = {str(path.relative_to(staging)): file_sha(path) for path in files}
     write_json(hash_path, hashes)
     hash_sidecar.write_text(file_sha(hash_path) + "\n")
+    print(json.dumps({"phase": "publish", "step": "hash_complete"}), flush=True)
 
     os.rename(staging, final)
     print(
