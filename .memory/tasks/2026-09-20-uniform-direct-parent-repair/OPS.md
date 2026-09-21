@@ -237,3 +237,45 @@ Focused adapter/profile/session validation:21 tests passed. NAS and Lance unchan
 - Explicit user continuation requested a bounded surface-topology audit. Re-solving70deg from the feasible50deg delta improves pinky gap3.879→0.460mm and axial error13.774→9.896mm; ring axial error5.140mm. Thumb/index/middle/ring/pinky signed gaps[-0.323,-0.619,-0.428,-0.571,+0.460]mm, max penetration0.619mm. Wrist17.420mm/11.175deg remains within bounds; largest normalized wrist component0.986, largest finger correction0.921rad.
 - The required pinky contact/5mm axial-band condition still fails. Two local70deg fits are negative evidence, not proof that no continuous branch exists. No new target/physical sweep follows an unverified geometry. Remaining exact question: can a continuous closest-surface branch close the0.460mm pinky gap and recover4.896mm excess axial error while preserving opposed normals and the same reference bounds?
 - Preserved outputs/action005_reference_contacts_v1/surface_feasibility_70_neighbor{.json,_qpos.npy}, outputs/audit_action005_surface_feasibility_70_neighbor.py and outputs/action005_reference_contacts_v1_surface70.log. Worker turn budget reached; stopping with localized unresolved geometry rather than asserting infeasibility.
+
+## 2026-09-21T07:20:45.997390+00:00 — topology correction and single native discriminator
+- Restored exact five005-owned files in new commit7ad67f9; did not rewrite ca9823a/37e3096 or touch unrelated largepose paths. Current disk task memory preserved.
+- Removed donor axial/azimuth penalties.70deg nearest-seed correction closes every gap to~-0.400mm; span93.743mm, wrist17.195mm/10.993deg, opposed normals0.957–0.981. PCHIP continuation across4-frame reference knots; target remains1321frames, prefix<225/tail>=1050 exact.50–90deg span>=86.819mm; max penetration1.057mm.24 all-path geometry audit failures remain (including1.307mm gap near726); no claim full-path feasibility.
+- Predicted ring/pinky bearing persists, span>=80mm and rotation acceleration ceases. Ran one frame0 native-U1 diagnostic in managed tmux feat-uniform-direct-parent-repair-005-surface; artifacts outputs/action005_reference_contacts_v2 and sibling fit/native/audit logs. Commands in docs/action005_reference_contact_diagnostic.md. No second physical trial.
+- Native stopped418, first reference50deg sample: ring/pinky1.667/2.157N, span80.826mm, opposed normals0.927–0.980 survive. Middle first zero after380 at402, remainszero418 with actual gap+0.017mm; thumb9.499N and penetration1.656mm. Relative drift4.090deg, rate20.964deg/s, acceleration87.444deg/s². Friction utilizationmax0.704; static wrench reserve1.253. Hence maintained lower leverage improves but does not establish five-contact retention.
+- Acquisition sequence also not demonstrated: recorded>=265 window thumb bearing270 precedes pinky301/ring311/middle333. Four-finger target ramp ordering did not enforce physical order.
+- Runtime aggregator incorrectly zeroed span/opposition when middle missing. Inspected raw contact points; corrected function preserves available contacts, explicit missing fingers, unknown complete axial order. Raw result untouched; offline audit.json supersedes derived fields. Regression test added. No resimulation.
+- All finite, fixed hashc6db552f..., CCD16, four480Hz substeps/native absolute targets; max applied error1.184e-7, no applied force/post-frame0 episode state write. Capacity maxima25/58/128. Forces sampled lastsubstep120Hz, capacity480Hz; broadphase bound not exact CCD occupancy.13 focused tests pass. No complete episode/repeat/video; localized blocker is realized acquisition/load distribution (early thumb, unloaded middle), not pinky axial position.
+
+## 2026-09-21T07:22:47.133876+00:00 — authorized single balance follow-up
+
+
+
+A single follow-up was explicitly authorized after v2: use actual frame418
+geometry to solve only thumb/middle joint offsets toward−0.9/−0.4mm gaps,
+with minimum-displacement regularization and±0.05rad limits. Apply offsets to
+frozen controls with a smooth350–380 onset and existing grip-window taper.
+Wrist/index/ring/pinky targets, prefix<350 and tail>=1050 are byte-identical
+to v2. No sweep was performed. `balance.json` records the exact joint vector.
+
+The corrected geometry predicted thumb/middle gaps
+-0.900000/-0.400000mm, but native replay again
+stopped418: middle0N, thumb9.212N, ring1.585N, pinky2.078N, span80.888mm.
+Thumb penetration remained1.617mm; rotation acceleration81.232deg/s² versus
+87.444 previously (only7.1% lower), drift4.059deg. Middle first zero after380
+is frame410. A kinematic displacement applied as
+a servo-target displacement mostly redistributes spring load instead of
+realizing that displacement under the coupled grasp. The predicted middle
+bearing was not established. This is the stopping boundary; no further trial.
+
+Artifacts: `outputs/action005_reference_contacts_v3/` contains `balance.json`,
+`target.npy`, `trace.npz`, `telemetry.jsonl.gz`, `result.json`, `audit.json`,
+`contract.json`; its `fit.json` is inherited v2 geometry, not a measured v3 fit.
+Run the same CLI with `--output outputs/action005_reference_contacts_v3
+--balance-from outputs/action005_reference_contacts_v2` to construct/replay
+(in a new output directory). Finite/canonical, no applied forces/state writes;
+capacity25/58/128, control error1.184e−7. **Two complete passes: no; zero full
+episodes.** Localized blocker remains middle unloading under thumb-dominated
+load, not absent lower leverage.
+
+Initial launch into prior tmux session failed because that session no longer existed; new managed session feat-uniform-direct-parent-repair-005-balance ran the sole v3 physics episode.

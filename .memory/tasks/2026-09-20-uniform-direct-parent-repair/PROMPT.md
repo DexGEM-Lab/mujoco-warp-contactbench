@@ -60,3 +60,9 @@ New deterministic sampling:3 radii ×8 octants ×6 rotations(±30deg one of roll
 
 ## Reopened action005 objective (supersedes paused005 / four-action augmentation)
 The user explicitly authorizes one writer to repair A030005 under nominal U1. Pause augmentation/other actions. Preserve original A030 object and wrist timeline: pickup, move over bowl, deep inversion/pour, return upright, placement, thumb-first release. Borrow candidate04 opposing contact topology only, never its root transport. Four fingers close before thumb. Fit continuous bounded offline contact corrections; permitted wrist micro-registration <=20mm/15deg (prefer smaller). Runtime is frozen absolute targets only; no post-frame0 state writes, feedback, forces, attachment or physics changes. First verify native50–90deg contact/force/span/drift/capacity evidence from frame0; run full and second fresh-process replay only if mechanism holds. Preserve all artifacts and unrelated largepose files. Source/tests/task memory are the only commit scope.
+
+## Authorized continuation: topology metric correction
+Restore only 005-owned paths in a new commit; never rewrite ca9823a/37e3096 or touch largepose files. Donor axial coordinates are not invariants: use opposite sides/normals, axial order, >=80mm span, shallow contacts, <=20mm/15deg wrist correction and continuous reference-conditioned branch. Close the70deg +0.460mm gap minimally; four fingers must physically acquire before thumb. One native frame0 focused diagnostic; stop on failure, no sweep. Only a positive focused result permits complete A030 and fresh-process frozen-control repeat. Update005 docs/memory honestly.
+
+## Mid-run authorized single load-balance correction
+After v2, exactly one thumb-opening/middle-closing correction is permitted, geometry-derived, smooth before380, taper with grip, wrist/index/ring/pinky unchanged. Rerun focused once; stop if false. No sweep.
