@@ -37,7 +37,18 @@ class Runtime:
         native_path=folder/'native_contacts.jsonl'; high={'contacts':0,'constraints':0}
         with native_path.open('w') as evidence:
             for f in range(self.I.frames):
-                if f: s.step()
+                if f:
+                    # Production uses explicit native substeps so capacity guards
+                    # observe every480Hz state, not only the120Hz arrival boundary.
+                    s.frame += 1
+                    control=command_target(target[f],s.data.qpos.numpy()[0,:28],*m.jnt_range[:28].T)
+                    s.data.ctrl.assign(control[None].astype(np.float32))
+                    for substep in range(4):
+                        s.mw.step(s.wm,s.data); s.wp.synchronize()
+                        nsub=int(s.data.nacon.numpy().ravel()[0]); efcsub=int(np.max(s.data.nefc.numpy()))
+                        high['contacts']=max(high['contacts'],nsub); high['constraints']=max(high['constraints'],efcsub)
+                        if nsub>=1024 or efcsub>=4096:
+                            raise ValueError(f'native capacity reached at frame{f} substep{substep}')
                 pose=s.data.qpos.numpy()[0].copy(); vel=s.data.qvel.numpy()[0].copy()
                 if not np.isfinite(pose).all() or not np.isfinite(vel).all(): raise ValueError('nonfinite state')
                 q.append(pose); v.append(vel); controls.append(s.data.ctrl.numpy()[0].copy())
@@ -87,7 +98,7 @@ class Runtime:
         np.savez_compressed(folder/'contact_validation.npz',**a)
         write_json(folder/'geometry_contacts.json',diag['contacts'])
         report=dict(accepted=all(gates.values()),gates=gates,physical=physical,premerge_contact_frames=precontact,
-            high_water=high,contract=s.contract,semantics=self.p['semantics'],delta=delta,
+            high_water=high, high_water_sampling='every480Hz substep', contract=s.contract,semantics=self.p['semantics'],delta=delta,
             native_force_boundary='last480Hz substep, contact-frame wrench; positions solver contact coordinates',
             sampled_flight_limit='three120Hz samples; subframe flight unmeasured',pid=os.getpid(),
             requested_target_sha256=array_sha(target),executed_target_sha256=array_sha(controls))

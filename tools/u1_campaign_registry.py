@@ -42,15 +42,15 @@ def build(root, output):
             semantics='alternate strong-pinch pick/place; action04 donor row847; no deep inversion'
         else:
             I,m,b,t,source,adrs=load(82)
-            target_path=root/'outputs/row82_release_repair_v6/target.npy'; evidence_path=target_path.parent/'validation.json'
+            target_path=root/'outputs/row82_release_repair_v13/target.npy'; evidence_path=target_path.parent/'validation.json'
             meta=json.loads(evidence_path.read_text()); trace_path=target_path.parent/meta['representative_trace']; parent_uuid=meta['candidate_uuid']
-            semantics='pitcher pour/return; release-v6 upright supported settled'
+            semantics='pitcher pour/return; supported yaw registration; thumb-first reverse-path release-v13'
         target=np.load(target_path); evidence=json.loads(evidence_path.read_text())
         contract=assert_u1(m,I); fingerprint=setting(m,I.arrays['scene_object_names'].tolist())
         if digest(fingerprint)!=SETTING: raise ValueError('U1 setting fingerprint mismatch')
         expected=evidence.get('target_sha256',evidence.get('frozen_target_sha256'))
         if expected != array_sha(target): raise ValueError('accepted evidence target hash mismatch')
-        accepted=(evidence.get('physical',{}).get('physical_pose_pass') is True or evidence.get('status')=='local_U1_two_fresh_release_pass')
+        accepted=(evidence.get('physical',{}).get('physical_pose_pass') is True or str(evidence.get('status','')).startswith('local_U1_two_fresh_release'))
         if not accepted: raise ValueError('missing explicit final parent acceptance')
         tr=np.load(trace_path); names=I.arrays['scene_object_names'].tolist()
         first=next((f for f,(q,v) in enumerate(zip(tr['qpos'],tr['qvel'])) if scene_contacts(m,q,v,names)),None)

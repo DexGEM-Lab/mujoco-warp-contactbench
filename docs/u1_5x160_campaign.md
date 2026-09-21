@@ -57,18 +57,20 @@ Exactly160 selected unique slots/action is the output condition, not a promised
 physical yield. Status uses the same registry/plan/staging/action arguments.
 Selected trace artifacts are hash-checked on resume. Failures remain in place.
 
-## Qualification and blockers
+## Qualification
 
-Local bounded pilots: zero and +++30mm/pitch−0.5° pass for003/005/007/009.
-006 fails final full source-relative orientation<15° in both pilots (~59°).
-Canonical release-v6 fresh02 already has59.73°: upright release does not certify
-terminal yaw. Resolve the parent/gate conflict explicitly before production;
-do not weaken the gate or silently switch parents.
+Local v3 bounded pilots under explicit every-480Hz-substep native stepping pass
+for zero and +++30mm/pitch−0.5° on all five actions. Each extreme frozen-control
+trace also passes a separate-process second replay. Observed high-water maxima
+across these runs are42/1024 active contacts and196/4096 constraints; reaching a
+capacity is a hard failure.
 
-These pilots are diagnostics, not independently accepted children. The new-process
-second-pass command is implemented but not physically qualified in this bounded
-run. Only one extreme cell/action was tested. Contact/constraint high-water checks
-are at saved120Hz frames, not every480Hz substep; CCD overflow instrumentation is
-not yet present. No21-keypoint compact-row exporter or Lance publisher is included.
-These remaining qualification/instrumentation boundaries must be addressed before
-claiming a production-ready800-row delivery. Existing datasets stay immutable.
+006 now uses release-v13: supported yaw registration, thumb-first clear, then
+reverse same-U1 acquisition deltas for four-finger/wrist extraction. Two fresh
+parent replays pass; v3 zero/extreme pilots finish with full orientation errors
+2.21°/1.25° and upright settled release.
+
+These pilots still cover only one extreme cell/action; production retains the
+frozen16-candidate reserve order and explicit slot exhaustion. No compact-row
+exporter or Lance publisher is included in this runner. Existing datasets stay
+immutable; attempts must use caller-provided staging with adequate space.
