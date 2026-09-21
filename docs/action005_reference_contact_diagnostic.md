@@ -161,3 +161,66 @@ PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python \
 ```
 Seven new tests enforce whole-prefix comparison, exact controls, nonfinite
 rejection and bearing-mask preservation. All20 scoped005 tests pass.
+
+## V5 fresh-realization sensitivity: inverse rejected
+
+One NEW frozen-v3 nominal-U1 realization captured155 native buffers at380/400/409.
+Model hash matchesv4; U1/initial states/target matchv3. No historical identity
+matching. Every branch restores all buffers exactly. Paired8-frame zero
+continuations pass: maximum pose1.79e-7, velocity3.20e-5. The frame0 baseline
+has no post-initialization state writes; diagnostic branches explicitly do.
+All substeps check zero external forces, finite state and capacity limits.
+
+|Frame|Thumb/middle force N|Thumb/middle gap mm|Span mm|Drift deg|
+|---|---:|---:|---:|---:|
+|380|9.408/0.841|−1.674/−0.336|78.660|0|
+|400|9.245/0.521|−1.652/−0.126|79.236|1.853|
+|409|9.165/0.448|−1.658/−0.016|79.711|2.739|
+|418|9.208/0|−1.616/+0.002|80.865|4.038|
+
+At418 index/ring/pinky=3.674/1.588/2.072N; net force
+[−0.1634,+0.0684,−0.1214]N, torque[−0.01349,+0.02657,−0.01194]Nm.
+Relative speed20.611deg/s and trailing12-frame acceleration80.963deg/s².
+The thumb-dominated unloading basin repeats; lower leverage survives.
+Original>=80mm criterion is false at checkpoints. Supervisor explicitly allowed
+same-basin/no-collapse baseline qualification because archived spans were
+78.989/79.259/79.734mm; fresh differences−0.330/−0.023/−0.023mm.
+This is not final acceptance. Physical acquisition still fails: thumb>1N at278,
+before middle/ring/pinky first>0.2N at334/310/300.
+
+Two unit joint-space normal-gap gradients (positive opens) were probed at
+±0.004/±0.002rad over8frames, with last4-frame mean forces/gaps/net wrench
+and quadratic relative SO(3) acceleration. All expected signs are observed.
+Normalized Jacobian conditions2.406/1.684/2.279 and task conditions
+4.10/5.21/20.08 establish rank, but every checkpoint fails30% linearity:
+
+-380: middle-direction angular symmetry error75.7%; force/gap errors4.1/8.9%.
+ Its specific angular-response mechanism remains unisolated; repeat noise is
+ orders smaller.
+-400: task-force inconsistency53.9%. Middle+.004rad loses contact at408;
+ +.002rad retains0.400N there. Small-scale middle-force slope−21.160N/rad
+ extrapolates0.3755N last4 mean at+.004; observed0.2865N. This is a post-hoc
+ scale-consistency comparison, not a candidate prediction/transfer result.
+-409: force77.5%, gap51.4% inconsistency; middle contact activation switches
+ across horizon frames depending on perturbation sign/scale.
+
+**Single blocker:** the measured8-frame target-to-response map crosses contact
+activation boundaries and exceeds30% nonlinearity. Correct signs/full rank do
+not justify a smooth inverse. No correction, v5 target, independent transfer,
+full episode or repeat followed. Complete passes:0. This does not establish
+ global uncontrollability. Reference-required wrench was not computed because
+ sensitivity failed before the inverse stage; reported wrench is measured net.
+
+Artifacts: `outputs/action005_reference_contacts_v5/run_001/` contains baseline
+trace/raw contacts, model/manifest, checkpoints,24 signed branches plus6 zero
+continuations, basis arrays, sensitivity reports and result. Parent directory
+contains PID/log/exit0. An initial managed-shell interruption stopped near280
+before checkpoints; preserved under`interrupted_launch/`, with exactly one
+approved identical operational restart. No scientific parameter variant.
+
+Reproduction (new output only):
+```sh
+PYTHONPATH=$PWD /home/jay/anaconda3/envs/manorl_mujoco/bin/python -m tools.identify_action005_fresh --output outputs/action005_fresh_NEW
+```
+27 focused005 tests pass, covering nonlinear/unilateral rejection, explicit
+sub80mm basin reporting, collapse rejection and unit normal-basis support.

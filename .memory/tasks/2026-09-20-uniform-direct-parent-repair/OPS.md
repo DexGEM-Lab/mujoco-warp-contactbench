@@ -288,3 +288,14 @@ Initial launch into prior tmux session failed because that session no longer exi
 - One frame0 frozen-v3 prefix completed409. Controls bitwise; qpos max0.0008723437786102295 at409 coordinate33, qvel0.1016545295715332 at291 coordinate33. Both first exceed prescribed tolerance at29. Force masks differ266/267/269/273/274/288;40 force samples fail0.02N+1%.380 index3.47321859 versus3.40321302N.400/409 force errors0.0100861/0.00998116N pass.
 - Full buffers380/400/409 saved but not qualified. Zero probes/inverse/candidate replay/full passes/repeats. No applied forces/post-frame0 writes during reconstruction. Numerical source not isolated.
 - v4 artifacts and sibling_native.log preserved; tool renamed reconstruct_action005_native after failure, unexecuted probe code removed.20 focused tests pass. Docs include reproduction command. No unrelated changes.
+
+## 2026-09-21T15:51:47+08:00 — fresh-baseline sensitivity intervention
+- One NEW v3-control frame0 realization through418; checkpoints380/400/409 retained in process. Two unit joint-space signed-gap gradients (thumb and middle) are the minimum basis addressing the two load/depth objectives. ±0.004/±0.002rad,8-frame horizon, last4-frame mean forces/gaps/net-wrench and quadratic relative-rotation acceleration. Restore every native buffer before every branch, verify assignment exactly, and run paired zero continuations. Fixed normalized scale/symmetry error limit30%, condition1000. Expected positive opening reduces force/increases gap; unilateral middle loss can refute local smooth invertibility.
+- No historical state matching; compiled model hash must match saved v4 and initial states/U1/target matchv3. Supervisor explicitly clarified baseline and acquisition gates in PROMPT.
+
+## 2026-09-21T15:52:59+08:00 — operational interruption and authorized restart
+- Managed foreground timeout then ShellGate off removed process near280 before checkpoints. Supervisor approved exactly one identical operational restart into v5/run_001; preserved partial manifest/model/log under interrupted_launch with no scientific conclusion.
+
+## 2026-09-21T15:57:34+08:00 — fresh sensitivity rejected
+- run_001 exit0, PID1013981;155 buffers restored,24 signed probes+6 zero branches. Baseline reproduces middle0 at418 with thumb9.208N/1.616mm, span80.865mm, drift4.038deg/alpha80.963deg/s². Restore max qpos1.79e-7/qvel3.20e-5.
+- All sensitivity gates fail despite correct signs/full rank:380 angular75.7%,400 task-force53.9% with contact loss408 for+.004 not+.002,409 force77.5%/gap51.4% with mode switches. Raw contacts inspected; repeat noise much smaller. No inverse/target/transfer/full pass/repeat. Reference wrench not computed.27 scoped005 tests pass.
