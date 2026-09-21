@@ -100,3 +100,6 @@ not be an equilibrium. Run nominal MJX-Warp U1 before donor consideration.
 A bounded same-dataset donor would require demonstrably better MJX acquisition,
 not CPU contacts alone. If budget cannot support qualified donor comparison,
 stop after baseline with its exact failure and a concrete next experiment.
+
+## Authorized fast direct120 v2 continuation
+Starting committed9dc54cb and v1 artifacts, one fixed-wrist local shallow acquisition solve before206, four nonthumb before delayed thumb. Preserve row130 wrist/object and full task timeline. Exactly one focused nominal MJX-Warp frame0 replay; stop first failed boundary, no variants. Only focused success permits full and fresh-process repeat. Unique outputs/action005_direct120_v2; no changes to unrelated largepose files.

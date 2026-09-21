@@ -310,3 +310,40 @@ Initial launch into prior tmux session failed because that session no longer exi
 ## 2026-09-21T16:48:34.245201 — row130 baseline fails acquisition
 {"row": 130, "version": 4, "uuid": "95c72d14-d854-47af-8239-849cd9757465", "backend": "MJX-Warp cuda:0", "setting_sha256": "c6db552f105d4de493880a52518772dbacad9496b105d2f4e43e87a907e692cd", "physical": {"row_id": "sept15_v4_row130", "physical_pose_pass": false, "functional_pass": false, "gates": {"lift_tracks_reference_scale": false, "airborne_opposing_contact": false, "final_supported": true, "final_released": true, "final_object_upright": true, "final_object_position_under_8cm": true}, "failed_gates": ["lift_tracks_reference_scale", "airborne_opposing_contact"], "category": "005-mayonnaisebottle-bowl-\u62ff\u8d77\u756a\u8304\u9171\u74f6", "hold": false, "max_lift_m": 0.0, "reference_max_lift_m": 0.1780657842755318, "airborne_multi_finger_fraction": 0.0, "final_support": ["world"], "final_finger_rays": 0, "object_position_final_cm": 1.0267472717348625, "object_orientation_final_deg": 8.070967792871894, "final_world_tilt_deg": 1.0559451640673476, "final_opening_axis_reference_error_deg": 0.8890912596611124, "longest_contact_lift_s": 0.0, "max_hand_penetration_mm": 2.036311588602899, "actual_wrist_position_p95_mm": 31.253695800843598, "actual_wrist_angle_p95_deg": 0.7862985251230541, "contact_semantics": "native geometry reconstructed from measured qpos; not force closure or GPU force telemetry", "terminal_semantics": "support and release", "outlet_alignment": "unmeasured; no fluid simulation"}, "first_bearing_frames": {"thumb": 206, "index": 207, "middle": null, "ring": null, "pinky": null}, "first_lift_failure_frame": 229, "first_lift_failure_bearing": {"thumb": 0.0, "index": 0.0, "middle": 0.0, "ring": 0.0, "pinky": 0.0}, "first_contact_frame": 206, "capacity": {"nacon": 22, "ncollision": 54, "nefc": 116}, "ctrl_target_error": 1.1916267128597724e-07, "peak_actual_tilt": 1.8973780953047885, "complete_pass_count": 0, "correction": "not run: worker turn budget exhausted", "next_step": "one own-row source-state nonthumb-first/thumb-delayed acquisition correction, then focused MJX replay"}
 - Three focused audit tests pass. No repair/full accepted replay/repeat/video. Unrelated largepose paths changed concurrently and were not touched or staged. Raw outputs preserved.
+
+## 2026-09-21T16:56:21.981205+08:00 — direct120 v2 bounded acquisition failure
+
+## Direct120 v2: first acquisition boundary fails
+
+One fixed-wrist solve at supported frame200 found five distal gaps of−0.400mm
+(index→pinky axial span59.94mm). No wrist correction was used. Nonthumb
+closure ramps140–190; earlier source thumb pose is held before the205–223
+thumb closure; correction fades300–340. Wrist targets are byte-identical to
+baseline throughout and every target is baseline-exact from340 onward.
+
+The single completed focused MJX-Warp replay stopped at **frame193**:
+thumb1.0412N, index/middle/ring/pinky0N. No nonthumb had previously crossed
+0.2N. Maximum lift0cm; peak tilt1.217deg. The first physical-order gate fails
+before reference lift229; no full episode or repeat was permitted. Finite
+states/controls, maximum target error5.96e−8; capacity maxima18contacts,
+50broadphase pairs,106constraints (480Hz). Nominal U1 unchanged.
+
+The source-frame160 thumb target does not keep the thumb physically clear
+while the reference wrist approaches: high loading begins at193 despite the
+delayed205 target-close phase. The shallow frame200 static fit therefore did
+not establish an acquired four-finger grasp. This is the exact failure boundary;
+no second target or solve was attempted.
+
+An initial launch crashed on missing telemetry local-contact coordinates at
+first bearing contact. Its log/manifest/partial telemetry and INCOMPLETE marker
+are retained in `interrupted/`. One explicitly authorized instrumentation-only
+restart reused the identical target SHA
+`3cd2a2b929c44eaca0e2b34093e7f3c26451e550eed2cfa896cd631fb2154137`.
+The local-coordinate first-bearing regression test passes. Setting hashes match;
+the archived baseline model-file hash is provenance, not a separately captured
+interrupted runtime model binary. No claim of deterministic state reproduction.
+
+Artifacts: `outputs/action005_direct120_v2/{fit.json,target.npy,fit_qpos.npy,
+compact_result.json,focused/,interrupted/}`. Reproduce the construction and single
+focused replay with `python -m tools.repair_action005_direct120 --output NEW`.
+**Complete passes:0.**

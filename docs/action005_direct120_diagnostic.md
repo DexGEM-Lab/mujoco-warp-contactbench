@@ -47,3 +47,38 @@ python -m pytest -q tests/test_action005_direct120_audit.py
 ```
 
 Baseline reuses existing `outputs/four_action_single_v1/run_reference.py`; its source path and build are preserved. Artifacts: `outputs/action005_direct120_v1/{selection.json,compact_result.json,audit/,collision/,baseline/}`. Immutable Lance untouched. Prior row1260.41cm baseline/2.73cm ILC failures were checked, not overwritten.
+
+## Direct120 v2: first acquisition boundary fails
+
+One fixed-wrist solve at supported frame200 found five distal gaps of−0.400mm
+(index→pinky axial span59.94mm). No wrist correction was used. Nonthumb
+closure ramps140–190; earlier source thumb pose is held before the205–223
+thumb closure; correction fades300–340. Wrist targets are byte-identical to
+baseline throughout and every target is baseline-exact from340 onward.
+
+The single completed focused MJX-Warp replay stopped at **frame193**:
+thumb1.0412N, index/middle/ring/pinky0N. No nonthumb had previously crossed
+0.2N. Maximum lift0cm; peak tilt1.217deg. The first physical-order gate fails
+before reference lift229; no full episode or repeat was permitted. Finite
+states/controls, maximum target error5.96e−8; capacity maxima18contacts,
+50broadphase pairs,106constraints (480Hz). Nominal U1 unchanged.
+
+The source-frame160 thumb target does not keep the thumb physically clear
+while the reference wrist approaches: high loading begins at193 despite the
+delayed205 target-close phase. The shallow frame200 static fit therefore did
+not establish an acquired four-finger grasp. This is the exact failure boundary;
+no second target or solve was attempted.
+
+An initial launch crashed on missing telemetry local-contact coordinates at
+first bearing contact. Its log/manifest/partial telemetry and INCOMPLETE marker
+are retained in `interrupted/`. One explicitly authorized instrumentation-only
+restart reused the identical target SHA
+`3cd2a2b929c44eaca0e2b34093e7f3c26451e550eed2cfa896cd631fb2154137`.
+The local-coordinate first-bearing regression test passes. Setting hashes match;
+the archived baseline model-file hash is provenance, not a separately captured
+interrupted runtime model binary. No claim of deterministic state reproduction.
+
+Artifacts: `outputs/action005_direct120_v2/{fit.json,target.npy,fit_qpos.npy,
+compact_result.json,focused/,interrupted/}`. Reproduce the construction and single
+focused replay with `python -m tools.repair_action005_direct120 --output NEW`.
+**Complete passes:0.**
