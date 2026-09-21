@@ -36,10 +36,17 @@ from sim.manorl.trajectory import (
 TARGET_REPLAY_V22_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
 TARGET_REPLAY_V23_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_3"
 TARGET_REPLAY_ROW_CONTRACT = TARGET_REPLAY_V22_ROW_CONTRACT
+TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS = frozenset(
+    (
+        "u1_four_action_largepose640_c1_native_v1",
+        "u1_five_action_largepose800_c1_native_v1",
+    )
+)
 TARGET_REPLAY_COMPACT_ROW_CONTRACTS = frozenset(
     (
         "synthetic_mano_target_replay_visual_v1",
         "synthetic_mano_target_replay_visual_v2_contact",
+        *TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS,
     )
 )
 TARGET_REPLAY_FULL_ROW_CONTRACTS = frozenset(
@@ -48,6 +55,8 @@ TARGET_REPLAY_FULL_ROW_CONTRACTS = frozenset(
 TARGET_REPLAY_ROW_CONTRACTS = frozenset(
     (*TARGET_REPLAY_FULL_ROW_CONTRACTS, *TARGET_REPLAY_COMPACT_ROW_CONTRACTS)
 )
+U1_LARGEPOSE_CONTACT_CAPACITY = 1024
+U1_LARGEPOSE_CONSTRAINT_CAPACITY = 4096
 LANCE_TARGET_REPLAY_COLUMNS = (
     "index",
     "trajectory_metadata",
@@ -274,6 +283,27 @@ def _scene_object_states(
     return tuple(objects)
 
 
+def _movement_object(metadata: Mapping[str, Any]) -> str:
+    trajectory_info = metadata.get("trajectory_info")
+    movement = (
+        trajectory_info.get("object_move")
+        if isinstance(trajectory_info, dict)
+        else None
+    )
+    names = [
+        entry.get("object_name")
+        for entry in movement
+        if isinstance(entry, dict)
+        and isinstance(entry.get("object_name"), str)
+        and entry["object_name"]
+    ] if isinstance(movement, list) else []
+    if len(names) != 1:
+        raise TargetReplaySourceError(
+            "U1 large-pose row must declare one active object movement"
+        )
+    return names[0]
+
+
 def _movement_range(
     metadata: Mapping[str, Any], object_type: str, frames: int
 ) -> tuple[int, int]:
@@ -332,8 +362,8 @@ class TargetReplaySource:
     source_row_index: int
     source_uuid: str
     source_identity: str
-    checkpoint_update: int
-    checkpoint_sha256: str
+    checkpoint_update: int | None
+    checkpoint_sha256: str | None
     row_contract: str
     source_contract: str
     reference_fps: int | None
@@ -413,42 +443,58 @@ def target_replay_source_from_row(
         raise TargetReplaySourceError("index.is_generated must be true")
     generated_uuid = _required_string(index, "uuid", context="index")
     source_uuid = _required_string(index, "seed_uuid", context="index")
-    source_identity = _required_string(
-        provenance, "source_identity", context="provenance"
-    )
-    if not _IDENTITY_RE.fullmatch(source_identity):
-        raise TargetReplaySourceError(
-            "provenance.source_identity must be object_action_sequence"
+    if contract in TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS:
+        object_type = _movement_object(metadata)
+        gesture = _required_string(metadata, "gesture", context="trajectory_metadata")
+        action = gesture.split("-", 1)[0]
+        episode = _nonnegative_int(provenance, "episode_index", context="provenance")
+        source_identity = f"{object_type}_{action}_{episode}"
+        if not _IDENTITY_RE.fullmatch(source_identity):
+            raise TargetReplaySourceError("invalid derived U1 source identity")
+        source_dataset_path = str(path)
+        source_dataset_version = dataset_version
+        source_row_index = row_index
+        checkpoint_update = None
+        checkpoint_sha256 = None
+    else:
+        source_identity = _required_string(
+            provenance, "source_identity", context="provenance"
         )
-    object_type, _action, _sequence = source_identity.rsplit("_", 2)
+        if not _IDENTITY_RE.fullmatch(source_identity):
+            raise TargetReplaySourceError(
+                "provenance.source_identity must be object_action_sequence"
+            )
+        object_type, _action, _sequence = source_identity.rsplit("_", 2)
+        source_dataset_path = _required_string(
+            provenance, "dataset_path", context="provenance"
+        )
+        source_dataset_version = _nonnegative_int(
+            provenance, "dataset_version", context="provenance"
+        )
+        source_row_index = _nonnegative_int(
+            provenance, "row_index", context="provenance"
+        )
+        checkpoint_update = _nonnegative_int(
+            provenance, "checkpoint_update", context="provenance"
+        )
+        checkpoint_sha256 = _required_string(
+            provenance, "checkpoint_sha256", context="provenance"
+        )
+        if len(checkpoint_sha256) != 64:
+            raise TargetReplaySourceError(
+                "provenance.checkpoint_sha256 must be a 64-character digest"
+            )
+        try:
+            int(checkpoint_sha256, 16)
+        except ValueError as exc:
+            raise TargetReplaySourceError(
+                "provenance.checkpoint_sha256 must be hexadecimal"
+            ) from exc
     if object_type not in scene_object_types:
         raise TargetReplaySourceError(
-            "index.scene disagrees with provenance.source_identity"
+            "index.scene disagrees with active object provenance"
         )
     active_object_index = scene_object_types.index(object_type)
-    source_dataset_path = _required_string(
-        provenance, "dataset_path", context="provenance"
-    )
-    source_dataset_version = _nonnegative_int(
-        provenance, "dataset_version", context="provenance"
-    )
-    source_row_index = _nonnegative_int(provenance, "row_index", context="provenance")
-    checkpoint_update = _nonnegative_int(
-        provenance, "checkpoint_update", context="provenance"
-    )
-    checkpoint_sha256 = _required_string(
-        provenance, "checkpoint_sha256", context="provenance"
-    )
-    if len(checkpoint_sha256) != 64:
-        raise TargetReplaySourceError(
-            "provenance.checkpoint_sha256 must be a 64-character digest"
-        )
-    try:
-        int(checkpoint_sha256, 16)
-    except ValueError as exc:
-        raise TargetReplaySourceError(
-            "provenance.checkpoint_sha256 must be hexadecimal"
-        ) from exc
 
     timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
     if timestamps.ndim != 1 or len(timestamps) < 2:
@@ -674,6 +720,11 @@ class TargetDofReplay:
             recommended_warp_contact_capacity,
         )
 
+        contact_capacity = recommended_warp_contact_capacity(1, ("right",))
+        constraint_capacity = EnvironmentConfig.constraint_capacity
+        if source.row_contract in TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS:
+            contact_capacity = U1_LARGEPOSE_CONTACT_CAPACITY
+            constraint_capacity = U1_LARGEPOSE_CONSTRAINT_CAPACITY
         self.environment = MujocoManoEnvironment(
             TrajectoryBatch((_trajectory_for_source(source),)),
             EnvironmentConfig(
@@ -686,7 +737,8 @@ class TargetDofReplay:
                 reference_fps=source.reference_fps,
                 control_fps=source.control_fps,
                 post_padding=0,
-                contact_capacity=recommended_warp_contact_capacity(1, ("right",)),
+                contact_capacity=contact_capacity,
+                constraint_capacity=constraint_capacity,
                 warp_ccd_iterations=ccd_iterations,
                 warp_ccd_contacts_per_world=ccd_contacts,
             ),
