@@ -311,7 +311,14 @@ def _row_record_valid(path: Path, expected: Mapping[str, Any], run_identity: Map
 def run_shard(args: argparse.Namespace) -> None:
     plan = json.loads(args.plan.read_text())
     validate_plan(plan)
-    rows = _plan_rows(plan, args.shard_id)
+    if args.output.exists():
+        if not args.resume:
+            raise FileExistsError(f"output exists without --resume: {args.output}")
+        if not (args.output / "run_manifest.json").is_file():
+            raise ValueError("resume output has no run manifest")
+        existing = json.loads((args.output / "run_manifest.json").read_text())
+    else:
+        existing = None
     gpu_binding = validate_gpu_binding(args.gpu)
     import lance
 
@@ -320,6 +327,20 @@ def run_shard(args: argparse.Namespace) -> None:
         raise ValueError("dataset row count differs from plan")
     if int(args.dataset_version) != int(plan["dataset_version"]):
         raise ValueError("dataset version differs from plan")
+    rows = _plan_rows(plan, args.shard_id)
+    if existing is not None:
+        expected = {
+            "contract": "one_worker_one_matching_compute_egl_gpu_v1",
+            "physical_gpu": int(args.gpu),
+            "cuda_visible_devices": str(args.gpu),
+            "mujoco_egl_device_id": str(args.gpu),
+        }
+        existing_binding = existing.get("gpu_binding") or {}
+        if (
+            existing.get("contract") != RUN_CONTRACT
+            or any(existing_binding.get(key) != value for key, value in expected.items())
+        ):
+            raise ValueError("resume run identity differs before GPU binding")
     _native, _visual, consumer_visual, assets, contracts = configure_modules(args)
     run_identity = {
         "contract": RUN_CONTRACT,
@@ -339,10 +360,7 @@ def run_shard(args: argparse.Namespace) -> None:
         "rendering": False,
         "persisted_payload": "per-row JSON metrics only; no images, videos, or trace arrays",
     }
-    if args.output.exists():
-        if not args.resume:
-            raise FileExistsError(f"output exists without --resume: {args.output}")
-        existing = json.loads((args.output / "run_manifest.json").read_text())
+    if existing is not None:
         if existing != run_identity:
             raise ValueError("resume run identity differs")
     else:
