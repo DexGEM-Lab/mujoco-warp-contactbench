@@ -197,17 +197,8 @@ class LargePoseRuntime:
             f = np.arange(len(q))
             pour = (f >= 560 + shift) & (f <= 840 + shift) & (a['world_tilt_deg'] >= 70)
             da = int(m.joint('pitcherbase_free').dofadr[0])
-            # Per-frame native evidence already recorded; rebuild only the 006-specific
-            # geometric proxies needed for release ordering.
-            tg = m.geom('thumb_ip_collision').id; ig = m.geom('index_dip_collision').id
-            gaps, radii, heights, pair_force = [], [], [], []
-            for f2 in range(len(q)):
-                d = s.cpu
-                d.qpos[:] = q[f2]; d.qvel[:] = v[f2]; s.mj.mj_forward(m, d)
-                gaps.append(float(s.mj.mj_geomDistance(m, d, tg, ig, .15, np.zeros(6))))
-                ob = m.body('pitcherbase').id; bb = m.body('bowl').id
-                sp = d.xpos[ob] + d.xmat[ob].reshape(3, 3) @ np.array([-.081061, -.0049836, .08246349])
-                radii.append(float(np.linalg.norm(sp[:2] - d.xpos[bb, :2]))); heights.append(float(sp[2] - d.xpos[bb, 2]))
+            # All 006 proxies and native tip-pair forces were captured in the
+            # live loop at the same last-480Hz-substep boundary.
             gaps = np.asarray(gaps); radii = np.asarray(radii); heights = np.asarray(heights); pair_force = np.asarray(pair_force)
             gates.update(pour_present=bool(np.any(pour)),
                          final_source_orientation_under15deg=physical['object_orientation_final_deg'] < 15,
