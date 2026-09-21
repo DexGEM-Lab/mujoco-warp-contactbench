@@ -90,3 +90,17 @@ real physical/native/teacher/two-object evidence, confirms16 rows per parent,
 validates the layout and offsets, copies runnable action005 parent bundles,
 hashes every file, and performs one same-filesystem rename. The final path must
 not already exist.
+
+## Published outcome
+
+The final publication is
+`/mnt/nas-222-project/mocap_v2/lance_datasets/manorl_cheyingtong_u1_largepose_5x160_c1_20260922`.
+Full readback passed all800 rows; action005 required no background offsets and the
+combined layout has zero unresolved clearances. Independent final-path audit
+rehashed69 files, reopened Lance v1 with800 unique UUIDs, and loaded all ten
+parent bundles. The `sha256.json` digest is
+`c4545e64d96eb983f5f49ebf3d45a9b32d7269a0af06f262a84e4813cc269777`.
+
+A full903-frame GPU replay directly from exact800 row160 passed without physics
+overrides in the complete bottle+bowl scene. Its maximum bottle-position and
+rotation differences from recorded physical evidence were7.56mm and0.04873rad.
