@@ -132,6 +132,7 @@ def main() -> None:
     parent_validation = json.loads(
         (staging / "action005_parent_validation.json").read_text()
     )
+    shard_merge = json.loads((staging / "action005_shard_merge.json").read_text())
     offsets = json.loads((staging / "background_offsets.json").read_text())
     layout = json.loads((staging / "visualization_layout.json").read_text())
     require(manifest["contract"] == CONTRACT, "manifest contract")
@@ -145,6 +146,12 @@ def main() -> None:
         and parent_validation["registry_digest"]
         == manifest["action005_registry_digest"],
         "action005 parent validation",
+    )
+    require(
+        shard_merge["selected"] == 160
+        and shard_merge["per_parent"] == {str(row): 16 for row in range(10)}
+        and shard_merge["plan_digest"] == manifest["action005_plan_digest"],
+        "action005 shard merge",
     )
     require(offsets["lance"] == "compact.lance", "offset Lance path")
     require(set(offsets["report_by_action"]) == set(ACTIONS), "offset action coverage")
