@@ -30,7 +30,7 @@ from sim.manorl.u1_campaign import Ledger, array_sha, child_uuid, digest, file_s
 from tools.u1_campaign_registry import load_parent
 from tools.u1_interactive_session import Session
 
-VERSION = 'u1-four-action-largepose-v1'
+VERSION = 'u1-four-action-largepose-v2-upper-hemisphere'
 ACTIONS = ('003', '006', '007', '009')
 RADII_MM = (50, 100, 150)
 ROT_AXES = (0, 1, 2)  # floating-root intrinsic XYZ: roll, pitch, yaw
@@ -42,37 +42,49 @@ SOURCE_REGISTRY = Path('/mnt/nas-222-project/mocap_v2/lance_datasets/.manorl_u1_
 SETTING = 'c6db552f105d4de493880a52518772dbacad9496b105d2f4e43e87a907e692cd'
 
 
+def _direction(radius_mm, sector, rng, ordinal):
+    """Historical-style approach start: azimuth coverage with positive height."""
+    center = 2 * np.pi * sector / 8.0
+    if ordinal == 0:
+        azimuth = center
+        elevation = np.deg2rad(30.0)
+    else:
+        azimuth = center + rng.uniform(-np.pi / 8, np.pi / 8)
+        elevation = np.deg2rad(rng.uniform(15.0, 60.0))
+    unit = np.array([np.cos(elevation) * np.cos(azimuth),
+                     np.cos(elevation) * np.sin(azimuth),
+                     np.sin(elevation)])
+    return radius_mm / 1000.0 * unit
+
+
 def build_plan(seed=SEED):
-    """160 slots: 144 base cells + 16 extra spatial draws."""
+    """160 slots: 3 radii × 8 azimuth sectors × 6 rotations + 16 extras."""
     slots = []
-    for radius, signs, (axis, sign) in itertools.product(
-            RADII_MM, itertools.product((-1, 1), repeat=3),
-            itertools.product(ROT_AXES, (1, -1))):
+    for radius, sector, (axis, sign) in itertools.product(
+            RADII_MM, range(8), itertools.product(ROT_AXES, (1, -1))):
         sid = len(slots)
         rng = np.random.default_rng(np.random.SeedSequence([seed, sid]))
         candidates = []
         for ordinal in range(RESERVES):
-            direction = np.asarray(signs) * (np.ones(3) if ordinal == 0 else rng.uniform(.25, 1.75, 3))
-            trans = radius / 1000.0 * direction / np.linalg.norm(direction)
+            trans = _direction(radius, sector, rng, ordinal)
             rot = np.zeros(3); rot[axis] = sign * np.deg2rad(ROT_DEG)
             candidates.append(dict(ordinal=ordinal, delta=np.r_[trans, rot].tolist()))
-        slots.append(dict(slot=sid, radius_mm=radius, octant=list(signs),
+        slots.append(dict(slot=sid, radius_mm=radius, azimuth_sector=sector,
                           rotation_axis=axis, rotation_sign=sign, candidates=candidates,
                           kind='base'))
     for k in range(16):
-        radius = RADII_MM[k % 3]; octant = k // 2
-        signs = [1 if octant & (1 << ax) else -1 for ax in range(3)]
+        radius = RADII_MM[k % 3]; sector = k // 2
         axis = k % 3
         sign = 1 if (k // 3) % 2 == 0 else -1
         sid = len(slots)
         rng = np.random.default_rng(np.random.SeedSequence([seed, sid, 987654321]))
         candidates = []
         for ordinal in range(RESERVES):
-            direction = np.asarray(signs) * rng.uniform(.5, 1.5, 3)
-            trans = radius / 1000.0 * direction / np.linalg.norm(direction)
+            # All extra draws are non-central but remain within their fixed sector.
+            trans = _direction(radius, sector, rng, ordinal + 1)
             rot = np.zeros(3); rot[axis] = sign * np.deg2rad(ROT_DEG)
             candidates.append(dict(ordinal=ordinal, delta=np.r_[trans, rot].tolist()))
-        slots.append(dict(slot=sid, radius_mm=radius, octant=list(signs),
+        slots.append(dict(slot=sid, radius_mm=radius, azimuth_sector=sector,
                           rotation_axis=axis, rotation_sign=sign, candidates=candidates,
                           kind='extra'))
     return slots
@@ -86,7 +98,13 @@ def prefix_envelope(frames, delta):
 
 def make_target(base, delta, prefix_frames):
     prefix = np.repeat(base[:1], prefix_frames, axis=0)
-    prefix[:, :6] += prefix_envelope(prefix_frames, delta)
+    offsets = prefix_envelope(prefix_frames, delta)
+    # Historical approach_prefix contract: an endpoint-smooth +4cm vertical arc
+    # avoids sweeping the hand through the table/object while converging. The
+    # arc is zero at both endpoints with zero first/second derivative.
+    phase = np.arange(prefix_frames, dtype=float) / float(prefix_frames - 1)
+    offsets[:, 2] += .04 * 64.0 * phase**3 * (1.0 - phase)**3
+    prefix[:, :6] += offsets
     target = np.concatenate([prefix, base], axis=0)
     assert target[prefix_frames:].tobytes() == base.tobytes()
     return target
@@ -123,7 +141,7 @@ class LargePoseRuntime:
         s.mw.forward(s.wm, s.data); s.wp.synchronize()
         names = self.p['names']
         adrs = [int(m.joint(n + '_free').qposadr[0]) for n in names]
-        q, v, controls, precontact = [], [], [], []
+        q, v, controls, prefix_force_contacts = [], [], [], []
         gaps, radii, heights, pair_force = [], [], [], []
         native_path = folder / 'native_contacts.jsonl'
         high = {'contacts': 0, 'constraints': 0}
@@ -170,8 +188,14 @@ class LargePoseRuntime:
                     dimension=s.data.contact.dim.numpy()[:n].tolist(),
                     efc_address=s.data.contact.efc_address.numpy()[:n].tolist(),
                     worldid=s.data.contact.worldid.numpy()[:n].tolist())) + '\n')
-                if f < prefix_frames and scene_contacts(m, pose, vel, names):
-                    precontact.append(f)
+                if f < prefix_frames and n:
+                    scene_bodies = {0, *(m.body(name).id for name in names)}
+                    for i, (g1, g2) in enumerate(pairs.astype(int)):
+                        b1, b2 = int(m.geom_bodyid[g1]), int(m.geom_bodyid[g2])
+                        # Historical prefix gate: solved native normal force >0.2N,
+                        # not geometry-only touching. Hand self-contact is excluded.
+                        if ((b1 in scene_bodies) != (b2 in scene_bodies)) and float(F[i, 0]) > .2:
+                            prefix_force_contacts.append(dict(frame=f, geom_pair=[int(g1), int(g2)], normal_force_N=float(F[i, 0])))
         q = np.asarray(q); v = np.asarray(v); controls = np.asarray(controls)
         np.save(folder / 'target.npy', controls)
         np.savez_compressed(folder / 'trace.npz', qpos=q, qvel=v, ctrl=controls)
@@ -183,7 +207,7 @@ class LargePoseRuntime:
         gates = dict(physical['gates'])
         error = controls.astype(float) - target
         error[:, 3:6] = np.arctan2(np.sin(error[:, 3:6]), np.cos(error[:, 3:6]))
-        gates.update(no_prefix_scene_contact=not precontact,
+        gates.update(no_prefix_scene_contact=not prefix_force_contacts,
                      no_uncontrolled_flight=not unsupported_intervals(a, 120),
                      controls_canonical=float(np.max(np.abs(error))) < 1e-6,
                      initial_pose=bool(np.allclose(q[0], q0, atol=1e-7, rtol=0)),
@@ -211,6 +235,7 @@ class LargePoseRuntime:
         np.savez_compressed(folder / 'contact_validation.npz', **a)
         write_json(folder / 'geometry_contacts.json', diag['contacts'])
         report = dict(accepted=all(gates.values()), gates=gates, physical=physical,
+                      prefix_force_contacts=prefix_force_contacts,
                       prefix_frames=prefix_frames, high_water=high,
                       contract=s.contract, semantics=self.p['semantics'],
                       pid=os.getpid(), requested_target_sha256=array_sha(target),
@@ -252,6 +277,16 @@ def run_action(args):
             folder = staging / args.action / uid
             ledger.append(uuid=uid, slot=sid, candidate=cand, status='started')
             try:
+                # Historical geometry preflight: preserve objects/fingers/qvel;
+                # reject only newly introduced hand-scene penetration or root range.
+                from sim.manorl.start_augmentation import scene_contacts
+                q0 = runtime.I.initial['qpos'].copy(); q0[:6] += delta
+                contacts = scene_contacts(runtime.m, q0, runtime.I.initial['qvel'], runtime.p['names'])
+                penetrating = [c for c in contacts if c['distance_m'] < 0]
+                inside = bool(np.all(q0[:6] >= runtime.m.jnt_range[:6, 0]) and
+                              np.all(q0[:6] <= runtime.m.jnt_range[:6, 1]))
+                if penetrating or not inside:
+                    raise ValueError(f'initial geometry preflight failed: penetration={penetrating}, wrist_in_range={inside}')
                 first = runtime.replay(delta, PREFIX_FRAMES, folder / 'first')
                 if not first['accepted']:
                     raise ValueError('first-pass gates failed')
