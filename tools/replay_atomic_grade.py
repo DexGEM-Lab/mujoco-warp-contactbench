@@ -292,6 +292,21 @@ def _group_batches(rows: Sequence[Mapping[str, Any]], batch_size: int) -> Iterab
             yield group[start : start + batch_size]
 
 
+def _pad_batch(
+    rows: Sequence[Mapping[str, Any]], batch_size: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Pad one homogeneous tail batch to a fixed MJX-Warp static shape."""
+
+    if not rows or len(rows) > batch_size:
+        raise ValueError("one non-empty batch no larger than batch_size is required")
+    result = [dict(row) for row in rows]
+    real_count = len(result)
+    source = list(result)
+    while len(result) < batch_size:
+        result.append(dict(source[(len(result) - real_count) % real_count]))
+    return result, real_count
+
+
 def _row_record_valid(path: Path, expected: Mapping[str, Any], run_identity: Mapping[str, Any]) -> bool:
     if not path.is_file():
         return False
@@ -328,6 +343,12 @@ def run_shard(args: argparse.Namespace) -> None:
     if int(args.dataset_version) != int(plan["dataset_version"]):
         raise ValueError("dataset version differs from plan")
     rows = _plan_rows(plan, args.shard_id)
+    if args.action:
+        rows = [row for row in rows if row["action"] == args.action]
+        if not rows:
+            raise ValueError(
+                f"shard {args.shard_id} has no rows for action {args.action}"
+            )
     if existing is not None:
         expected = {
             "contract": "one_worker_one_matching_compute_egl_gpu_v1",
@@ -356,6 +377,7 @@ def run_shard(args: argparse.Namespace) -> None:
         "grade_contract": GRADE_CONTRACT,
         "batch_size": args.batch_size,
         "shard_id": args.shard_id,
+        "action": args.action or None,
         "gpu_binding": gpu_binding,
         "rendering": False,
         "persisted_payload": "per-row JSON metrics only; no images, videos, or trace arrays",
@@ -380,6 +402,7 @@ def run_shard(args: argparse.Namespace) -> None:
         "contract": RUN_CONTRACT,
         "state": "running",
         "shard_id": args.shard_id,
+        "action": args.action or None,
         "row_count": len(rows),
         "pending": len(pending),
         "completed_before_resume": completed_before,
@@ -388,7 +411,10 @@ def run_shard(args: argparse.Namespace) -> None:
     dump_atomic(args.output / "status.json", status)
     processed = completed_before
     try:
-        for batch_number, batch in enumerate(_group_batches(pending, args.batch_size), 1):
+        for batch_number, real_batch in enumerate(
+            _group_batches(pending, args.batch_size), 1
+        ):
+            batch, real_count = _pad_batch(real_batch, args.batch_size)
             indices = [int(value["row_index"]) for value in batch]
             payload = dataset.take(indices).to_pylist()
             decoded = [
@@ -412,7 +438,9 @@ def run_shard(args: argparse.Namespace) -> None:
                 consumer_visual=consumer_visual,
                 decorative_scene_spec=args.scene,
             )
-            for expected, output in zip(batch, outputs, strict=True):
+            for expected, output in zip(
+                real_batch, outputs[:real_count], strict=True
+            ):
                 maximum = float(output["metrics"]["max_target_position_error_m"])
                 record = {
                     "status": "ok",
@@ -435,21 +463,23 @@ def run_shard(args: argparse.Namespace) -> None:
                 dump_atomic(
                     row_dir / f"row{int(expected['row_index']):04d}.json", record
                 )
-            processed += len(batch)
+            processed += real_count
             print(
                 json.dumps(
                     {
                         "shard": args.shard_id,
+                        "action": args.action or None,
                         "batch": batch_number,
                         "processed": processed,
                         "total": len(rows),
-                        "rows": indices,
+                        "rows": [int(value["row_index"]) for value in real_batch],
+                        "padding_worlds": len(batch) - real_count,
                         "batch_grade_counts": dict(
                             Counter(
                                 grade_from_max_error(
                                     float(output["metrics"]["max_target_position_error_m"])
                                 )
-                                for output in outputs
+                                for output in outputs[:real_count]
                             )
                         ),
                         "physics": physics["runtime"],
@@ -481,6 +511,7 @@ def run_shard(args: argparse.Namespace) -> None:
         "contract": RUN_CONTRACT,
         "state": "complete",
         "shard_id": args.shard_id,
+        "action": args.action or None,
         "row_count": len(rows),
         "frame_count": sum(int(row["frames"]) for row in rows),
         "grade_counts": {grade: int(counts.get(grade, 0)) for grade in "ABC"},
@@ -573,7 +604,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--shard-count", type=int, default=6)
     value.add_argument("--plan", type=Path, required=True)
     value.add_argument("--shard-id", type=int)
-    value.add_argument("--batch-size", type=int, default=16)
+    value.add_argument("--action", default="")
+    value.add_argument("--batch-size", type=int, default=5)
     value.add_argument("--output", type=Path)
     value.add_argument("--resume", action="store_true")
     value.add_argument("--shard-outputs", default="")

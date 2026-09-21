@@ -76,6 +76,16 @@ def test_group_batches_never_mixes_physical_topology() -> None:
         assert len(batch) <= 2
 
 
+def test_tail_batch_padding_keeps_fixed_shape_without_new_rows() -> None:
+    source = records()[:2]
+    padded, real_count = grade._pad_batch(source, 5)
+    assert real_count == 2
+    assert len(padded) == 5
+    assert [row["row_index"] for row in padded] == [0, 1, 0, 1, 0]
+    with pytest.raises(ValueError, match="non-empty"):
+        grade._pad_batch([], 5)
+
+
 def test_parse_rows_is_end_exclusive_and_deduplicated() -> None:
     assert grade.parse_rows("2,4:7,5", 10) == [2, 4, 5, 6]
     with pytest.raises(ValueError, match="outside"):
