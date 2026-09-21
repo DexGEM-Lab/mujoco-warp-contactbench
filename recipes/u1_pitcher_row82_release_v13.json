@@ -1,0 +1,34 @@
+{
+  "schema": "manorl.u1-pitcher-release.v13",
+  "source_uuid": "f32f8c68-84f1-4c67-8179-3b35d9f93e52",
+  "base_target_sha256": "81faf6e05c4173de79e5007c61a310506ad8c389be4458ebc2242f072a580e39",
+  "final_target_sha256": "f16c7c23e6eff801b877603ea13d0e3179ac6597e81c1c82da2b516b6562a93a",
+  "candidate_uuid": "010689af-4678-5e68-bbbd-180dedc4bb53",
+  "setting_sha256": "c6db552f105d4de493880a52518772dbacad9496b105d2f4e43e87a907e692cd",
+  "unchanged_prefix_end_exclusive": 1130,
+  "release_mechanism": [
+    "unload the landed hand springs and let the supported pitcher settle",
+    "register the supported upright pitcher yaw while retaining contact",
+    "move the thumb radially clear first",
+    "hold the thumb open and reverse the same-U1 acquired wrist/non-thumb trajectory so four fingers exit the handle",
+    "hold the final clear state"
+  ],
+  "contact_order_evidence": {
+    "fresh01": {"thumb_last_contact": 1569, "nonthumb_last_contact_range": [1726, 1743]},
+    "fresh02": {"thumb_last_contact": 1569, "nonthumb_last_contact_range": [1727, 1742]}
+  },
+  "acceptance": {
+    "fresh_runs": 2,
+    "max_release_tilt_deg": [6.153384909880884, 5.8688750870085515],
+    "final_tilt_deg": [0.45372806209434613, 0.45573721325756417],
+    "final_orientation_error_deg": [8.385461214620014, 10.034875110672699],
+    "final_position_error_m": [0.0070850799481068875, 0.006857489531392944],
+    "final_object_qvel_norm": [0.004505877383053303, 0.0038296987768262625]
+  },
+  "artifacts": {
+    "target": "outputs/row82_release_repair_v13/target.npy",
+    "validation_run1": "outputs/row82_release_repair_v13/fresh01/summary.json",
+    "validation_run2": "outputs/row82_release_repair_v13/fresh02/summary.json",
+    "registry_bundle": "outputs/u1_5x160_registry_v3/006"
+  }
+}
