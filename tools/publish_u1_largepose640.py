@@ -7,9 +7,10 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+import shutil
 
-from sim.manorl.u1_campaign import file_sha, write_json
-from tools.export_u1_largepose640 import ACTIONS, CONTRACT, SETTING, schema
+from sim.manorl.u1_campaign import digest, file_sha, write_json
+from tools.export_u1_largepose640 import ACTIONS, CONTRACT, SETTING, SOURCE_REGISTRY, schema
 from tools.build_u1_largepose640_scene_layout import CONTRACT as LAYOUT_CONTRACT
 
 EXPECTED_COUNTS = {action: 160 for action in ACTIONS}
@@ -52,6 +53,18 @@ def main() -> None:
     require(manifest["contract"] == CONTRACT, "manifest contract")
     require(manifest["setting_sha256"] == SETTING, "setting hash")
     require(manifest["ordered_uuids"] == uuids, "manifest UUID order")
+    registry = json.loads(SOURCE_REGISTRY.read_text())
+    settings = [registry["parents"][action]["setting"] for action in ACTIONS]
+    require(all(setting == settings[0] for setting in settings), "registry settings differ")
+    require(digest(settings[0]) == SETTING, "registry setting digest")
+    shutil.copyfile(SOURCE_REGISTRY, staging / "registry.json")
+    write_json(staging / "setting.json", settings[0])
+    manifest.update(
+        registry_digest=registry["digest"],
+        registry_sha256=file_sha(staging / "registry.json"),
+        plan_sha256=file_sha(staging / "plan.json"),
+    )
+    write_json(staging / "manifest.json", manifest)
     require(validation["validated"] is True and validation["rows"] == 640, "source-bound validation")
     require(validation["counts"] == EXPECTED_COUNTS, "validated action counts")
     require(offsets["lance"] == "compact.lance", "offset Lance path must be relative")
@@ -76,6 +89,7 @@ This directory contains 640 newly generated Cheyingtong right-hand trajectories:
 - dataset contract: `{CONTRACT}`
 - Lance: `compact.lance` (version 1, 640 rows)
 - source-bound validation: `validation.json`
+- frozen source registry and U1 setting: `registry.json`, `setting.json`
 - deterministic perturbation plan: `plan.json`
 - rejected attempts retained as evidence: `rejections.json`
 - per-UUID visualization layout: `visualization_layout.json`
@@ -110,14 +124,17 @@ not part of the recorded physics.
     write_json(staging / "publication.json", publication)
 
     hash_path = staging / "sha256.json"
-    if hash_path.exists():
-        hash_path.unlink()
+    hash_sidecar = staging / "sha256.json.sha256"
+    for old in (hash_path, hash_sidecar):
+        if old.exists():
+            old.unlink()
     hashes = {
         str(path.relative_to(staging)): file_sha(path)
         for path in sorted(staging.rglob("*"))
-        if path.is_file() and path != hash_path
+        if path.is_file() and path not in (hash_path, hash_sidecar)
     }
     write_json(hash_path, hashes)
+    hash_sidecar.write_text(file_sha(hash_path) + "\n")
 
     os.rename(staging, final)
     print(
