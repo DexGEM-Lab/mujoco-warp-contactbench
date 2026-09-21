@@ -60,7 +60,13 @@ class Runtime:
                 forces=s.wp.zeros(n,dtype=s.wp.spatial_vector)
                 if n: s.mw.contact_force(s.wm,s.data,ids,False,forces)
                 F=forces.numpy()
-                evidence.write(json.dumps(dict(frame=f,geom_pairs=pairs.tolist(),force_contact_frame=F.tolist(),position=s.data.contact.pos.numpy()[:n].tolist()))+'\n')
+                contact_frame=s.data.contact.frame.numpy()[:n]
+                contact_friction=s.data.contact.friction.numpy()[:n]
+                contact_dim=s.data.contact.dim.numpy()[:n]
+                contact_efc=s.data.contact.efc_address.numpy()[:n]
+                contact_world=s.data.contact.worldid.numpy()[:n]
+                evidence.write(json.dumps(dict(frame=f,geom_pairs=pairs.tolist(),force_contact_frame=F.tolist(),position=s.data.contact.pos.numpy()[:n].tolist(),
+                    contact_frame=contact_frame.tolist(),friction=contact_friction.tolist(),dimension=contact_dim.tolist(),efc_address=contact_efc.tolist(),worldid=contact_world.tolist()))+'\n')
                 if f<self.p['C']-1 and scene_contacts(m,pose,vel,names): precontact.append(f)
                 if self.action=='006':
                     d=s.cpu; d.qpos[:]=pose; d.qvel[:]=vel; s.mj.mj_forward(m,d)
@@ -100,6 +106,7 @@ class Runtime:
         report=dict(accepted=all(gates.values()),gates=gates,physical=physical,premerge_contact_frames=precontact,
             high_water=high, high_water_sampling='every480Hz substep', contract=s.contract,semantics=self.p['semantics'],delta=delta,
             native_force_boundary='last480Hz substep, contact-frame wrench; positions solver contact coordinates',
+            native_contact_capture='native geom pairs, contact-frame wrench, position, frame basis, friction, dimension, efc address and world id',
             sampled_flight_limit='three120Hz samples; subframe flight unmeasured',pid=os.getpid(),
             requested_target_sha256=array_sha(target),executed_target_sha256=array_sha(controls))
         write_json(folder/'result.json',report)

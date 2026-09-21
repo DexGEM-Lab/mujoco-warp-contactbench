@@ -40,8 +40,11 @@ attempt; the single-world graph persists for each action runtime.
 Existing action-specific evaluate gates are supplemented with premerge scene
 contact exclusion, sampled uncontrolled-flight exclusion, exact applied controls,
 100ms sustained009 hold, and006 pour/spout/distal-force/release/settling checks.
-Native per-frame geom pairs, contact-frame wrenches and contact positions remain
-in `native_contacts.jsonl`; geometric contacts are separately labeled.
+Native per-frame geom pairs, contact-frame wrenches, contact positions, native
+contact-frame basis matrices, friction, dimensions, EFC addresses and world IDs
+remain in `native_contacts.jsonl`; geometric contacts are separately labeled.
+These fields are sufficient to transform captured native forces without CPU
+contact-normal reconstruction.
 
 ## Production command (not run)
 
