@@ -41,6 +41,11 @@ RUN_CONTRACT = "manorl.atomic-grade-replay-shard.v1"
 GRADE_CONTRACT = "mano_target_replay_max_position_error_grade_v1"
 GRADE_A_MAX_M = 0.03
 GRADE_B_MAX_M = 0.08
+# Multi-object rows increase only allocation demand. These capacities exceed the
+# observed action001 requirements (CCD1302 total / constraints5302 for 5 worlds)
+# without changing equations, model parameters, controls, or grade thresholds.
+GRADE_CONSTRAINT_CAPACITY = 8192
+GRADE_CCD_CONTACTS_PER_WORLD = 320
 
 
 def dump_atomic(path: Path, value: object) -> None:
@@ -375,6 +380,8 @@ def run_shard(args: argparse.Namespace) -> None:
         "client_commit": _git_head(args.client_root),
         "scene_sha256": sha256(args.scene),
         "grade_contract": GRADE_CONTRACT,
+        "constraint_capacity": GRADE_CONSTRAINT_CAPACITY,
+        "ccd_contacts_per_world": GRADE_CCD_CONTACTS_PER_WORLD,
         "batch_size": args.batch_size,
         "shard_id": args.shard_id,
         "action": args.action or None,
@@ -437,6 +444,8 @@ def run_shard(args: argparse.Namespace) -> None:
                 contracts=contracts,
                 consumer_visual=consumer_visual,
                 decorative_scene_spec=args.scene,
+                constraint_capacity=GRADE_CONSTRAINT_CAPACITY,
+                ccd_contacts_per_world=GRADE_CCD_CONTACTS_PER_WORLD,
             )
             for expected, output in zip(
                 real_batch, outputs[:real_count], strict=True

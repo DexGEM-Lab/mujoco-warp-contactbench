@@ -391,6 +391,8 @@ def run_physics(
     assets: Any,
     contracts: Any,
     decorative_scene_spec: Path,
+    constraint_capacity: int = 4096,
+    ccd_contacts_per_world: int = 256,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import sim.manorl.environment as environment_module
     from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
@@ -454,6 +456,8 @@ def run_physics(
         object_types=tuple(object_types),
         decorative_scene_spec=decorative_scene_spec,
     )[:2]
+    if constraint_capacity < 1 or ccd_contacts_per_world < 1:
+        raise ValueError("solver and CCD capacities must be positive")
     config = EnvironmentConfig(
         num_envs=len(decoded),
         device="gpu",
@@ -465,10 +469,10 @@ def run_physics(
         residual_enabled=False,
         expected_contact_mode="five_fingertips",
         contact_capacity=1024 * len(decoded),
-        constraint_capacity=4096,
+        constraint_capacity=constraint_capacity,
         unified_object_batch=True,
         warp_ccd_iterations=16,
-        warp_ccd_contacts_per_world=256,
+        warp_ccd_contacts_per_world=ccd_contacts_per_world,
         warp_persistent_ccd_workspace=True,
         device_resident_controls=True,
         capture_transition_diagnostics=True,
@@ -602,7 +606,8 @@ def run_physics(
             "target_object": target,
             "object_object_collisions": True,
             "ccd_iterations": 16,
-            "ccd_contacts_per_world": 256,
+            "ccd_contacts_per_world": ccd_contacts_per_world,
+            "constraint_capacity": constraint_capacity,
             "environment_clock": {
                 "control_timestep": config.control_timestep,
                 "physics_timestep": config.physics_timestep,

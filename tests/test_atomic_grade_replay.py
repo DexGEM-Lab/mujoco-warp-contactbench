@@ -37,6 +37,8 @@ def test_grade_boundaries_match_state45_quality_contract() -> None:
     assert grade.grade_from_max_error(0.03) == "B"
     assert grade.grade_from_max_error(0.079999) == "B"
     assert grade.grade_from_max_error(0.08) == "C"
+    assert grade.GRADE_CONSTRAINT_CAPACITY > 5302
+    assert 5 * grade.GRADE_CCD_CONTACTS_PER_WORLD > 1302
     with pytest.raises(ValueError, match="finite"):
         grade.grade_from_max_error(float("nan"))
 
