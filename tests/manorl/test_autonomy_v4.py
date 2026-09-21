@@ -128,6 +128,39 @@ def test_reference_speed_motion_gate_is_exact_and_independent_of_actual_speed():
     r_fast_actual=compute_reward(fast_actual,_contact(),linear,j.asarray([0]),action)
     np.testing.assert_allclose(np.asarray(r_fast_actual.object_position),np.asarray(r_linear.object_position),atol=1e-7)
 
+def test_static_reference_rotation_override_escapes_motion_gate():
+    jax=pytest.importorskip("jax"); j=jax.numpy
+    def rot_base(deg):
+        if deg<=20: rv=1-.00125*deg**2
+        elif deg<=90: rv=-.00003175*(deg-20)**2-.019206*(deg-20)+.5
+        else: rv=-1.
+        return .4*rv-.1
+    def rot_state(deg):
+        h=np.deg2rad(deg)/2; q=np.array([0.,0.,np.sin(h),np.cos(h)])
+        return _state()._replace(object_quat_xyzw=j.asarray(q[None]))
+    cache=_cache(); contact=_contact(); action=j.zeros((1,28)); idx=j.asarray([0])
+    # Static reference (v_eff=0): below threshold keeps the 1% gate.
+    r30=compute_reward(rot_state(30.),contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(r30.object_rotation),[.01*rot_base(30.)],rtol=1e-4,atol=1e-6)
+    r449=compute_reward(rot_state(44.9),contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(r449.object_rotation),[.01*rot_base(44.9)],rtol=1e-4,atol=1e-6)
+    # Above 45 degrees the static gate escalates to 0.75.
+    r60=compute_reward(rot_state(60.),contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(r60.object_rotation),[.75*rot_base(60.)],rtol=1e-4,atol=1e-6)
+    r451=compute_reward(rot_state(45.1),contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(r451.object_rotation),[.75*rot_base(45.1)],rtol=1e-4,atol=1e-6)
+    # Moving reference keeps the full gate regardless of rotation error.
+    moving=replace(cache,object_v_com=np.tile([.2,0.,0.],(len(cache.q_feasible),1)))
+    r60m=compute_reward(rot_state(60.),contact,moving,idx,action)
+    np.testing.assert_allclose(np.asarray(r60m.object_rotation),[rot_base(60.)],rtol=1e-4,atol=1e-6)
+    # Transition band without full motion follows w_obj, not the override.
+    trans=replace(cache,object_v_com=np.tile([.055,0.,0.],(len(cache.q_feasible),1)))
+    r60t=compute_reward(rot_state(60.),contact,trans,idx,action)
+    np.testing.assert_allclose(np.asarray(r60t.object_rotation),[.505*rot_base(60.)],rtol=1e-3,atol=1e-5)
+    # Position and velocity terms never see the rotation override.
+    np.testing.assert_allclose(np.asarray(r60.object_position),np.asarray(r30.object_position),atol=1e-7)
+    np.testing.assert_allclose(np.asarray(r60.object_velocity),np.asarray(r30.object_velocity),atol=1e-7)
+
 def test_v4_checkpoint_rejects_legacy_metadata():
     validate_v4_checkpoint_metadata({"checkpoint_format":CHECKPOINT_FORMAT,"observation_contract":OBSERVATION_CONTRACT_ID,"reward_contract":REWARD_CONTRACT_ID,"action_contract":ACTION_CONTRACT_ID})
     with pytest.raises(ValueError): validate_v4_checkpoint_metadata({"checkpoint_format":"manorl.autonomy.ppo.v3.1"})

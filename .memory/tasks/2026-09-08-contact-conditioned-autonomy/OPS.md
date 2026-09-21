@@ -387,3 +387,17 @@ The v5 point-cloud state spec is now implemented in the case branch alongside v4
 - `sim/manorl/model.py`: `PointNetEncoder` accepts a configurable point count (default 64, backward compatible).
 
 Focused suite: 114 tests pass (v4 regressions plus new v5 ABI/builder/model/bank tests). The runtime `BatchedAutonomyRuntime` still emits v4 observations; a training-side v5 selection flag is the remaining integration step, not yet wired. Reward/teacher use cache geometry directly and are independent of the observation change.
+
+## 2026-09-21T16:50:00+08:00 — Static-reference rotation gate override
+
+User design decision: while the reference object is static, an object rotation error against the reference above 45 deg must not be hidden by the 1% object-tracking floor; the rotation term's multiplier becomes 0.75.
+
+Implementation (`sim/manorl/autonomy_v4.py::compute_reward`): `w_rot = where(v_eff <= REWARD_MOTION_GATE_LOW and deg > REWARD_STATIC_ROT_ERROR_DEG, REWARD_STATIC_ROT_WEIGHT, w_obj)`, applied only to the rotation term; position and velocity keep `w_obj`. New constants `REWARD_STATIC_ROT_ERROR_DEG=45.0`, `REWARD_STATIC_ROT_WEIGHT=0.75`. Reward parameter provenance id is now `manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.v1` and records the override's static condition, threshold and weight. Structural reward ABI (term names/order) is unchanged, so old frozen checkpoints remain evaluable.
+
+Analytic answer recorded for the review question: the unweighted rotation term at exactly 45 deg is `0.4*(0.5-0.019206*25-0.00003175*625)-0.1 = 0.4*0.00000625-0.1 ~= -0.1`; the term crosses zero near 32.7 deg and floors at -0.5 beyond 90 deg. The override therefore moves a persistent gross twist during a static hold from -0.001 to -0.075 per control at 45 deg, and to -0.375 per control at >=90 deg.
+
+Measured effect on the immutable successful trace (offline, same saved actions/physics): 136 of 538 controls trigger, all inside controls 403-538 (rest/withdrawal, where the released object rests with an orientation differing from the static reference), with max static error 90 deg. Rotation term 15.800549818653 -> -29.257291435, episode total 302.0651347453153 -> 257.007293492. Approach/lift/lower phases trigger zero frames. This is a scoring change on the fixed trace, not evidence about retrained behavior; the late-phase trigger means the override mainly penalizes a dropped/released object that does not match the reference's final orientation.
+
+Tests: `tests/manorl/test_autonomy_v4.py::test_static_reference_rotation_override_escapes_motion_gate` covers static below/above threshold (30 deg, 44.9 deg keep 0.01; 60 deg, 45.1 deg escalate to 0.75), moving reference (full gate at 60 deg), transition band (w_obj, not the override), and position/velocity independence. Focused CPU suite: 120 passed. Docs updated at `docs/manorl_autonomy_v4.md`.
+
+Local investigation artifact (ignored outputs, not committed): `outputs/manorl/contact_conditioned_autonomy/reward-playground/` — single-file HTML weight playground over this trace with the new static-rotation toggle (off by default so the page still reconciles to the published 302.065135; enabling it reproduces 257.007293 and 136 triggers).

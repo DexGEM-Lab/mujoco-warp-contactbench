@@ -88,7 +88,14 @@ w_{\mathrm{obj}}=0.01+0.99u^2(3-2u).
 \]
 
 Thus a static reference retains 1% object tracking, the gate reaches 50.5% at
-`0.055 m/s`, and it is 100% at/above `0.10 m/s`. Hand--object relative pose
+`0.055 m/s`, and it is 100% at/above `0.10 m/s`. One deliberate exception:
+while the reference is static (`v_eff <= 0.01`), an object rotation error
+against the reference above `45 deg` escalates only the rotation term's gate
+from `0.01` to `0.75`; position and velocity keep `w_obj`, and a moving or
+transitioning reference keeps `w_obj` for all three. At exactly 45 deg the
+unweighted rotation term is `-0.1` (its linear segment's floor onset), so the
+override turns a persistent gross twist during a static hold from `-0.001` to
+`-0.075` per control. Hand--object relative pose
 has coefficient `0.125`; feasible fingers retain `0.2`; reference-contact
 anchor correspondence has coefficient `1.2`; action penalty remains
 `-0.002 mean(clipped_action²)`; survival remains `0.001`; and a deviation,
@@ -98,8 +105,8 @@ the other terms. It has no force-magnitude, table-contact, slip, or hidden
 contact reward. Reasons are complete=1, deviation=2, fallen=4, nonfinite=8.
 
 The exact parameter set is emitted as
-`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.v1` in new
-training provenance/config and frozen-evaluation provenance. It is deliberately
+`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.v1`
+in new training provenance/config and frozen-evaluation provenance. It is deliberately
 separate from the model ABI: an old frozen checkpoint can load, but an
 evaluation performed with this runtime reports the new reward and must not be
 compared numerically to its historical return.

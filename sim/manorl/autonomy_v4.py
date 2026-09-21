@@ -28,6 +28,8 @@ REWARD_MOTION_RADIUS=0.04330042412758056  # cube2 max collision-vertex radius ab
 REWARD_HAND_RELATIVE_COEF=0.125   # palm-object relative pose
 REWARD_GEOMETRY_COEF=1.2          # contact anchor correspondence
 REWARD_SEVERE_PENALTY=75.0        # deviation / fall / non-finite, applied once
+REWARD_STATIC_ROT_ERROR_DEG=45.0  # static-reference rotation error escaping the gate
+REWARD_STATIC_ROT_WEIGHT=0.75     # rotation gate weight once the static error threshold is exceeded
 
 def motion_gate_weight(v_eff):
     """Smooth 1%->100% object-tracking weight from REFERENCE effective speed only."""
@@ -38,7 +40,7 @@ def motion_gate_weight(v_eff):
 
 def reward_parameters(object_radius: float = REWARD_MOTION_RADIUS) -> dict[str, object]:
     """JSON-safe reward provenance for training and frozen-evaluation artifacts."""
-    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.v1",
+    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.v1",
             "object_tracking": {"motion_source": "reference_object_com_linear_and_angular_velocity",
                                 "effective_speed": "sqrt(norm(v_ref_com)^2 + (object_radius_m * norm(omega_ref))^2)",
                                 "object_radius_m": float(object_radius),
@@ -47,6 +49,11 @@ def reward_parameters(object_radius: float = REWARD_MOTION_RADIUS) -> dict[str, 
                                 "static_weight": REWARD_MOTION_STATIC_WEIGHT,
                                 "moving_weight": 1.0,
                                 "terms": ["object_position", "object_rotation", "object_velocity"]},
+            "static_rotation_override": {"applies_when": "reference_effective_speed <= smoothstep_low_m_per_s",
+                                          "condition": "object rotation error vs reference > threshold",
+                                          "error_threshold_deg": REWARD_STATIC_ROT_ERROR_DEG,
+                                          "gate_weight": REWARD_STATIC_ROT_WEIGHT,
+                                          "term": "object_rotation"},
             "coefficients": {"hand_relative": REWARD_HAND_RELATIVE_COEF,
                              "fingers": 0.2, "geometry": REWARD_GEOMETRY_COEF,
                              "action": -0.002, "survival": 0.001,
@@ -587,7 +594,11 @@ def compute_reward(physical: V4Physical, contact: V4Contact, cache: ReferenceCac
     v_ref=C(cache.object_v_com)[i]; w_ref=C(cache.object_w)[i]
     v_eff=j.sqrt(j.sum(v_ref*v_ref,axis=-1)+(j.asarray(cache.object_radius)*j.linalg.norm(w_ref,axis=-1))**2)
     w_obj=motion_gate_weight(v_eff)
-    pos=w_obj*pos; rot=w_obj*rot; vel=w_obj*vel
+    # Static reference loophole closure: a badly rotated object while the
+    # reference holds still must not hide behind the 1% object gate. Position
+    # and velocity keep w_obj; rotation escalates once the error passes 45 deg.
+    w_rot=j.where((v_eff<=REWARD_MOTION_GATE_LOW)&(deg>REWARD_STATIC_ROT_ERROR_DEG),REWARD_STATIC_ROT_WEIGHT,w_obj)
+    pos=w_obj*pos; rot=w_rot*rot; vel=w_obj*vel
     action=-.002*j.mean(j.clip(executed_action,-1,1)**2,axis=-1); survival=j.full_like(pos,.001)
     fallen=physical.object_bottom < cache.table_height-.05; deviation=j.linalg.norm(dp,axis=-1)>.10; finite=j.isfinite(pos+rot+vel+hand+fingers+geometry+action)&physical.valid&contact.valid
     severe=j.where(finite,j.where(fallen|deviation,-REWARD_SEVERE_PENALTY,0.),-REWARD_SEVERE_PENALTY); reason=(j.asarray(index)>=reference_lengths(cache,env_ref)-1).astype(j.int32)|j.where(deviation,2,0)|j.where(fallen,4,0)|j.where(~finite,8,0)
