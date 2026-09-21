@@ -197,7 +197,8 @@ This directory contains 800 newly generated Cheyingtong right-hand trajectories:
 - Lance: `compact.lance` (version 1, 800 rows)
 - source-bound validation: `validation.json`
 - deterministic action005 plan/registry: `action005_plan.json`, `action005_registry.json`
-- parent qualification: `action005_parent_validation.json`
+- parent qualification and shard provenance: `action005_parent_validation.json`,
+  `action005_shard_merge.json`
 - runnable action005 parent bundles: `parents/row00` through `parents/row09`
 - visualization layout and clearances: `visualization_layout.json`, `background_offsets.json`
 - file hashes: `sha256.json`

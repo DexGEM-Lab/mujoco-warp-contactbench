@@ -578,6 +578,9 @@ def export(args) -> dict:
     shutil.copyfile(
         parent_validation, args.output / "action005_parent_validation.json"
     )
+    shard_merge = args.action005_attempts / "action005_shard_merge.json"
+    require(shard_merge.is_file(), "missing action005 shard merge report")
+    shutil.copyfile(shard_merge, args.output / "action005_shard_merge.json")
     for name in ("manifest.json", "validation.json", "publication.json"):
         shutil.copyfile(args.exact640 / name, args.output / ("source640_" + name))
     write_json(args.output / "action005_rejections.json", audit)
@@ -599,6 +602,7 @@ def export(args) -> dict:
         "action005_plan_sha256": file_sha(args.action005_plan),
         "action005_plan_digest": plan["digest"],
         "action005_parent_validation_sha256": file_sha(parent_validation),
+        "action005_shard_merge_sha256": file_sha(shard_merge),
     }
     write_json(args.output / "manifest.json", manifest)
     lance.write_dataset(
@@ -645,6 +649,11 @@ def validate(args) -> dict:
         file_sha(args.output / "action005_parent_validation.json")
         == manifest["action005_parent_validation_sha256"],
         "action005 parent validation snapshot",
+    )
+    require(
+        file_sha(args.output / "action005_shard_merge.json")
+        == manifest["action005_shard_merge_sha256"],
+        "action005 shard merge snapshot",
     )
     source_dataset = lance.dataset(str(args.exact640 / "compact.lance"))
     for output_index in range(800):
