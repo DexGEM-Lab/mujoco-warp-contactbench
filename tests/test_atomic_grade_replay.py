@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from argparse import Namespace
 import json
 
 import pytest
@@ -38,7 +39,7 @@ def test_grade_boundaries_match_state45_quality_contract() -> None:
     assert grade.grade_from_max_error(0.079999) == "B"
     assert grade.grade_from_max_error(0.08) == "C"
     assert grade.GRADE_CONSTRAINT_CAPACITY > 5302
-    assert 5 * grade.GRADE_CCD_CONTACTS_PER_WORLD > 1302
+    assert 5 * grade.GRADE_CCD_CONTACTS_PER_WORLD > 1874
     with pytest.raises(ValueError, match="finite"):
         grade.grade_from_max_error(float("nan"))
 
@@ -113,3 +114,76 @@ def test_row_resume_identity_must_match(tmp_path) -> None:
     )
     assert grade._row_record_valid(path, expected, run)
     assert not grade._row_record_valid(path, expected, {"contract": "other"})
+
+
+def test_action_isolated_aggregate_requires_clean_complete_population(tmp_path) -> None:
+    plan = grade.make_balanced_plan(
+        records(), dataset_rows=6, dataset_version=2, shard_count=2
+    )
+    plan_path = tmp_path / "plan.json"
+    grade.dump_atomic(plan_path, plan)
+    roots = [tmp_path / "shard0", tmp_path / "shard1"]
+    errors = [0.01, 0.04, 0.09, 0.02, 0.07, 0.11]
+    identity_base = {
+        "grade_contract": grade.GRADE_CONTRACT,
+        "constraint_capacity": grade.GRADE_CONSTRAINT_CAPACITY,
+        "ccd_contacts_per_world": grade.GRADE_CCD_CONTACTS_PER_WORLD,
+        "batch_size": 5,
+        "rendering": False,
+        "asset_commit": "asset",
+        "asset_manifest_sha256": "manifest",
+        "client_commit": "client",
+        "manorl_commit": "manorl",
+        "scene_sha256": "scene",
+    }
+    for shard_id, root in enumerate(roots):
+        for action in sorted({row["action"] for row in plan["shards"][shard_id]["rows"]}):
+            expected = [
+                row for row in plan["shards"][shard_id]["rows"]
+                if row["action"] == action
+            ]
+            action_root = root / f"action{action}"
+            row_root = action_root / "rows"
+            row_root.mkdir(parents=True)
+            identity = {**identity_base, "shard_id": shard_id, "action": action}
+            for row in expected:
+                error = errors[row["row_index"]]
+                grade.dump_atomic(
+                    row_root / f"row{row['row_index']:04d}.json",
+                    {
+                        "status": "ok",
+                        "row_index": row["row_index"],
+                        "uuid": row["uuid"],
+                        "action": action,
+                        "grade": grade.grade_from_max_error(error),
+                        "max_target_position_error_m": error,
+                    },
+                )
+            grade.dump_atomic(
+                action_root / "summary.json",
+                {
+                    "state": "complete",
+                    "shard_id": shard_id,
+                    "action": action,
+                    "row_count": len(expected),
+                    "row_indices_sha256": grade.canonical_sha256(
+                        [row["row_index"] for row in expected]
+                    ),
+                    "run_identity": identity,
+                },
+            )
+            (root / f"action{action}.log").write_text("clean\n")
+    output = tmp_path / "result.json"
+    args = Namespace(
+        plan=plan_path,
+        shard_outputs=",".join(map(str, roots)),
+        output=output,
+    )
+    grade.aggregate(args)
+    result = json.loads(output.read_text())
+    assert result["rows"] == 6
+    assert result["grade_counts"] == {"A": 2, "B": 2, "C": 2}
+    first_log = next(roots[0].glob("action*.log"))
+    first_log.write_text("nefc overflow - increase njmax\n")
+    with pytest.raises(ValueError, match="overflow"):
+        grade.aggregate(Namespace(**{**vars(args), "output": tmp_path / "bad.json"}))

@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
@@ -42,10 +43,10 @@ GRADE_CONTRACT = "mano_target_replay_max_position_error_grade_v1"
 GRADE_A_MAX_M = 0.03
 GRADE_B_MAX_M = 0.08
 # Multi-object rows increase only allocation demand. These capacities exceed the
-# observed action001 requirements (CCD1302 total / constraints5302 for 5 worlds)
+# observed action001 requirements (CCD1874 total / constraints5302 for 5 worlds)
 # without changing equations, model parameters, controls, or grade thresholds.
 GRADE_CONSTRAINT_CAPACITY = 8192
-GRADE_CCD_CONTACTS_PER_WORLD = 320
+GRADE_CCD_CONTACTS_PER_WORLD = 512
 
 
 def dump_atomic(path: Path, value: object) -> None:
@@ -539,15 +540,77 @@ def aggregate(args: argparse.Namespace) -> None:
     roots = [Path(value) for value in args.shard_outputs.split(",") if value]
     if len(roots) != int(plan["shard_count"]):
         raise ValueError("one shard output root is required per plan shard")
+    overflow = re.compile(
+        r"(?:nefc|nacon|CCD|constraint|contact).*overflow|"
+        r"overflow.*(?:nefc|nacon|CCD|constraint|contact)",
+        re.IGNORECASE,
+    )
+    forbidden_suffixes = {".png", ".jpg", ".jpeg", ".mp4", ".npy", ".npz"}
     rows: list[dict[str, Any]] = []
-    summaries = []
+    summaries: list[dict[str, Any]] = []
+    provenance: dict[str, set[Any]] = defaultdict(set)
     for shard_id, root in enumerate(roots):
-        summary = json.loads((root / "summary.json").read_text())
-        if summary.get("state") != "complete" or int(summary["shard_id"]) != shard_id:
-            raise ValueError(f"shard {shard_id} is not complete")
-        summaries.append(summary)
-        for path in sorted((root / "rows").glob("row*.json")):
-            rows.append(json.loads(path.read_text()))
+        if not root.is_dir():
+            raise FileNotFoundError(f"shard root is absent: {root}")
+        forbidden = [
+            path for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in forbidden_suffixes
+        ]
+        if forbidden:
+            raise ValueError(f"shard {shard_id} contains forbidden image/trace artifacts")
+        expected_shard = plan["shards"][shard_id]
+        actions = sorted({str(row["action"]) for row in expected_shard["rows"]})
+        for action in actions:
+            expected_action = [
+                row for row in expected_shard["rows"] if row["action"] == action
+            ]
+            action_root = root / f"action{action}"
+            summary = json.loads((action_root / "summary.json").read_text())
+            if (
+                summary.get("state") != "complete"
+                or int(summary["shard_id"]) != shard_id
+                or summary.get("action") != action
+                or int(summary["row_count"]) != len(expected_action)
+            ):
+                raise ValueError(f"shard {shard_id} action {action} is not complete")
+            expected_indices = [int(row["row_index"]) for row in expected_action]
+            if summary.get("row_indices_sha256") != canonical_sha256(expected_indices):
+                raise ValueError(f"shard {shard_id} action {action} row identity differs")
+            log = root / f"action{action}.log"
+            if not log.is_file():
+                raise FileNotFoundError(f"missing action log: {log}")
+            if overflow.search(log.read_text(errors="replace")):
+                raise ValueError(f"capacity overflow in shard {shard_id} action {action}")
+            identity = summary.get("run_identity") or {}
+            if (
+                identity.get("grade_contract") != GRADE_CONTRACT
+                or identity.get("constraint_capacity") != GRADE_CONSTRAINT_CAPACITY
+                or identity.get("ccd_contacts_per_world")
+                != GRADE_CCD_CONTACTS_PER_WORLD
+                or identity.get("batch_size") != 5
+                or identity.get("rendering") is not False
+            ):
+                raise ValueError(f"shard {shard_id} action {action} runtime differs")
+            for key in (
+                "asset_commit",
+                "asset_manifest_sha256",
+                "client_commit",
+                "manorl_commit",
+                "scene_sha256",
+            ):
+                provenance[key].add(identity.get(key))
+            action_rows = [
+                json.loads(path.read_text())
+                for path in sorted((action_root / "rows").glob("row*.json"))
+            ]
+            if [int(row["row_index"]) for row in action_rows] != expected_indices:
+                raise ValueError(f"shard {shard_id} action {action} records differ")
+            if any(row.get("status") != "ok" for row in action_rows):
+                raise ValueError(f"shard {shard_id} action {action} has non-ok rows")
+            rows.extend(action_rows)
+            summaries.append(summary)
+    if any(len(values) != 1 or None in values for values in provenance.values()):
+        raise ValueError(f"cross-shard provenance differs: {dict(provenance)}")
     rows.sort(key=lambda value: int(value["row_index"]))
     expected = sorted(
         [row for shard in plan["shards"] for row in shard["rows"]],
@@ -560,9 +623,28 @@ def aggregate(args: argparse.Namespace) -> None:
     overall = Counter(row["grade"] for row in rows)
     by_action: dict[str, Counter[str]] = defaultdict(Counter)
     error_by_action: dict[str, list[float]] = defaultdict(list)
+    boundary_rows = []
     for row in rows:
+        error = float(row["max_target_position_error_m"])
+        if not float("-inf") < error < float("inf"):
+            raise ValueError(f"row {row['row_index']} has nonfinite error")
+        expected_grade = grade_from_max_error(error)
+        if row["grade"] != expected_grade:
+            raise ValueError(f"row {row['row_index']} grade does not match error")
         by_action[row["action"]][row["grade"]] += 1
-        error_by_action[row["action"]].append(float(row["max_target_position_error_m"]))
+        error_by_action[row["action"]].append(error)
+        margin = min(abs(error - GRADE_A_MAX_M), abs(error - GRADE_B_MAX_M))
+        if margin <= 0.001:
+            boundary_rows.append(
+                {
+                    "row_index": int(row["row_index"]),
+                    "uuid": row["uuid"],
+                    "action": row["action"],
+                    "grade": row["grade"],
+                    "max_target_position_error_m": error,
+                    "threshold_margin_m": margin,
+                }
+            )
     import numpy as np
 
     result = {
@@ -590,7 +672,11 @@ def aggregate(args: argparse.Namespace) -> None:
             }
             for action, counts in sorted(by_action.items())
         },
-        "shards": summaries,
+        "boundary_rows_within_1mm": boundary_rows,
+        "runtime_provenance": {
+            key: next(iter(values)) for key, values in sorted(provenance.items())
+        },
+        "action_shards": summaries,
         "rendered_images": 0,
         "rendered_videos": 0,
         "completed_at": datetime.now(timezone.utc).isoformat(),
