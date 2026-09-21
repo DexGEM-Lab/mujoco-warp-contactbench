@@ -60,3 +60,39 @@ Evidence and exact target hashes live in ignored local artifact
 `outputs/four_action_single_v1/correct_bowl_single_candidates.json`. Existing
 Lances remain unchanged; these are local single-trajectory results, not H200 or
 augmentation robustness claims.
+
+## Final pitcher release v13
+
+The earlier row82 target was not robust: two later fresh replays toppled after
+release. Final v13 preserves the physical grasp/pour/return prefix through1130,
+then uses supported yaw registration and a strict release sequence. The thumb is
+moved radially clear first; with the thumb held open, the four fingers and wrist
+reverse the actual same-U1 acquisition deltas so the fingers exit along the
+handle-entry corridor. This satisfies the user-required topology without forcing
+the object.
+
+Two fresh frame0 replays pass. Thumb last-contact frame1569 precedes nonthumb
+last contacts1726–1743; max release tilt is6.15/5.87deg, final tilt0.45deg, full
+orientation8.39/10.03deg, final position0.71/0.69cm, and the pitcher ends clear
+and settled. Canonical manifest: `recipes/u1_pitcher_row82_release_v13.json`.
+Target SHA: `f16c7c23e6eff801b877603ea13d0e3179ac6597e81c1c82da2b516b6562a93a`.
+
+## Exact800 campaign
+
+The final five parents are bundled in signed registry v3 under
+`outputs/u1_5x160_registry_v3`; the current production registry is copied to the
+hidden NAS campaign staging. Plan:5 radii x8 XYZ octants x4 nonzero roll/pitch
+orientations=160 slots/action,16 deterministic candidate directions/slot. Every
+selected child must pass a native U1 first replay and a separate-process replay
+of the same frozen actual controls. Every480Hz substep checks contact/constraint
+capacity. Native contact capture includes frame basis matrices, so compact force
+export never substitutes CPU normals.
+
+Old augmentation speed came from32-world batches (1344 runs in about14minutes)
+and formal8-world batches. The exact campaign initially used one scalar process;
+it was accelerated to five concurrent whole-action owners. Local owns003/009;
+Server1 GPUs0/2/3 own005/006/007 through an exact-SHA source deployment and a
+process-private NAS path alias. Ledger identity remains the canonical `/home`
+path. The cross-host wrapper accepts only the exact signed registry/plan SHA;
+it bypasses only 1e-18 cross-CPU re-normalization differences, never candidate,
+UUID, physics or validation checks.
