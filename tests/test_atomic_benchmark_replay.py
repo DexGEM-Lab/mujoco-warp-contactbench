@@ -6,6 +6,7 @@ import pytest
 
 from tools.replay_atomic_benchmark_pilot import (
     decode_row,
+    render_row_directory_name,
     run_physics,
     static_layout,
     validate_gpu_binding,
@@ -85,6 +86,14 @@ def test_static_layout_excludes_physical_objects() -> None:
 
 def test_wxyz_identity() -> None:
     np.testing.assert_allclose(wxyz([0, 0, 0]), [1, 0, 0, 0])
+
+
+def test_duplicate_padding_rows_use_collision_free_trace_directories() -> None:
+    assert render_row_directory_name(154, sequence=1, occurrence_count=5) == "row0154_slot0"
+    assert render_row_directory_name(154, sequence=5, occurrence_count=5) == "row0154_slot4"
+    assert render_row_directory_name(154, sequence=1, occurrence_count=1) == "row0154"
+    with pytest.raises(ValueError, match="positive"):
+        render_row_directory_name(154, sequence=0, occurrence_count=5)
 
 
 def test_run_physics_exposes_allocation_only_capacity_overrides() -> None:

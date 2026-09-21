@@ -648,6 +648,19 @@ def label(frame: np.ndarray, text: str) -> np.ndarray:
     return np.asarray(image)
 
 
+def render_row_directory_name(
+    row_index: int, *, sequence: int, occurrence_count: int
+) -> str:
+    """Return one collision-free trace directory for padded duplicate worlds."""
+
+    if sequence < 1 or occurrence_count < 1:
+        raise ValueError("sequence and occurrence_count must be positive")
+    name = f"row{int(row_index):04d}"
+    if occurrence_count > 1:
+        name += f"_slot{sequence - 1}"
+    return name
+
+
 def render_action(
     *,
     action: str,
@@ -692,6 +705,10 @@ def render_action(
     video = output_dir / f"action{action}_five_trajectories.mp4"
     story_frames: list[Image.Image] = []
     row_reports = []
+    row_index_counts: dict[int, int] = {}
+    for trace in outputs:
+        row_index = int(trace["row_index"])
+        row_index_counts[row_index] = row_index_counts.get(row_index, 0) + 1
     with imageio.get_writer(
         video,
         fps=VIDEO_FPS,
@@ -746,7 +763,12 @@ def render_action(
                 writer.append_data(combined)
                 if frame in story_targets:
                     story_frames.append(Image.fromarray(combined))
-            row_dir = output_dir / f"row{trace['row_index']:04d}"
+            row_name = render_row_directory_name(
+                int(trace["row_index"]),
+                sequence=sequence,
+                occurrence_count=row_index_counts[int(trace["row_index"])],
+            )
+            row_dir = output_dir / row_name
             row_dir.mkdir()
             arrays = {
                 "hand_qpos": trace["hand_simulated"],
