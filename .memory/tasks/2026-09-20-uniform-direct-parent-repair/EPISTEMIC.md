@@ -149,9 +149,12 @@ Repeating each existing control frame520–560 twice reduced withdrawal speed an
 made four independent processes settle upright while preserving every source
 control in order. This is a documented time schedule, not a target-value repair.
 
-The formal registry now binds ten unique complete-scene parents. A maximum-radius
-strict-C1 row9 child also passed twice, so the repaired terminal release survives
-the augmentation join. The live uncertainty has moved from parent validity to
-reserve consumption across the160 global slots. Production uses disjoint
-single-writer shards; any exhausted slot invalidates the campaign rather than
-shrinking the perturbation.
+The formal registry binds ten unique complete-scene parents. Exact160 production
+is complete: all global slots passed twice, each parent contributes16 children,
+and no slot exhausted its deterministic same-cell reserves. Fifty rejected
+candidates are concentrated in parent7/8 terminal stability and remain preserved;
+row9's slowed withdrawal was robust across its assigned children. Hash-verified
+same-filesystem merge produced one canonical ledger and artifact tree. Thus the
+remaining uncertainty is no longer physical acceptance or sampling coverage. It
+is representational: whether the new exact800 serialization, full source-bound
+readback, and mesh-clearance layout preserve these traces without alteration.
