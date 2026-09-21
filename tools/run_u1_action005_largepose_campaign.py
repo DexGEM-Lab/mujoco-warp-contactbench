@@ -75,7 +75,7 @@ def campaign_plan(registry: Path) -> dict:
     return dict(payload, digest=digest(payload))
 
 
-def _identity(registry: Path, plan: dict) -> str:
+def campaign_identity(registry: Path, plan: dict) -> str:
     return digest(
         {
             "version": VERSION,
@@ -108,7 +108,9 @@ def run(args) -> None:
             raise ValueError("saved action005 plan differs")
     else:
         write_json(plan_path, plan)
-    ledger = Ledger(args.staging / "005.jsonl", _identity(args.registry, plan))
+    ledger = Ledger(
+        args.staging / "005.jsonl", campaign_identity(args.registry, plan)
+    )
     registry_sha = file_sha(args.registry)
     runtimes: dict[int, Action005LargePoseRuntime] = {}
     for slot in plan["slots"][args.slot_start : args.slot_stop]:

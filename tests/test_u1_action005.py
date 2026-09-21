@@ -9,6 +9,12 @@ from sim.manorl.u1_action005 import (
     canonical_parent_target,
     validate_parent_assignment,
 )
+from tools.export_u1_largepose800 import (
+    CONTRACT as EXACT800_CONTRACT,
+    movement_record,
+    schema as exact800_schema,
+    source640_index_for_output,
+)
 from tools.run_u1_largepose_campaign import build_plan
 
 
@@ -115,3 +121,30 @@ def test_action005_gate_values_require_real_pour_and_settle() -> None:
         bowl_velocity=bowl_velocity,
     )
     assert drifting["settled_terminal_bottle_linear"] is False
+
+
+def test_exact800_interleave_mapping_preserves_source_order() -> None:
+    assert source640_index_for_output(0) == 0
+    assert source640_index_for_output(159) == 159
+    assert source640_index_for_output(160) is None
+    assert source640_index_for_output(319) is None
+    assert source640_index_for_output(320) == 160
+    assert source640_index_for_output(799) == 639
+
+
+def test_exact800_schema_and_shifted_action005_movement() -> None:
+    assert exact800_schema().metadata[b"schema_version"] == EXACT800_CONTRACT.encode()
+    assert movement_record(
+        {
+            "frames": 742,
+            "movement": {
+                "object_name": "mayonnaisebottle",
+                "start_frame": 120,
+                "end_frame": 491,
+            },
+        }
+    ) == {
+        "object_name": "mayonnaisebottle",
+        "start_frame": 240,
+        "end_frame": 611,
+    }
