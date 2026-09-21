@@ -195,8 +195,9 @@ def main() -> None:
 
     readme = f"""# ManoRL strict-C1 U1 large-pose exact800
 
-This directory contains 800 newly generated Cheyingtong right-hand trajectories:
-160 each for actions 003, 005, 006, 007, and 009.
+This directory contains five 160-row Cheyingtong right-hand blocks for actions
+003, 005, 006, 007, and 009. The 640 non-005 rows are source-equal to the immutable
+strict-C1 exact640 publication; the 160 action005 rows are newly generated.
 
 - U1 setting SHA-256: `{SETTING}`
 - dataset contract: `{CONTRACT}`
@@ -214,7 +215,8 @@ The published exact640 source is unchanged. Its rows are interleaved read-only w
 160 new action005 rows. Every action005 child retains mayonnaisebottle and bowl,
 uses a strict 120-frame physical-teacher discrete-C1 prefix, has zero solved-force
 prefix contact, and passed two frozen-control physical replays with distinct PIDs.
-The exported physical state, native contact-frame evidence, teacher state, and
+Rejected reserve candidates remain enumerated in the rejection audit. The exported
+physical state, native contact-frame evidence, teacher state, and
 complete-scene reference were reconstructed from the second replay and compared
 exactly against Lance readback.
 
