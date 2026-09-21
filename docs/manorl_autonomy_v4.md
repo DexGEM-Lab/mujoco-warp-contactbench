@@ -89,12 +89,12 @@ position and velocity; orientation is `MIN + (MAX-MIN)·(1-L)` with
 |---|---|---:|---:|---|
 | `object_position` | per-axis absolute error | 1.5 cm | 10 cm | D equals the deviation termination threshold; axis weights 0.2/0.2/0.8 unchanged |
 | `object_velocity` | `sqrt(Σ((v-vref)/0.25)² + Σ((w-wref)/2)²)` | 0.5 | 2.5 | same normalization as before, only the curve changed |
-| `object_rotation` | shortest angle vs reference | 25 deg | 90 deg | keeps +0.3 at 0 deg and the -0.5 floor |
+| `object_rotation` | shortest angle vs reference | 35 deg | 90 deg | keeps +0.3 at 0 deg and the -0.5 floor |
 
 A log ramp has no flat top and no dead tail: the marginal reward is largest at
 zero error and decays algebraically rather than exponentially. Consequences
-worth knowing: orientation reaches zero reward at ~16 deg instead of ~33 deg
-and -0.27 at 45 deg instead of -0.10, while position and velocity keep more
+worth knowing: orientation reaches zero reward at ~25 deg instead of ~33 deg
+and -0.19 at 45 deg instead of -0.10, while position and velocity keep more
 reward at large errors (position is 19% of max at 5 cm instead of 13.5%;
 velocity 7.5% at normalised u=2 instead of 1.8%). All three are multiplied by
 the same **reference motion gate**, never by actual-object speed:

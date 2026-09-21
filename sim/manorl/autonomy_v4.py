@@ -39,7 +39,7 @@ REWARD_POSITION_HALF_M=0.015     # per-axis 1.5 cm keeps half of the position te
 REWARD_POSITION_HORIZON_M=0.10   # 10 cm = deviation termination threshold
 REWARD_VELOCITY_HALF=0.5         # combined normalized velocity error at half reward
 REWARD_VELOCITY_HORIZON=2.5      # normalized error at zero
-REWARD_ROTATION_HALF_DEG=25.0    # orientation error at half of the rotation range
+REWARD_ROTATION_HALF_DEG=35.0    # orientation error at half of the rotation range
 REWARD_ROTATION_HORIZON_DEG=90.0 # orientation error at the floor
 REWARD_ROTATION_MAX=0.3          # alignment bonus at zero error
 REWARD_ROTATION_MIN=-0.5         # floor beyond the horizon

@@ -179,12 +179,12 @@ def test_tracking_curves_are_log_shaped_with_documented_half_and_horizon():
     def rot_state(deg):
         h=np.deg2rad(deg)/2; return _state()._replace(object_quat_xyzw=j.asarray([[0.,0.,np.sin(h),np.cos(h)]]))
     # rotation endpoints and the half point are preserved at full gate
-    r0=compute_reward(rot_state(0.),contact,moving,idx,action); r25=compute_reward(rot_state(25.),contact,moving,idx,action)
+    r0=compute_reward(rot_state(0.),contact,moving,idx,action); rhalf=compute_reward(rot_state(REWARD_ROTATION_HALF_DEG),contact,moving,idx,action)
     r90=compute_reward(rot_state(90.),contact,moving,idx,action); r120=compute_reward(rot_state(120.),contact,moving,idx,action)
     np.testing.assert_allclose(np.asarray(r0.object_rotation),[REWARD_ROTATION_MAX],atol=1e-5)
     np.testing.assert_allclose(np.asarray(r90.object_rotation),[REWARD_ROTATION_MIN],atol=1e-4)
     np.testing.assert_allclose(np.asarray(r120.object_rotation),[REWARD_ROTATION_MIN],atol=1e-4)
-    np.testing.assert_allclose(np.asarray(r25.object_rotation),[(REWARD_ROTATION_MAX+REWARD_ROTATION_MIN)/2],atol=1e-4)
+    np.testing.assert_allclose(np.asarray(rhalf.object_rotation),[(REWARD_ROTATION_MAX+REWARD_ROTATION_MIN)/2],atol=1e-4)
     # the top is no longer flat: 0->5 deg must cost strictly more than the old
     # quadratic top (which lost only 1-0.00125*25 = 3.1% of the range)
     r5=compute_reward(rot_state(5.),contact,moving,idx,action)
