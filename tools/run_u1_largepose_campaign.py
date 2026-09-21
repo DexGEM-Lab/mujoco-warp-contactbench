@@ -124,6 +124,7 @@ class LargePoseRuntime:
         names = self.p['names']
         adrs = [int(m.joint(n + '_free').qposadr[0]) for n in names]
         q, v, controls, precontact = [], [], [], []
+        gaps, radii, heights, pair_force = [], [], [], []
         native_path = folder / 'native_contacts.jsonl'
         high = {'contacts': 0, 'constraints': 0}
         with native_path.open('w') as evidence:
@@ -152,6 +153,16 @@ class LargePoseRuntime:
                 if n:
                     s.mw.contact_force(s.wm, s.data, ids, False, forces)
                 F = forces.numpy()
+                if self.action == '006':
+                    d = s.cpu; d.qpos[:] = pose; d.qvel[:] = vel; s.mj.mj_forward(m, d)
+                    tg = m.geom('thumb_ip_collision').id; ig = m.geom('index_dip_collision').id
+                    gaps.append(float(s.mj.mj_geomDistance(m, d, tg, ig, .15, np.zeros(6))))
+                    ob = m.body('pitcherbase').id; bb = m.body('bowl').id
+                    sp = d.xpos[ob] + d.xmat[ob].reshape(3, 3) @ np.array([-.081061, -.0049836, .08246349])
+                    radii.append(float(np.linalg.norm(sp[:2] - d.xpos[bb, :2])))
+                    heights.append(float(sp[2] - d.xpos[bb, 2]))
+                    mask = ((pairs[:, 0] == tg) & (pairs[:, 1] == ig)) | ((pairs[:, 0] == ig) & (pairs[:, 1] == tg))
+                    pair_force.append(float(F[mask, 0].sum()))
                 evidence.write(json.dumps(dict(frame=f, geom_pairs=pairs.tolist(),
                     force_contact_frame=F.tolist(), position=s.data.contact.pos.numpy()[:n].tolist(),
                     contact_frame=s.data.contact.frame.numpy()[:n].tolist(),
@@ -197,12 +208,13 @@ class LargePoseRuntime:
                 ob = m.body('pitcherbase').id; bb = m.body('bowl').id
                 sp = d.xpos[ob] + d.xmat[ob].reshape(3, 3) @ np.array([-.081061, -.0049836, .08246349])
                 radii.append(float(np.linalg.norm(sp[:2] - d.xpos[bb, :2]))); heights.append(float(sp[2] - d.xpos[bb, 2]))
-            gaps = np.asarray(gaps); radii = np.asarray(radii); heights = np.asarray(heights)
+            gaps = np.asarray(gaps); radii = np.asarray(radii); heights = np.asarray(heights); pair_force = np.asarray(pair_force)
             gates.update(pour_present=bool(np.any(pour)),
                          final_source_orientation_under15deg=physical['object_orientation_final_deg'] < 15,
                          pour_spout_proxy_inside_bowl=bool(np.any(pour) and np.all(radii[pour] < .077101396)),
                          pour_above_bowl=bool(np.any(pour) and np.all(heights[pour] > .025)),
                          distal_surfaces_touch_during_pour=bool(np.any(pour) and np.mean(gaps[pour] < .0005) > .95),
+                         native_tip_pair_force_during_pour=bool(np.any(pour & (f % 12 == 0)) and np.all(pair_force[pour & (f % 12 == 0)] > .1)),
                          settled_final_object=bool(np.linalg.norm(v[-1, da:da + 6]) < .01),
                          release_upright=bool(np.max(a['world_tilt_deg'][1130 + shift:]) < 10))
         np.savez_compressed(folder / 'contact_validation.npz', **a)
