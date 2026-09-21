@@ -25,6 +25,10 @@ REWARD_MOTION_GATE_LOW=0.01       # reference effective speed where object track
 REWARD_MOTION_GATE_HIGH=0.10      # full weight above this reference speed (m/s)
 REWARD_MOTION_STATIC_WEIGHT=0.01  # object terms preserve 1% on a still reference
 REWARD_MOTION_RADIUS=0.04330042412758056  # cube2 max collision-vertex radius about COM (m)
+REWARD_OBJECT_POSITION_COEF=0.5    # object world position tracking (was 1.0; its half funds hand_world)
+REWARD_HAND_WORLD_COEF=0.6         # palm world pose vs reference palm (half of the pre-split object position scale)
+REWARD_HAND_POSITION_SCALE=0.04    # 4 cm position scale, shared by both hand terms
+REWARD_HAND_ANGLE_SCALE=0.35       # ~20 deg orientation scale, shared by both hand terms
 REWARD_HAND_RELATIVE_COEF=0.125   # palm-object relative pose
 REWARD_GEOMETRY_COEF=1.2          # contact anchor correspondence
 REWARD_SEVERE_PENALTY=75.0        # deviation / fall / non-finite, applied once
@@ -40,7 +44,7 @@ def motion_gate_weight(v_eff):
 
 def reward_parameters(object_radius: float = REWARD_MOTION_RADIUS) -> dict[str, object]:
     """JSON-safe reward provenance for training and frozen-evaluation artifacts."""
-    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.v1",
+    return {"id": "manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.hand-world-tracking.v1",
             "object_tracking": {"motion_source": "reference_object_com_linear_and_angular_velocity",
                                 "effective_speed": "sqrt(norm(v_ref_com)^2 + (object_radius_m * norm(omega_ref))^2)",
                                 "object_radius_m": float(object_radius),
@@ -54,10 +58,17 @@ def reward_parameters(object_radius: float = REWARD_MOTION_RADIUS) -> dict[str, 
                                           "error_threshold_deg": REWARD_STATIC_ROT_ERROR_DEG,
                                           "gate_weight": REWARD_STATIC_ROT_WEIGHT,
                                           "term": "object_rotation"},
-            "coefficients": {"hand_relative": REWARD_HAND_RELATIVE_COEF,
+            "coefficients": {"object_position": REWARD_OBJECT_POSITION_COEF,
+                             "hand_world": REWARD_HAND_WORLD_COEF,
+                             "hand_relative": REWARD_HAND_RELATIVE_COEF,
                              "fingers": 0.2, "geometry": REWARD_GEOMETRY_COEF,
                              "action": -0.002, "survival": 0.001,
                              "severe_failure": -REWARD_SEVERE_PENALTY},
+            "hand_world_tracking": {"quantity": "palm world pose vs reference palm world pose",
+                                    "position_scale_m": REWARD_HAND_POSITION_SCALE,
+                                    "angle_scale_rad": REWARD_HAND_ANGLE_SCALE,
+                                    "gated_by_reference_speed": False,
+                                    "note": "explicit absolute hand placement; the object position half is the funding source"},
             "severe_conditions": ["object_position_deviation_gt_0.10_m", "object_bottom_below_table_minus_0.05_m", "nonfinite_physics_or_contact"]}
 
 class V4Physical(NamedTuple):
@@ -579,17 +590,22 @@ def encode_observation(raw, embedding):
     return j.concatenate((raw[:,rs['autonomous_actual']],raw[:,rs['autonomous_reference']],raw[:,rs['autonomous_future']],raw[:,rs['autonomous_geometry']],embedding,raw[:,rs['action_types']],raw[:,rs['object_geometry']]),axis=-1)
 
 class V4Reward(NamedTuple):
-    total: Any; object_position: Any; object_rotation: Any; object_velocity: Any; hand_relative: Any; fingers: Any; geometry: Any; action: Any; survival: Any; severe: Any; done: Any; reason: Any; valid: Any
+    total: Any; object_position: Any; object_rotation: Any; object_velocity: Any; hand_relative: Any; hand_world: Any; fingers: Any; geometry: Any; action: Any; survival: Any; severe: Any; done: Any; reason: Any; valid: Any
 
 def compute_reward(physical: V4Physical, contact: V4Contact, cache: ReferenceCacheV4, index, executed_action, env_ref=None):
     import jax.numpy as j
     i=_gather(cache,index,env_ref=env_ref); C=lambda x:j.asarray(x); target_p=C(cache.object_origin)[i]; target_q=C(cache.object_quat_xyzw)[i]
     dp=physical.object_origin-target_p
-    pos=.2*j.exp(-40*j.abs(dp[:,0]))+.2*j.exp(-40*j.abs(dp[:,1]))+.8*j.exp(-40*j.abs(dp[:,2]))
+    pos=REWARD_OBJECT_POSITION_COEF*(.2*j.exp(-40*j.abs(dp[:,0]))+.2*j.exp(-40*j.abs(dp[:,1]))+.8*j.exp(-40*j.abs(dp[:,2])))
     deg=shortest_angle(physical.object_quat_xyzw,target_q)*180/j.pi; rotvalue=j.where(deg<=20,1-.00125*deg**2,j.where(deg<=90,-.00003175*(deg-20)**2-.019206*(deg-20)+.5,-1.)); rot=.4*rotvalue-.1
     vel=.1*j.exp(-j.sum(((physical.object_v_com-C(cache.object_v_com)[i])/.25)**2,axis=-1)-j.sum(((physical.object_w-C(cache.object_w)[i])/2.)**2,axis=-1))
-    rel=quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-physical.object_origin); rrel=quat_unrotate(target_q,C(cache.palm_origin)[i]-target_p); relq=quat_mul(quat_conj(physical.object_quat_xyzw),physical.palm_quat_xyzw); rrelq=quat_mul(quat_conj(target_q),C(cache.palm_quat_xyzw)[i]); hand=REWARD_HAND_RELATIVE_COEF*j.exp(-j.sum(((rel-rrel)/.04)**2,axis=-1)-(shortest_angle(relq,rrelq)/.35)**2)
+    rel=quat_unrotate(physical.object_quat_xyzw,physical.palm_origin-physical.object_origin); rrel=quat_unrotate(target_q,C(cache.palm_origin)[i]-target_p); relq=quat_mul(quat_conj(physical.object_quat_xyzw),physical.palm_quat_xyzw); rrelq=quat_mul(quat_conj(target_q),C(cache.palm_quat_xyzw)[i]); hand=REWARD_HAND_RELATIVE_COEF*j.exp(-j.sum(((rel-rrel)/REWARD_HAND_POSITION_SCALE)**2,axis=-1)-(shortest_angle(relq,rrelq)/REWARD_HAND_ANGLE_SCALE)**2)
     fingers=.2*j.exp(-j.mean((physical.q_raw[:,6:]-C(cache.q_feasible)[i][:,6:])**2,axis=-1)/.35**2)
+    # Absolute hand placement: palm world pose vs reference palm world pose.
+    # Composes the object world error and the hand-object relative error, so it
+    # anchors the hand during static-reference holds where the object gate is 1%.
+    # Deliberately NOT reference-speed gated. Funded by halving object_position.
+    hand_world=REWARD_HAND_WORLD_COEF*j.exp(-j.sum(((physical.palm_origin-C(cache.palm_origin)[i])/REWARD_HAND_POSITION_SCALE)**2,axis=-1)-(shortest_angle(physical.palm_quat_xyzw,C(cache.palm_quat_xyzw)[i])/REWARD_HAND_ANGLE_SCALE)**2)
     _,_,delta,_=anchor_delta_and_velocity(physical,C(cache.region_anchor_hand)[i],C(cache.region_anchor_object)[i]); e=delta-C(cache.delta_ref)[i]; weight=C(cache.proximity)[i]*C(cache.confidence)[i]*C(cache.valid)[i]; geometry=REWARD_GEOMETRY_COEF*j.sum(weight*j.exp(-j.sum(e*e,axis=-1)/.01**2),axis=-1)/j.maximum(j.sum(weight,axis=-1),1.)
     v_ref=C(cache.object_v_com)[i]; w_ref=C(cache.object_w)[i]
     v_eff=j.sqrt(j.sum(v_ref*v_ref,axis=-1)+(j.asarray(cache.object_radius)*j.linalg.norm(w_ref,axis=-1))**2)
@@ -600,8 +616,8 @@ def compute_reward(physical: V4Physical, contact: V4Contact, cache: ReferenceCac
     w_rot=j.where((v_eff<=REWARD_MOTION_GATE_LOW)&(deg>REWARD_STATIC_ROT_ERROR_DEG),REWARD_STATIC_ROT_WEIGHT,w_obj)
     pos=w_obj*pos; rot=w_rot*rot; vel=w_obj*vel
     action=-.002*j.mean(j.clip(executed_action,-1,1)**2,axis=-1); survival=j.full_like(pos,.001)
-    fallen=physical.object_bottom < cache.table_height-.05; deviation=j.linalg.norm(dp,axis=-1)>.10; finite=j.isfinite(pos+rot+vel+hand+fingers+geometry+action)&physical.valid&contact.valid
+    fallen=physical.object_bottom < cache.table_height-.05; deviation=j.linalg.norm(dp,axis=-1)>.10; finite=j.isfinite(pos+rot+vel+hand+hand_world+fingers+geometry+action)&physical.valid&contact.valid
     severe=j.where(finite,j.where(fallen|deviation,-REWARD_SEVERE_PENALTY,0.),-REWARD_SEVERE_PENALTY); reason=(j.asarray(index)>=reference_lengths(cache,env_ref)-1).astype(j.int32)|j.where(deviation,2,0)|j.where(fallen,4,0)|j.where(~finite,8,0)
-    total=j.where(finite,pos+rot+vel+hand+fingers+geometry+action+survival+severe,-REWARD_SEVERE_PENALTY)
+    total=j.where(finite,pos+rot+vel+hand+hand_world+fingers+geometry+action+survival+severe,-REWARD_SEVERE_PENALTY)
     done=(reason!=0)
-    return V4Reward(total,pos,rot,vel,hand,fingers,geometry,action,survival,severe,done,reason,finite)
+    return V4Reward(total,pos,rot,vel,hand,hand_world,fingers,geometry,action,survival,severe,done,reason,finite)

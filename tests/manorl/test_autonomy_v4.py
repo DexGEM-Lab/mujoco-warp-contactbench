@@ -103,7 +103,7 @@ def test_contact_rejects_unsupported_cone_and_skips_unsolved_rows():
 def test_reward_boundaries_clipped_action_and_reason_bits():
     jax=pytest.importorskip("jax"); j=jax.numpy; cache=_cache(); s=_state(); r=compute_reward(s,_contact(),cache,j.asarray([0]),j.full((1,28),2.))
     # Synthetic reference is stationary: object terms retain precisely 1%.
-    np.testing.assert_allclose(np.asarray(r.action),[-.002],atol=1e-7); np.testing.assert_allclose(np.asarray(r.object_position),[.012],atol=1e-6)
+    np.testing.assert_allclose(np.asarray(r.action),[-.002],atol=1e-7); np.testing.assert_allclose(np.asarray(r.object_position),[.006],atol=1e-6)
     np.testing.assert_allclose(np.asarray(r.hand_relative),[.125],atol=1e-6); np.testing.assert_allclose(np.asarray(r.geometry),[1.2],atol=1e-6); assert not bool(r.done[0])
     fallen=s._replace(object_bottom=j.asarray([-.06])); f=compute_reward(fallen,_contact(),cache,j.asarray([0]),j.zeros((1,28))); assert int(f.reason[0])&4 and np.isclose(np.asarray(f.severe)[0],-75)
 
@@ -120,9 +120,9 @@ def test_reference_speed_motion_gate_is_exact_and_independent_of_actual_speed():
     r_linear=compute_reward(state,_contact(),linear,j.asarray([0]),action)
     angular=replace(stationary,object_w=np.tile([.055/stationary.object_radius,0.,0.],(len(stationary.q_feasible),1)))
     r_angular=compute_reward(state,_contact(),angular,j.asarray([0]),action)
-    np.testing.assert_allclose(np.asarray(r_still.object_position),[.012],atol=1e-6)
-    np.testing.assert_allclose(np.asarray(r_linear.object_position),[1.2],atol=1e-6)
-    np.testing.assert_allclose(np.asarray(r_angular.object_position),[.606],atol=1e-6)
+    np.testing.assert_allclose(np.asarray(r_still.object_position),[.006],atol=1e-6)
+    np.testing.assert_allclose(np.asarray(r_linear.object_position),[.6],atol=1e-6)
+    np.testing.assert_allclose(np.asarray(r_angular.object_position),[.303],atol=1e-6)
     # A changed actual speed changes the velocity-match term, but never the gate.
     fast_actual=state._replace(object_v_com=j.asarray([[100.,0.,0.]]),object_w=j.asarray([[100.,0.,0.]]))
     r_fast_actual=compute_reward(fast_actual,_contact(),linear,j.asarray([0]),action)
@@ -160,6 +160,38 @@ def test_static_reference_rotation_override_escapes_motion_gate():
     # Position and velocity terms never see the rotation override.
     np.testing.assert_allclose(np.asarray(r60.object_position),np.asarray(r30.object_position),atol=1e-7)
     np.testing.assert_allclose(np.asarray(r60.object_velocity),np.asarray(r30.object_velocity),atol=1e-7)
+
+def test_hand_world_tracking_is_absolute_and_ungated():
+    jax=pytest.importorskip("jax"); j=jax.numpy
+    from sim.manorl.autonomy_v4 import REWARD_HAND_WORLD_COEF, REWARD_HAND_POSITION_SCALE, REWARD_HAND_ANGLE_SCALE
+    cache=_cache(); contact=_contact(); action=j.zeros((1,28)); idx=j.asarray([0])
+    # Perfect alignment -> full coefficient, and it is NOT multiplied by the object gate.
+    r0=compute_reward(_state(),contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(r0.hand_world),[REWARD_HAND_WORLD_COEF],atol=1e-6)
+    # Pure 4 cm position offset halves the term (exp(-1)); the object gate stays 1%.
+    off=_state()._replace(palm_origin=j.asarray([[REWARD_HAND_POSITION_SCALE,0.,0.]]))
+    r4=compute_reward(off,contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(r4.hand_world),[REWARD_HAND_WORLD_COEF*np.exp(-1.)],rtol=1e-4,atol=1e-6)
+    np.testing.assert_allclose(np.asarray(r4.object_position),[.006],atol=1e-6)
+    # Pure orientation offset at the angle scale halves it independently.
+    h=np.deg2rad(np.rad2deg(REWARD_HAND_ANGLE_SCALE))/2
+    rq=_state()._replace(palm_quat_xyzw=j.asarray([[0.,0.,np.sin(h),np.cos(h)]]))
+    ra=compute_reward(rq,contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(ra.hand_world),[REWARD_HAND_WORLD_COEF*np.exp(-1.)],rtol=1e-4,atol=1e-6)
+    # A moving reference does not change the hand term (no object gate on it).
+    moving=replace(cache,object_v_com=np.tile([.2,0.,0.],(len(cache.q_feasible),1)))
+    r4m=compute_reward(off,contact,moving,idx,action)
+    np.testing.assert_allclose(np.asarray(r4m.hand_world),np.asarray(r4.hand_world),atol=1e-7)
+    # The palm offset leaves the object term at full scale: the object itself is
+    # perfectly aligned, so the two terms measure independent errors.
+    np.testing.assert_allclose(np.asarray(r4m.object_position),[.6],atol=1e-6)
+    # An object offset alone keeps the hand term at full weight (the hand still
+    # matches the reference hand) while the static reference holds the object
+    # term at 1 %: this asymmetry is the static anchoring hand_world adds.
+    objoff=_state()._replace(object_origin=j.asarray([[REWARD_HAND_POSITION_SCALE,0.,0.]]))
+    ro=compute_reward(objoff,contact,cache,idx,action)
+    np.testing.assert_allclose(np.asarray(ro.object_position),[.01*.5*(.2*np.exp(-40*REWARD_HAND_POSITION_SCALE)+.2+.8)],atol=1e-7)
+    np.testing.assert_allclose(np.asarray(ro.hand_world),[REWARD_HAND_WORLD_COEF],atol=1e-6)
 
 def test_v4_checkpoint_rejects_legacy_metadata():
     validate_v4_checkpoint_metadata({"checkpoint_format":CHECKPOINT_FORMAT,"observation_contract":OBSERVATION_CONTRACT_ID,"reward_contract":REWARD_CONTRACT_ID,"action_contract":ACTION_CONTRACT_ID})

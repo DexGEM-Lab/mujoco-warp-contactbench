@@ -124,7 +124,7 @@ class BatchedAutonomyAdapter:
         # NumPy's host path. Only physical execution crosses JAX/Torch via DLPack.
         raw_action_abs=raw_actions.detach().abs()
         executed=torch.clamp(raw_actions.detach(),-1.,1.)
-        terms=jp.stack((reward.object_position,reward.object_rotation,reward.object_velocity,reward.hand_relative,
+        terms=jp.stack((reward.object_position,reward.object_rotation,reward.object_velocity,reward.hand_relative,reward.hand_world,
                         reward.fingers,reward.geometry,reward.action,reward.survival,reward.severe),axis=1)
         snapshot={
             "reward_terms":terms, "reward_total":reward.total, "reason":reward.reason, "valid":reward.valid,
