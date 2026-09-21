@@ -9,9 +9,12 @@ Control targets in this bundle are ARRIVAL indexed: target[t] is repeated for al
 four physics substeps producing state[t]. Source audit verifies every row against
 ctrl_substeps; frame0 is prestep and velocities zero. The older single-object
 TargetDofReplay parser/outgoing indexing must not be applied silently to it.
-All scene objects and underscore-containing identities must be preserved. Reuse
-native source model/CCD/servo settings, not the unrelated repaired-input PID or
-elliptic/impratio100 recipe.
+All scene objects and underscore-containing identities must be preserved. The
+direct target-DOF reader now resolves the active object from the source identity
+and requires `index.scene`, `trajectory_metadata.object_names`, and `objects` to
+agree in order; it compiles and resets every declared scene body rather than
+collapsing to the active object. Reuse native source model/CCD/servo settings,
+not the unrelated repaired-input PID or elliptic/impratio100 recipe.
 
 Native-contact last-forward object poses and postintegration qpos differ by up to
 one480Hz substep. Store/compare like boundaries. Acceptance uses source-specific
