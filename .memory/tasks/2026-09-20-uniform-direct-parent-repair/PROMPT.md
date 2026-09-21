@@ -115,3 +115,16 @@ full source-bound row readback, build a per-UUID visualization layout with zero
 unresolved background clearances, and atomically publish to a new NAS directory.
 The existing1,923-row dataset and all v1/v2/005 evidence remain immutable. No
 subagents for this resumed publication work.
+
+## Current action005 minimal-replay follow-up
+The user supplied a ten-row u3300 action005 Lance and then restored the passive
+bowl track. Preserve that supplied file. Produce a sibling minimal replay Lance
+containing only the shared ten core compact columns: hand spatial state and
+28D targets, all scene-object poses, compact contacts, timestamps, reference
+mapping, identity and provenance. Do not fabricate the exact640 audit extensions
+or fill unavailable evidence with zeros. Repair the duplicate generated UUID
+deterministically while leaving every other decoded value unchanged. Extend the
+direct target-DOF viewer to reconstruct all declared scene objects, validate a
+real two-object GPU reset/replay, and leave parent126/128 alternating visibly on
+local DISPLAY=:1. This source inspection does not qualify005 for nominal-U1 or
+add it to the published exact640.

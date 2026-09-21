@@ -76,3 +76,32 @@ file SHA, the SHA sidecar, and absence of the hidden staging source. The final
 `sha256.json` digest is
 `4004504f838aa866993680b901c0f767251cae2caef605154d27008630d9036a`.
 Action005 remains intentionally outside this claim.
+
+## Action005 minimal replay model
+
+The user-updated u3300 action005 source is a compact replay dataset, not an
+exact640 audit artifact. Its ten core Arrow fields already match the compact
+base of the four-action export. The five exact640 extensions (`physical`,
+`native_contacts`, `lineage_json`, `teacher_qpos`, and
+`reference_objects_json`) prove campaign construction; they are not required
+for the user's hand/object spatial playback. Zero-filling them would assert
+false physical states or false absence of contact, so the accepted representation
+omits them rather than imitating unavailable evidence.
+
+The standardized sibling is
+`outputs/manorl/dev_mayonnaisebottle05/synthesis-u3300-two-parents/mayonnaisebottle05-u3300-parents126-128-ratio5-replay-minimal.lance`.
+It has ten rows and ten unique UUIDs. Every Arrow-normalized value equals the
+user-supplied two-object source except row6 UUID, deterministically repaired
+from the source identity, checkpoint, seed2003, episode/attempt and target hash.
+Both `mayonnaisebottle` and `bowl` are frame-aligned in every row; no audit field
+is zero-filled. The original supplied Lance remains unchanged.
+
+The old viewer failure was a reader collapse: it interpreted `index.scene` as
+one object and compiled only the active bottle. The replay reader now resolves
+the active object from source lineage while retaining the ordered complete
+scene from `index.scene`, `object_names`, and `objects`. A real GPU preflight
+compiled `nq=42/nv=40`, mapped bowl and bottle to distinct free joints, and
+reset all generalized coordinates exactly after stepping. DISPLAY=:1 shows the
+bowl and bottle together while directly applying the stored28D targets. This
+establishes replay usability only; it does not establish strict-U1 lineage or
+formal action005 acceptance.

@@ -16,6 +16,7 @@ from sim.manorl.target_replay import (
     TARGET_REPLAY_V23_ROW_CONTRACT,
     TargetDofReplay,
     TargetReplaySourceError,
+    _trajectory_for_source,
     load_target_replay_source,
     target_replay_source_from_row,
 )
@@ -119,6 +120,45 @@ def test_direct_row_preserves_generated_and_source_lineage() -> None:
     assert source.control_fps == 200
     assert source.physics_substeps_per_control == 2
     assert not source.target_qpos.flags.writeable
+
+
+def test_multi_object_row_preserves_scene_and_active_object_mapping() -> None:
+    row = _row()
+    frames = row["trajectory_metadata"]["total_frames"]
+    bowl_position = np.repeat([[-0.05, -0.247, 0.036]], frames, axis=0)
+    row["index"]["scene"] = "bowl,cube1"
+    row["trajectory_metadata"]["object_names"] = ["bowl", "cube1"]
+    row["objects"] = [
+        {
+            "pos": bowl_position.tolist(),
+            "rot_aa": np.zeros((frames, 3), dtype=np.float64).tolist(),
+        },
+        row["objects"][0],
+    ]
+
+    source = _source(row)
+
+    assert source.object_type == "cube1"
+    assert source.scene_object_types == ("bowl", "cube1")
+    assert source.active_object_index == 1
+    assert source.scene_object_position.shape == (2, frames, 3)
+    np.testing.assert_array_equal(source.object_position, source.scene_object_position[1])
+    np.testing.assert_array_equal(source.scene_object_position[0], bowl_position)
+    assert not source.scene_object_position.flags.writeable
+
+    trajectory = _trajectory_for_source(source)
+    assert trajectory.identity.object_index == 1
+    assert trajectory.scene_object_types == ("bowl", "cube1")
+    np.testing.assert_array_equal(
+        trajectory.scene_object_initial_pos, source.scene_object_position[:, 0]
+    )
+
+
+def test_multi_object_row_rejects_scene_order_mismatch() -> None:
+    row = _row()
+    row["index"]["scene"] = "cube1,bowl"
+    with pytest.raises(TargetReplaySourceError, match="object_names disagrees"):
+        _source(row)
 
 
 def test_compact_row_uses_direct_warp_ccd_provenance() -> None:
@@ -244,7 +284,11 @@ def test_cpu_replay_requires_override_for_row_ccd() -> None:
 
 
 def test_cli_numeric_and_frame_validation() -> None:
-    from tools.replay_manorl_target_dof import _positive_float, _validate_frame_limit
+    from tools.replay_manorl_target_dof import (
+        _activate_asset_profile,
+        _positive_float,
+        _validate_frame_limit,
+    )
 
     assert _positive_float("0.25") == 0.25
     for value in ("nan", "inf", "-1", "0"):
@@ -254,3 +298,5 @@ def test_cli_numeric_and_frame_validation() -> None:
     assert _validate_frame_limit(2, 3) == 2
     with pytest.raises(ValueError, match="exceeds row transitions"):
         _validate_frame_limit(4, 3)
+    with pytest.raises(ValueError, match="provided together"):
+        _activate_asset_profile(Path("/assets"), None)
