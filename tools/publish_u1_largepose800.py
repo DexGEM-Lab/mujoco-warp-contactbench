@@ -30,6 +30,19 @@ def require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def _copy_tree_bytes(source: Path, destination: Path) -> None:
+    require(source.is_dir() and not destination.exists(), "parent bundle copy paths")
+    destination.mkdir(parents=True)
+    for path in sorted(source.rglob("*")):
+        target = destination / path.relative_to(source)
+        if path.is_dir():
+            target.mkdir()
+        elif path.is_file() and not path.is_symlink():
+            shutil.copyfile(path, target)
+        else:
+            raise ValueError("unsupported parent bundle entry: " + str(path))
+
+
 def _copy_parent_bundles(registry_path: Path, output: Path) -> None:
     registry = json.loads(registry_path.read_text())
     destination_root = output / "parents"
@@ -39,7 +52,7 @@ def _copy_parent_bundles(registry_path: Path, output: Path) -> None:
         source = registry_path.parent / parent["folder"]
         destination = output / parent["folder"]
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, destination, copy_function=shutil.copyfile)
+        _copy_tree_bytes(source, destination)
     for row in range(10):
         load_action005_parent(output / "action005_registry.json", row)
 
