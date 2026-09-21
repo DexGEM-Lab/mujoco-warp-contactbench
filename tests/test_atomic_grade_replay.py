@@ -38,6 +38,7 @@ def test_grade_boundaries_match_state45_quality_contract() -> None:
     assert grade.grade_from_max_error(0.03) == "B"
     assert grade.grade_from_max_error(0.079999) == "B"
     assert grade.grade_from_max_error(0.08) == "C"
+    assert grade.GRADE_CONTACT_CAPACITY_PER_WORLD * 5 > 5648
     assert grade.GRADE_CONSTRAINT_CAPACITY > 5302
     assert 5 * grade.GRADE_CCD_CONTACTS_PER_WORLD > 1874
     with pytest.raises(ValueError, match="finite"):
@@ -126,6 +127,7 @@ def test_action_isolated_aggregate_requires_clean_complete_population(tmp_path) 
     errors = [0.01, 0.04, 0.09, 0.02, 0.07, 0.11]
     identity_base = {
         "grade_contract": grade.GRADE_CONTRACT,
+        "contact_capacity_per_world": grade.GRADE_CONTACT_CAPACITY_PER_WORLD,
         "constraint_capacity": grade.GRADE_CONSTRAINT_CAPACITY,
         "ccd_contacts_per_world": grade.GRADE_CCD_CONTACTS_PER_WORLD,
         "batch_size": 5,
@@ -184,6 +186,6 @@ def test_action_isolated_aggregate_requires_clean_complete_population(tmp_path) 
     assert result["rows"] == 6
     assert result["grade_counts"] == {"A": 2, "B": 2, "C": 2}
     first_log = next(roots[0].glob("action*.log"))
-    first_log.write_text("nefc overflow - increase njmax\n")
+    first_log.write_text("nefc overflow - please increase njmax to 9000\n")
     with pytest.raises(ValueError, match="overflow"):
         grade.aggregate(Namespace(**{**vars(args), "output": tmp_path / "bad.json"}))

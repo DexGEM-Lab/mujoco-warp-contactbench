@@ -391,6 +391,7 @@ def run_physics(
     assets: Any,
     contracts: Any,
     decorative_scene_spec: Path,
+    contact_capacity_per_world: int = 1024,
     constraint_capacity: int = 4096,
     ccd_contacts_per_world: int = 256,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -456,8 +457,12 @@ def run_physics(
         object_types=tuple(object_types),
         decorative_scene_spec=decorative_scene_spec,
     )[:2]
-    if constraint_capacity < 1 or ccd_contacts_per_world < 1:
-        raise ValueError("solver and CCD capacities must be positive")
+    if (
+        contact_capacity_per_world < 1
+        or constraint_capacity < 1
+        or ccd_contacts_per_world < 1
+    ):
+        raise ValueError("contact, solver and CCD capacities must be positive")
     config = EnvironmentConfig(
         num_envs=len(decoded),
         device="gpu",
@@ -468,7 +473,7 @@ def run_physics(
         compatibility=SOURCE_ALIGNED_COMPATIBILITY,
         residual_enabled=False,
         expected_contact_mode="five_fingertips",
-        contact_capacity=1024 * len(decoded),
+        contact_capacity=contact_capacity_per_world * len(decoded),
         constraint_capacity=constraint_capacity,
         unified_object_batch=True,
         warp_ccd_iterations=16,
@@ -607,6 +612,8 @@ def run_physics(
             "object_object_collisions": True,
             "ccd_iterations": 16,
             "ccd_contacts_per_world": ccd_contacts_per_world,
+            "contact_capacity_per_world": contact_capacity_per_world,
+            "contact_capacity_total": contact_capacity_per_world * len(decoded),
             "constraint_capacity": constraint_capacity,
             "environment_clock": {
                 "control_timestep": config.control_timestep,

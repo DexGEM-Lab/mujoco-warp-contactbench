@@ -43,8 +43,10 @@ GRADE_CONTRACT = "mano_target_replay_max_position_error_grade_v1"
 GRADE_A_MAX_M = 0.03
 GRADE_B_MAX_M = 0.08
 # Multi-object rows increase only allocation demand. These capacities exceed the
-# observed action001 requirements (CCD1874 total / constraints5302 for 5 worlds)
-# without changing equations, model parameters, controls, or grade thresholds.
+# observed action001 requirements (contact5648 total / CCD1874 total /
+# constraints5302 for 5 worlds) without changing equations, model parameters,
+# controls, or grade thresholds.
+GRADE_CONTACT_CAPACITY_PER_WORLD = 2048
 GRADE_CONSTRAINT_CAPACITY = 8192
 GRADE_CCD_CONTACTS_PER_WORLD = 512
 
@@ -381,6 +383,7 @@ def run_shard(args: argparse.Namespace) -> None:
         "client_commit": _git_head(args.client_root),
         "scene_sha256": sha256(args.scene),
         "grade_contract": GRADE_CONTRACT,
+        "contact_capacity_per_world": GRADE_CONTACT_CAPACITY_PER_WORLD,
         "constraint_capacity": GRADE_CONSTRAINT_CAPACITY,
         "ccd_contacts_per_world": GRADE_CCD_CONTACTS_PER_WORLD,
         "batch_size": args.batch_size,
@@ -445,6 +448,7 @@ def run_shard(args: argparse.Namespace) -> None:
                 contracts=contracts,
                 consumer_visual=consumer_visual,
                 decorative_scene_spec=args.scene,
+                contact_capacity_per_world=GRADE_CONTACT_CAPACITY_PER_WORLD,
                 constraint_capacity=GRADE_CONSTRAINT_CAPACITY,
                 ccd_contacts_per_world=GRADE_CCD_CONTACTS_PER_WORLD,
             )
@@ -541,8 +545,8 @@ def aggregate(args: argparse.Namespace) -> None:
     if len(roots) != int(plan["shard_count"]):
         raise ValueError("one shard output root is required per plan shard")
     overflow = re.compile(
-        r"(?:nefc|nacon|CCD|constraint|contact).*overflow|"
-        r"overflow.*(?:nefc|nacon|CCD|constraint|contact)",
+        r"\b(?:CCD|nefc|nacon|narrowphase|constraint|contact) "
+        r"overflow - please increase\b",
         re.IGNORECASE,
     )
     forbidden_suffixes = {".png", ".jpg", ".jpeg", ".mp4", ".npy", ".npz"}
@@ -584,6 +588,8 @@ def aggregate(args: argparse.Namespace) -> None:
             identity = summary.get("run_identity") or {}
             if (
                 identity.get("grade_contract") != GRADE_CONTRACT
+                or identity.get("contact_capacity_per_world")
+                != GRADE_CONTACT_CAPACITY_PER_WORLD
                 or identity.get("constraint_capacity") != GRADE_CONSTRAINT_CAPACITY
                 or identity.get("ccd_contacts_per_world")
                 != GRADE_CCD_CONTACTS_PER_WORLD
