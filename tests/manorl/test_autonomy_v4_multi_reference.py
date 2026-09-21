@@ -84,7 +84,7 @@ def test_multireference_motion_gate_uses_each_env_reference_speed():
     bank=ReferenceBankV4([a,b]); refs=j.array([0,1]); state=_state(2); contact=_contact(2)
     reward=compute_reward(state,contact,bank,j.array([0,0]),j.zeros((2,28)),refs)
     # Same actual state and targets; only each selected reference's speed differs.
-    np.testing.assert_allclose(np.asarray(reward.object_position),[.006,.6],atol=1e-6)
+    np.testing.assert_allclose(np.asarray(reward.object_position),[.012,1.2],atol=1e-6)
     with pytest.raises(ValueError,match='object_radius'):
         ReferenceBankV4([a,replace(a,object_radius=a.object_radius*1.01)])
 

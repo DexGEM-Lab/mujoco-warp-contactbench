@@ -95,15 +95,7 @@ from `0.01` to `0.75`; position and velocity keep `w_obj`, and a moving or
 transitioning reference keeps `w_obj` for all three. At exactly 45 deg the
 unweighted rotation term is `-0.1` (its linear segment's floor onset), so the
 override turns a persistent gross twist during a static hold from `-0.001` to
-`-0.075` per control. Object world position tracking carries coefficient
-`0.5` (halved from `1.0`); its other half funds an explicit **hand-world**
-term, `0.6*exp(-||palm_world - ref_palm_world||^2/0.04^2 -
-(angle/0.35)^2)`, which measures the palm world pose against the reference
-palm world pose and is deliberately **not** reference-speed gated. Because it
-is absolute rather than object-relative, it anchors the hand during
-static-reference holds where the object gate sits at 1%; because it is the
-composition `object error + hand-object relative error`, it prices the same
-physical offset the object term prices only at 1%. Hand--object relative pose
+`-0.075` per control. Hand--object relative pose
 has coefficient `0.125`; feasible fingers retain `0.2`; reference-contact
 anchor correspondence has coefficient `1.2`; action penalty remains
 `-0.002 mean(clipped_action²)`; survival remains `0.001`; and a deviation,
@@ -113,7 +105,7 @@ the other terms. It has no force-magnitude, table-contact, slip, or hidden
 contact reward. Reasons are complete=1, deviation=2, fallen=4, nonfinite=8.
 
 The exact parameter set is emitted as
-`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.hand-world-tracking.v1`
+`manorl.autonomy.reward.v4.reference-speed-gated.contact-priority.static-rotation-override.v1`
 in new training provenance/config and frozen-evaluation provenance. It is deliberately
 separate from the model ABI: an old frozen checkpoint can load, but an
 evaluation performed with this runtime reports the new reward and must not be

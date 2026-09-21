@@ -34,13 +34,12 @@ def test_episode_returns_cross_update_cut_and_emit_only_completed() -> None:
     row = acc.reduce(update=1, transitions=2)
     assert row["episodes/completed_count"] == 0
     assert "episodes/return_mean" not in row
-    # Env 0 completes after two steps; the synthetic sample sets every term to
-    # the step reward, so the episode return is 2 steps x 1 x len(REWARD_NAMES).
+    # Env 0 completes after two steps (total=18); env 1 did not complete.
     acc.add(_sample(rewards=(1., 2.), reason=(1, 0)))
     row = acc.reduce(update=2, transitions=4)
     assert row["episodes/completed_count"] == 1
     assert row["episodes/return_denominator"] == 1
-    assert row["episodes/return_mean"] == 2 * len(REWARD_NAMES)
+    assert row["episodes/return_mean"] == 18
     assert row["reward/episode_severe_return_mean"] == 2
 
 

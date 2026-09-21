@@ -12,7 +12,7 @@ from typing import Mapping
 import torch
 
 REWARD_NAMES = (
-    "object_position", "object_rotation", "object_velocity", "hand_relative", "hand_world",
+    "object_position", "object_rotation", "object_velocity", "hand_relative",
     "fingers", "geometry", "action", "survival", "severe",
 )
 REASON_BITS = {"reference_complete": 1, "deviation": 2, "fallen": 4, "nonfinite": 8}
