@@ -74,3 +74,29 @@ Supervisor approved HEAD9890d25 (unrelated descendant of7de8fa9) and reconstruct
 ## Authorized v5 fresh-realization continuation
 From c3e26bd, do not reconstruct historical v3 identity. Capture one NEW frozen-v3 nominal-U1 baseline and complete native checkpoints380/400/409 in the same process; qualify middle unloading with retained opposed index/ring/pinky contact, then compact central normal-direction probes ±0.004/±0.002rad for8frames. Reject >30% scale/symmetry inconsistency, inadequate rank/signs or condition>1000. Only if qualified solve exactly one regularized inverse; freeze v5 before independent frame0 transfer. Stop at first failed validation; complete A030 and second fresh repeat only after focused pass. Preserve all old outputs and unrelated largepose paths.
 Supervisor clarification: archived checkpoint spans are78.989/79.259/79.734mm, so baseline gate is same basin/no collapse, not >=80mm. V5 focus must retain ring/pinky and axial order, all five bearing, >=78mm and no>5% drop from380 through first>50deg; report original80mm criterion separately. Physical acquisition requires all four nonthumb>0.2N before thumb>1N; light thumb touch permitted. Any single correction must begin early enough to affect this order, not only350.
+
+## Authorized direct Cheyingtong nominal120Hz action005 pivot
+Supersedes the A030-only reference constraint. Audit immutable Sept15 Lance v4
+non-generated005 rows62,69,124–131 before selecting any reference or replaying.
+Use the original right-hand/object/wrist/finger trajectories, pinned Cheyingtong
+assets and exact nominal U1 c6db552f...,120/480Hz, four substeps, CCD16.
+Require pickup, bowl alignment, deep inversion, upright return, placement and
+release; reject shallow/easy references. Audit every row's timestamp/identity,
+discontinuities, hand-object relative motion and source-state surface topology.
+Geometric contacts must not be represented as measured bearing forces. Freeze
+selection before physics; if no deep-pour reference has suitable topology, stop.
+Otherwise one native frame0 compensated baseline, then one bounded source-derived
+offline correction and focused high-tilt test. No sweep, donor transport, physics
+changes, runtime feedback, forces, attachment or post-frame0 state writes. Stop
+on first falsified repair mechanism. Full action and fresh frozen-control repeat
+only after focused success. Video only after two physical passes. Output root:
+outputs/action005_direct120_v1. Other actions/augmentation and unrelated largepose
+paths remain untouched. No delegation.
+
+## Mid-run clarification: approximate source geometry; MJX adjudication
+Source contact geometry is diagnostic, not an eligibility veto. Select the best
+complete direct120 kinematic reference (row130); imperfect captured qpos need
+not be an equilibrium. Run nominal MJX-Warp U1 before donor consideration.
+A bounded same-dataset donor would require demonstrably better MJX acquisition,
+not CPU contacts alone. If budget cannot support qualified donor comparison,
+stop after baseline with its exact failure and a concrete next experiment.
