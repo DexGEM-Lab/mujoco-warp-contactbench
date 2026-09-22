@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 from collections import Counter
 from pathlib import Path
 import uuid
