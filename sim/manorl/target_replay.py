@@ -31,22 +31,16 @@ from sim.manorl.trajectory import (
     ReferenceTrajectory,
     TrajectoryBatch,
     wxyz_to_xyzw,
+    xyzw_to_wxyz,
 )
 
 TARGET_REPLAY_V22_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_2"
 TARGET_REPLAY_V23_ROW_CONTRACT = "synthetic_mano_28d_checkpoint_rollout_v2_3"
 TARGET_REPLAY_ROW_CONTRACT = TARGET_REPLAY_V22_ROW_CONTRACT
-TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS = frozenset(
-    (
-        "u1_four_action_largepose640_c1_native_v1",
-        "u1_five_action_largepose800_c1_native_v1",
-    )
-)
 TARGET_REPLAY_COMPACT_ROW_CONTRACTS = frozenset(
     (
         "synthetic_mano_target_replay_visual_v1",
         "synthetic_mano_target_replay_visual_v2_contact",
-        *TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS,
     )
 )
 TARGET_REPLAY_FULL_ROW_CONTRACTS = frozenset(
@@ -55,8 +49,6 @@ TARGET_REPLAY_FULL_ROW_CONTRACTS = frozenset(
 TARGET_REPLAY_ROW_CONTRACTS = frozenset(
     (*TARGET_REPLAY_FULL_ROW_CONTRACTS, *TARGET_REPLAY_COMPACT_ROW_CONTRACTS)
 )
-U1_LARGEPOSE_CONTACT_CAPACITY = 1024
-U1_LARGEPOSE_CONSTRAINT_CAPACITY = 4096
 LANCE_TARGET_REPLAY_COLUMNS = (
     "index",
     "trajectory_metadata",
@@ -65,7 +57,7 @@ LANCE_TARGET_REPLAY_COLUMNS = (
     "objects",
     "provenance",
 )
-_IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*_[0-9]{1,3}_[0-9]+$")
+_IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*_[0-9]{1,2}_[0-9]+$")
 
 
 class TargetReplaySourceError(ValueError):
@@ -255,53 +247,21 @@ def _right_hand(row: Mapping[str, Any], metadata: Mapping[str, Any]) -> dict[str
     return hand
 
 
-def _scene_object_states(
-    row: Mapping[str, Any],
-    metadata: Mapping[str, Any],
-    scene_object_types: tuple[str, ...],
-) -> tuple[dict[str, Any], ...]:
-    """Resolve every ordered scene object without collapsing to the active one."""
-
+def _object_state(
+    row: Mapping[str, Any], metadata: Mapping[str, Any], object_type: str
+) -> dict[str, Any]:
     objects = _list(row, "objects")
     names = metadata.get("object_names")
-    if not isinstance(names, list) or not all(
-        isinstance(name, str) and name for name in names
+    if not isinstance(names, list) or object_type not in names:
+        raise TargetReplaySourceError(
+            "trajectory_metadata.object_names does not identify index.scene"
+        )
+    object_index = names.index(object_type)
+    if not 0 <= object_index < len(objects) or not isinstance(
+        objects[object_index], dict
     ):
-        raise TargetReplaySourceError(
-            "trajectory_metadata.object_names must list scene objects"
-        )
-    if tuple(names) != scene_object_types:
-        raise TargetReplaySourceError(
-            "trajectory_metadata.object_names disagrees with index.scene"
-        )
-    if len(objects) != len(scene_object_types) or not all(
-        isinstance(state, dict) for state in objects
-    ):
-        raise TargetReplaySourceError(
-            "Lance row must contain one ordered state for every scene object"
-        )
-    return tuple(objects)
-
-
-def _movement_object(metadata: Mapping[str, Any]) -> str:
-    trajectory_info = metadata.get("trajectory_info")
-    movement = (
-        trajectory_info.get("object_move")
-        if isinstance(trajectory_info, dict)
-        else None
-    )
-    names = [
-        entry.get("object_name")
-        for entry in movement
-        if isinstance(entry, dict)
-        and isinstance(entry.get("object_name"), str)
-        and entry["object_name"]
-    ] if isinstance(movement, list) else []
-    if len(names) != 1:
-        raise TargetReplaySourceError(
-            "U1 large-pose row must declare one active object movement"
-        )
-    return names[0]
+        raise TargetReplaySourceError("Lance row lacks the selected object state")
+    return objects[object_index]
 
 
 def _movement_range(
@@ -354,16 +314,14 @@ class TargetReplaySource:
     dataset_version: int
     row_index: int
     object_type: str
-    scene_object_types: tuple[str, ...]
-    active_object_index: int
     generated_uuid: str
     source_dataset_path: str
     source_dataset_version: int
     source_row_index: int
     source_uuid: str
     source_identity: str
-    checkpoint_update: int | None
-    checkpoint_sha256: str | None
+    checkpoint_update: int
+    checkpoint_sha256: str
     row_contract: str
     source_contract: str
     reference_fps: int | None
@@ -377,8 +335,6 @@ class TargetReplaySource:
     target_qpos: np.ndarray
     object_position: np.ndarray
     object_quaternion_xyzw: np.ndarray
-    scene_object_position: np.ndarray
-    scene_object_quaternion_xyzw: np.ndarray
 
     @property
     def frames(self) -> int:
@@ -429,72 +385,45 @@ def target_replay_source_from_row(
         raise TargetReplaySourceError(
             f"unsupported target replay row contract: {contract!r}"
         )
-    scene = _required_string(index, "scene", context="index")
-    scene_object_types = tuple(part.strip() for part in scene.split(","))
-    if (
-        not scene_object_types
-        or any(not name for name in scene_object_types)
-        or len(set(scene_object_types)) != len(scene_object_types)
-    ):
-        raise TargetReplaySourceError(
-            "index.scene must contain unique comma-separated object names"
-        )
+    object_type = _required_string(index, "scene", context="index")
     if index.get("is_generated") is not True:
         raise TargetReplaySourceError("index.is_generated must be true")
     generated_uuid = _required_string(index, "uuid", context="index")
     source_uuid = _required_string(index, "seed_uuid", context="index")
-    if contract in TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS:
-        object_type = _movement_object(metadata)
-        gesture = _required_string(metadata, "gesture", context="trajectory_metadata")
-        action = gesture.split("-", 1)[0]
-        episode = _nonnegative_int(provenance, "episode_index", context="provenance")
-        source_identity = f"{object_type}_{action}_{episode}"
-        if not _IDENTITY_RE.fullmatch(source_identity):
-            raise TargetReplaySourceError("invalid derived U1 source identity")
-        source_dataset_path = str(path)
-        source_dataset_version = dataset_version
-        source_row_index = row_index
-        checkpoint_update = None
-        checkpoint_sha256 = None
-    else:
-        source_identity = _required_string(
-            provenance, "source_identity", context="provenance"
-        )
-        if not _IDENTITY_RE.fullmatch(source_identity):
-            raise TargetReplaySourceError(
-                "provenance.source_identity must be object_action_sequence"
-            )
-        object_type, _action, _sequence = source_identity.rsplit("_", 2)
-        source_dataset_path = _required_string(
-            provenance, "dataset_path", context="provenance"
-        )
-        source_dataset_version = _nonnegative_int(
-            provenance, "dataset_version", context="provenance"
-        )
-        source_row_index = _nonnegative_int(
-            provenance, "row_index", context="provenance"
-        )
-        checkpoint_update = _nonnegative_int(
-            provenance, "checkpoint_update", context="provenance"
-        )
-        checkpoint_sha256 = _required_string(
-            provenance, "checkpoint_sha256", context="provenance"
-        )
-        if len(checkpoint_sha256) != 64:
-            raise TargetReplaySourceError(
-                "provenance.checkpoint_sha256 must be a 64-character digest"
-            )
-        try:
-            int(checkpoint_sha256, 16)
-        except ValueError as exc:
-            raise TargetReplaySourceError(
-                "provenance.checkpoint_sha256 must be hexadecimal"
-            ) from exc
-    if object_type not in scene_object_types:
+    source_identity = _required_string(
+        provenance, "source_identity", context="provenance"
+    )
+    if not _IDENTITY_RE.fullmatch(source_identity):
         raise TargetReplaySourceError(
-            "index.scene disagrees with active object provenance"
+            "provenance.source_identity must be object_action_sequence"
         )
-    active_object_index = scene_object_types.index(object_type)
+    if source_identity.split("_", 1)[0] != object_type:
+        raise TargetReplaySourceError(
+            "index.scene disagrees with provenance.source_identity"
+        )
+    source_dataset_path = _required_string(
+        provenance, "dataset_path", context="provenance"
+    )
+    source_dataset_version = _nonnegative_int(
+        provenance, "dataset_version", context="provenance"
+    )
+    source_row_index = _nonnegative_int(provenance, "row_index", context="provenance")
+    checkpoint_update = _nonnegative_int(
+        provenance, "checkpoint_update", context="provenance"
+    )
+    checkpoint_sha256 = _required_string(
+        provenance, "checkpoint_sha256", context="provenance"
+    )
+    if len(checkpoint_sha256) != 64:
+        raise TargetReplaySourceError(
+            "provenance.checkpoint_sha256 must be a 64-character digest"
+        )
+    try:
+        int(checkpoint_sha256, 16)
+    except ValueError as exc:
+        raise TargetReplaySourceError(
+            "provenance.checkpoint_sha256 must be hexadecimal"
+        ) from exc
 
     timestamps = np.asarray(row.get("timestamp", ()), dtype=np.float64)
     if timestamps.ndim != 1 or len(timestamps) < 2:
@@ -514,26 +443,11 @@ def target_replay_source_from_row(
     data_fps = metadata.get("data_fps")
     source_contract, reference_fps, clock = _row_clock(contract, provenance, data_fps)
     hand = _right_hand(row, metadata)
-    object_states = _scene_object_states(row, metadata, scene_object_types)
+    object_state = _object_state(row, metadata, object_type)
     recorded_qpos = np.asarray(hand.get("urdf_dof", ()), dtype=np.float64)
     target_qpos = np.asarray(hand.get("urdf_dof_target", ()), dtype=np.float64)
-    scene_positions: list[np.ndarray] = []
-    scene_rotvecs: list[np.ndarray] = []
-    for name, state in zip(scene_object_types, object_states, strict=True):
-        positions = np.asarray(state.get("pos", ()), dtype=np.float64)
-        rotvecs = np.asarray(state.get("rot_aa", ()), dtype=np.float64)
-        if positions.shape != (frames, 3) or rotvecs.shape != (frames, 3):
-            raise TargetReplaySourceError(
-                f"{name} scene pose arrays must both have shape ({frames}, 3)"
-            )
-        if not np.all(np.isfinite(positions)) or not np.all(np.isfinite(rotvecs)):
-            raise TargetReplaySourceError(f"{name} scene pose contains non-finite values")
-        scene_positions.append(positions)
-        scene_rotvecs.append(rotvecs)
-    scene_object_position = np.stack(scene_positions, axis=0)
-    scene_object_rotvec = np.stack(scene_rotvecs, axis=0)
-    object_position = scene_object_position[active_object_index]
-    object_rotvec = scene_object_rotvec[active_object_index]
+    object_position = np.asarray(object_state.get("pos", ()), dtype=np.float64)
+    object_rotvec = np.asarray(object_state.get("rot_aa", ()), dtype=np.float64)
     expected = {
         "timestamp": (frames,),
         "urdf_dof": (frames, JOINT_DOF),
@@ -564,11 +478,8 @@ def target_replay_source_from_row(
         raise TargetReplaySourceError(
             f"timestamps must advance strictly by {clock.control_timestep} seconds"
         )
-    scene_object_quaternion = Rotation.from_rotvec(
-        scene_object_rotvec.reshape(-1, 3)
-    ).as_quat().reshape(len(scene_object_types), frames, 4)
-    object_quaternion = scene_object_quaternion[active_object_index]
-    quaternion_norms = np.linalg.norm(scene_object_quaternion, axis=2)
+    object_quaternion = Rotation.from_rotvec(object_rotvec).as_quat()
+    quaternion_norms = np.linalg.norm(object_quaternion, axis=1)
     if not np.allclose(quaternion_norms, 1.0, rtol=0.0, atol=1e-10):
         raise TargetReplaySourceError(
             "object rotations did not produce unit quaternions"
@@ -580,8 +491,6 @@ def target_replay_source_from_row(
         dataset_version=dataset_version,
         row_index=row_index,
         object_type=object_type,
-        scene_object_types=scene_object_types,
-        active_object_index=active_object_index,
         generated_uuid=generated_uuid,
         source_dataset_path=source_dataset_path,
         source_dataset_version=source_dataset_version,
@@ -603,8 +512,6 @@ def target_replay_source_from_row(
         target_qpos=_readonly(target_qpos),
         object_position=_readonly(object_position),
         object_quaternion_xyzw=_readonly(object_quaternion),
-        scene_object_position=_readonly(scene_object_position),
-        scene_object_quaternion_xyzw=_readonly(scene_object_quaternion),
     )
 
 
@@ -645,7 +552,7 @@ def _trajectory_for_source(source: TargetReplaySource) -> ReferenceTrajectory:
         dataset_path=source.source_dataset_path,
         dataset_version=source.source_dataset_version,
         row_index=source.source_row_index,
-        object_index=source.active_object_index,
+        object_index=0,
         uuid=source.source_uuid,
         file_uuid="",
         identity=source.source_identity,
@@ -671,9 +578,6 @@ def _trajectory_for_source(source: TargetReplaySource) -> ReferenceTrajectory:
         control_fps=source.control_fps,
         movement_start_step=source.movement_start,
         movement_end_step=source.movement_end,
-        scene_object_types=source.scene_object_types,
-        scene_object_initial_pos=source.scene_object_position[:, 0],
-        scene_object_initial_quat_xyzw=source.scene_object_quaternion_xyzw[:, 0],
     )
 
 
@@ -720,11 +624,6 @@ class TargetDofReplay:
             recommended_warp_contact_capacity,
         )
 
-        contact_capacity = recommended_warp_contact_capacity(1, ("right",))
-        constraint_capacity = EnvironmentConfig.constraint_capacity
-        if source.row_contract in TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS:
-            contact_capacity = U1_LARGEPOSE_CONTACT_CAPACITY
-            constraint_capacity = U1_LARGEPOSE_CONSTRAINT_CAPACITY
         self.environment = MujocoManoEnvironment(
             TrajectoryBatch((_trajectory_for_source(source),)),
             EnvironmentConfig(
@@ -737,8 +636,7 @@ class TargetDofReplay:
                 reference_fps=source.reference_fps,
                 control_fps=source.control_fps,
                 post_padding=0,
-                contact_capacity=contact_capacity,
-                constraint_capacity=constraint_capacity,
+                contact_capacity=recommended_warp_contact_capacity(1, ("right",)),
                 warp_ccd_iterations=ccd_iterations,
                 warp_ccd_contacts_per_world=ccd_contacts,
             ),
@@ -754,13 +652,16 @@ class TargetDofReplay:
         """Restore the row's recorded frame-0 reset state."""
 
         environment = self.environment
-        # Reset from the environment-owned immutable scene state. Copying the
-        # current state would leave passive objects at the end of the prior loop.
-        qpos = np.asarray(environment._reset_qpos, dtype=np.float64).copy()
+        qpos = np.asarray(environment.data.qpos, dtype=np.float64).copy()
         qvel = np.zeros_like(np.asarray(environment.data.qvel, dtype=np.float64))
         ctrl = np.asarray(environment.data.ctrl, dtype=np.float64).copy()
         hand_slice = environment.producer.hand_qpos_slices["right"]
+        object_address = environment.producer.object_qpos_address
         qpos[0, hand_slice] = self.source.recorded_qpos[0]
+        qpos[0, object_address : object_address + 3] = self.source.object_position[0]
+        qpos[0, object_address + 3 : object_address + 7] = xyzw_to_wxyz(
+            self.source.object_quaternion_xyzw[0]
+        )
         ctrl[0, :JOINT_DOF] = self.source.target_qpos[0]
         environment.data = environment.data.replace(
             qpos=environment.jax.device_put(
@@ -783,16 +684,15 @@ class TargetDofReplay:
             environment.data.qpos[0, environment.producer.hand_qpos_slices["right"]],
             dtype=np.float64,
         ).copy()
-        object_body_id = (
-            int(environment.producer.active_object_body_ids[0])
-            if getattr(environment, "_unified_object_batch", False)
-            else environment.producer.object_body_id
-        )
         object_position = np.asarray(
-            environment.data.xpos[0, object_body_id], dtype=np.float64
+            environment.data.xpos[0, environment.producer.object_body_id],
+            dtype=np.float64,
         ).copy()
         object_quaternion = wxyz_to_xyzw(
-            np.asarray(environment.data.xquat[0, object_body_id], dtype=np.float64)
+            np.asarray(
+                environment.data.xquat[0, environment.producer.object_body_id],
+                dtype=np.float64,
+            )
         ).copy()
         return ReplayState(qpos, object_position, object_quaternion)
 
@@ -898,7 +798,6 @@ class TargetDofReplay:
             "row_contract": self.source.row_contract,
             "source_contract": self.source.source_contract,
             "object": self.source.object_type,
-            "scene_objects": list(self.source.scene_object_types),
             "device": self.device,
             "states": transitions + 1,
             "transitions": transitions,

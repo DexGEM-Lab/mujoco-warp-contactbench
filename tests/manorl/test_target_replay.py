@@ -13,11 +13,9 @@ from sim.manorl.target_replay import (
     LANCE_TARGET_REPLAY_COLUMNS,
     TARGET_REPLAY_COMPACT_ROW_CONTRACTS,
     TARGET_REPLAY_ROW_CONTRACT,
-    TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS,
     TARGET_REPLAY_V23_ROW_CONTRACT,
     TargetDofReplay,
     TargetReplaySourceError,
-    _trajectory_for_source,
     load_target_replay_source,
     target_replay_source_from_row,
 )
@@ -123,56 +121,10 @@ def test_direct_row_preserves_generated_and_source_lineage() -> None:
     assert not source.target_qpos.flags.writeable
 
 
-def test_multi_object_row_preserves_scene_and_active_object_mapping() -> None:
-    row = _row()
-    frames = row["trajectory_metadata"]["total_frames"]
-    bowl_position = np.repeat([[-0.05, -0.247, 0.036]], frames, axis=0)
-    row["index"]["scene"] = "bowl,cube1"
-    row["trajectory_metadata"]["object_names"] = ["bowl", "cube1"]
-    row["objects"] = [
-        {
-            "pos": bowl_position.tolist(),
-            "rot_aa": np.zeros((frames, 3), dtype=np.float64).tolist(),
-        },
-        row["objects"][0],
-    ]
-
-    source = _source(row)
-
-    assert source.object_type == "cube1"
-    assert source.scene_object_types == ("bowl", "cube1")
-    assert source.active_object_index == 1
-    assert source.scene_object_position.shape == (2, frames, 3)
-    np.testing.assert_array_equal(source.object_position, source.scene_object_position[1])
-    np.testing.assert_array_equal(source.scene_object_position[0], bowl_position)
-    assert not source.scene_object_position.flags.writeable
-
-    trajectory = _trajectory_for_source(source)
-    assert trajectory.identity.object_index == 1
-    assert trajectory.scene_object_types == ("bowl", "cube1")
-    np.testing.assert_array_equal(
-        trajectory.scene_object_initial_pos, source.scene_object_position[:, 0]
-    )
-
-
-def test_multi_object_row_rejects_scene_order_mismatch() -> None:
-    row = _row()
-    row["index"]["scene"] = "cube1,bowl"
-    with pytest.raises(TargetReplaySourceError, match="object_names disagrees"):
-        _source(row)
-
-
-@pytest.mark.parametrize(
-    "row_contract",
-    sorted(
-        TARGET_REPLAY_COMPACT_ROW_CONTRACTS
-        - TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS
-    ),
-)
-def test_compact_row_uses_direct_warp_ccd_provenance(row_contract: str) -> None:
+def test_compact_row_uses_direct_warp_ccd_provenance() -> None:
     row = _row()
     provenance = row["provenance"]
-    provenance["contract"] = row_contract
+    provenance["contract"] = next(iter(TARGET_REPLAY_COMPACT_ROW_CONTRACTS))
     provenance["source_contract"] = TARGET_REPLAY_V23_ROW_CONTRACT
     provenance.pop("checkpoint_metadata_json")
     provenance["reference_fps"] = None
@@ -192,48 +144,6 @@ def test_compact_row_uses_direct_warp_ccd_provenance(row_contract: str) -> None:
     assert source.warp_ccd_contacts_per_world == 16
     assert source.source_contract == TARGET_REPLAY_V23_ROW_CONTRACT
     assert source.control_fps == 200
-
-
-@pytest.mark.parametrize(
-    "row_contract", sorted(TARGET_REPLAY_U1_LARGEPOSE_ROW_CONTRACTS)
-)
-def test_u1_largepose_row_uses_explicit_movement_with_nullable_history(
-    row_contract: str,
-) -> None:
-    row = _row()
-    row["trajectory_metadata"]["gesture"] = "01-grasp"
-    provenance = row["provenance"]
-    provenance.update(
-        contract=row_contract,
-        source_contract=TARGET_REPLAY_V23_ROW_CONTRACT,
-        dataset_path=None,
-        dataset_version=None,
-        row_index=None,
-        source_identity=None,
-        checkpoint_update=None,
-        checkpoint_sha256=None,
-        checkpoint_metadata_sha256="b" * 64,
-        warp_ccd_iterations=16,
-        warp_ccd_contacts_per_world=256,
-        episode_index=7,
-        control_fps=200,
-        control_timestep_seconds=0.005,
-        physics_fps=400,
-        physics_timestep_seconds=0.0025,
-        physics_substeps_per_control=2,
-    )
-    provenance.pop("checkpoint_metadata_json")
-
-    source = _source(row)
-
-    assert source.object_type == "cube1"
-    assert source.source_identity == "cube1_01_7"
-    assert source.source_dataset_path == "/generated/merged.lance"
-    assert source.source_dataset_version == 1
-    assert source.source_row_index == 2239
-    assert source.checkpoint_update is None
-    assert source.checkpoint_sha256 is None
-    assert source.warp_ccd_contacts_per_world == 256
 
 
 def test_v23_row_uses_dynamic_120hz_clock() -> None:
@@ -334,11 +244,7 @@ def test_cpu_replay_requires_override_for_row_ccd() -> None:
 
 
 def test_cli_numeric_and_frame_validation() -> None:
-    from tools.replay_manorl_target_dof import (
-        _activate_asset_profile,
-        _positive_float,
-        _validate_frame_limit,
-    )
+    from tools.replay_manorl_target_dof import _positive_float, _validate_frame_limit
 
     assert _positive_float("0.25") == 0.25
     for value in ("nan", "inf", "-1", "0"):
@@ -348,5 +254,3 @@ def test_cli_numeric_and_frame_validation() -> None:
     assert _validate_frame_limit(2, 3) == 2
     with pytest.raises(ValueError, match="exceeds row transitions"):
         _validate_frame_limit(4, 3)
-    with pytest.raises(ValueError, match="provided together"):
-        _activate_asset_profile(Path("/assets"), None)
