@@ -334,7 +334,7 @@ def collect(a):
     import pyarrow as pa
     from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
     if a.output.exists():raise FileExistsError(a.output)
-    plan=json.loads(a.plan.read_text());accepted=[];reports=[]
+    plan=json.loads(a.plan.read_text());candidate_rows=[];reports=[]
     for batch in plan['batches']:
         b=batch['batch'];root=a.run_roots[0] if b<4 else a.run_roots[1]
         first=root/f'batch{b}/generation';second=root/f'batch{b}/verification'
@@ -365,7 +365,6 @@ def collect(a):
                     'repeat_max_error_m':repeat,'repeat_grade':'A'if repeat<.03 else'B'if repeat<.08 else'C',
                     'accepted':bool(passed),'generation':str(first/f'world{w}'),'verification':str(second/f'world{w}')}
             reports.append(record)
-            if not passed:continue
             new=copy.deepcopy(row);n=len(ctrl);h=new['hands'][0];qh=q1[:,:28]
             h['urdf_dof']=qh.tolist();h['urdf_dof_target']=ctrl.tolist();h['mano_global_pos']=qh[:,:3].tolist()
             h['mano_global_rot_aa']=Rotation.from_euler('XYZ',qh[:,3:6]).as_rotvec().tolist()
@@ -389,19 +388,29 @@ def collect(a):
                 dataset_path=plan['parent_dataset'],dataset_version=1,row_index=meta['parent_row'],
                 warp_ccd_contacts_per_world=2048,episode_index=ordinal,generation_attempt=1,
                 software_commit=fm['manorl_commit'],checkpoint_metadata_sha256=hashlib.sha256(json.dumps(record,sort_keys=True).encode()).hexdigest())
-            accepted.append(new)
+            candidate_rows.append(new)
     if len(reports)!=27 or len({r['uuid']for r in reports})!=27:raise ValueError('incomplete pilot')
     a.output.mkdir(parents=True)
     # Native FK keypoints saved by the observer, not padded ancestor positions.
-    for row,record in zip(accepted,[r for r in reports if r['accepted']],strict=True):
+    for row,record in zip(candidate_rows,reports,strict=True):
         with np.load(Path(record['generation'])/'physical_trace.npz')as z:
             row['hands'][0]['mano_joint_pos']=z['mano_joint_pos'].tolist()
-    if accepted:
-        schema=lance.dataset(str(a.dataset),version=1).schema
-        lance.write_dataset(pa.Table.from_pylist(accepted,schema=schema),str(a.output/'accepted.lance'))
-        readback=lance.dataset(str(a.output/'accepted.lance'))
-        if readback.count_rows()!=len(accepted):raise ValueError('export row count mismatch')
+    accepted=[row for row,record in zip(candidate_rows,reports,strict=True) if record['accepted']]
+    replay_a=[row for row,record in zip(candidate_rows,reports,strict=True) if record['repeat_grade']=='A']
+    schema=lance.dataset(str(a.dataset),version=1).schema
+    for name,rows in [('all_candidates.lance',candidate_rows),('replay_a_candidates.lance',replay_a),('accepted.lance',accepted)]:
+        if not rows:continue
+        lance.write_dataset(pa.Table.from_pylist(rows,schema=schema),str(a.output/name))
+        readback=lance.dataset(str(a.output/name))
+        if readback.count_rows()!=len(rows):raise ValueError('export row count mismatch')
+        # Compare full row readback at the actual persisted Arrow precision.
+        expected=pa.Table.from_pylist(rows,schema=schema)
+        actual=readback.to_table()
+        if not actual.equals(expected):raise ValueError('export fields changed during Lance readback')
     result={'contract':CONTRACT,'candidate_count':27,'accepted_count':len(accepted),
+            'candidate_dataset':'all_candidates.lance',
+            'replay_a_candidate_dataset':'replay_a_candidates.lance'if replay_a else None,
+            'candidate_usage':'diagnostic only; replay-A alone does not satisfy the frozen parent-fidelity gates',
             'repeat_grade_counts':dict(Counter(r['repeat_grade']for r in reports)),
             'by_radius':{str(r):{'tried':9,'accepted':sum(x['accepted']for x in reports if x['radius_m']==r)}for r in (.05,.10,.15)},
             'plan_sha256':sha256(a.plan),'reports':reports,'accepted_dataset':'accepted.lance'if accepted else None}

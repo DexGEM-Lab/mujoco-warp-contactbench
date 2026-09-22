@@ -55,7 +55,10 @@ are a parent-fidelity and repeatability screen, not an exhaustive new stirring
 semantic classifier. A passing self-comparison is never counted as Grade A.
 
 `collect` verifies hashes, plan identity, independent PIDs and guard receipts,
-keeps all rejection evidence, and exports only accepted children to a fresh
-`accepted.lance` plus `summary.json`. If none pass, it reports zero and does not
-publish a misleading empty-success dataset. Original534/800 inputs remain
-read-only.
+and exports all actual first-pass children to diagnostic `all_candidates.lance`.
+`replay_a_candidates.lance` contains children whose independent replay is A;
+that alone does not imply the parent motion was preserved. Only children passing
+all frozen gates enter `accepted.lance`. If none pass, the accepted count is zero
+and no accepted dataset is published. `summary.json` retains all distinctions
+and rejection evidence; every exported field is compared with Lance readback.
+Original534/800 inputs remain read-only.
