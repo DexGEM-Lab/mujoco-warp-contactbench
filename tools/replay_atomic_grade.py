@@ -329,6 +329,14 @@ def _group_batches(rows: Sequence[Mapping[str, Any]], batch_size: int) -> Iterab
             yield group[start : start + batch_size]
 
 
+def _take_payload(dataset: Any, indices: Sequence[int], mode: str) -> list[dict[str, Any]]:
+    if mode == "batch":
+        return dataset.take(list(indices)).to_pylist()
+    if mode == "individual":
+        return [dataset.take([row_index]).to_pylist()[0] for row_index in indices]
+    raise ValueError(f"unsupported Lance read mode {mode!r}")
+
+
 def _pad_batch(
     rows: Sequence[Mapping[str, Any]], batch_size: int
 ) -> tuple[list[dict[str, Any]], int]:
@@ -461,7 +469,7 @@ def run_shard(args: argparse.Namespace) -> None:
         ):
             batch, real_count = _pad_batch(real_batch, args.batch_size)
             indices = [int(value["row_index"]) for value in batch]
-            payload = dataset.take(indices).to_pylist()
+            payload = _take_payload(dataset, indices, args.lance_read_mode)
             decoded = [
                 decode_row(row_index, row)
                 for row_index, row in zip(indices, payload, strict=True)
@@ -750,6 +758,9 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--batch-size", type=int, default=5)
     value.add_argument("--output", type=Path)
     value.add_argument("--resume", action="store_true")
+    value.add_argument(
+        "--lance-read-mode", choices=("batch", "individual"), default="batch"
+    )
     value.add_argument("--shard-outputs", default="")
     value.add_argument("--asset-manifest", type=Path)
     value.add_argument("--asset-root", type=Path)

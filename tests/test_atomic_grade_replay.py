@@ -84,6 +84,33 @@ def test_group_batches_never_mixes_physical_topology() -> None:
         assert len(batch) <= 2
 
 
+def test_explicit_individual_lance_read_never_uses_batch_take() -> None:
+    class Table:
+        def __init__(self, values):
+            self.values = values
+
+        def to_pylist(self):
+            return self.values
+
+    class Dataset:
+        def __init__(self):
+            self.calls = []
+
+        def take(self, indices):
+            self.calls.append(indices)
+            if len(indices) != 1:
+                raise OSError("simulated list-offset decoder failure")
+            return Table([{"row_index": indices[0]}])
+
+    dataset = Dataset()
+    assert grade._take_payload(dataset, [3, 7, 9], "individual") == [
+        {"row_index": 3}, {"row_index": 7}, {"row_index": 9}
+    ]
+    assert dataset.calls == [[3], [7], [9]]
+    with pytest.raises(OSError, match="decoder"):
+        grade._take_payload(Dataset(), [3, 7], "batch")
+
+
 def test_tail_batch_padding_keeps_fixed_shape_without_new_rows() -> None:
     source = records()[:2]
     padded, real_count = grade._pad_batch(source, 5)
