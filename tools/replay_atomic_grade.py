@@ -32,6 +32,7 @@ from tools.replay_atomic_benchmark_pilot import (
     CONTRACT as PILOT_CONTRACT,
     configure_modules,
     decode_row,
+    resolved_replay_identity,
     run_physics,
     sha256,
     validate_gpu_binding,
@@ -126,15 +127,21 @@ def _metadata_rows(dataset: Any, selected: set[int]) -> list[dict[str, Any]]:
             target = str(movement[0]["object_name"])
             if target not in names:
                 raise ValueError(f"row {row_index} target {target!r} is absent")
+            uuid = str(row["index"]["uuid"])
             records.append(
                 {
                     "row_index": row_index,
-                    "uuid": str(row["index"]["uuid"]),
+                    "uuid": uuid,
                     "action": action,
                     "frames": int(metadata["total_frames"]),
                     "object_names": names,
                     "target": target,
-                    "source_identity": str(row["provenance"]["source_identity"]),
+                    "source_identity": resolved_replay_identity(
+                        row["provenance"].get("source_identity"),
+                        target=target,
+                        action=action,
+                        uuid=uuid,
+                    ),
                 }
             )
     if [record["row_index"] for record in records] != all_indices:

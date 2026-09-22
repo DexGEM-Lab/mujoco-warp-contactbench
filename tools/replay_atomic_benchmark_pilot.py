@@ -64,6 +64,28 @@ def wxyz(rot_aa: Sequence[float]) -> np.ndarray:
     return xyzw[[3, 0, 1, 2]]
 
 
+def resolved_replay_identity(
+    source_identity: object, *, target: str, action: str, uuid: str
+) -> str:
+    """Return an object-addressable trajectory identity without changing provenance.
+
+    Older compact datasets provide ``object_action_sequence`` in
+    ``provenance.source_identity``.  Augmentation-only datasets can omit that
+    optional lineage field while still carrying an immutable UUID and complete
+    target metadata.  ``ReferenceTrajectory`` uses the identity only to recover
+    the active object and label the trajectory, so derive a stable adapter key
+    from those authoritative row fields when lineage is absent.
+    """
+
+    if isinstance(source_identity, str) and source_identity:
+        return source_identity
+    if not target or not action.isdigit() or not uuid:
+        raise ValueError(
+            "missing source identity requires target, numeric action and UUID"
+        )
+    return f"{target}_{action}_{uuid}"
+
+
 def validate_gpu_binding(gpu: int) -> dict[str, object]:
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
     egl = os.environ.get("MUJOCO_EGL_DEVICE_ID", "").strip()
@@ -217,6 +239,13 @@ def decode_row(row_index: int, row: dict) -> dict[str, Any]:
     if len(moves) != 1 or moves[0]["object_name"] not in names:
         raise ValueError(f"row {row_index} has no unique manipulated object")
     target = moves[0]["object_name"]
+    action = str(metadata["gesture"])[:3]
+    replay_identity = resolved_replay_identity(
+        provenance.get("source_identity"),
+        target=target,
+        action=action,
+        uuid=str(row["index"]["uuid"]),
+    )
     frames = int(metadata["total_frames"])
     hand = row["hands"][0]
     hand_qpos = np.asarray(hand["urdf_dof"], dtype=np.float64)
@@ -245,6 +274,7 @@ def decode_row(row_index: int, row: dict) -> dict[str, Any]:
         "names": names,
         "target": target,
         "movement": dict(moves[0]),
+        "replay_identity": replay_identity,
         "hand_recorded": hand_qpos,
         "commands": commands,
         "object_recorded_pos": object_pos,
@@ -417,7 +447,7 @@ def run_physics(
             active_index,
             item["uuid"],
             item["uuid"],
-            item["provenance"]["source_identity"],
+            item["replay_identity"],
             0,
             item["frames"],
             int(movement["start_frame"]),

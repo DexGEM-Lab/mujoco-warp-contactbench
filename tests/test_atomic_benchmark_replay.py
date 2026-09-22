@@ -7,6 +7,7 @@ import pytest
 from tools.replay_atomic_benchmark_pilot import (
     decode_row,
     render_row_directory_name,
+    resolved_replay_identity,
     run_physics,
     static_layout,
     validate_gpu_binding,
@@ -54,6 +55,7 @@ def test_decode_row_preserves_multiobject_target_contract() -> None:
     assert decoded["row_index"] == 9
     assert decoded["names"] == ("egg_cup", "bowl")
     assert decoded["target"] == "egg_cup"
+    assert decoded["replay_identity"] == "egg_cup_04_001"
     np.testing.assert_array_equal(decoded["commands"], 1.0)
     np.testing.assert_array_equal(decoded["object_recorded_pos"]["bowl"], 1.0)
     np.testing.assert_array_equal(
@@ -67,6 +69,20 @@ def test_decode_rejects_wrong_clock() -> None:
     row["provenance"]["physics_fps"] = 400
     with pytest.raises(ValueError, match="incompatible replay contract"):
         decode_row(0, row)
+
+
+def test_missing_source_identity_uses_stable_row_identity() -> None:
+    row = row_fixture()
+    row["provenance"]["source_identity"] = None
+    decoded = decode_row(9, row)
+    assert decoded["replay_identity"] == "egg_cup_004_u"
+    assert decoded["provenance"]["source_identity"] is None
+    assert (
+        resolved_replay_identity(None, target="egg_cup", action="004", uuid="u")
+        == "egg_cup_004_u"
+    )
+    with pytest.raises(ValueError, match="requires target"):
+        resolved_replay_identity(None, target="", action="004", uuid="u")
 
 
 def test_static_layout_excludes_physical_objects() -> None:
