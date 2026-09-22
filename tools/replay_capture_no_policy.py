@@ -7,9 +7,6 @@ wrapping/joint-limit enforcement by the existing position controller.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import os
-import subprocess
 import json
 from pathlib import Path
 import time
@@ -18,50 +15,26 @@ import lance
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from sim.manorl import assets
 from sim.manorl.contracts import FLOOR_TOP_Z, OBJECT_CLEARANCE
+from sim.manorl.mjx_sim import command_target
+from tools.generate_manorl_asset_manifest import generate
 
 COLUMNS = ["index", "trajectory_metadata", "timestamp", "hands", "objects"]
 
 
-PINNED_MANIFEST_SHA256 = "e686d91931979c444c923d4f962ddd135ce8204e0de9df6fd7368bfdb855e29b"
-PINNED_ASSET_COMMIT = "778614d09e917deffed0bff3f357aa237efa762d"
-PINNED_OPERATOR = "cheyingtong"
-
-
-def activate_hand_profile(operator: str, asset_root: Path, asset_manifest: Path) -> dict:
-    """Bind the formal profile before physical imports; never generate a fallback."""
-    root = asset_root.expanduser().resolve(strict=True)
-    path = asset_manifest.expanduser().resolve(strict=True)
-    payload = path.read_bytes()
-    if hashlib.sha256(payload).hexdigest() != PINNED_MANIFEST_SHA256:
-        raise ValueError("asset manifest SHA256 differs from the pinned formal profile")
-    manifest = json.loads(payload)
-    if operator != PINNED_OPERATOR or manifest.get("hand_operator") != operator:
-        raise ValueError("source/manifest hand operator differs from the pinned profile")
-    if manifest.get("source_commit") != PINNED_ASSET_COMMIT:
-        raise ValueError("asset manifest source commit differs from the pinned profile")
-    commit = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True,
-    ).stdout.strip()
-    if commit != PINNED_ASSET_COMMIT:
-        raise ValueError("asset root source commit differs from the pinned profile")
-    os.environ["MANORL_ASSET_MANIFEST"] = str(path)
-    from sim.manorl import assets
-
-    assets.DEXSTREAM_ROOT = root
-    assets.EXPLICIT_ASSET_MANIFEST = str(path)
-    assets.ASSET_MANIFEST = path
+def activate_hand_profile(operator: str, output: Path) -> dict:
+    """Use an explicit process-local profile; never overwrite the training manifest."""
+    manifest = generate(assets.DEXSTREAM_ROOT, assets.REPOSITORY_ROOT, hand_operator=operator)
+    path = output / "asset_manifest.json"
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     assets.MANO_OPERATOR = operator
+    assets.ASSET_MANIFEST = path
     assets._asset_manifest.cache_clear()
-    assets.object_collision_vertices.cache_clear()
-    assets.validate_asset_manifest(hand_side="right")
     return manifest
 
 
 def source_arrays(row: dict, manifest: dict, fps: int) -> dict:
-    from sim.manorl import assets
-
     metadata = row["trajectory_metadata"]
     hand_names = metadata["hand_names"]
     if hand_names.count("right") != 1:
@@ -115,8 +88,6 @@ def longest_duration(mask: np.ndarray, fps: int) -> float:
 
 
 def render_trace(output: Path, source: dict, trace: dict, fps: int) -> None:
-    from sim.manorl import assets
-
     import imageio.v2 as imageio
     from PIL import Image, ImageDraw
     import mujoco as mj
@@ -171,9 +142,7 @@ def replay(args: argparse.Namespace) -> dict:
     dataset = lance.dataset(str(args.dataset), version=args.version)
     row = dataset.take([args.row], columns=COLUMNS).to_pylist()[0]
     operator = row["index"]["operator"]
-    manifest = activate_hand_profile(operator, args.asset_root, args.asset_manifest)
-    from sim.manorl import assets
-    from sim.manorl.mjx_sim import command_target
+    manifest = activate_hand_profile(operator, args.output)
     source = source_arrays(row, manifest, args.fps)
     names = tuple(sorted(source["names"]))
     mj, model = assets.compile_unified_model(object_types=names, object_collisions=True,
@@ -199,7 +168,6 @@ def replay(args: argparse.Namespace) -> dict:
     settings = dict(schema="manorl.raw_right_capture_replay.v1", dataset=str(args.dataset),
                     dataset_version=int(dataset.version), row=args.row, index=row["index"],
                     hand_operator=operator, hand_sides=["right"], actuators=model.nu,
-                    asset_root=str(assets.DEXSTREAM_ROOT), asset_manifest=str(assets.ASSET_MANIFEST),
                     asset_provenance=assets.asset_provenance(), objects=list(names),
                     object_qpos_addresses=addresses, body_names=body_names,
                     frames=len(source["commands"]), source_mean_fps=source["actual_fps"],
@@ -283,10 +251,6 @@ def replay(args: argparse.Namespace) -> dict:
 
 def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--asset-root",type=Path,required=True,
-                        help="Existing DexStream checkout at the pinned formal commit")
-    parser.add_argument("--asset-manifest",type=Path,required=True,
-                        help="Existing SHA-pinned Cheyingtong formal manifest (never regenerated)")
     parser.add_argument("--dataset",type=Path,required=True)
     parser.add_argument("--version",type=int,required=True)
     parser.add_argument("--row",type=int,required=True)

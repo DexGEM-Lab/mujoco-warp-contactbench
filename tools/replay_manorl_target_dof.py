@@ -63,16 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--row-index", type=_nonnegative_int, required=True)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="gpu")
     parser.add_argument(
-        "--asset-root",
-        type=Path,
-        help="optional pinned DexStream checkout (requires --asset-manifest)",
-    )
-    parser.add_argument(
-        "--asset-manifest",
-        type=Path,
-        help="optional physical asset manifest (requires --asset-root)",
-    )
-    parser.add_argument(
         "--headless",
         action="store_true",
         help="run parity metrics and print JSON instead of opening a viewer",
@@ -129,33 +119,6 @@ def _validate_gui_numbers(args: argparse.Namespace) -> None:
         raise ValueError("camera values must be finite")
 
 
-def _activate_asset_profile(
-    asset_root: Path | None, asset_manifest: Path | None
-) -> None:
-    """Bind an explicit checkout/manifest pair before model compilation."""
-
-    if (asset_root is None) != (asset_manifest is None):
-        raise ValueError("--asset-root and --asset-manifest must be provided together")
-    if asset_root is None or asset_manifest is None:
-        return
-    root = asset_root.expanduser().resolve(strict=True)
-    manifest_path = asset_manifest.expanduser().resolve(strict=True)
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    operator = payload.get("hand_operator")
-    if not isinstance(operator, str) or not operator:
-        raise ValueError("asset manifest has no hand_operator")
-    os.environ["MANORL_ASSET_MANIFEST"] = str(manifest_path)
-    from sim.manorl import assets
-
-    assets.DEXSTREAM_ROOT = root
-    assets.EXPLICIT_ASSET_MANIFEST = str(manifest_path)
-    assets.ASSET_MANIFEST = manifest_path
-    assets.MANO_OPERATOR = operator
-    assets._asset_manifest.cache_clear()
-    assets.object_collision_vertices.cache_clear()
-    assets.validate_asset_manifest(hand_side="right")
-
-
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.output and not args.headless:
@@ -168,7 +131,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.headless:
             _validate_gui_numbers(args)
-        _activate_asset_profile(args.asset_root, args.asset_manifest)
         source = load_target_replay_source(
             args.dataset,
             dataset_version=args.dataset_version,
