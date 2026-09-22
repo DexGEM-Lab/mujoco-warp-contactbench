@@ -54,7 +54,9 @@ the stored child; the second supplies genuine replay-fidelity evidence. These
 are a parent-fidelity and repeatability screen, not an exhaustive new stirring
 semantic classifier. A passing self-comparison is never counted as Grade A.
 
-`collect` verifies hashes, plan identity, independent PIDs and guard receipts,
+`collect` requires explicit `--asset-manifest` and `--asset-root` matching the
+physical run, because URDF-to-MANO conversion depends on the selected operator's
+joint axes. It verifies hashes, plan identity, independent PIDs and guard receipts,
 and exports all actual first-pass children to diagnostic `all_candidates.lance`.
 `replay_a_candidates.lance` contains children whose independent replay is A;
 that alone does not imply the parent motion was preserved. Only children passing

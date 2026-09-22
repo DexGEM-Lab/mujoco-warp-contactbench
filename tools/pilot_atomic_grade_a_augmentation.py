@@ -332,6 +332,11 @@ def run(a):
 def collect(a):
     import lance
     import pyarrow as pa
+    if a.asset_manifest is None or a.asset_root is None:
+        raise ValueError('collect requires explicit --asset-manifest and --asset-root for native hand conversion')
+    os.environ['MANORL_ASSET_MANIFEST'] = str(a.asset_manifest.resolve(strict=True))
+    from sim.manorl import assets
+    assets.DEXSTREAM_ROOT = a.asset_root.resolve(strict=True)
     from sim.manorl.mano_pose import right_urdf_trajectory_to_mano_48d
     if a.output.exists():raise FileExistsError(a.output)
     plan=json.loads(a.plan.read_text());candidate_rows=[];reports=[]
