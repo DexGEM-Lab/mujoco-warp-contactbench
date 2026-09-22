@@ -263,7 +263,8 @@ def load_candidate(dataset, metadata: dict) -> tuple[dict, dict, dict]:
     item = decode_row(metadata["parent"]["row_index"], row)
     item["uuid"] = metadata["uuid"]
     item["seed_uuid"] = metadata["parent"]["uuid"]
-    item["replay_identity"] = f"{item['target']}_{item['action']}_{metadata['uuid']}"
+    item["action"] = metadata["action"]
+    item["replay_identity"] = f"{item['target']}_{metadata['action']}_{metadata['uuid']}"
     item["hand_recorded"] = hold_extend(item["hand_recorded"])
     item["hand_recorded"][0] = initial
     item["commands"] = target
