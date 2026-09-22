@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 import numpy as np
 import pytest
 
 from tools.replay_atomic_benchmark_pilot import (
     decode_row,
+    apply_physics_profile,
     render_row_directory_name,
     resolved_replay_identity,
     run_physics,
@@ -85,6 +87,44 @@ def test_missing_source_identity_uses_stable_row_identity() -> None:
         resolved_replay_identity(None, target="", action="004", uuid="u")
 
 
+def test_u1_table_profile_changes_only_support_height_and_friction() -> None:
+    names = {
+        "floor": 0,
+        "collidable_table_leg_0": 1,
+        "collidable_table_leg_1": 2,
+        "collidable_table_leg_2": 3,
+        "collidable_table_leg_3": 4,
+    }
+    mujoco = SimpleNamespace(
+        mjtObj=SimpleNamespace(mjOBJ_GEOM=1),
+        mjtGeom=SimpleNamespace(mjGEOM_BOX=6),
+        mj_name2id=lambda _model, _kind, name: names.get(name, -1),
+    )
+    model = SimpleNamespace(
+        geom_type=np.full(6, 6, dtype=np.int32),
+        geom_pos=np.asarray(
+            [[0, 0, -0.025], [0.68, 0.68, -0.375], [0.68, -0.68, -0.375],
+             [-0.68, 0.68, -0.375], [-0.68, -0.68, -0.375], [9, 8, 7]],
+            dtype=np.float64,
+        ),
+        geom_size=np.asarray([[0.75, 0.75, 0.025]] + [[0.05, 0.05, 0.325]] * 4 + [[1, 2, 3]], dtype=np.float64),
+        geom_friction=np.asarray([[1, 0.005, 0.0001]] * 5 + [[0.7, 0.02, 0.01]], dtype=np.float64),
+    )
+    before_pos = model.geom_pos.copy()
+    before_size = model.geom_size.copy()
+    before_friction = model.geom_friction.copy()
+    report = apply_physics_profile(mujoco, model, "u1-table")
+    assert report["changed_fields"] == ["table_and_leg_z", "table_and_leg_friction"]
+    assert model.geom_pos[0, 2] + model.geom_size[0, 2] == pytest.approx(-0.001)
+    np.testing.assert_allclose(model.geom_pos[:5, 2], before_pos[:5, 2] - 0.001)
+    np.testing.assert_allclose(
+        model.geom_friction[:5], np.tile([1, 0.01, 0.001], (5, 1))
+    )
+    np.testing.assert_array_equal(model.geom_size, before_size)
+    np.testing.assert_array_equal(model.geom_pos[5], before_pos[5])
+    np.testing.assert_array_equal(model.geom_friction[5], before_friction[5])
+
+
 def test_static_layout_excludes_physical_objects() -> None:
     from tools.replay_atomic_benchmark_pilot import ALL_OBJECTS
 
@@ -117,6 +157,7 @@ def test_run_physics_exposes_allocation_only_capacity_overrides() -> None:
     assert parameters["contact_capacity_per_world"].default == 1024
     assert parameters["constraint_capacity"].default == 4096
     assert parameters["ccd_contacts_per_world"].default == 256
+    assert parameters["physics_profile"].default == "atomic-benchmark"
 
 
 def test_compute_and_egl_gpu_binding_must_match(monkeypatch) -> None:

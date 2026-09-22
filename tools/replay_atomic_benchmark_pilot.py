@@ -41,6 +41,9 @@ ALL_OBJECTS = (
     "pitcherbase",
 )
 CONTRACT = "manorl.atomic-benchmark-target-dof-pilot.v1"
+PHYSICS_PROFILES = ("atomic-benchmark", "u1-table")
+U1_TABLE_SURFACE_Z = -0.001
+U1_TABLE_FRICTION = np.asarray((1.0, 0.01, 0.001), dtype=np.float64)
 
 
 def sha256(path: Path) -> str:
@@ -339,6 +342,66 @@ def benchmark_invariance(mujoco: Any, physics_model: Any, visual_model: Any, tab
     }
 
 
+def support_surface_state(mujoco: Any, model: Any, profile: str) -> dict[str, Any]:
+    floor = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+    if floor < 0 or int(model.geom_type[floor]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+        raise ValueError("finite collidable tabletop is absent")
+    return {
+        "contract": "manorl.atomic-replay-physics-profile.v1",
+        "profile": profile,
+        "support_geometry": "finite_box_table_with_four_box_legs",
+        "surface_z_m": float(model.geom_pos[floor, 2] + model.geom_size[floor, 2]),
+        "friction": np.asarray(model.geom_friction[floor]).tolist(),
+    }
+
+
+def apply_physics_profile(mujoco: Any, model: Any, profile: str) -> dict[str, Any]:
+    """Apply the smallest declared support-surface delta to a compiled model."""
+
+    if profile not in PHYSICS_PROFILES:
+        raise ValueError(f"unsupported physics profile {profile!r}")
+    floor = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+    if floor < 0 or int(model.geom_type[floor]) != int(mujoco.mjtGeom.mjGEOM_BOX):
+        raise ValueError("finite collidable tabletop is absent")
+    leg_ids = [
+        mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, f"collidable_table_leg_{index}"
+        )
+        for index in range(4)
+    ]
+    if any(geom_id < 0 for geom_id in leg_ids):
+        raise ValueError("finite collidable table legs are absent")
+    before = support_surface_state(mujoco, model, "atomic-benchmark")
+    if profile == "u1-table":
+        delta_z = U1_TABLE_SURFACE_Z - before["surface_z_m"]
+        model.geom_pos[floor, 2] += delta_z
+        model.geom_friction[floor] = U1_TABLE_FRICTION
+        for geom_id in leg_ids:
+            model.geom_pos[geom_id, 2] += delta_z
+            model.geom_friction[geom_id] = U1_TABLE_FRICTION
+    after = support_surface_state(mujoco, model, profile)
+    expected = (
+        {"surface_z_m": U1_TABLE_SURFACE_Z, "friction": U1_TABLE_FRICTION.tolist()}
+        if profile == "u1-table"
+        else {"surface_z_m": before["surface_z_m"], "friction": before["friction"]}
+    )
+    if not np.isclose(after["surface_z_m"], expected["surface_z_m"], atol=1e-12, rtol=0):
+        raise ValueError("support-surface height profile was not applied")
+    if not np.allclose(after["friction"], expected["friction"], atol=1e-12, rtol=0):
+        raise ValueError("support-surface friction profile was not applied")
+    return {
+        "contract": "manorl.atomic-replay-physics-profile-application.v1",
+        "profile": profile,
+        "before": before,
+        "after": after,
+        "changed_fields": (
+            ["table_and_leg_z", "table_and_leg_friction"]
+            if profile == "u1-table"
+            else []
+        ),
+    }
+
+
 def build_benchmark_model(
     *,
     consumer_visual: Any,
@@ -347,8 +410,9 @@ def build_benchmark_model(
     target: str,
     object_types: Sequence[str],
     decorative_scene_spec: Path,
+    physics_profile: str = "atomic-benchmark",
 ) -> tuple[Any, Any, dict[str, Any]]:
-    return consumer_visual.build_consumer_visual_model(
+    mujoco, model, invariance = consumer_visual.build_consumer_visual_model(
         target,
         WIDTH,
         HEIGHT,
@@ -366,6 +430,11 @@ def build_benchmark_model(
         },
         object_body_name=assets.object_runtime(target).body_name,
     )
+    invariance = dict(invariance)
+    invariance["physics_profile"] = apply_physics_profile(
+        mujoco, model, physics_profile
+    )
+    return mujoco, model, invariance
 
 
 def make_scene(
@@ -377,6 +446,7 @@ def make_scene(
     object_types: Sequence[str],
     decorative_scene_spec: Path,
     create_renderer: bool,
+    physics_profile: str = "atomic-benchmark",
 ) -> tuple[Any, ...]:
     mujoco, model, invariance = build_benchmark_model(
         consumer_visual=consumer_visual,
@@ -385,6 +455,7 @@ def make_scene(
         target=target,
         object_types=object_types,
         decorative_scene_spec=decorative_scene_spec,
+        physics_profile=physics_profile,
     )
     data = mujoco.MjData(model)
     renderer = (
@@ -424,6 +495,7 @@ def run_physics(
     contact_capacity_per_world: int = 1024,
     constraint_capacity: int = 4096,
     ccd_contacts_per_world: int = 256,
+    physics_profile: str = "atomic-benchmark",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import sim.manorl.environment as environment_module
     from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
@@ -486,6 +558,7 @@ def run_physics(
         target=target,
         object_types=tuple(object_types),
         decorative_scene_spec=decorative_scene_spec,
+        physics_profile=physics_profile,
     )[:2]
     if (
         contact_capacity_per_world < 1
@@ -520,6 +593,21 @@ def run_physics(
         raise RuntimeError(f"compiled physics timestep {model.opt.timestep} is not 1/480")
     if config.physics_substeps_per_control != 4:
         raise RuntimeError("120 Hz replay did not resolve four physics substeps")
+    import mujoco
+
+    if int(model.opt.cone) != int(mujoco.mjtCone.mjCONE_PYRAMIDAL) or not np.isclose(
+        model.opt.impratio, 1.0
+    ):
+        raise RuntimeError("atomic replay requires pyramidal cone and impratio=1")
+    if physics_profile == "u1-table":
+        if int(model.opt.ccd_iterations) != 16:
+            raise RuntimeError("U1 table replay requires CCD iterations=16")
+        if model.na != 0 or not np.all(model.actuator_dyntype == mujoco.mjtDyn.mjDYN_NONE):
+            raise RuntimeError("U1 table replay requires stateless native actuators")
+        if not np.all(model.actuator_gaintype == mujoco.mjtGain.mjGAIN_FIXED):
+            raise RuntimeError("U1 table replay requires fixed native actuator gains")
+        if not np.all(model.actuator_biastype == mujoco.mjtBias.mjBIAS_AFFINE):
+            raise RuntimeError("U1 table replay requires affine native actuator bias")
     addresses = {name: int(model.joint(name + "_free").qposadr[0]) for name in names}
     qpos = np.asarray(environment.data.qpos).copy()
     qvel = np.zeros_like(np.asarray(environment.data.qvel))
@@ -632,6 +720,8 @@ def run_physics(
     return outputs, {
         "runtime": {
             "physics_backend": "mjx_warp",
+            "physics_profile": physics_profile,
+            "support_surface": support_surface_state(mujoco, model, physics_profile),
             "right_hand_only": True,
             "control_hz": CONTROL_HZ,
             "physics_hz": PHYSICS_HZ,
@@ -640,6 +730,8 @@ def run_physics(
             "object_types": list(names),
             "target_object": target,
             "object_object_collisions": True,
+            "actuator_contract": "native_position_no_hidden_pid_or_feedforward",
+            "target_contract": "arrival_indexed_absolute_28d",
             "ccd_iterations": 16,
             "ccd_contacts_per_world": ccd_contacts_per_world,
             "contact_capacity_per_world": contact_capacity_per_world,
@@ -704,6 +796,7 @@ def render_action(
     output_dir: Path,
     gpu: int,
     provenance: Mapping[str, Any],
+    physics_profile: str = "atomic-benchmark",
 ) -> dict[str, Any]:
     import imageio.v2 as imageio
     import mujoco
@@ -717,6 +810,7 @@ def render_action(
         object_types=ALL_OBJECTS,
         decorative_scene_spec=decorative_scene_spec,
         create_renderer=True,
+        physics_profile=physics_profile,
     )
     mujoco, model, data, renderer = scene[:4]
     for geom_id in range(model.ngeom):
@@ -872,6 +966,9 @@ def main() -> None:
     parser.add_argument("--scene", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument(
+        "--physics-profile", choices=PHYSICS_PROFILES, default="atomic-benchmark"
+    )
     parser.add_argument("--contact-capacity-per-world", type=int, default=1024)
     parser.add_argument("--constraint-capacity", type=int, default=4096)
     parser.add_argument("--ccd-contacts-per-world", type=int, default=256)
@@ -901,6 +998,7 @@ def main() -> None:
         contact_capacity_per_world=args.contact_capacity_per_world,
         constraint_capacity=args.constraint_capacity,
         ccd_contacts_per_world=args.ccd_contacts_per_world,
+        physics_profile=args.physics_profile,
     )
     provenance = {
         "dataset": str(args.dataset),
@@ -934,6 +1032,7 @@ def main() -> None:
         output_dir=args.output,
         gpu=args.gpu,
         provenance=provenance,
+        physics_profile=args.physics_profile,
     )
     print(json.dumps({"action": args.action, "video": result["video"]}, indent=2))
 

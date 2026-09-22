@@ -50,6 +50,25 @@ GRADE_B_MAX_M = 0.08
 GRADE_CONTACT_CAPACITY_PER_WORLD = 2048
 GRADE_CONSTRAINT_CAPACITY = 8192
 GRADE_CCD_CONTACTS_PER_WORLD = 512
+U1_CONTACT_CAPACITY_PER_WORLD = 1024
+U1_CONSTRAINT_CAPACITY = 4096
+U1_CCD_CONTACTS_PER_WORLD = 256
+
+
+def capacities_for_profile(profile: str) -> tuple[int, int, int]:
+    if profile == "u1-table":
+        return (
+            U1_CONTACT_CAPACITY_PER_WORLD,
+            U1_CONSTRAINT_CAPACITY,
+            U1_CCD_CONTACTS_PER_WORLD,
+        )
+    if profile == "atomic-benchmark":
+        return (
+            GRADE_CONTACT_CAPACITY_PER_WORLD,
+            GRADE_CONSTRAINT_CAPACITY,
+            GRADE_CCD_CONTACTS_PER_WORLD,
+        )
+    raise ValueError(f"unsupported physics profile {profile!r}")
 
 
 def dump_atomic(path: Path, value: object) -> None:
@@ -378,6 +397,9 @@ def run_shard(args: argparse.Namespace) -> None:
         ):
             raise ValueError("resume run identity differs before GPU binding")
     _native, _visual, consumer_visual, assets, contracts = configure_modules(args)
+    contact_capacity, constraint_capacity, ccd_capacity = capacities_for_profile(
+        args.physics_profile
+    )
     run_identity = {
         "contract": RUN_CONTRACT,
         "plan_sha256": sha256(args.plan),
@@ -390,12 +412,13 @@ def run_shard(args: argparse.Namespace) -> None:
         "client_commit": _git_head(args.client_root),
         "scene_sha256": sha256(args.scene),
         "grade_contract": GRADE_CONTRACT,
-        "contact_capacity_per_world": GRADE_CONTACT_CAPACITY_PER_WORLD,
-        "constraint_capacity": GRADE_CONSTRAINT_CAPACITY,
-        "ccd_contacts_per_world": GRADE_CCD_CONTACTS_PER_WORLD,
+        "contact_capacity_per_world": contact_capacity,
+        "constraint_capacity": constraint_capacity,
+        "ccd_contacts_per_world": ccd_capacity,
         "batch_size": args.batch_size,
         "shard_id": args.shard_id,
         "action": args.action or None,
+        "physics_profile": args.physics_profile,
         "gpu_binding": gpu_binding,
         "rendering": False,
         "persisted_payload": "per-row JSON metrics only; no images, videos, or trace arrays",
@@ -455,9 +478,10 @@ def run_shard(args: argparse.Namespace) -> None:
                 contracts=contracts,
                 consumer_visual=consumer_visual,
                 decorative_scene_spec=args.scene,
-                contact_capacity_per_world=GRADE_CONTACT_CAPACITY_PER_WORLD,
-                constraint_capacity=GRADE_CONSTRAINT_CAPACITY,
-                ccd_contacts_per_world=GRADE_CCD_CONTACTS_PER_WORLD,
+                contact_capacity_per_world=contact_capacity,
+                constraint_capacity=constraint_capacity,
+                ccd_contacts_per_world=ccd_capacity,
+                physics_profile=args.physics_profile,
             )
             for expected, output in zip(
                 real_batch, outputs[:real_count], strict=True
@@ -593,15 +617,18 @@ def aggregate(args: argparse.Namespace) -> None:
             if overflow.search(log.read_text(errors="replace")):
                 raise ValueError(f"capacity overflow in shard {shard_id} action {action}")
             identity = summary.get("run_identity") or {}
+            expected_capacities = capacities_for_profile(
+                identity.get("physics_profile", "atomic-benchmark")
+            )
             if (
                 identity.get("grade_contract") != GRADE_CONTRACT
                 or identity.get("contact_capacity_per_world")
-                != GRADE_CONTACT_CAPACITY_PER_WORLD
-                or identity.get("constraint_capacity") != GRADE_CONSTRAINT_CAPACITY
-                or identity.get("ccd_contacts_per_world")
-                != GRADE_CCD_CONTACTS_PER_WORLD
+                != expected_capacities[0]
+                or identity.get("constraint_capacity") != expected_capacities[1]
+                or identity.get("ccd_contacts_per_world") != expected_capacities[2]
                 or identity.get("batch_size") != 5
                 or identity.get("rendering") is not False
+                or identity.get("physics_profile") not in {"atomic-benchmark", "u1-table"}
             ):
                 raise ValueError(f"shard {shard_id} action {action} runtime differs")
             for key in (
@@ -610,6 +637,7 @@ def aggregate(args: argparse.Namespace) -> None:
                 "client_commit",
                 "manorl_commit",
                 "scene_sha256",
+                "physics_profile",
             ):
                 provenance[key].add(identity.get(key))
             action_rows = [
@@ -725,6 +753,11 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--benchmark-root", type=Path)
     value.add_argument("--scene", type=Path)
     value.add_argument("--gpu", type=int)
+    value.add_argument(
+        "--physics-profile",
+        choices=("atomic-benchmark", "u1-table"),
+        default="atomic-benchmark",
+    )
     return value
 
 
