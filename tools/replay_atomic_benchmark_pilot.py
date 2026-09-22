@@ -42,6 +42,11 @@ ALL_OBJECTS = (
 )
 CONTRACT = "manorl.atomic-benchmark-target-dof-pilot.v1"
 PHYSICS_PROFILES = ("atomic-benchmark", "u1-table")
+# Allocation-only defaults. Batch5 CCD1280 overflowed with reported demand2498;
+# reserve10240 CCD slots rather than making2560 a near-boundary default.
+DEFAULT_CONTACT_CAPACITY_PER_WORLD = 2048
+DEFAULT_CONSTRAINT_CAPACITY = 8192
+DEFAULT_CCD_CONTACTS_PER_WORLD = 2048
 U1_TABLE_SURFACE_Z = -0.001
 U1_TABLE_FRICTION = np.asarray((1.0, 0.01, 0.001), dtype=np.float64)
 
@@ -492,9 +497,9 @@ def run_physics(
     assets: Any,
     contracts: Any,
     decorative_scene_spec: Path,
-    contact_capacity_per_world: int = 1024,
-    constraint_capacity: int = 4096,
-    ccd_contacts_per_world: int = 256,
+    contact_capacity_per_world: int = DEFAULT_CONTACT_CAPACITY_PER_WORLD,
+    constraint_capacity: int = DEFAULT_CONSTRAINT_CAPACITY,
+    ccd_contacts_per_world: int = DEFAULT_CCD_CONTACTS_PER_WORLD,
     physics_profile: str = "atomic-benchmark",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import sim.manorl.environment as environment_module
@@ -969,9 +974,13 @@ def main() -> None:
     parser.add_argument(
         "--physics-profile", choices=PHYSICS_PROFILES, default="atomic-benchmark"
     )
-    parser.add_argument("--contact-capacity-per-world", type=int, default=1024)
-    parser.add_argument("--constraint-capacity", type=int, default=4096)
-    parser.add_argument("--ccd-contacts-per-world", type=int, default=256)
+    parser.add_argument(
+        "--contact-capacity-per-world", type=int, default=DEFAULT_CONTACT_CAPACITY_PER_WORLD
+    )
+    parser.add_argument("--constraint-capacity", type=int, default=DEFAULT_CONSTRAINT_CAPACITY)
+    parser.add_argument(
+        "--ccd-contacts-per-world", type=int, default=DEFAULT_CCD_CONTACTS_PER_WORLD
+    )
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError(f"output must be fresh: {args.output}")

@@ -154,9 +154,9 @@ def test_duplicate_padding_rows_use_collision_free_trace_directories() -> None:
 
 def test_run_physics_exposes_allocation_only_capacity_overrides() -> None:
     parameters = inspect.signature(run_physics).parameters
-    assert parameters["contact_capacity_per_world"].default == 1024
-    assert parameters["constraint_capacity"].default == 4096
-    assert parameters["ccd_contacts_per_world"].default == 256
+    assert parameters["contact_capacity_per_world"].default == 2048
+    assert parameters["constraint_capacity"].default == 8192
+    assert parameters["ccd_contacts_per_world"].default == 2048
     assert parameters["physics_profile"].default == "atomic-benchmark"
 
 

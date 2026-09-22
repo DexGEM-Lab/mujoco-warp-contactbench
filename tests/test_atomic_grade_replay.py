@@ -43,7 +43,10 @@ def test_grade_boundaries_match_state45_quality_contract() -> None:
     assert 5 * grade.GRADE_CCD_CONTACTS_PER_WORLD > 1874
     assert grade.capacities_for_profile("expanded") == (2048, 8192, 512)
     assert grade.capacities_for_profile("u1") == (1024, 4096, 256)
-    with pytest.raises(ValueError, match="physics profile"):
+    assert grade.capacities_for_profile("headroom") == (2048, 8192, 2048)
+    args = grade.parser().parse_args(["--make-plan", "--plan", "unused.json"])
+    assert args.capacity_profile == "headroom"
+    with pytest.raises(ValueError, match="capacity profile"):
         grade.capacities_for_profile("unknown")
     with pytest.raises(ValueError, match="finite"):
         grade.grade_from_max_error(float("nan"))

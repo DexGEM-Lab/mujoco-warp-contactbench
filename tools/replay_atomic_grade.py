@@ -30,6 +30,9 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from tools.replay_atomic_benchmark_pilot import (
     CONTRACT as PILOT_CONTRACT,
+    DEFAULT_CONTACT_CAPACITY_PER_WORLD,
+    DEFAULT_CONSTRAINT_CAPACITY,
+    DEFAULT_CCD_CONTACTS_PER_WORLD,
     configure_modules,
     decode_row,
     resolved_replay_identity,
@@ -55,10 +58,16 @@ U1_CONSTRAINT_CAPACITY = 4096
 U1_CCD_CONTACTS_PER_WORLD = 256
 
 
-CAPACITY_PROFILES = ("expanded", "u1")
+CAPACITY_PROFILES = ("headroom", "expanded", "u1")
 
 
 def capacities_for_profile(profile: str) -> tuple[int, int, int]:
+    if profile == "headroom":
+        return (
+            DEFAULT_CONTACT_CAPACITY_PER_WORLD,
+            DEFAULT_CONSTRAINT_CAPACITY,
+            DEFAULT_CCD_CONTACTS_PER_WORLD,
+        )
     if profile == "u1":
         return (
             U1_CONTACT_CAPACITY_PER_WORLD,
@@ -71,7 +80,7 @@ def capacities_for_profile(profile: str) -> tuple[int, int, int]:
             GRADE_CONSTRAINT_CAPACITY,
             GRADE_CCD_CONTACTS_PER_WORLD,
         )
-    raise ValueError(f"unsupported physics profile {profile!r}")
+    raise ValueError(f"unsupported capacity profile {profile!r}")
 
 
 def dump_atomic(path: Path, value: object) -> None:
@@ -776,7 +785,7 @@ def parser() -> argparse.ArgumentParser:
         default="atomic-benchmark",
     )
     value.add_argument(
-        "--capacity-profile", choices=CAPACITY_PROFILES, default="expanded"
+        "--capacity-profile", choices=CAPACITY_PROFILES, default="headroom"
     )
     return value
 
