@@ -41,8 +41,8 @@ def test_grade_boundaries_match_state45_quality_contract() -> None:
     assert grade.GRADE_CONTACT_CAPACITY_PER_WORLD * 5 > 5648
     assert grade.GRADE_CONSTRAINT_CAPACITY > 5302
     assert 5 * grade.GRADE_CCD_CONTACTS_PER_WORLD > 1874
-    assert grade.capacities_for_profile("atomic-benchmark") == (2048, 8192, 512)
-    assert grade.capacities_for_profile("u1-table") == (1024, 4096, 256)
+    assert grade.capacities_for_profile("expanded") == (2048, 8192, 512)
+    assert grade.capacities_for_profile("u1") == (1024, 4096, 256)
     with pytest.raises(ValueError, match="physics profile"):
         grade.capacities_for_profile("unknown")
     with pytest.raises(ValueError, match="finite"):
@@ -137,6 +137,7 @@ def test_action_isolated_aggregate_requires_clean_complete_population(tmp_path) 
         "batch_size": 5,
         "rendering": False,
         "physics_profile": "atomic-benchmark",
+        "capacity_profile": "expanded",
         "asset_commit": "asset",
         "asset_manifest_sha256": "manifest",
         "client_commit": "client",

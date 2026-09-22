@@ -55,14 +55,17 @@ U1_CONSTRAINT_CAPACITY = 4096
 U1_CCD_CONTACTS_PER_WORLD = 256
 
 
+CAPACITY_PROFILES = ("expanded", "u1")
+
+
 def capacities_for_profile(profile: str) -> tuple[int, int, int]:
-    if profile == "u1-table":
+    if profile == "u1":
         return (
             U1_CONTACT_CAPACITY_PER_WORLD,
             U1_CONSTRAINT_CAPACITY,
             U1_CCD_CONTACTS_PER_WORLD,
         )
-    if profile == "atomic-benchmark":
+    if profile == "expanded":
         return (
             GRADE_CONTACT_CAPACITY_PER_WORLD,
             GRADE_CONSTRAINT_CAPACITY,
@@ -398,7 +401,7 @@ def run_shard(args: argparse.Namespace) -> None:
             raise ValueError("resume run identity differs before GPU binding")
     _native, _visual, consumer_visual, assets, contracts = configure_modules(args)
     contact_capacity, constraint_capacity, ccd_capacity = capacities_for_profile(
-        args.physics_profile
+        args.capacity_profile
     )
     run_identity = {
         "contract": RUN_CONTRACT,
@@ -419,6 +422,7 @@ def run_shard(args: argparse.Namespace) -> None:
         "shard_id": args.shard_id,
         "action": args.action or None,
         "physics_profile": args.physics_profile,
+        "capacity_profile": args.capacity_profile,
         "gpu_binding": gpu_binding,
         "rendering": False,
         "persisted_payload": "per-row JSON metrics only; no images, videos, or trace arrays",
@@ -618,7 +622,7 @@ def aggregate(args: argparse.Namespace) -> None:
                 raise ValueError(f"capacity overflow in shard {shard_id} action {action}")
             identity = summary.get("run_identity") or {}
             expected_capacities = capacities_for_profile(
-                identity.get("physics_profile", "atomic-benchmark")
+                identity.get("capacity_profile", "expanded")
             )
             if (
                 identity.get("grade_contract") != GRADE_CONTRACT
@@ -629,6 +633,7 @@ def aggregate(args: argparse.Namespace) -> None:
                 or identity.get("batch_size") != 5
                 or identity.get("rendering") is not False
                 or identity.get("physics_profile") not in {"atomic-benchmark", "u1-table"}
+                or identity.get("capacity_profile") not in CAPACITY_PROFILES
             ):
                 raise ValueError(f"shard {shard_id} action {action} runtime differs")
             for key in (
@@ -638,6 +643,7 @@ def aggregate(args: argparse.Namespace) -> None:
                 "manorl_commit",
                 "scene_sha256",
                 "physics_profile",
+                "capacity_profile",
             ):
                 provenance[key].add(identity.get(key))
             action_rows = [
@@ -757,6 +763,9 @@ def parser() -> argparse.ArgumentParser:
         "--physics-profile",
         choices=("atomic-benchmark", "u1-table"),
         default="atomic-benchmark",
+    )
+    value.add_argument(
+        "--capacity-profile", choices=CAPACITY_PROFILES, default="expanded"
     )
     return value
 
