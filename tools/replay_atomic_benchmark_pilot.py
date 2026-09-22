@@ -501,6 +501,7 @@ def run_physics(
     constraint_capacity: int = DEFAULT_CONSTRAINT_CAPACITY,
     ccd_contacts_per_world: int = DEFAULT_CCD_CONTACTS_PER_WORLD,
     physics_profile: str = "atomic-benchmark",
+    observer: Any | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import sim.manorl.environment as environment_module
     from sim.manorl.environment import EnvironmentConfig, MujocoManoEnvironment
@@ -656,6 +657,9 @@ def run_physics(
     max_frames = max(item["frames"] for item in decoded)
     for frame in range(max_frames):
         state = environment.producer.materialize_state(environment.data)
+        if observer is not None:
+            # Observers only read solved buffers; they must not step or mutate data.
+            observer.frame(environment, state, frame)
         for world, output in enumerate(outputs):
             if frame >= output["frames"]:
                 continue
@@ -677,9 +681,11 @@ def run_physics(
             ]
         )
         environment.data = environment.data.replace(ctrl=device(next_targets))
-        for _ in range(config.physics_substeps_per_control):
+        for substep in range(config.physics_substeps_per_control):
             environment.data = environment._step_fn(environment.data)
             environment._check_warp_ccd_overflow()
+            if observer is not None:
+                observer.substep(environment, frame + 1, substep + 1)
         if frame and frame % 120 == 0:
             print("PHYSICS_FRAME", frame, "/", max_frames - 1, flush=True)
     metrics = []
