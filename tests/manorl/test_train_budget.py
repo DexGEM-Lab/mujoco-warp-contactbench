@@ -1585,3 +1585,49 @@ def test_owned_initial_checkpoint_cleans_up_after_failure_and_refuses_collisions
     with pytest.raises(RuntimeError, match="could not reserve"):
         with tool._owned_initial_checkpoint(tmp_path):
             pass
+
+
+def test_raw_transfer_budget_allows_pre60_with_early120(tmp_path: Path) -> None:
+    tool = _load_tool()
+    package = tmp_path / "pkg.mtp"
+    package.write_bytes(b"placeholder")
+    budget = tool.TrainingBudget(
+        raw_transfer=True,
+        hand_side="right",
+        drop_uncontrolled_hands=True,
+        reference_fps=120,
+        pre_padding=60,
+        post_padding=0,
+        expected_contact_mode="raw_gesture",
+        residual_joint_mode="all",
+        action_penalty_scale=1.0,
+        trajectory_package=package,
+        early_phase_steps=120,
+        joint_scale_multiplier=2.5,
+        joint_max_offset_multiplier=2.5,
+    )
+    assert budget.residual_action_config.joint_scale_multiplier == 2.5
+    assert budget.residual_action_config.joint_max_offset_multiplier == 2.5
+    assert budget.residual_action_config.early_phase_steps == 120
+
+
+def test_raw_transfer_budget_still_rejects_post_padding_and_bad_early(tmp_path: Path) -> None:
+    tool = _load_tool()
+    package = tmp_path / "pkg.mtp"
+    package.write_bytes(b"placeholder")
+    common = dict(
+        raw_transfer=True,
+        hand_side="right",
+        drop_uncontrolled_hands=True,
+        reference_fps=120,
+        expected_contact_mode="raw_gesture",
+        residual_joint_mode="all",
+        action_penalty_scale=1.0,
+        trajectory_package=package,
+    )
+    with pytest.raises(ValueError, match="raw_transfer training requires"):
+        tool.TrainingBudget(pre_padding=0, post_padding=1, **common)
+    with pytest.raises(ValueError, match="early_phase_steps"):
+        tool.TrainingBudget(pre_padding=60, post_padding=0, early_phase_steps=-1, **common)
+    with pytest.raises(ValueError, match="early_phase_steps"):
+        tool.TrainingBudget(pre_padding=60, post_padding=0, early_phase_steps=1.5, **common)

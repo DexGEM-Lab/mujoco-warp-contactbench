@@ -231,6 +231,7 @@ class TrainingBudget:
     action_penalty_scale: float = 0.0
     pre_padding: int = DEFAULT_PRE_PADDING
     post_padding: int = DEFAULT_POST_PADDING
+    early_phase_steps: int = SOURCE_ALIGNED_COMPATIBILITY.early_phase_steps
     residual_enabled: bool = True
     position_scale: float = 0.002
     max_position_offset: float = 0.01
@@ -269,11 +270,17 @@ class TrainingBudget:
             raise ValueError("trajectory_package and trajectory_packages are exclusive")
         if not math.isfinite(self.action_penalty_scale) or self.action_penalty_scale < 0.0:
             raise ValueError("action_penalty_scale must be finite and non-negative")
+        if (
+            not isinstance(self.early_phase_steps, int)
+            or isinstance(self.early_phase_steps, bool)
+            or self.early_phase_steps < 0
+        ):
+            raise ValueError("early_phase_steps must be a non-negative integer")
         if self.raw_transfer and (
             self.hand_side != "right"
             or not self.drop_uncontrolled_hands
             or self.reference_fps != 120
-            or self.pre_padding != 0
+            or self.pre_padding < 0
             or self.post_padding != 0
             or self.expected_contact_mode != "raw_gesture"
             or self.residual_joint_mode != "all"
@@ -281,7 +288,7 @@ class TrainingBudget:
             or (self.trajectory_package is None and not self.trajectory_packages)
         ):
             raise ValueError(
-                "raw_transfer training requires package-backed right-only120Hz full captures, "
+                "raw_transfer training requires package-backed right-only120Hz captures (pre-padding relative to movement start allowed), "
                 "raw_gesture contacts, all-joint residual repair, and positive residual regularization"
             )
 
@@ -296,6 +303,7 @@ class TrainingBudget:
             max_position_offset=(self.max_position_offset,) * 3,
             joint_scale_multiplier=self.joint_scale_multiplier,
             joint_max_offset_multiplier=self.joint_max_offset_multiplier,
+            early_phase_steps=self.early_phase_steps,
         )
 
     @property
@@ -2006,6 +2014,7 @@ def _build_evaluation_runtime(
             reference_fps=budget.reference_fps,
             compatibility=replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
+                early_phase_steps=budget.early_phase_steps,
                 movement_pre_padding=budget.pre_padding,
             ),
             post_padding=budget.post_padding,
@@ -2265,6 +2274,7 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             reference_fps=budget.reference_fps,
             compatibility=replace(
                 SOURCE_ALIGNED_COMPATIBILITY,
+                early_phase_steps=budget.early_phase_steps,
                 movement_pre_padding=budget.pre_padding,
             ),
             post_padding=budget.post_padding,
@@ -2804,6 +2814,12 @@ def main(argv: list[str] | None = None) -> int:
         default=2.0,
         help="multiply all per-joint cumulative residual caps",
     )
+    parser.add_argument(
+        "--early-phase-steps",
+        type=int,
+        default=SOURCE_ALIGNED_COMPATIBILITY.early_phase_steps,
+        help="pure-reference opening control steps before residual authority (default: 30)",
+    )
     parser.add_argument("--film", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--terminal", type=parse_cli_bool, default=True, metavar="{true,false}")
     parser.add_argument("--headless", type=parse_cli_bool, default=True, metavar="{true,false}")
@@ -3040,6 +3056,7 @@ def main(argv: list[str] | None = None) -> int:
             action_penalty_scale=args.action_penalty_scale,
             pre_padding=args.pre_padding,
             post_padding=args.post_padding,
+            early_phase_steps=args.early_phase_steps,
             residual_enabled=args.use_residual,
             position_scale=args.position_scale,
             max_position_offset=args.max_position_offset,
