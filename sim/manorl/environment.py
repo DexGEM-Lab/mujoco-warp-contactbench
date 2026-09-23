@@ -3686,13 +3686,34 @@ class MujocoManoEnvironment:
                 prior_control_call=prior_control_call,
             )
         extraction_phase = self._phase_start("state_contact_extraction")
-        physical = self.producer.extract(
-            self.data,
-            timings=self.phase_timings if self.phase_timings.enabled else None,
-            synchronize=self._profile_sync if self.phase_timings.enabled else None,
-            record_profile=self.phase_timings.enabled,
-            device_contact_decode=self.config.device_contact_decode,
-        )
+        try:
+            physical = self.producer.extract(
+                self.data,
+                timings=self.phase_timings if self.phase_timings.enabled else None,
+                synchronize=self._profile_sync if self.phase_timings.enabled else None,
+                record_profile=self.phase_timings.enabled,
+                device_contact_decode=self.config.device_contact_decode,
+            )
+        except (RuntimeError, ValueError) as exc:
+            # Fail closed, but name the divergent worlds first: which env,
+            # identity, object and step went non-finite is the evidence needed
+            # to fix the scene instead of guessing.
+            import sys
+
+            qpos = np.asarray(self.data.qpos)
+            bad = ~np.isfinite(qpos).all(axis=1)
+            identities = [
+                getattr(t.identity, "identity", "?") for t in self.trajectories
+            ]
+            objects = getattr(self, "object_types", ("?",) * len(qpos))
+            for env_id in np.flatnonzero(bad)[:8]:
+                print(
+                    f"NONFINITE-WORLD env={int(env_id)} step={self.trajectory_steps[int(env_id)]} "
+                    f"identity={identities[int(env_id)]} object={objects[int(env_id)]}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            raise type(exc)(f"{exc} (non-finite worlds: {np.flatnonzero(bad)[:8].tolist() if bad.any() else 'contact-force-only'})") from exc
         self._phase_stop("state_contact_extraction", extraction_phase)
         deviation_mask = self.trajectory_steps < self.deviation_enable_steps
         termination_phase = self._phase_start("termination")
