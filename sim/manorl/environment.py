@@ -3715,6 +3715,22 @@ class MujocoManoEnvironment:
                 )
             raise type(exc)(f"{exc} (non-finite worlds: {np.flatnonzero(bad)[:8].tolist() if bad.any() else 'contact-force-only'})") from exc
         self._phase_stop("state_contact_extraction", extraction_phase)
+        if not np.all(np.isfinite(physical.object_position)):
+            import sys
+
+            bad = ~np.isfinite(physical.object_position).all(axis=1)
+            identities = [
+                getattr(t.identity, "identity", "?") for t in self.trajectories
+            ]
+            objects = getattr(self, "object_types", ("?",) * len(bad))
+            for env_id in np.flatnonzero(bad)[:8]:
+                print(
+                    f"NONFINITE-OBJECT env={int(env_id)} step={self.trajectory_steps[int(env_id)]} "
+                    f"identity={identities[int(env_id)]} object={objects[int(env_id)]} "
+                    f"pos={physical.object_position[int(env_id)]}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         deviation_mask = self.trajectory_steps < self.deviation_enable_steps
         termination_phase = self._phase_start("termination")
         termination = check_termination(
