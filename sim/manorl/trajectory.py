@@ -749,12 +749,12 @@ class TrajectorySelection:
             or not self.drop_uncontrolled_hands
             or self.reference_fps != 120
             or self.resolved_control_fps != 120
-            or self.pre_padding
+            or self.pre_padding < 0
             or self.post_padding
         ):
             raise ValueError(
                 "raw_transfer requires right-only, dropped uncontrolled hands, "
-                "zero padding, and a coupled 120 Hz clock"
+                "non-negative pre-padding with zero post-padding, and a coupled 120 Hz clock"
             )
         normalize_hand_side(self.hand_side)
         if self.target_object_overrides:
