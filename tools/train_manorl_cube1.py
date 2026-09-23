@@ -1088,7 +1088,7 @@ def _evaluation_group_results(
 
 def _evaluate(runtime: ManoSkrlRuntime, mode: Literal["zero", "untrained", "trained"]) -> EvaluationResult:
     environment = runtime.gymnasium_env.environment
-    if environment.config.device_transition:
+    if getattr(environment.config, "device_transition", False):
         raise RuntimeError(
             "device_transition is training-only: evaluation requires a full physical snapshot"
         )
@@ -2675,7 +2675,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--expected-contact-mode",
         choices=("source_mapping", "five_fingertips", "raw_gesture"),
-        default="source_mapping",
+        default="five_fingertips",
+        help="expected hand contact sites for observation/reward and finger masks",
     )
     parser.add_argument(
         "--residual-joint-mode",
@@ -2716,14 +2717,9 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="override resolved Gym minibatch size (default: largest 4096-compatible divisor)",
     )
-    parser.add_argument("--target-object-overrides", default="", metavar="OBJECT:ACTION[,OBJECT:ACTION...]",
-                        help="explicit single target per action for compound movement annotations")
-    parser.add_argument("--drop-uncontrolled-hands", action="store_true",
-                        help="omit unselected hand references and physical models")
     parser.add_argument("--generated-reference", action="store_true",
                         help="use canonical120Hz generated full episodes; requires --pre-padding 0 --post-padding 0")
-    parser.add_argument("--expected-contact-mode", choices=("source_mapping", "five_fingertips"),
-                        default="five_fingertips", help="expected hand contact sites for observation/reward and finger masks")
+
     parser.add_argument("--wall-clock-seconds", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rerun-output", type=Path, help="optional .rrd transition recording for one training env")
