@@ -1,40 +1,34 @@
 ## Objective
-Build and validate one package-driven ManoRL training path that physically repairs two real-world raw capture corpora with a fixed Cheyingtong right MANO hand at 120 Hz control / 480 Hz physics. Completion requires source-complete accounting, duration-preserving 120 Hz references, small learned residuals, and physical grasp/transport/place/release evaluation.
+Align the two canonical real-world raw-capture sources to one future ManoRL input contract: every row uses the same Cheyingtong right MANO physical hand, complete trajectories are converted to a duration-preserving 120 Hz reference, and verified Lance-free packages can be consumed together by one runtime. Delivery is input-path code, tests, and runbook; full-corpus compilation and policy training are outside the current request.
 
 ## Workbench
-1. Implement the raw-transfer source/package contract and focused tests on `feat/raw-capture-transfer-120hz`.
-2. Compile verified per-source packages and a combined catalog.
-3. Run zero-residual baselines before any PPO smoke test.
-4. Choose long-training scale only from measured baseline failure mechanisms.
+1. Finish focused validation and commit the raw-transfer input feature.
+2. Preserve real-sample package/scene evidence and exact source accounting.
+3. Report the future compile commands and known source rejections.
 
 ## Context
-- Runtime source snapshot: `/home/jay/dexrobot/FromSSH/manoRL_mujoco` (deployed snapshot, no usable top-level Git history).
-- Managed protected integration: `/home/jay/dexrobot/FromSSH/manoRL_mujoco_dev`, `dev` at `e23d7f3`.
-- Deployed source claims lost Git object `edcd2a3cda16f15c9901af3c0231c6c72ba99b40`.
+- Worker: `/home/jay/dexrobot/FromSSH/manoRL_mujoco-worktrees/feat-raw-capture-transfer-120hz`, branch `feat/raw-capture-transfer-120hz`.
+- Managed integration: `/home/jay/dexrobot/FromSSH/manoRL_mujoco_dev`, `dev` at `e23d7f3`.
 - Remake source: `/mnt/nas-222-projects/mocap_v2/lance_datasets/human_p1_remake_v3/human_p1_remake_clean.lance`, v978.
 - Guangguan source: `/mnt/nas-222-projects/mocap_v2/lance_datasets/human_p1_guangguan/human_p1_guangguan_clean.lance`, v530.
-- Fixed hand manifest: `/home/jay/dexrobot/FromSSH/manoRL_mujoco/outputs/cheyingtong120_start_augmentation_20260917/seeds/asset_manifest.json`.
+- Verified Cheyingtong/f98 manifest: `outputs/raw_capture_transfer/cheyingtong_asset_manifest.json` in the worker output; SHA256 `d9fa818613cfc899041d4d195d14a8d5cfd8d45af8a00234b55e75c0b59aeb42`.
 
 ## Task specifications
-- Use the complete canonical clean datasets only; do not mix daily, dirty, anomaly, generated, IsaacGym-refined, or synthetic rows.
-- Select right-hand motion. Explicitly reject rows without right-hand data.
-- Source operator and source MANO betas remain provenance. The physical model is always the pinned Cheyingtong right-hand asset.
-- Raw `urdf_dof` is a kinematic actuator-target reference. Raw capture has no separate `q_state_ref`; do not invent one.
-- Preserve complete capture approach, manipulation, release, and withdrawal. Movement annotations define reward/evaluation phases but do not crop the source.
-- Remake is a physical 100 Hz source. Resample by elapsed timestamp to a 120 Hz grid with duration/final-pose preservation.
-- Guangguan is nominally/mean 120 Hz despite millisecond-quantized median intervals near 8 ms. Normalize by elapsed timestamps to the same 120 Hz grid.
-- Hand XYZ/object XYZ: linear interpolation. Hand angular coordinates: unwrap then linear interpolation. Object orientation: quaternion SLERP.
-- Initialize every scene object once from frame 0 plus one common support shift; all objects then evolve as free MJX-Warp bodies. Never write reference object poses after reset.
-- Execute absolute target `q_raw_120 + residual`; no reference action is injected beyond the base position target.
-- Separate action-specific expected-contact reward from the residual-active finger mask. The raw repair profile may adjust all 22 finger joints, with explicit residual-size regularization.
-- Preserve the compound `bottle,cap` action18 scene and account for its 55 rows through an explicit `bottle:18` target override; do not split labels heuristically or silently drop the cap.
-- Training consumes Lance-free verified package data. Lance/PyArrow stay in isolated compile workers.
-- Combined training must preserve both source paths/versions and each row UUID; it may not pretend two sources are one Lance dataset.
+- Use canonical clean datasets only; do not mix daily, dirty, anomaly, generated, synthetic, or IsaacGym-refined rows.
+- Select raw right-hand q. Rows without a right hand are explicit source rejections.
+- `index.operator` and source MANO betas remain provenance only. They never select or modify the physical hand. The physical hand is always the pinned Cheyingtong right MANO asset.
+- Raw `urdf_dof` is the one kinematic actuator-target reference; do not invent `q_state_ref`.
+- Preserve complete approach, manipulation, release, and withdrawal. Movement annotations define phases but do not crop the capture.
+- Resample elapsed timestamps to a coupled120Hz grid: linear hand/object XYZ, unwrapped-linear hand angles, quaternion SLERP for objects, final-pose preservation with at most one grid-edge hold.
+- Initialize every scene body once from frame0 after one common support shift. All objects evolve as free MJX-Warp bodies thereafter.
+- Preserve compound bottle+cap scenes. Use explicit `bottle:18` target selection while retaining cap as a free colliding body.
+- Keep Lance/PyArrow inside isolated compiler workers. Packages bind source path/version/schema/catalog, source operator/betas, fixed physical manifest, clock, and interpolation contract.
+- Permit several independently verified source packages to feed one policy runtime without pretending they came from one Lance dataset.
 
 ## Constraints
-- Do not use the 12,200-row IsaacGym refined Lance for this task.
-- Do not use `q_state_ref` semantics for raw capture.
+- Do not run additional PPO training or frozen policy evaluation for this task.
+- Do not compile the full15,704-row corpus unless the user asks.
 - Do not alter either source Lance.
-- Do not start a long PPO run before zero-residual physical baselines identify the dominant failure modes.
-- Do not commit feature changes directly to protected `dev`.
+- Do not use IsaacGym refined state-target semantics.
+- Do not commit directly to protected `dev`.
 - Do not touch unrelated GPU processes.

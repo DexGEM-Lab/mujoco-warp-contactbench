@@ -29,3 +29,17 @@
 - Initial conservative profile is1mm/control XYZ,10mm XYZ cap,1x joint scale/cap, penalty scale1.0.
 - Checkpoint strict signature now binds contact mode, residual-joint mask, complete reward config, and the package/bundle digest.
 - Focused suites:57 passed/7 skipped for asset+trajectory+package+unified raw boundary;98 passed with one known pre-existing test failure excluded and19 environment setup errors caused by the obsolete singular NAS fixture path.
+
+## 2026-09-23T18:01:18+08:00 — zero-residual physical baseline
+- All screens used the fixed Cheyingtong/f98 hand, 120/480Hz, zero residual, Warp CCD16 with32 contacts/world. The earlier16/world bottle screen overflowed at901>880 total slots and is invalid; it was replaced by the clean32/world run.
+- Remake cylinder5:03 row3282: no hand-object contact; actual bottom clearance max14.43mm vs reference109.17mm; reason2 at frame198 with102.92mm object error.
+- Guangguan cube2:11 row1057:76 contact frames, max3 keypoints, but zero loaded-airborne frames; actual bottom clearance max1.88mm vs reference99.67mm; reason2 at frame214 with101.34mm error.
+- Guangguan bottle+cap action18:55/55 reason2;52/55 ever contacted; every contacting row reached exactly one keypoint and none reached opposing two-keypoint contact; zero loaded-airborne frames. Median contact duration98 frames, median actual bottom clearance0.765mm vs median reference89.38mm. One3.65cm transient had no simultaneous load-bearing contact and is not a grip.
+
+## 2026-09-23T18:16:56+08:00 — user scope correction and bounded smoke boundary
+- User clarified that current delivery is input alignment only; no actual training is required.
+- The already-running bounded smoke had completed before this clarification:512 envs,100 updates,2,457,600 transitions, two references, fixed Cheyingtong. It produced0 natural successes across11,776 completed stochastic episodes and is retained only as a diagnostic artifact, not evidence about full-corpus learnability.
+- Run root: `/home/jay/dexrobot/FromSSH/manoRL_raw_transfer_runs/two-source-two-reference-n512-u100-20260923T095718Z`.
+- Final checkpoint SHA256: `40f59e5dc9795d17c35d4e8a924a9045423dfcd0ba9aead1a9d769f85c08624a`.
+- A telemetry defect was observed: persisted update aliases used CLI placeholder cube1/01 for mixed-package episodes while the episode ledger retained correct identities. The fix derives aliases from resolved trajectory labels and persists real grouped metrics.
+- No trainer or zero-residual process remains active; all four GPUs were released.

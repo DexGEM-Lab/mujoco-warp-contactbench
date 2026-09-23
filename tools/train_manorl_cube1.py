@@ -921,7 +921,15 @@ def _public_update_metrics(update: dict[str, Any]) -> dict[str, Any]:
     """Exclude in-memory W&B histogram samples from persisted update metrics."""
 
     private = {"episode_return_values", "grouped_metrics"}
-    return {name: value for name, value in update.items() if name not in private}
+    public = {name: value for name, value in update.items() if name not in private}
+    grouped = update.get("grouped_metrics", {})
+    if not isinstance(grouped, dict) or any(
+        not isinstance(name, str) or not isinstance(value, (int, float))
+        for name, value in grouped.items()
+    ):
+        raise RuntimeError("grouped persisted telemetry must be a flat numeric mapping")
+    public.update(grouped)
+    return public
 
 
 def _completed_episode_record(
@@ -1612,9 +1620,17 @@ def _train(
                 update_metrics[f"episode_cumulative/{alias}"] = float(np.mean(component_values))
                 update_metrics[f"episode_cumulative_min/{alias}_min"] = float(np.min(component_values))
                 update_metrics[f"episode_cumulative_max/{alias}_max"] = float(np.max(component_values))
-            # This bounded trainer resolves one global object/gesture group.
-            # Mirror the source observer's selected-group reward/component keys.
-            groups = (f"{budget.object_type}_{budget.gesture}", f"object_{budget.object_type}")
+            # Preserve legacy selected-group aliases for single-pair runs,
+            # but derive them from the resolved trajectories. Mixed runs use
+            # the actual grouped telemetry below and must never inherit CLI
+            # placeholder labels such as the default cube1/01 pair.
+            groups = (
+                (f"{budget.object_type}_{budget.gesture}", f"object_{budget.object_type}")
+                if telemetry_layout is None
+                else tuple(axis.labels[0] for axis in telemetry_layout.axes)
+                if all(len(axis.labels) == 1 for axis in telemetry_layout.axes)
+                else ()
+            )
             for group in groups:
                 update_metrics[f"episode_reward/{group}"] = episode_total_mean
                 for alias, values in completed_episode_components.items():

@@ -698,6 +698,11 @@ def test_train_emits_gym_style_object_and_pair_telemetry(
     assert grouped["distance_reward_x/cube1_02"] == 2.0
     assert grouped["distance_reward/cube2_02"] == 12.0
     assert "grouped_metrics" not in updates[0]
+    assert updates[0]["reward_mean/cube1_01"] == 1.0
+    assert updates[0]["reward_mean/cube2_02"] == 4.0
+    assert updates[0]["episode_reward/cube1_02"] == 2.5
+    assert updates[0]["episode_reward/cube2_02"] == -4.0
+    assert "episode_reward/cube1_01" not in updates[0]
     assert episode_records[0]["schema"] == "manorl.completed_episode_returns.v2"
     assert episode_records[0]["object_types"] == ["cube1", "cube2"]
     assert episode_records[0]["action_ids"] == ["02", "02"]
