@@ -32,13 +32,17 @@ from sim.manorl.contracts import (
 
 TASK_ASSET_ROOT = Path(__file__).resolve().parent / "task_assets"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEXSTREAM_ROOT = REPOSITORY_ROOT / "assets" / "dexstream_digital_assets"
+DEFAULT_DEXSTREAM_ROOT = REPOSITORY_ROOT / "assets" / "dexstream_digital_assets"
+DEXSTREAM_ROOT = Path(
+    os.environ.get("MANORL_ASSET_ROOT", str(DEFAULT_DEXSTREAM_ROOT))
+).expanduser().resolve()
 DEXSTREAM_REPOSITORY = "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
 MANO_OPERATOR = "sunke"
 EXPLICIT_ASSET_MANIFEST = os.environ.get("MANORL_ASSET_MANIFEST", "")
 ASSET_MANIFEST = (
     Path(EXPLICIT_ASSET_MANIFEST).expanduser().resolve()
-    if EXPLICIT_ASSET_MANIFEST else TASK_ASSET_ROOT / "dexstream_manifest.json"
+    if EXPLICIT_ASSET_MANIFEST
+    else TASK_ASSET_ROOT / "dexstream_manifest.json"
 )
 if EXPLICIT_ASSET_MANIFEST:
     MANO_OPERATOR = json.loads(ASSET_MANIFEST.read_text(encoding="utf-8"))["hand_operator"]
@@ -1406,7 +1410,8 @@ def validate_unified_compiled_model(
                 f"got {len(object_geom_ids)}"
             )
         if not np.all(model.geom_contype[object_geom_ids] == 2) or not np.all(
-            model.geom_conaffinity[object_geom_ids] == (7 if object_collisions else 5)
+            model.geom_conaffinity[object_geom_ids]
+            == (7 if object_collisions else 5)
         ):
             raise ValueError(f"compiled {runtime.object_type} collision masks mismatch")
     validate_static_fk(mujoco, model, object_type=names[0], hand_side=side)

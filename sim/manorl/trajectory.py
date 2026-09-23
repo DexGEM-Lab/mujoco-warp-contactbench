@@ -55,6 +55,8 @@ DEFAULT_REFERENCE_FPS = DEFAULT_POLICY_FPS
 REFERENCE_RESAMPLING_ID = (
     "coupled_source_policy_clock_edge_hold_padding_unwrapped_linear_slerp_v3"
 )
+RAW_CAPTURE_TRANSFER_CONTRACT = "manorl.raw_capture_fixed_hand_120hz.v1"
+RAW_CAPTURE_RESAMPLING_ID = "timestamp_duration_linear_slerp_to_120hz_v1"
 CUBE1_ACTION_01_BATCH_ROWS = (
     (0, "97f4b8a1-19f4-5c1c-a051-162f21fcfc84", "cube1_01_003", 1481, 681, 971),
     (1, "d5bc2bc6-9458-52d0-bccc-66c9ec21bae3", "cube1_01_009", 1373, 690, 982),
@@ -138,6 +140,11 @@ class ReferenceTrajectory:
     scene_object_types: tuple[str, ...] = ()
     scene_object_initial_pos: NDArray[np.float64] | None = None
     scene_object_initial_quat_xyzw: NDArray[np.float64] | None = None
+    # Raw-transfer provenance remains the recorded capture identity. It does
+    # not claim that the source shape equals the fixed physical hand profile.
+    source_operator: str | None = None
+    source_hand_betas: tuple[float, ...] | None = None
+    reference_contract: str | None = None
 
     def __post_init__(self) -> None:
         expected = int(self.source_indices.shape[0])
@@ -174,6 +181,33 @@ class ReferenceTrajectory:
         object.__setattr__(self, "hand_sides", sides)
         object.__setattr__(self, "q_ref_by_side", normalized_map)
         object.__setattr__(self, "selected_hand_sides", selected)
+        if self.reference_contract is not None:
+            if self.reference_contract != RAW_CAPTURE_TRANSFER_CONTRACT:
+                raise ValueError("unsupported reference trajectory contract")
+            if self.source_operator is None or not str(self.source_operator).strip():
+                raise ValueError("raw-transfer trajectories require a source operator")
+            betas = np.asarray(self.source_hand_betas, dtype=np.float64)
+            if betas.shape != (10,) or not np.all(np.isfinite(betas)):
+                raise ValueError("raw-transfer trajectories require ten finite source MANO betas")
+            if selected != ("right",) or sides != ("right",):
+                raise ValueError("raw-transfer trajectories must contain only the selected right hand")
+            if self.reference_fps != 120 or self.control_fps != 120:
+                raise ValueError("raw-transfer trajectories require a coupled 120 Hz clock")
+            object.__setattr__(self, "source_operator", str(self.source_operator))
+            object.__setattr__(self, "source_hand_betas", tuple(float(value) for value in betas))
+        elif self.source_operator is not None or self.source_hand_betas is not None:
+            betas = np.asarray(self.source_hand_betas, dtype=np.float64)
+            if (
+                self.source_operator is None
+                or not str(self.source_operator).strip()
+                or betas.shape != (10,)
+                or not np.all(np.isfinite(betas))
+                or self.reference_fps is not None
+                or self.control_fps is not None
+            ):
+                raise ValueError("unbound raw-capture provenance is incomplete")
+            object.__setattr__(self, "source_operator", str(self.source_operator))
+            object.__setattr__(self, "source_hand_betas", tuple(float(value) for value in betas))
         if self.scene_object_types:
             scene_types = tuple(self.scene_object_types)
             active_object = self.identity.identity.rsplit("_", 2)[0]
@@ -436,6 +470,97 @@ def resample_reference_trajectory(
     )
 
 
+
+def resample_timestamped_reference_trajectory(
+    trajectory: ReferenceTrajectory,
+    *,
+    reference_fps: int = 120,
+) -> ReferenceTrajectory:
+    """Preserve raw-capture elapsed time on a coupled control/reference grid.
+
+    The final source pose is retained. When duration is not an exact control
+    interval, the output has one terminal edge-hold frame at most.
+    """
+
+    if not isinstance(trajectory, ReferenceTrajectory):
+        raise TypeError("trajectory must be a ReferenceTrajectory")
+    if reference_fps != 120:
+        raise ValueError("raw capture transfer requires reference_fps=120")
+    if trajectory.reference_fps is not None or trajectory.control_fps is not None:
+        raise ValueError("timestamped trajectory is already bound to a control clock")
+    source_times = np.asarray(trajectory.timestamps, dtype=np.float64)
+    source_times = source_times - source_times[0]
+    if (
+        source_times.shape != (len(trajectory.q_ref),)
+        or source_times[-1] <= 0.0
+        or np.any(np.diff(source_times) <= 0.0)
+    ):
+        raise ValueError("timestamped trajectory must span strictly increasing elapsed time")
+    control_timestep = 1.0 / float(reference_fps)
+    control_intervals = int(
+        np.ceil(float(source_times[-1]) / control_timestep - 1e-12)
+    )
+    control_times = np.arange(control_intervals + 1, dtype=np.float64) * control_timestep
+    query_times = np.minimum(control_times, float(source_times[-1]))
+    q_ref_by_side = {
+        side: _immutable(_interpolate_hand_qpos(values, source_times, query_times))
+        for side, values in trajectory.q_ref_by_side.items()
+    }
+    primary_side = (
+        "right"
+        if "right" in trajectory.selected_hand_sides
+        else trajectory.selected_hand_sides[0]
+    )
+    object_pos_raw = _interpolate_rows(
+        trajectory.object_pos_raw, source_times, query_times
+    )
+    object_pos = object_pos_raw.copy()
+    object_pos[:, 2] += trajectory.object_z_shift
+    object_quat_xyzw = Slerp(
+        source_times,
+        Rotation.from_quat(trajectory.object_quat_xyzw),
+    )(query_times).as_quat()
+    object_quat_xyzw /= np.linalg.norm(object_quat_xyzw, axis=1, keepdims=True)
+    source_coordinates = np.interp(
+        query_times,
+        source_times,
+        np.asarray(trajectory.source_indices, dtype=np.float64),
+    )
+    source_indices = np.floor(source_coordinates + 1e-10).astype(np.int64)
+    source_indices[-1] = int(trajectory.source_indices[-1])
+    movement_start = (
+        0 if trajectory.movement_start_step is None else trajectory.movement_start_step
+    )
+    movement_end = (
+        len(trajectory.q_ref) - 1
+        if trajectory.movement_end_step is None
+        else trajectory.movement_end_step
+    )
+    movement_start_step = int(
+        np.ceil(source_times[movement_start] / control_timestep - 1e-10)
+    )
+    movement_end_step = min(
+        int(np.ceil(source_times[movement_end] / control_timestep - 1e-10)),
+        len(control_times) - 1,
+    )
+    if not 0 <= movement_start_step <= movement_end_step < len(control_times):
+        raise ValueError("source movement window does not map onto the 120 Hz grid")
+    return replace(
+        trajectory,
+        source_indices=_immutable(source_indices, dtype=np.int64),
+        timestamps=_immutable(control_times),
+        q_ref=q_ref_by_side[primary_side],
+        q_ref_by_side=q_ref_by_side,
+        object_pos_raw=_immutable(object_pos_raw),
+        object_pos=_immutable(object_pos),
+        object_quat_xyzw=_immutable(object_quat_xyzw),
+        reference_fps=reference_fps,
+        control_fps=reference_fps,
+        movement_start_step=movement_start_step,
+        movement_end_step=movement_end_step,
+        reference_contract=RAW_CAPTURE_TRANSFER_CONTRACT,
+    )
+
 @dataclass(frozen=True)
 class TrajectoryBatch:
     """Immutable per-world reference assignments, mirroring Isaac batch loading."""
@@ -565,6 +690,7 @@ class TrajectorySelection:
     drop_uncontrolled_hands: bool = False
     target_object_overrides: str = ""
     generated_reference: bool = False
+    raw_transfer: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "dataset_path", Path(self.dataset_path))
@@ -612,8 +738,24 @@ class TrajectorySelection:
             raise ValueError("pair_assignment_cycle must be a non-negative integer")
         if not isinstance(self.generated_reference, bool):
             raise ValueError("generated_reference must be boolean")
+        if not isinstance(self.raw_transfer, bool):
+            raise ValueError("raw_transfer must be boolean")
+        if self.generated_reference and self.raw_transfer:
+            raise ValueError("generated_reference and raw_transfer are exclusive")
         if self.generated_reference and (self.pre_padding or self.post_padding):
             raise ValueError("generated references require zero padding and full episodes")
+        if self.raw_transfer and (
+            self.hand_side != "right"
+            or not self.drop_uncontrolled_hands
+            or self.reference_fps != 120
+            or self.resolved_control_fps != 120
+            or self.pre_padding
+            or self.post_padding
+        ):
+            raise ValueError(
+                "raw_transfer requires right-only, dropped uncontrolled hands, "
+                "zero padding, and a coupled 120 Hz clock"
+            )
         normalize_hand_side(self.hand_side)
         if self.target_object_overrides:
             overrides = parse_trajectory_selector(self.target_object_overrides)
@@ -970,6 +1112,7 @@ def trajectory_from_lance_row(
     post_padding: int = 0,
     drop_uncontrolled_hands: bool = False,
     generated_reference: bool = False,
+    raw_transfer: bool = False,
 ) -> ReferenceTrajectory:
     """Decode a modern Lance row with one, left/right, or both hands.
 
@@ -984,6 +1127,12 @@ def trajectory_from_lance_row(
     metadata = row.get("trajectory_metadata")
     if not isinstance(metadata, dict):
         raise ValueError("row lacks trajectory_metadata")
+    if generated_reference and raw_transfer:
+        raise ValueError("generated_reference and raw_transfer are exclusive")
+    if raw_transfer and (hand_side != "right" or not drop_uncontrolled_hands):
+        raise ValueError("raw_transfer requires a dropped, selected right hand")
+    if raw_transfer and (pre_padding or post_padding):
+        raise ValueError("raw_transfer preserves the full capture and requires zero padding")
     if generated_reference:
         from sim.manorl.lance_v2 import SYNTHETIC_LANCE_CONTRACT
         if row.get("index", {}).get("is_generated") is not True:
@@ -1027,7 +1176,7 @@ def trajectory_from_lance_row(
         recorded_profile = extra.get("physical_hand_profile", {})
         if recorded_profile.get("manifest_sha256") != assets.asset_provenance()["asset_manifest_sha256"]:
             raise ValueError("generated reference physical asset hash mismatch")
-    if assets.EXPLICIT_ASSET_MANIFEST:
+    if assets.EXPLICIT_ASSET_MANIFEST and not raw_transfer:
         if row.get("index", {}).get("operator") != assets.MANO_OPERATOR:
             raise ValueError("capture operator differs from explicit hand asset profile")
         raw_names = metadata["hand_names"]
@@ -1108,7 +1257,7 @@ def trajectory_from_lance_row(
     # stationary edge hold so every selected pair receives the requested
     # policy-duration padding.
     requested_stop = movement_end + 1 + post_padding
-    if generated_reference:
+    if generated_reference or raw_transfer:
         requested_start, requested_stop = 0, source_count
     start = max(0, requested_start)
     stop = min(source_count, requested_stop)
@@ -1151,7 +1300,7 @@ def trajectory_from_lance_row(
     object_pos[:, 2] += z_shift
     scene_initial_pos = scene_initial_pos_raw.copy()
     scene_initial_pos[:, 2] += z_shift
-    if len(object_names) > 1:
+    if len(object_names) > 1 or raw_transfer:
         for side, values in q_by_side.items():
             shifted = values.copy()
             shifted[:, 2] += z_shift
@@ -1200,9 +1349,13 @@ def trajectory_from_lance_row(
         object_pos=_immutable(object_pos),
         object_quat_xyzw=_immutable(object_quat_xyzw),
         object_z_shift=z_shift,
-        scene_object_types=object_names if len(object_names) > 1 else (),
-        scene_object_initial_pos=_immutable(scene_initial_pos) if len(object_names) > 1 else None,
-        scene_object_initial_quat_xyzw=_immutable(scene_initial_quat) if len(object_names) > 1 else None,
+        scene_object_types=object_names if (len(object_names) > 1 or raw_transfer) else (),
+        scene_object_initial_pos=(
+            _immutable(scene_initial_pos) if (len(object_names) > 1 or raw_transfer) else None
+        ),
+        scene_object_initial_quat_xyzw=(
+            _immutable(scene_initial_quat) if (len(object_names) > 1 or raw_transfer) else None
+        ),
         hand_sides=sides,
         q_ref_by_side=q_by_side,
         selected_hand_sides=selected,
@@ -1210,6 +1363,17 @@ def trajectory_from_lance_row(
         movement_end_step=movement_end_step,
         reference_fps=int(metadata["data_fps"]) if generated_reference else None,
         control_fps=int(metadata["data_fps"]) if generated_reference else None,
+        source_operator=(str(index.get("operator", "")) if raw_transfer else None),
+        source_hand_betas=(
+            tuple(
+                float(value)
+                for value in metadata.get("mano_hand_shapes", [])[
+                    metadata["hand_names"].index("right")
+                ]
+            )
+            if raw_transfer
+            else None
+        ),
     )
 
 
@@ -1661,8 +1825,14 @@ def _row_with_target_override(row: dict[str, Any], selection: TrajectorySelectio
     if len(moves) != 1 or not isinstance(moves[0], dict):
         raise ValueError("target override requires one annotated movement interval")
     annotated = str(moves[0].get("object_name", "")).split(",")
-    if target not in _modern_scene_object_names(row) or target not in [n.strip() for n in annotated]:
-        raise ValueError("target override is absent from the annotated scene/movement")
+    if (
+        target not in _modern_scene_object_names(row)
+        or target not in [name.strip() for name in annotated]
+    ):
+        # One action id spans many object categories. An override names only
+        # rows whose scene and movement annotation contain that target; other
+        # rows with the same action retain their authoritative annotation.
+        return row
     return {**row, "trajectory_metadata": {**metadata, "trajectory_info": {
         **info, "object_move": [{**moves[0], "object_name": target}]
     }}}
@@ -1837,11 +2007,16 @@ def _selected_trajectory_from_row(
             post_padding=selection.post_padding,
             drop_uncontrolled_hands=selection.drop_uncontrolled_hands,
             generated_reference=selection.generated_reference,
+            raw_transfer=selection.raw_transfer,
         )
         if selection.generated_reference:
             if selection.reference_fps not in (None, trajectory.reference_fps):
                 raise ValueError("generated references must retain their saved clock")
             return trajectory
+        if selection.raw_transfer:
+            return resample_timestamped_reference_trajectory(
+                trajectory, reference_fps=120
+            )
         return (
             trajectory
             if selection.reference_fps is None

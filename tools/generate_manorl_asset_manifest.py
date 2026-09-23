@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 SOURCE_REPOSITORY = "git@github.com:DexGEM-Lab/dexstream_digital-assets.git"
-HAND_OPERATOR = "sunke"
+DEFAULT_HAND_OPERATOR = "sunke"
 SCHEMA = "manorl.dexstream-assets.v1"
 
 # The runtime encodes every object's metric collision AABB.  The semantic
@@ -142,7 +142,7 @@ def _mesh_paths(urdf_path: str, root: ET.Element, query: str) -> list[str]:
 
 
 def _hand_manifest(
-    asset_root: Path, side: str, *, hand_operator: str = HAND_OPERATOR
+    asset_root: Path, side: str, *, hand_operator: str = DEFAULT_HAND_OPERATOR
 ) -> dict[str, Any]:
     root_path = f"hand/mano/{hand_operator}/{side}"
     urdf_name = f"mano_{side}_hand_floating.urdf"
@@ -316,10 +316,13 @@ def _object_manifest(
     }
 
 def generate(
-    asset_root: Path, repository_root: Path, *, hand_operator: str = HAND_OPERATOR
+    asset_root: Path,
+    repository_root: Path,
+    *,
+    hand_operator: str = DEFAULT_HAND_OPERATOR,
 ) -> dict[str, Any]:
     if re.fullmatch(r"[a-z][a-z0-9_-]*", hand_operator) is None:
-        raise ValueError("hand operator must be a source bundle name")
+        raise ValueError("hand_operator must be a normalized asset profile name")
     commit = _run_git(asset_root, "rev-parse", "HEAD").decode("ascii").strip()
     mapping_path = repository_root / "sim/manorl/task_assets/object_grasps_simple.yaml"
     mapping = mapping_path.read_bytes()
@@ -329,7 +332,9 @@ def generate(
         "source_commit": commit,
         "hand_operator": hand_operator,
         "hands": {
-            side: _hand_manifest(asset_root, side, hand_operator=hand_operator)
+            side: _hand_manifest(
+                asset_root, side, hand_operator=hand_operator
+            )
             for side in ("right", "left")
         },
         "objects": {
@@ -355,12 +360,16 @@ def main() -> None:
         type=Path,
         default=Path("sim/manorl/task_assets/dexstream_manifest.json"),
     )
-    parser.add_argument("--hand-operator", default=HAND_OPERATOR)
+    parser.add_argument("--hand-operator", default=DEFAULT_HAND_OPERATOR)
     args = parser.parse_args()
     repository_root = Path(__file__).resolve().parents[1]
     asset_root = (repository_root / args.asset_root).resolve()
     output = (repository_root / args.output).resolve()
-    manifest = generate(asset_root, repository_root, hand_operator=args.hand_operator)
+    manifest = generate(
+        asset_root,
+        repository_root,
+        hand_operator=args.hand_operator,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n",

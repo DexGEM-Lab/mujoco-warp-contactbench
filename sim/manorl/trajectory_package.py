@@ -17,6 +17,8 @@ from sim.manorl.abi import ENVIRONMENT_CONTRACT_ID
 from sim.manorl.contracts import TrajectoryIdentity
 from sim.manorl.trajectory import (
     ObjectActionPair,
+    RAW_CAPTURE_RESAMPLING_ID,
+    RAW_CAPTURE_TRANSFER_CONTRACT,
     REFERENCE_RESAMPLING_ID,
     ReferenceTrajectory,
     TrajectoryBatch,
@@ -301,6 +303,13 @@ def write_trajectory_package(
                     "scene_object_initial_quat_xyzw": (
                         None if trajectory.scene_object_initial_quat_xyzw is None else trajectory.scene_object_initial_quat_xyzw.tolist()
                     ),
+                    "source_operator": trajectory.source_operator,
+                    "source_hand_betas": (
+                        None
+                        if trajectory.source_hand_betas is None
+                        else list(trajectory.source_hand_betas)
+                    ),
+                    "reference_contract": trajectory.reference_contract,
                     "movement_start_step": trajectory.movement_start_step,
                     "movement_end_step": trajectory.movement_end_step,
                     "offset": [start, stop],
@@ -343,7 +352,11 @@ def write_trajectory_package(
         manifest: dict[str, object] = {
             "schema": (SCENE_TRAJECTORY_PACKAGE_SCHEMA if any(t.scene_object_types for t in ordered) else TRAJECTORY_PACKAGE_SCHEMA),
             "environment_contract": ENVIRONMENT_CONTRACT_ID,
-            "reference_resampling": REFERENCE_RESAMPLING_ID,
+            "reference_resampling": (
+                RAW_CAPTURE_RESAMPLING_ID
+                if selection.raw_transfer
+                else REFERENCE_RESAMPLING_ID
+            ),
             "dataset": {
                 "logical_path": next(iter(dataset_paths)),
                 "version": int(dataset_version),
@@ -353,6 +366,7 @@ def write_trajectory_package(
             "selection": {
                 "catalog_selector": "all",
                 "generated_reference": selection.generated_reference,
+                "raw_transfer": selection.raw_transfer,
                 "hand_side": selection.hand_side,
                 "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
                 "target_object_overrides": selection.target_object_overrides,
@@ -375,8 +389,22 @@ def write_trajectory_package(
             "catalog_digest": _canonical_digest(catalog_basis),
         }
         from sim.manorl import assets
+        if selection.raw_transfer and (
+            not assets.EXPLICIT_ASSET_MANIFEST
+            or assets.MANO_OPERATOR != "cheyingtong"
+        ):
+            raise TrajectoryPackageError(
+                "raw-transfer package requires an explicit Cheyingtong asset manifest"
+            )
         if assets.EXPLICIT_ASSET_MANIFEST:
-            manifest["source_hand_asset_profile"] = assets.asset_provenance()
+            profile = {
+                **assets.asset_provenance(),
+                "hand_operator": assets.MANO_OPERATOR,
+            }
+            if selection.raw_transfer:
+                manifest["physical_hand_asset_profile"] = profile
+            else:
+                manifest["source_hand_asset_profile"] = profile
         manifest["package_digest"] = _canonical_digest(manifest)
         manifest_path = temporary / _MANIFEST_FILE
         manifest_path.write_text(
@@ -438,10 +466,18 @@ def load_trajectory_package(
     if not root.is_dir():
         raise FileNotFoundError(f"trajectory package directory is absent: {root}")
     manifest, manifest_sha256 = _load_manifest(root)
-    if "source_hand_asset_profile" in manifest:
-        from sim.manorl.assets import asset_provenance
-        if manifest["source_hand_asset_profile"] != asset_provenance():
-            raise TrajectoryPackageError("trajectory package source hand asset profile mismatch")
+    for profile_key in ("source_hand_asset_profile", "physical_hand_asset_profile"):
+        if profile_key in manifest:
+            from sim.manorl import assets
+            actual = {**assets.asset_provenance(), "hand_operator": assets.MANO_OPERATOR}
+            expected = dict(manifest[profile_key])
+            # Legacy scene packages predate the explicit hand-operator field.
+            if "hand_operator" not in expected:
+                actual.pop("hand_operator")
+            if expected != actual:
+                raise TrajectoryPackageError(
+                    f"trajectory package {profile_key} mismatch"
+                )
     arrays_metadata = manifest.get("arrays")
     if not isinstance(arrays_metadata, dict) or set(arrays_metadata) != set(_ARRAY_FILES):
         raise TrajectoryPackageError("trajectory package array manifest is incomplete")
@@ -528,6 +564,13 @@ def load_trajectory_package(
                 scene_object_initial_quat_xyzw=record.get(
                     "scene_object_initial_quat_xyzw"
                 ),
+                source_operator=record.get("source_operator"),
+                source_hand_betas=(
+                    None
+                    if record.get("source_hand_betas") is None
+                    else tuple(record["source_hand_betas"])
+                ),
+                reference_contract=record.get("reference_contract"),
                 hand_sides=hand_sides,
                 q_ref_by_side=side_map,
                 selected_hand_sides=selected_hand_sides,
@@ -605,6 +648,24 @@ def _validate_catalog_selection(catalog: TrajectoryCatalog, selection: Trajector
         raise TrajectoryPackageError("trajectory package selection contract is missing")
     if bool(manifest_selection.get("generated_reference", False)) != selection.generated_reference:
         raise TrajectoryPackageError("trajectory package generated_reference mismatch")
+    if bool(manifest_selection.get("raw_transfer", False)) != selection.raw_transfer:
+        raise TrajectoryPackageError("trajectory package raw_transfer mismatch")
+    expected_resampling = (
+        RAW_CAPTURE_RESAMPLING_ID if selection.raw_transfer else REFERENCE_RESAMPLING_ID
+    )
+    if catalog.manifest.get("reference_resampling") != expected_resampling:
+        raise TrajectoryPackageError("trajectory package reference resampling mismatch")
+    if selection.raw_transfer:
+        profile = catalog.manifest.get("physical_hand_asset_profile")
+        if not isinstance(profile, Mapping) or profile.get("hand_operator") != "cheyingtong":
+            raise TrajectoryPackageError(
+                "raw-transfer package requires the fixed Cheyingtong hand profile"
+            )
+        if any(
+            trajectory.reference_contract != RAW_CAPTURE_TRANSFER_CONTRACT
+            for trajectory in catalog.trajectories
+        ):
+            raise TrajectoryPackageError("raw-transfer package contains a non-raw trajectory")
     expected = {
         "hand_side": selection.hand_side,
         "pre_padding": selection.pre_padding,

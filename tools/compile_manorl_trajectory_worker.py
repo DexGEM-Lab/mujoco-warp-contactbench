@@ -30,6 +30,7 @@ def _selection(path: Path) -> TrajectorySelection:
         hand_side=str(values["hand_side"]),
         drop_uncontrolled_hands=bool(values.get("drop_uncontrolled_hands", False)),
         generated_reference=bool(values.get("generated_reference", False)),
+        raw_transfer=bool(values.get("raw_transfer", False)),
         reference_fps=int(values["reference_fps"]),
         control_fps=int(values["control_fps"]),
         pair_assignment_cycle=0,

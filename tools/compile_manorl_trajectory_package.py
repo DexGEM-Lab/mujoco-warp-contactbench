@@ -101,6 +101,7 @@ def _selection_payload(selection: TrajectorySelection) -> dict[str, object]:
         "hand_side": selection.hand_side,
         "drop_uncontrolled_hands": selection.drop_uncontrolled_hands,
         "generated_reference": selection.generated_reference,
+        "raw_transfer": selection.raw_transfer,
         "target_object_overrides": selection.target_object_overrides,
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
@@ -340,6 +341,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drop-uncontrolled-hands", action="store_true")
     parser.add_argument("--generated-reference", action="store_true",
                         help="opt in to canonical120Hz generated full episodes; requires zero padding")
+    parser.add_argument(
+        "--raw-transfer",
+        action="store_true",
+        help="preserve a complete real capture, resample elapsed timestamps to120Hz, and transfer it to one fixed physical hand",
+    )
+    parser.add_argument(
+        "--asset-manifest",
+        type=Path,
+        help="explicit fixed physical asset manifest required by --raw-transfer",
+    )
+    parser.add_argument(
+        "--asset-root",
+        type=Path,
+        help="materialized DexStream checkout required by --raw-transfer",
+    )
+    parser.add_argument(
+        "--fixed-hand-operator",
+        default="cheyingtong",
+        help="required hand_operator in --asset-manifest (default: %(default)s)",
+    )
     parser.add_argument("--shard-size", type=int, default=128)
     parser.add_argument("--max-attempts", type=int, default=3)
     args = parser.parse_args(argv)
@@ -349,6 +370,41 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("padding must be non-negative")
     if args.shard_size < 1 or args.max_attempts < 1:
         parser.error("shard-size and max-attempts must be positive")
+    if args.raw_transfer:
+        if args.generated_reference:
+            parser.error("--raw-transfer and --generated-reference are exclusive")
+        if (
+            args.asset_manifest is None
+            or args.asset_root is None
+            or args.reference_fps != 120
+            or args.hand_side != "right"
+            or not args.drop_uncontrolled_hands
+            or args.pre_padding != 0
+            or args.post_padding != 0
+        ):
+            parser.error(
+                "--raw-transfer requires --asset-manifest, --asset-root, --reference-fps 120, "
+                "--hand-side right, --drop-uncontrolled-hands, and zero padding"
+            )
+        asset_manifest = args.asset_manifest.expanduser().resolve()
+        asset_root = args.asset_root.expanduser().resolve()
+        if not asset_manifest.is_file():
+            parser.error("--asset-manifest must name an existing file")
+        if not asset_root.is_dir():
+            parser.error("--asset-root must name a materialized DexStream checkout")
+        if "sim.manorl.assets" in sys.modules:
+            parser.error("asset module loaded before fixed raw-transfer hand was selected")
+        os.environ["MANORL_ASSET_MANIFEST"] = str(asset_manifest)
+        os.environ["MANORL_ASSET_ROOT"] = str(asset_root)
+        from sim.manorl import assets
+
+        if assets.MANO_OPERATOR != args.fixed_hand_operator:
+            parser.error(
+                "asset manifest hand_operator "
+                f"{assets.MANO_OPERATOR!r} != required {args.fixed_hand_operator!r}"
+            )
+    elif args.asset_manifest is not None or args.asset_root is not None:
+        parser.error("--asset-manifest/--asset-root are reserved for --raw-transfer")
     selection = TrajectorySelection(
         selector=args.pairs or "all",
         dataset_path=args.dataset_path.expanduser().resolve(),
@@ -358,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         hand_side=args.hand_side,
         drop_uncontrolled_hands=args.drop_uncontrolled_hands,
         generated_reference=args.generated_reference,
+        raw_transfer=args.raw_transfer,
         target_object_overrides=args.target_object_overrides,
         reference_fps=args.reference_fps,
     )
