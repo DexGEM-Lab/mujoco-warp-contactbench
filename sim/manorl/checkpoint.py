@@ -47,6 +47,8 @@ _ENVIRONMENT_SIGNATURE_FIELDS = (
     "post_padding",
     "warp_ccd",
     "expected_contact_mode",
+    "residual_joint_mode",
+    "action_penalty_scale",
     "trajectory_package_schema",
     "trajectory_package_digest",
     "trajectory_package_manifest_sha256",
@@ -319,6 +321,12 @@ def _validate_environment_signature(metadata: dict[str, Any], agent: "PPO") -> N
         return
     checkpoint_environment = dict(checkpoint_environment)
     checkpoint_environment.setdefault("expected_contact_mode", "source_mapping")
+    checkpoint_environment.setdefault("residual_joint_mode", "expected_contacts")
+    reward = checkpoint_environment.get("reward")
+    if "action_penalty_scale" not in checkpoint_environment and isinstance(reward, dict):
+        checkpoint_environment["action_penalty_scale"] = reward.get(
+            "action_penalty_scale", 0.0
+        )
 
     target = getattr(agent, "manorl_environment_signature", None)
     if isinstance(target, dict):

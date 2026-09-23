@@ -26,11 +26,11 @@ Real captures are kinematically coherent but can fail under free-body MJX-Warp b
 ## Anomalies
 - Nine Guangguan rows have non-increasing timestamps and must appear as explicit compiler rejections.
 - Thirty-five Guangguan rows lack a right hand and must appear as explicit compiler rejections.
-- A broad reward profile still needs implementation: all-five-fingertip contact intent conflicts with labeled pinch/lateral/adduction grasps, and the current default residual penalty is zero.
-- The trainer currently accepts one package; simultaneous two-source training needs verified multi-package catalog composition.
+- The raw training profile now uses pair-specific contact mappings with grasp-action fallback, permits corrections on all22 finger joints, and applies nonzero cumulative-residual regularization.
+- Two independently verified source packages now compose into one deterministic policy catalog and one checkpoint-bound aggregate digest.
 
 ## Current justified claim
-The corrected source→fixed-Cheyingtong→120Hz→free-object package path works for real 100Hz, real nominal120Hz, and compound-scene examples. The next intervention is the small-residual training profile plus multi-package assignment, followed by zero-residual failure-mode measurement.
+The corrected source→fixed-Cheyingtong→120Hz→free-object package path works for real 100Hz, real nominal120Hz, and compound-scene examples. The package and training contracts are implemented. The next intervention is zero-residual failure-mode measurement on a representative cross-source/action screen, followed by a short PPO smoke only if the baseline exposes a correctable contact or tracking gap.
 
 ## Highest-value next question
 With corrected references and one fixed hand, does zero-residual failure arise mainly at contact acquisition, load-bearing transport, or release? That measurement determines whether the conservative 1× residual envelope is sufficient.

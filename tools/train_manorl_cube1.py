@@ -57,6 +57,7 @@ from sim.manorl.rewards import (
     PPO_REWARD_SCALE,
     REWARD_CONTRACT_ID,
     REWARD_HAND_OBJECT_THRESHOLD_N,
+    SOURCE_ALIGNED_REWARD_CONFIG,
 )
 from sim.manorl.skrl_runtime import ManoPPOConfig, ManoSkrlRuntime
 from sim.manorl.trajectory import (
@@ -69,7 +70,11 @@ from sim.manorl.trajectory import (
     TrajectorySelection,
     load_assigned_trajectory_batch,
 )
-from sim.manorl.trajectory_package import file_sha256, load_assigned_trajectory_package
+from sim.manorl.trajectory_package import (
+    file_sha256,
+    load_assigned_trajectory_package,
+    load_assigned_trajectory_packages,
+)
 
 DEFAULT_WANDB_PROJECT = "mujoco-mano"
 DEFAULT_WANDB_TAGS = ("manorl", "mujoco", "skrl")
@@ -214,12 +219,16 @@ class TrainingBudget:
     dataset_path: str = DATASET_PATH
     dataset_version: int | None = None
     trajectory_package: str | None = None
+    trajectory_packages: tuple[str, ...] = ()
     reference_fps: int = DEFAULT_REFERENCE_FPS
     hand_side: str = "auto"
     target_object_overrides: str = ""
     drop_uncontrolled_hands: bool = False
     generated_reference: bool = False
+    raw_transfer: bool = False
     expected_contact_mode: str = "five_fingertips"
+    residual_joint_mode: str = "expected_contacts"
+    action_penalty_scale: float = 0.0
     pre_padding: int = DEFAULT_PRE_PADDING
     post_padding: int = DEFAULT_POST_PADDING
     residual_enabled: bool = True
@@ -254,6 +263,27 @@ class TrainingBudget:
     warp_ccd_iterations: int | None = None
     warp_ccd_contacts_per_world: int | None = None
     warp_persistent_ccd_workspace: bool = False
+
+    def __post_init__(self) -> None:
+        if self.trajectory_package is not None and self.trajectory_packages:
+            raise ValueError("trajectory_package and trajectory_packages are exclusive")
+        if not math.isfinite(self.action_penalty_scale) or self.action_penalty_scale < 0.0:
+            raise ValueError("action_penalty_scale must be finite and non-negative")
+        if self.raw_transfer and (
+            self.hand_side != "right"
+            or not self.drop_uncontrolled_hands
+            or self.reference_fps != 120
+            or self.pre_padding != 0
+            or self.post_padding != 0
+            or self.expected_contact_mode != "raw_gesture"
+            or self.residual_joint_mode != "all"
+            or self.action_penalty_scale <= 0.0
+            or (self.trajectory_package is None and not self.trajectory_packages)
+        ):
+            raise ValueError(
+                "raw_transfer training requires package-backed right-only120Hz full captures, "
+                "raw_gesture contacts, all-joint residual repair, and positive residual regularization"
+            )
 
     @property
     def transitions(self) -> int:
@@ -1872,13 +1902,21 @@ def _load_selected_trajectories(
     *,
     num_envs: int,
 ):
-    if budget.trajectory_package is None:
-        return load_assigned_trajectory_batch(selection, num_envs=num_envs)
-    return load_assigned_trajectory_package(
-        budget.trajectory_package,
-        selection,
-        num_envs=num_envs,
-    )
+    if budget.trajectory_package is not None and budget.trajectory_packages:
+        raise ValueError("trajectory_package and trajectory_packages are exclusive")
+    if budget.trajectory_packages:
+        return load_assigned_trajectory_packages(
+            budget.trajectory_packages,
+            selection,
+            num_envs=num_envs,
+        )
+    if budget.trajectory_package is not None:
+        return load_assigned_trajectory_package(
+            budget.trajectory_package,
+            selection,
+            num_envs=num_envs,
+        )
+    return load_assigned_trajectory_batch(selection, num_envs=num_envs)
 
 
 def _build_training_observer(
@@ -1958,6 +1996,11 @@ def _build_evaluation_runtime(
             unified_object_batch=budget.unified_object_batch,
             hand_side=budget.hand_side,
             expected_contact_mode=budget.expected_contact_mode,
+            residual_joint_mode=budget.residual_joint_mode,
+            reward_config=replace(
+                SOURCE_ALIGNED_REWARD_CONFIG,
+                action_penalty_scale=budget.action_penalty_scale,
+            ),
         ),
     )
     ppo_config = _evaluation_ppo_config(training_config, num_envs=num_envs)
@@ -2150,9 +2193,10 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
         dataset_path=Path(budget.dataset_path),
         expected_dataset_version=budget.dataset_version,
         hand_side=budget.hand_side,
+        target_object_overrides=budget.target_object_overrides,
         drop_uncontrolled_hands=budget.drop_uncontrolled_hands,
         generated_reference=budget.generated_reference,
-        target_object_overrides=budget.target_object_overrides,
+        raw_transfer=budget.raw_transfer,
         reference_fps=budget.reference_fps,
         pair_assignment_cycle=budget.pair_assignment_cycle,
         pre_padding=budget.pre_padding,
@@ -2214,6 +2258,11 @@ def run(output: Path, budget: TrainingBudget) -> dict[str, Any]:
             warp_persistent_ccd_workspace=budget.warp_persistent_ccd_workspace,
             hand_side=budget.hand_side,
             expected_contact_mode=budget.expected_contact_mode,
+            residual_joint_mode=budget.residual_joint_mode,
+            reward_config=replace(
+                SOURCE_ALIGNED_REWARD_CONFIG,
+                action_penalty_scale=budget.action_penalty_scale,
+            ),
         ),
     )
     ppo_config = ManoPPOConfig(
@@ -2598,6 +2647,27 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--trajectory-packages",
+        type=Path,
+        action="append",
+        default=[],
+        help="repeat once per verified source package to train one shared multi-source policy",
+    )
+    parser.add_argument("--raw-transfer", action="store_true")
+    parser.add_argument("--target-object-overrides", default="")
+    parser.add_argument("--drop-uncontrolled-hands", action="store_true")
+    parser.add_argument(
+        "--expected-contact-mode",
+        choices=("source_mapping", "five_fingertips", "raw_gesture"),
+        default="source_mapping",
+    )
+    parser.add_argument(
+        "--residual-joint-mode",
+        choices=("expected_contacts", "all"),
+        default="expected_contacts",
+    )
+    parser.add_argument("--action-penalty-scale", type=float, default=0.0)
+    parser.add_argument(
         "--reference-fps",
         type=int,
         choices=SUPPORTED_REFERENCE_FPS,
@@ -2780,6 +2850,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--resume-checkpoint and --warm-start-checkpoint are mutually exclusive")
     if args.trajectory_package is not None and not args.trajectory_package.expanduser().is_dir():
         parser.error("--trajectory-package must name an existing package directory")
+    if args.trajectory_package is not None and args.trajectory_packages:
+        parser.error("--trajectory-package and --trajectory-packages are mutually exclusive")
+    missing_packages = [path for path in args.trajectory_packages if not path.expanduser().is_dir()]
+    if missing_packages:
+        parser.error(f"--trajectory-packages contains a missing directory: {missing_packages[0]}")
+    if len(args.trajectory_packages) > 1 and args.dataset_version is not None:
+        parser.error("multi-source --trajectory-packages requires --dataset-version to be omitted")
     if (args.warm_start_checkpoint is None) != (
         args.warm_start_prior_updates is None
     ):
@@ -2809,9 +2886,10 @@ def main(argv: list[str] | None = None) -> int:
             dataset_path=args.dataset_path,
             expected_dataset_version=args.dataset_version,
             hand_side=args.hand_side,
+            target_object_overrides=args.target_object_overrides,
             drop_uncontrolled_hands=args.drop_uncontrolled_hands,
             generated_reference=args.generated_reference,
-            target_object_overrides=args.target_object_overrides,
+            raw_transfer=args.raw_transfer,
             reference_fps=args.reference_fps,
             pre_padding=args.pre_padding,
             post_padding=args.post_padding,
@@ -2827,6 +2905,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("updates, num-envs, and rerun-stride must be positive")
     if args.pre_padding < 0 or args.post_padding < 0:
         parser.error("pre-padding and post-padding must be non-negative")
+    if not math.isfinite(args.action_penalty_scale) or args.action_penalty_scale < 0.0:
+        parser.error("--action-penalty-scale must be finite and non-negative")
     for name, value in (
         ("position-scale", args.position_scale),
         ("max-position-offset", args.max_position_offset),
@@ -2934,12 +3014,18 @@ def main(argv: list[str] | None = None) -> int:
                 if args.trajectory_package is None
                 else str(args.trajectory_package.expanduser().resolve())
             ),
+            trajectory_packages=tuple(
+                str(path.expanduser().resolve()) for path in args.trajectory_packages
+            ),
             reference_fps=args.reference_fps,
             hand_side=args.hand_side,
+            target_object_overrides=args.target_object_overrides,
             drop_uncontrolled_hands=args.drop_uncontrolled_hands,
             generated_reference=args.generated_reference,
-            target_object_overrides=args.target_object_overrides,
+            raw_transfer=args.raw_transfer,
             expected_contact_mode=args.expected_contact_mode,
+            residual_joint_mode=args.residual_joint_mode,
+            action_penalty_scale=args.action_penalty_scale,
             pre_padding=args.pre_padding,
             post_padding=args.post_padding,
             residual_enabled=args.use_residual,

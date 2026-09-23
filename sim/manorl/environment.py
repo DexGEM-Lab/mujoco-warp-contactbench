@@ -130,6 +130,26 @@ _CURATED_GRASP_ALIASES_BY_PAIR = {
     ("powerdrill", "18"): ("thumb3", "index3"),
 }
 
+_RAW_GESTURE_CONTACT_ALIASES = {
+    "01": ("thumb3", "index3"),
+    "02": ("thumb3", "index3", "middle3"),
+    "03": ("thumb3", "index3", "middle3", "ring3"),
+    "04": ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    "07": ("thumb3", "index3", "middle3"),
+    "08": ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    "09": ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    "10": ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    "11": ("thumb3", "index3", "middle3"),
+    "12": ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    "13": ("thumb3", "index3", "index2"),
+    "14": ("thumb3", "index3", "middle3", "ring3", "pinky3"),
+    "15": ("thumb3", "middle3", "ring3", "pinky3"),
+    "16": ("index2", "index3", "middle2", "middle3"),
+    "18": ("thumb3", "index3"),
+    "19": ("thumb3", "index3", "middle3"),
+}
+
+
 
 def _build_masked_reset_data_fn(
     *,
@@ -221,6 +241,7 @@ class EnvironmentConfig:
     warp_persistent_ccd_workspace: bool = False
     hand_side: str = "auto"
     expected_contact_mode: str = "source_mapping"
+    residual_joint_mode: str = "expected_contacts"
     # Data-augmentation option used by the synthetic exporter: sample a per-env
     # uniform XY offset in [-range, +range] meters and apply it to the object's
     # INITIAL position only. Reference hand targets and target object poses stay
@@ -356,8 +377,12 @@ class EnvironmentConfig:
             or self.object_init_xy_offset_range_m < 0.0
         ):
             raise ValueError("object_init_xy_offset_range_m must be a finite non-negative float")
-        if self.expected_contact_mode not in {"source_mapping", "five_fingertips"}:
-            raise ValueError("expected_contact_mode must be source_mapping or five_fingertips")
+        if self.expected_contact_mode not in {"source_mapping", "five_fingertips", "raw_gesture"}:
+            raise ValueError(
+                "expected_contact_mode must be source_mapping, five_fingertips, or raw_gesture"
+            )
+        if self.residual_joint_mode not in {"expected_contacts", "all"}:
+            raise ValueError("residual_joint_mode must be expected_contacts or all")
         normalize_hand_side(self.hand_side)
 
     @property
@@ -869,7 +894,7 @@ def _expected_keypoint_ids(
         return np.asarray([KEYPOINT_NAMES.index(name) for name in (
             "thumb_ip", "index_dip", "middle_dip", "ring_dip", "pinky_dip"
         )], dtype=np.int64)
-    if mode != "source_mapping":
+    if mode not in {"source_mapping", "raw_gesture"}:
         raise ValueError("unknown expected contact mode")
     runtime = object_runtime(object_type)
     import yaml
@@ -884,7 +909,13 @@ def _expected_keypoint_ids(
         else _CURATED_GRASP_ALIASES_BY_PAIR.get((object_type, action_id))
     )
     if aliases is None:
-        aliases = ("thumb3", "index3", "pinky3", "middle3", "ring3")
+        aliases = (
+            _RAW_GESTURE_CONTACT_ALIASES.get(action_id)
+            if mode == "raw_gesture"
+            else ("thumb3", "index3", "pinky3", "middle3", "ring3")
+        )
+    if aliases is None:
+        raise ValueError(f"raw gesture contact intent is undefined for action {action_id}")
     if not isinstance(aliases, (list, tuple)) or not all(
         isinstance(alias, str) for alias in aliases
     ):
@@ -1854,8 +1885,12 @@ class MujocoManoEnvironment:
         for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):
             self.expected_contact_mask[env_id, keypoint_ids] = 1.0
         self.expected_contact_weights = self.expected_contact_mask.copy()
-        self.active_joint_mask_by_side = _active_joint_mask(
-            self.expected_contact_mask, finger_dof=self.finger_dof
+        self.active_joint_mask_by_side = (
+            np.ones((config.num_envs, self.finger_dof), dtype=bool)
+            if config.residual_joint_mode == "all"
+            else _active_joint_mask(
+                self.expected_contact_mask, finger_dof=self.finger_dof
+            )
         )
         self.active_joint_mask = np.tile(
             self.active_joint_mask_by_side,
@@ -2086,8 +2121,12 @@ class MujocoManoEnvironment:
         for env_id, keypoint_ids in enumerate(self.expected_keypoint_ids):
             self.expected_contact_mask[env_id, keypoint_ids] = 1.0
         self.expected_contact_weights = self.expected_contact_mask.copy()
-        self.active_joint_mask_by_side = _active_joint_mask(
-            self.expected_contact_mask, finger_dof=self.finger_dof
+        self.active_joint_mask_by_side = (
+            np.ones((config.num_envs, self.finger_dof), dtype=bool)
+            if config.residual_joint_mode == "all"
+            else _active_joint_mask(
+                self.expected_contact_mask, finger_dof=self.finger_dof
+            )
         )
         self.active_joint_mask = np.tile(
             self.active_joint_mask_by_side,

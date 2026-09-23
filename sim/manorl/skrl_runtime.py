@@ -440,6 +440,9 @@ class ManoSkrlRuntime:
             "warp_ccd": physical.warp_ccd_metadata(),
             "expected_contact_mode": getattr(physical.config, "expected_contact_mode", "source_mapping"),
             "residual_action": asdict(physical.config.residual_action),
+            "expected_contact_mode": physical.config.expected_contact_mode,
+            "residual_joint_mode": physical.config.residual_joint_mode,
+            "action_penalty_scale": float(physical.config.reward_config.action_penalty_scale),
         }
         package = getattr(physical, "trajectory_package", None)
         if package is not None:

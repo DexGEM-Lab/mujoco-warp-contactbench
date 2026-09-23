@@ -103,6 +103,7 @@ local accidental-workflow guard, not a security boundary.
 | Cube1 training protocol (budget, launch, W&B) | [`docs/manorl_cube1_training_protocol.md`](docs/manorl_cube1_training_protocol.md) |
 | Synthetic Lance production (approach prefix, offline retreat, save gate) | [`docs/manorl_synthesis_approach_prefix.md`](docs/manorl_synthesis_approach_prefix.md) |
 | Lance isolation runbook (Source → Compile → Run, package, publish) | [`docs/manorl_lance_isolation_runbook.md`](docs/manorl_lance_isolation_runbook.md) |
+| Fixed-Cheyingtong raw-capture repair (two sources, timestamp→120 Hz, multi-package training) | [`docs/raw_capture_transfer_training.md`](docs/raw_capture_transfer_training.md) |
 | Phase 5A ABI inventory (observation/residual/reward/checkpoint) | [`docs/manorl_phase5_abi_inventory.md`](docs/manorl_phase5_abi_inventory.md) |
 | DexStream asset setup and integrity manifest | [`scripts/setup_manorl_assets.sh`](scripts/setup_manorl_assets.sh), [`tools/generate_manorl_asset_manifest.py`](tools/generate_manorl_asset_manifest.py) |
 | ManoRL physical asset source contract | [`docs/manorl_asset_source.md`](docs/manorl_asset_source.md) |

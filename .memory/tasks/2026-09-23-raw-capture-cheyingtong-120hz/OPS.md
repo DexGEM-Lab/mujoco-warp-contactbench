@@ -22,3 +22,10 @@
 - Compiled all 55 Guangguan bottle+cap action18 rows with explicit `bottle:18` target; no rejections.
 - One-world CPU MJX-Warp scene contained free bottle and free cap, object-object collisions enabled. Both initial XYZ states matched package scene states within 5e-9 m and four zero-residual controls remained finite.
 - Focused validation with explicit f98 asset root: 57 passed, 7 skipped.
+
+## 2026-09-23T17:37:23+08:00 — multi-source training contract
+- Added deterministic composition of independently verified MTP catalogs. A real two-package load assigned one Guangguan and one Remake trajectory without Lance/PyArrow and produced aggregate checkpoint digests under `manorl.trajectory_package_bundle.v1`.
+- Raw training profile requires right-only120Hz full captures, fixed package backing, action-specific `raw_gesture` contact intent, all22 finger residual axes available, and positive cumulative-residual regularization.
+- Initial conservative profile is1mm/control XYZ,10mm XYZ cap,1x joint scale/cap, penalty scale1.0.
+- Checkpoint strict signature now binds contact mode, residual-joint mask, complete reward config, and the package/bundle digest.
+- Focused suites:57 passed/7 skipped for asset+trajectory+package+unified raw boundary;98 passed with one known pre-existing test failure excluded and19 environment setup errors caused by the obsolete singular NAS fixture path.

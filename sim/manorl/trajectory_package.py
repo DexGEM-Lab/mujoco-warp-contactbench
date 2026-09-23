@@ -780,3 +780,130 @@ def load_assigned_trajectory_package(
 ) -> TrajectoryBatch:
     catalog = load_trajectory_package(package, verify_hashes=verify_hashes)
     return assign_trajectory_catalog(catalog, selection, num_envs=num_envs)
+
+TRAJECTORY_PACKAGE_BUNDLE_SCHEMA = "manorl.trajectory_package_bundle.v1"
+
+
+def _bundle_checkpoint_metadata(
+    catalogs: Sequence[TrajectoryCatalog],
+) -> dict[str, str]:
+    """Bind one runtime assignment to an ordered, canonical package set."""
+
+    children = [
+        {
+            "logical_path": str(catalog.manifest["dataset"]["logical_path"]),
+            **catalog.checkpoint_metadata,
+        }
+        for catalog in catalogs
+    ]
+    return {
+        "schema": TRAJECTORY_PACKAGE_BUNDLE_SCHEMA,
+        "package_digest": _canonical_digest(
+            [{"path": child["logical_path"], "digest": child["package_digest"]} for child in children]
+        ),
+        "manifest_sha256": _canonical_digest(
+            [{"path": child["logical_path"], "sha256": child["manifest_sha256"]} for child in children]
+        ),
+        "catalog_digest": _canonical_digest(
+            [{"path": child["logical_path"], "digest": child["catalog_digest"]} for child in children]
+        ),
+    }
+
+
+def assign_trajectory_catalogs(
+    catalogs: Sequence[TrajectoryCatalog],
+    selection: TrajectorySelection,
+    *,
+    num_envs: int,
+) -> TrajectoryBatch:
+    """Assign several independently verified source catalogs as one policy corpus."""
+
+    if not catalogs:
+        raise TrajectoryPackageError("trajectory package bundle is empty")
+    if num_envs < 1:
+        raise ValueError("num_envs must be positive")
+    if selection.expected_dataset_version is not None:
+        raise TrajectoryPackageError(
+            "multi-source package assignment requires dataset_version=None"
+        )
+    ordered = tuple(
+        sorted(
+            catalogs,
+            key=lambda catalog: (
+                str(catalog.manifest["dataset"]["logical_path"]),
+                catalog.package_digest,
+            ),
+        )
+    )
+    logical_paths = [str(catalog.manifest["dataset"]["logical_path"]) for catalog in ordered]
+    if len(set(logical_paths)) != len(logical_paths):
+        raise TrajectoryPackageError("trajectory package bundle duplicates a source path")
+    for catalog in ordered:
+        _validate_catalog_selection(catalog, selection)
+
+    by_pair: dict[ObjectActionPair, list[ReferenceTrajectory]] = {}
+    for catalog in ordered:
+        for trajectory in catalog.trajectories:
+            by_pair.setdefault(_pair_for(trajectory), []).append(trajectory)
+    requested = selection.requested_pairs
+    resolved_pairs = tuple(sorted(by_pair)) if requested is None else requested
+    missing = tuple(pair for pair in resolved_pairs if pair not in by_pair)
+    if missing:
+        raise LookupError(
+            "trajectory package bundle selector pair(s) are absent: "
+            + ", ".join(pair.canonical for pair in missing)
+        )
+    if not resolved_pairs:
+        raise LookupError("trajectory package bundle resolved no pairs")
+
+    values_by_pair = {
+        pair: tuple(
+            sorted(
+                by_pair[pair],
+                key=lambda trajectory: (
+                    trajectory.identity.dataset_path,
+                    trajectory.identity.row_index,
+                    trajectory.identity.identity,
+                ),
+            )
+        )
+        for pair in resolved_pairs
+    }
+    pair_slot_counts = {pair: 0 for pair in resolved_pairs}
+    for env_id in range(num_envs):
+        pair_slot_counts[resolved_pairs[env_id % len(resolved_pairs)]] += 1
+    rotated: dict[ObjectActionPair, tuple[ReferenceTrajectory, ...]] = {}
+    for pair in resolved_pairs:
+        values = values_by_pair[pair]
+        offset = selection.pair_assignment_cycle * pair_slot_counts[pair] % len(values)
+        rotated[pair] = values[offset:] + values[:offset]
+    pair_slots = {pair: 0 for pair in resolved_pairs}
+    assignments: list[ReferenceTrajectory] = []
+    for env_id in range(num_envs):
+        pair = resolved_pairs[env_id % len(resolved_pairs)]
+        values = rotated[pair]
+        assignments.append(values[pair_slots[pair] % len(values)])
+        pair_slots[pair] += 1
+    return TrajectoryBatch(
+        tuple(assignments),
+        resolved_pairs=resolved_pairs,
+        selection_mode=selection.mode,
+        pair_assignment_cycle=selection.pair_assignment_cycle,
+        trajectory_package=_bundle_checkpoint_metadata(ordered),
+    )
+
+
+def load_assigned_trajectory_packages(
+    packages: Sequence[str | Path],
+    selection: TrajectorySelection,
+    *,
+    num_envs: int,
+    verify_hashes: bool = True,
+) -> TrajectoryBatch:
+    """Load a deterministic multi-source package bundle without Lance/PyArrow."""
+
+    catalogs = tuple(
+        load_trajectory_package(package, verify_hashes=verify_hashes)
+        for package in packages
+    )
+    return assign_trajectory_catalogs(catalogs, selection, num_envs=num_envs)
