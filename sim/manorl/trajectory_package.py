@@ -666,9 +666,11 @@ def _validate_catalog_selection(catalog: TrajectoryCatalog, selection: Trajector
             for trajectory in catalog.trajectories
         ):
             raise TrajectoryPackageError("raw-transfer package contains a non-raw trajectory")
+    # ``pre_padding`` is a runtime episode-start offset relative to the stored
+    # movement window, not package content; the complete capture is always
+    # preserved, so the package contract does not pin it.
     expected = {
         "hand_side": selection.hand_side,
-        "pre_padding": selection.pre_padding,
         "post_padding": selection.post_padding,
         "reference_fps": selection.reference_fps,
         "control_fps": selection.resolved_control_fps,
