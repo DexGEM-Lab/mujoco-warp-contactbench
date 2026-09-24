@@ -19,8 +19,15 @@ from sim.manorl.trajectory_package import (
 )
 
 
-def _raw_row(*, fps: int = 100, scene: str = "cube1", gesture: str = "001-Palmar-Pinch") -> dict:
-    frames = 5
+def _raw_row(
+    *,
+    fps: int = 100,
+    scene: str = "cube1",
+    gesture: str = "001-Palmar-Pinch",
+    frames: int = 5,
+    move_start: int = 1,
+    move_end: int = 3,
+) -> dict:
     timestamps = np.arange(frames, dtype=np.float64) / float(fps)
     right = np.zeros((frames, 28), dtype=np.float64)
     right[:, 0] = timestamps
@@ -53,7 +60,11 @@ def _raw_row(*, fps: int = 100, scene: str = "cube1", gesture: str = "001-Palmar
             "object_names": object_names,
             "trajectory_info": {
                 "object_move": [
-                    {"object_name": active, "start_frame": 1, "end_frame": 3}
+                    {
+                        "object_name": active,
+                        "start_frame": move_start,
+                        "end_frame": move_end,
+                    }
                 ]
             },
         },
@@ -354,3 +365,88 @@ def test_training_cli_builds_one_fixed_hand_multi_source_profile(
     assert budget.trajectory_packages == (str(remake), str(guangguan))
     assert budget.expected_contact_mode == "raw_gesture"
     assert budget.residual_joint_mode == "all"
+
+
+def test_runtime_pre_padding_crops_episode_start_to_movement_window() -> None:
+    from sim.manorl.trajectory_package import _apply_runtime_pre_padding
+
+    row = _raw_row(fps=120, frames=200, move_start=100, move_end=150)
+    selection = _selection(Path("/tmp/source.lance"))
+    trajectory = _selected_trajectory_from_row(
+        row,
+        7,
+        row_index=0,
+        selection=selection,
+        expected_pair=ObjectActionPair("cube1", "01"),
+    )
+    assert trajectory.movement_start_step is not None
+    # Zero keeps the complete capture untouched (identical object).
+    assert _apply_runtime_pre_padding(trajectory, 0) is trajectory
+    # A pre-padding beyond the movement start clamps to frame zero.
+    assert _apply_runtime_pre_padding(trajectory, 10_000) is trajectory
+
+    start = int(trajectory.movement_start_step) - 80
+    assert start > 0
+    cropped = _apply_runtime_pre_padding(trajectory, 80)
+    assert len(cropped.q_ref) == len(trajectory.q_ref) - start
+    assert cropped.movement_start_step == trajectory.movement_start_step - start
+    assert cropped.movement_end_step == trajectory.movement_end_step - start
+    assert cropped.identity == trajectory.identity
+    np.testing.assert_allclose(cropped.q_ref[0], trajectory.q_ref[start])
+    np.testing.assert_allclose(cropped.object_pos[0], trajectory.object_pos[start])
+    np.testing.assert_allclose(
+        cropped.object_quat_xyzw[0], trajectory.object_quat_xyzw[start]
+    )
+    for side, values in cropped.q_ref_by_side.items():
+        np.testing.assert_allclose(values[0], trajectory.q_ref_by_side[side][start])
+
+
+def test_package_assignment_applies_runtime_pre_padding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dataclasses import replace as dc_replace
+
+    from sim.manorl.trajectory_package import load_assigned_trajectory_packages
+
+    monkeypatch.setattr(
+        "sim.manorl.trajectory._initial_scene_support_shift",
+        lambda *_args: 0.0,
+    )
+    monkeypatch.setattr(assets, "EXPLICIT_ASSET_MANIFEST", "/fixed/cheyingtong.json")
+    monkeypatch.setattr(assets, "MANO_OPERATOR", "cheyingtong")
+    monkeypatch.setattr(
+        assets,
+        "asset_provenance",
+        lambda: {
+            "asset_source_repository": "repo",
+            "asset_source_commit": "commit",
+            "asset_manifest_sha256": "a" * 64,
+        },
+    )
+    selection = _selection(tmp_path / "source.lance")
+    trajectory = _selected_trajectory_from_row(
+        _raw_row(fps=120, frames=200, move_start=100, move_end=150),
+        7,
+        row_index=0,
+        selection=selection,
+        expected_pair=ObjectActionPair("cube1", "01"),
+    )
+    package = write_trajectory_package(
+        tmp_path / "raw.mtp",
+        [trajectory],
+        selection=selection,
+        dataset_schema_digest="schema",
+        discovery_digest="discovery",
+    )
+    assignment_selection = dc_replace(
+        selection, pre_padding=80, expected_dataset_version=None
+    )
+    batch = load_assigned_trajectory_packages(
+        [package], assignment_selection, num_envs=2
+    )
+    assigned = batch.trajectories[0]
+    start = int(trajectory.movement_start_step) - 80
+    assert start > 0
+    assert len(assigned.q_ref) == len(trajectory.q_ref) - start
+    assert assigned.movement_start_step == trajectory.movement_start_step - start
+    np.testing.assert_allclose(assigned.q_ref[0], trajectory.q_ref[start])

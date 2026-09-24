@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import os
@@ -112,6 +112,74 @@ def _pair_for(trajectory: ReferenceTrajectory) -> ObjectActionPair:
         )
     return ObjectActionPair(fields[0], fields[1])
 
+
+
+def _apply_runtime_pre_padding(
+    trajectory: ReferenceTrajectory, pre_padding: int
+) -> ReferenceTrajectory:
+    """Crop a raw-transfer episode to ``movement_start - pre_padding`` frames.
+
+    Raw-transfer packages always retain the complete capture; this function is
+    the only place the runtime pre-padding shortens an episode. Zero keeps the
+    full capture unchanged. The active object's physical initial pose follows
+    the cropped reference frame zero automatically (the environment
+    initializes from ``reference_object_pos[:, 0]``), and the movement window
+    that drives reward phases shifts with the crop. Compound-scene passive
+    objects keep their stored initial poses, which is the pre-existing
+    full-capture convention.
+    """
+
+    if pre_padding <= 0 or trajectory.movement_start_step is None:
+        return trajectory
+    start = max(0, int(trajectory.movement_start_step) - int(pre_padding))
+    if start <= 0:
+        return trajectory
+    frames = int(np.asarray(trajectory.q_ref).shape[0])
+    if frames - start < 2:
+        raise TrajectoryPackageError(
+            "runtime pre-padding leaves fewer than two reference frames"
+        )
+
+    def cut(value: object) -> object:
+        return None if value is None else np.asarray(value)[start:].copy()
+
+    by_side = {
+        side: cut(value) for side, value in trajectory.q_ref_by_side.items()
+    }
+    scene_pos = trajectory.scene_object_initial_pos
+    scene_quat = trajectory.scene_object_initial_quat_xyzw
+    if (
+        scene_pos is not None
+        and scene_quat is not None
+        and trajectory.scene_object_types
+    ):
+        # The active object's stored initial pose must equal reference frame
+        # zero; move it with the crop. Passive compound-scene objects keep
+        # their full-capture frame-zero poses (documented limitation).
+        slot = int(trajectory.identity.object_index)
+        scene_pos = np.array(scene_pos, dtype=np.float64, copy=True)
+        scene_quat = np.array(scene_quat, dtype=np.float64, copy=True)
+        scene_pos[slot] = np.asarray(trajectory.object_pos)[start]
+        scene_quat[slot] = np.asarray(trajectory.object_quat_xyzw)[start]
+    cropped = replace(
+        trajectory,
+        source_indices=cut(trajectory.source_indices),
+        timestamps=cut(trajectory.timestamps),
+        q_ref=cut(trajectory.q_ref),
+        object_pos_raw=cut(trajectory.object_pos_raw),
+        object_pos=cut(trajectory.object_pos),
+        object_quat_xyzw=cut(trajectory.object_quat_xyzw),
+        q_ref_by_side=by_side,
+        movement_start_step=int(trajectory.movement_start_step) - start,
+        movement_end_step=(
+            None
+            if trajectory.movement_end_step is None
+            else int(trajectory.movement_end_step) - start
+        ),
+        scene_object_initial_pos=scene_pos,
+        scene_object_initial_quat_xyzw=scene_quat,
+    )
+    return cropped
 
 def _uniform_value(
     trajectories: Sequence[ReferenceTrajectory],
@@ -706,7 +774,9 @@ def assign_trajectory_catalog(
         raise ValueError("num_envs must be positive")
     _validate_catalog_selection(catalog, selection)
     decoded_by_key = {
-        (item.identity.row_index, item.identity.identity): item
+        (item.identity.row_index, item.identity.identity): _apply_runtime_pre_padding(
+            item, selection.pre_padding
+        )
         for item in catalog.trajectories
     }
     source_catalog = catalog.manifest.get("source_catalog")
@@ -846,7 +916,9 @@ def assign_trajectory_catalogs(
     by_pair: dict[ObjectActionPair, list[ReferenceTrajectory]] = {}
     for catalog in ordered:
         for trajectory in catalog.trajectories:
-            by_pair.setdefault(_pair_for(trajectory), []).append(trajectory)
+            by_pair.setdefault(_pair_for(trajectory), []).append(
+                _apply_runtime_pre_padding(trajectory, selection.pre_padding)
+            )
     requested = selection.requested_pairs
     resolved_pairs = tuple(sorted(by_pair)) if requested is None else requested
     missing = tuple(pair for pair in resolved_pairs if pair not in by_pair)
