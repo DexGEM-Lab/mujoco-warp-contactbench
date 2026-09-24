@@ -178,11 +178,15 @@ def inspect_v4_warmstart(path: str | Path, target_architecture: dict[str, Any], 
 def _load_v4_model_state(path: str | Path, model: torch.nn.Module, *,
                          map_location: str | torch.device,
                          expected_provenance: dict[str, Any] | None,
-                         allow_shared_policy_transfer: bool = False) -> tuple[dict[str, Any], str]:
+                         allow_shared_policy_transfer: bool = False,
+                         target_contracts: dict[str, str] | None = None) -> tuple[dict[str, Any], str]:
     payload, mode = inspect_v4_warmstart(path, model.checkpoint_architecture(),
                                          map_location=map_location,
                                          expected_provenance=expected_provenance,
-                                         target_contracts=model.checkpoint_contracts())
+                                         target_contracts=(
+                                             model.checkpoint_contracts()
+                                             if target_contracts is None else target_contracts
+                                         ))
     if mode == "exact_model":
         model.load_state_dict(payload["model"], strict=True)
         return payload, mode
@@ -211,11 +215,17 @@ def _load_v4_model_state(path: str | Path, model: torch.nn.Module, *,
 
 def load_v4_warmstart(path: str | Path, model: torch.nn.Module, *,
                       map_location: str | torch.device = "cpu",
-                      expected_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+                      expected_provenance: dict[str, Any] | None = None,
+                      ignore_reward_contract: bool = False) -> dict[str, Any]:
     """Load exact v4 weights or shared policy weights into a separate-critic target."""
+    target_contracts = model.checkpoint_contracts()
+    if ignore_reward_contract:
+        target_contracts = dict(target_contracts)
+        target_contracts.pop("reward_contract", None)
     payload, mode = _load_v4_model_state(path, model, map_location=map_location,
                                          expected_provenance=expected_provenance,
-                                         allow_shared_policy_transfer=True)
+                                         allow_shared_policy_transfer=True,
+                                         target_contracts=target_contracts)
     return {**payload, "warmstart_transfer_mode": mode}
 
 
@@ -233,10 +243,17 @@ _RESUME_MUTABLE_CONFIG = {
     "wandb", "wandb_project", "wandb_entity", "wandb_mode", "wandb_run_id",
     "source_commit", "warmstart", "warmstart_checkpoint", "warmstart_transfer_mode",
     "mode", "resume_checkpoint", "resume",
+    # Phase-based reference rotation legitimately changes the reference
+    # selection across resume phases; the physical/package provenance gate
+    # below still pins the package, assets, and identity split.
+    "reference_identities", "all_train_references", "all_references",
 }
 _RESUME_DIAGNOSTIC_PROVENANCE = {
     "source_commit", "cache_hash_recorded_not_compared", "separate_critic",
     "warmstart_checkpoint", "warmstart_transfer_mode", "mode", "resume_checkpoint", "resume",
+    # The env->reference round-robin roster changes across rotation phases;
+    # package, asset pin, and identity split remain pinned by the physical gate.
+    "reference_assignment",
 }
 _RESUME_REQUIRED_PROVENANCE = {
     "asset_pin", "package_digest", "manifest_sha256", "catalog_digest",
@@ -275,6 +292,14 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
         config.setdefault("teacher_anchor_beta", 0.0)
         config.setdefault("teacher_anchor_passes", 2)
         config.setdefault("teacher_anchor", teacher_anchor_metadata())
+        anchor = config.get("teacher_anchor")
+        if isinstance(anchor, dict) and isinstance(anchor.get("schedule"), dict):
+            # The decay horizon (schedule.updates) follows the cumulative
+            # --updates target and legitimately changes across resume phases;
+            # the recipe itself is beta/passes/start/final.
+            schedule = dict(anchor["schedule"])
+            schedule.pop("updates", None)
+            config["teacher_anchor"] = {**anchor, "schedule": schedule}
         if config.get("teacher_anchor_final_beta") is None:
             config["teacher_anchor_final_beta"] = config["teacher_anchor_beta"]
         curriculum = config.get("curriculum", False)
@@ -303,6 +328,11 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
     for provenance in (source_provenance, expected_provenance):
         if provenance["teacher_anchor"].get("beta") == 0:
             provenance["teacher_anchor"] = teacher_anchor_metadata(0., provenance["teacher_anchor"].get("passes", 2))
+        anchor = provenance["teacher_anchor"]
+        if isinstance(anchor.get("schedule"), dict):
+            schedule = dict(anchor["schedule"])
+            schedule.pop("updates", None)
+            provenance["teacher_anchor"] = {**anchor, "schedule": schedule}
     physical = lambda p: {k: v for k, v in p.items() if k not in _RESUME_DIAGNOSTIC_PROVENANCE}
     if physical(source_provenance) != physical(expected_provenance):
         raise ValueError("resume physical/package provenance mismatch")
@@ -454,6 +484,7 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
                     target_kl: float | None = None,
                     curriculum_config: CurriculumConfig | None = None,
                     warmstart: str | Path | None = None,
+                    warmstart_ignore_reward_contract: bool = False,
                     resume_checkpoint: str | Path | None = None,
                     expected_warmstart_provenance: dict[str, Any] | None = None,
                     on_update: Callable[[dict[str, float]], None] | None = None) -> tuple[torch.nn.Module, Any, list[dict[str, float]]]:
@@ -499,7 +530,8 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
     # supplies model weights only; teacher optimizer/progress/RNG are ignored.
     if warmstart is not None:
         warmstart_payload = load_v4_warmstart(warmstart, model, map_location=adapter.device,
-                                              expected_provenance=expected_warmstart_provenance)
+                                              expected_provenance=expected_warmstart_provenance,
+                                              ignore_reward_contract=warmstart_ignore_reward_contract)
         transfer_mode = warmstart_payload["warmstart_transfer_mode"]
     lineage = {"separate_critic": bool(separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
                "warmstart_transfer_mode": transfer_mode,
@@ -565,7 +597,14 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         valid = torch.ones((), dtype=torch.bool, device=adapter.device)
         completed_return = torch.zeros((), device=adapter.device); completed_length = torch.zeros((), device=adapter.device)
         completed_count = torch.zeros((), device=adapter.device)
-        summaries = {name: torch.zeros((), device=adapter.device) for name in ("object_motion", "contact_force", "path")}
+        summaries = (
+            None
+            if telemetry is not None
+            else {
+                name: torch.zeros((), device=adapter.device)
+                for name in ("object_motion", "contact_force", "path")
+            }
+        )
         teacher_pairs = [] if current_anchor_beta > 0 else None
         for _ in range(rollouts):
             with torch.no_grad():
@@ -589,7 +628,9 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
             if telemetry is not None:
                 # Captures cached t+1 reward/physical/contact facts before reset.
                 telemetry.add(adapter.telemetry_snapshot(actions))
-            for name, value in adapter.compact_summary().items(): summaries[name] += value
+            else:
+                for name, value in adapter.compact_summary().items():
+                    summaries[name] += value
             # Must happen after record_transition: reset source is runtime.last_done.
             observations = adapter.prepare_action(); policy_steps += 1
         _sync(adapter.device); sample_seconds = time.perf_counter() - sampled
@@ -606,17 +647,26 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         row = {"update": float(update), "policy_steps": float(policy_steps), "transitions": float(transitions),
                "window_transitions": count, "reward_mean": float(reward_sum.cpu()) / count,
                "terminations": float(done_count.cpu()), "valid": float(valid.cpu()),
-               "performance/sampling_time": sample_seconds, "performance/optimizer_time": optimize_seconds,
-               "physics/window_object_z_mean": float(summaries["object_motion"].cpu()) / count,
-               "physics/window_contact_force_mean": float(summaries["contact_force"].cpu()) / count,
-               "physics/window_path_error_mean": float(summaries["path"].cpu()) / count}
+               "performance/sampling_time": sample_seconds, "performance/optimizer_time": optimize_seconds}
         if telemetry is not None:
             # Scalar egress occurs once/update; episode state inside telemetry spans rollout cuts.
             row.update(telemetry.reduce(update=update, transitions=int(transitions)))
-        elif float(completed_count.cpu()):
-            row.update({"episodes/completed_count": float(completed_count.cpu()),
-                        "episodes/return_mean": float(completed_return.cpu() / completed_count.cpu()),
-                        "episodes/length_mean": float(completed_length.cpu() / completed_count.cpu())})
+        else:
+            row.update({
+                "physics/window_object_z_mean": float(
+                    summaries["object_motion"].cpu()
+                ) / count,
+                "physics/window_contact_force_mean": float(
+                    summaries["contact_force"].cpu()
+                ) / count,
+                "physics/window_path_error_mean": float(
+                    summaries["path"].cpu()
+                ) / count,
+            })
+            if float(completed_count.cpu()):
+                row.update({"episodes/completed_count": float(completed_count.cpu()),
+                            "episodes/return_mean": float(completed_return.cpu() / completed_count.cpu()),
+                            "episodes/length_mean": float(completed_length.cpu() / completed_count.cpu())})
         # This derives the effective values from the instantiated PPO/Adam,
         # rather than restating library defaults in telemetry configuration.
         row.update({f"config/{name}": value for name, value in resolved_v4_ppo_config(agent).items()

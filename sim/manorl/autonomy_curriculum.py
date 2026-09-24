@@ -134,10 +134,47 @@ class CurriculumController:
         }
 
 
-def curriculum_parameters(config: CurriculumConfig) -> dict[str, object]:
+def mixed_stage_frame(
+    all_candidates: dict[int, tuple[int, ...]],
+    stage: int,
+    env: int,
+    *,
+    mix_previous: float = 0.0,
+    full_horizon: float = 0.0,
+) -> int:
+    """Pick the reset frame for one environment, mixing in anti-forgetting resets.
+
+    A deterministic share of environments keeps full-horizon (frame 0) and
+    earlier-stage key-frame resets so the approach phase stays in the training
+    distribution when the curriculum advances.
+    """
+    candidates = all_candidates[stage]
+    frame = candidates[env % len(candidates)]
+    bucket = env % 100
+    full_horizon_buckets = round(full_horizon * 100)
+    mix_previous_buckets = round(mix_previous * 100)
+    if bucket < full_horizon_buckets:
+        return 0
+    if bucket < full_horizon_buckets + mix_previous_buckets and stage > 1:
+        previous_stage = 1 + (env % (stage - 1))
+        previous = all_candidates[previous_stage]
+        return previous[env % len(previous)]
+    return frame
+
+
+def curriculum_parameters(
+    config: CurriculumConfig,
+    *,
+    mix_previous: float = 0.0,
+    full_horizon: float = 0.0,
+) -> dict[str, object]:
     return {
         "enabled": True,
         "stages": dict(CURRICULUM_STAGE_NAMES),
+        "anti_forgetting": {
+            "mix_previous_ratio": float(mix_previous),
+            "full_horizon_ratio": float(full_horizon),
+        },
         "thresholds": {
             "opposing_loaded_fraction": config.opposition_threshold,
             "positive_lift_fraction": config.positive_lift_threshold,

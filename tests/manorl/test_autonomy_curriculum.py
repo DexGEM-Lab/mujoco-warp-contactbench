@@ -4,6 +4,7 @@ from __future__ import annotations
 from sim.manorl.autonomy_curriculum import (
     CurriculumConfig,
     CurriculumController,
+    mixed_stage_frame,
     reference_stage_candidates,
 )
 from tests.manorl.test_autonomy_v4 import _cache
@@ -41,3 +42,36 @@ def test_curriculum_promotes_only_after_window_and_stage_threshold():
     promoted = controller.observe(_metrics(lift=0.1))
     assert promoted["curriculum/stage"] == 3
     assert promoted["curriculum/promoted"] == 1
+
+
+def test_mixed_stage_frame_defaults_to_stage_candidates():
+    candidates = reference_stage_candidates(_cache(64))
+    for stage in (1, 2, 3):
+        for env in range(100):
+            assert mixed_stage_frame(candidates, stage, env) in candidates[stage]
+
+
+def test_mixed_stage_frame_mixes_full_horizon_and_previous_stages():
+    candidates = reference_stage_candidates(_cache(64))
+    frames = {
+        env: mixed_stage_frame(
+            candidates, 3, env, mix_previous=0.25, full_horizon=0.15
+        )
+        for env in range(100)
+    }
+    assert all(frames[env] == 0 for env in range(15))
+    stage1_or_2 = set(candidates[1]) | set(candidates[2])
+    assert all(frames[env] in stage1_or_2 for env in range(15, 40))
+    assert all(frames[env] in candidates[3] for env in range(40, 100))
+
+
+def test_mixed_stage_frame_stage_one_skips_previous_mix():
+    candidates = reference_stage_candidates(_cache(64))
+    frames = {
+        env: mixed_stage_frame(
+            candidates, 1, env, mix_previous=0.25, full_horizon=0.15
+        )
+        for env in range(100)
+    }
+    assert all(frames[env] == 0 for env in range(15))
+    assert all(frames[env] in candidates[1] for env in range(15, 100))

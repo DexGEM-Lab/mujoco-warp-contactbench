@@ -62,6 +62,7 @@ from sim.manorl.autonomy_training import (
 from sim.manorl.autonomy_v4 import REWARD_MOTION_RADIUS, reward_parameters
 from sim.manorl.autonomy_reward_v10 import reward_parameters_v10
 from sim.manorl.autonomy_reward_v101 import reward_parameters_v101
+from sim.manorl.autonomy_reward_v11 import reward_parameters_v11
 from sim.manorl.autonomy_curriculum import CurriculumConfig, curriculum_parameters
 from sim.manorl.assets import DEXSTREAM_ROOT
 from sim.manorl.trajectory_package import load_trajectory_package
@@ -102,6 +103,24 @@ def _training_references(args, catalog, trajectory, split):
         object_types={t.identity.identity.split('_')[0] for t in references}
         if len(object_types) != 1:
             raise ValueError("all-reference v4 requires one shared object type")
+        return references
+    subset = getattr(args, "reference_identities", None)
+    if subset:
+        names = [name.strip() for name in subset.split(",") if name.strip()]
+        if not names:
+            raise ValueError("--reference-identities requires at least one identity")
+        by_name = {t.identity.identity: t for t in catalog.trajectories}
+        missing = [name for name in names if name not in by_name]
+        if missing:
+            raise ValueError(f"reference identities absent from package: {missing}")
+        train_names = {catalog.trajectories[i].identity.identity for i in split["train_indices"]}
+        outside = [name for name in names if name not in train_names]
+        if outside:
+            raise ValueError(f"reference identities must stay inside the TRAIN split: {outside}")
+        references = [by_name[name] for name in names]
+        object_types = {t.identity.identity.split('_')[0] for t in references}
+        if len(object_types) != 1:
+            raise ValueError("subset reference training requires one shared object type")
         return references
     if not getattr(args, "all_train_references", False):
         return trajectory
@@ -167,13 +186,21 @@ def _contracts(
 
 
 def _adapter(args, trajectory, *, full_horizon_diagnostic=False, policy_version=None):
+    mix_previous = getattr(args, "curriculum_mix_previous", 0.0)
+    full_horizon = getattr(args, "curriculum_full_horizon", 0.0)
+    if (mix_previous or full_horizon) and not getattr(args, "curriculum", False):
+        raise ValueError("--curriculum-mix-previous/--curriculum-full-horizon require --curriculum")
     return BatchedAutonomyAdapter(trajectory, num_envs=args.num_envs, device=args.device, seed=args.seed,
         persistent_ccd_workspace=args.persistentworkspace, ccd_contacts_per_world=args.ccd_contacts_per_world,
         full_horizon_diagnostic=full_horizon_diagnostic,
         policy_version=policy_version or _policy_version(args),
         reward_version=args.reward_version,
         reward_severe_penalty=getattr(args, "severe_penalty", None),
-        curriculum_reset=getattr(args, "curriculum", False))
+        curriculum_reset=getattr(args, "curriculum", False),
+        curriculum_mix_previous=mix_previous,
+        curriculum_full_horizon=full_horizon,
+        reset_randomize_xy_m=getattr(args, "reset_randomize_xy", 0.0),
+        reset_randomize_yaw_deg=getattr(args, "reset_randomize_yaw", 0.0))
 
 
 def _reward_parameters(adapter):
@@ -182,6 +209,8 @@ def _reward_parameters(adapter):
         return reward_parameters_v10(adapter.runtime.reward_config)
     if reward_version == "v10.1":
         return reward_parameters_v101(adapter.runtime.reward_config)
+    if reward_version == "v11":
+        return reward_parameters_v11(adapter.runtime.reward_config)
     return reward_parameters(
         getattr(adapter.runtime.cache, "object_radius", REWARD_MOTION_RADIUS)
     )
@@ -218,7 +247,11 @@ def _provenance(catalog, split, adapter):
             "constraint_capacity_per_world": adapter.runtime.warp_constraint_capacity,
             "reward_parameters": _reward_parameters(adapter)}
     if getattr(adapter.runtime, "curriculum_enabled", False):
-        result["curriculum"] = curriculum_parameters(CurriculumConfig())
+        result["curriculum"] = curriculum_parameters(
+            CurriculumConfig(),
+            mix_previous=adapter.runtime.curriculum_mix_previous,
+            full_horizon=adapter.runtime.curriculum_full_horizon,
+        )
     if getattr(adapter.runtime, "trajectories", None) is not None:
         result["reference_assignment"] = {"mode": "fixed_round_robin_same_reference_reset",
             "identities": [t.identity.identity for t in adapter.runtime.trajectories]}
@@ -317,6 +350,9 @@ def train(args):
         raise ValueError("total-transitions must equal updates * rollouts * num-envs")
     references = _training_references(args, catalog, trajectory, split)
     adapter = _adapter(args, references); provenance = _provenance(catalog, split, adapter)
+    # Multi/subset-reference adapters adopt the first reference as the runtime
+    # trajectory; provenance must keep the explicitly requested anchor identity.
+    provenance["identity"] = trajectory.identity.identity
     if _adapter_policy_version(adapter) == "v6":
         # Independent actor/critic fusion towers are part of the v6 model
         # contract rather than an optional PPO setting.
@@ -333,7 +369,11 @@ def train(args):
         else args.teacher_anchor_final_beta
     )
     config["curriculum"] = (
-        curriculum_parameters(CurriculumConfig())
+        curriculum_parameters(
+            CurriculumConfig(),
+            mix_previous=args.curriculum_mix_previous,
+            full_horizon=args.curriculum_full_horizon,
+        )
         if args.curriculum
         else {"enabled": False}
     )
@@ -344,6 +384,9 @@ def train(args):
             "identity_split", "contracts", "identity",
         )
     }
+    if args.warmstart_ignore_reward_contract:
+        warmstart_expected["contracts"] = dict(warmstart_expected["contracts"])
+        warmstart_expected["contracts"].pop("reward", None)
     warmstart_expected["clock"] = {
         key: provenance["clock"][key] for key in (
             "control_timestep", "physics_timestep", "physics_substeps",
@@ -362,7 +405,13 @@ def train(args):
                 "checkpoint_format": provenance["contracts"]["checkpoint"],
                 "observation_contract": provenance["contracts"]["observation"],
                 "action_contract": provenance["contracts"]["action"],
-                "reward_contract": provenance["contracts"]["reward"],
+                # Warm-start transfers policy weights only; the reward contract
+                # belongs to the new run, not to the source checkpoint.
+                **(
+                    {}
+                    if args.warmstart_ignore_reward_contract
+                    else {"reward_contract": provenance["contracts"]["reward"]}
+                ),
             },
         )
     lineage = {"separate_critic": bool(args.separate_critic), "warmstart_checkpoint": warmstart_checkpoint,
@@ -397,7 +446,7 @@ def train(args):
         del validation_model, validation_optimizer, payload
     config.update(lineage); provenance.update(lineage)
     config["wandb_run_id"] = args.wandb_run_id or os.environ.get("WANDB_RUN_ID")
-    metadata = {"training_contract": "manorl.autonomy.training.v4.all_references" if args.all_references else ("manorl.autonomy.training.v4.multi_reference" if args.all_train_references else "manorl.autonomy.training.v4.single_reference"), "config": config,
+    metadata = {"training_contract": "manorl.autonomy.training.v4.all_references" if args.all_references else ("manorl.autonomy.training.v4.multi_reference" if args.all_train_references else ("manorl.autonomy.training.v4.subset_reference" if args.reference_identities else "manorl.autonomy.training.v4.single_reference")), "config": config,
                 "resolved": _resolved_telemetry_config(adapter, args), "provenance": provenance}
     run = _wandb(args, metadata)
     try:
@@ -413,6 +462,7 @@ def train(args):
             learning_epochs=args.learning_epochs, mini_batches=args.mini_batches, learning_rate=args.learning_rate, checkpoint=args.checkpoint,
             checkpoint_interval=args.checkpoint_interval, config=config, provenance=provenance,
             separate_critic=args.separate_critic, warmstart=warmstart_checkpoint,
+            warmstart_ignore_reward_contract=args.warmstart_ignore_reward_contract,
             teacher_anchor_beta=args.teacher_anchor_beta, teacher_anchor_passes=args.teacher_anchor_passes,
             teacher_anchor_final_beta=args.teacher_anchor_final_beta,
             target_kl=args.target_kl,
@@ -634,15 +684,21 @@ def build_parser():
     train_parser.add_argument("--learning-rate", type=float, default=3e-4, help="finite positive PPO Adam learning rate (default: 3e-4)")
     train_parser.add_argument("--target-kl", type=float, default=None, help="optional exact-KL early-stop threshold for each PPO update")
     train_parser.add_argument("--curriculum", action="store_true", help="enable telemetry-gated three-stage key-frame reset curriculum")
+    train_parser.add_argument("--curriculum-mix-previous", type=float, default=0.0, help="fraction of environments reset to earlier-stage key frames (anti-forgetting; requires --curriculum)")
+    train_parser.add_argument("--curriculum-full-horizon", type=float, default=0.0, help="fraction of environments always reset to frame 0 (anti-forgetting; requires --curriculum)")
+    train_parser.add_argument("--reset-randomize-xy", type=float, default=0.0, help="per-env uniform reset jitter on object XY position, metres")
+    train_parser.add_argument("--reset-randomize-yaw", type=float, default=0.0, help="per-env uniform reset jitter on object yaw, degrees")
     reference_group = train_parser.add_mutually_exclusive_group()
     reference_group.add_argument("--all-train-references", action="store_true", help="fixed round-robin assignment over all 40 deterministic TRAIN identities")
     reference_group.add_argument("--all-references", action="store_true", help="fixed round-robin assignment over every reference in the supplied package")
+    reference_group.add_argument("--reference-identities", help="comma-separated subset of TRAIN identities for phase-based rotation training")
     train_parser.add_argument("--teacher-anchor-beta", type=float, default=0.0, help="optional post-PPO teacher-action MSE weight; training supervision only")
     train_parser.add_argument("--teacher-anchor-final-beta", type=float, default=None, help="optional final teacher-anchor weight for a linear update schedule")
     train_parser.add_argument("--teacher-anchor-passes", type=int, default=2, help="full teacher-label minibatch passes after each PPO update")
     initialization = train_parser.add_mutually_exclusive_group()
     initialization.add_argument("--warmstart", help="strict v4 model-only checkpoint initialization; PPO uses a fresh full optimizer")
     initialization.add_argument("--resume-checkpoint", help="restore v4 model/Adam/RNG; --updates is the TOTAL cumulative target, with fresh full-start episodes")
+    train_parser.add_argument("--warmstart-ignore-reward-contract", action="store_true", help="allow warm-start from a checkpoint trained under a different reward version (policy weights transfer only)")
     train_parser.add_argument("--wandb-run-id", help="existing W&B run ID; required explicitly or via WANDB_RUN_ID on resume")
     train_parser.add_argument("--separate-critic", action="store_true", help="use an independent value trunk; shared remains the default")
     train_parser.add_argument("--wandb", action=argparse.BooleanOptionalAction, default=True); train_parser.add_argument("--wandb-project"); train_parser.add_argument("--wandb-entity"); train_parser.add_argument("--wandb-mode"); train_parser.set_defaults(fn=train)

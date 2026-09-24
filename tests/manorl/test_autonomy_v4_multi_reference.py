@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 from sim.manorl.autonomy_v4 import ReferenceBankV4, REFERENCE_TIME_FIELDS, _gather, build_raw_observation, compute_reward, raw_observation_slices
 from sim.manorl.autonomy_batch import BatchedAutonomyRuntime
+from sim.manorl.autonomy_contracts import V4_REWARD_TERM_NAMES
+from sim.manorl.autonomy_training import _telemetry_slices
 from tests.manorl.test_autonomy_v4 import _cache, _state, _contact
 
 
@@ -128,8 +130,11 @@ def test_identity_split_fallback_for_new_package_is_deterministic():
     bank=ReferenceBankV4(caches()); refs=j.array([0,1,0]); index=j.array([6,6,12])
     physical=_state(3); contact=_contact(3); action=j.zeros((3,28))
     adapter=object.__new__(BatchedAutonomyAdapter); adapter.num_envs=3
+    adapter.reward_names=V4_REWARD_TERM_NAMES
+    adapter._telemetry_slices,adapter._telemetry_width=_telemetry_slices(adapter.reward_names)
     adapter.runtime=SimpleNamespace(jp=j,cache=bank,env_ref=refs,indices=index,
         last_physical=physical,last_contact=contact,last_reward=compute_reward(physical,contact,bank,index,action,refs))
+    adapter._packed_telemetry_fn=adapter._pack_device_telemetry
     # Keep JAX values on device exactly as the GPU bridge does; no NumPy path.
     adapter._to_torch=lambda value:value
     snapshot=adapter.telemetry_snapshot(torch.zeros((3,28)))

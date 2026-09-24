@@ -19,10 +19,14 @@ V10_REWARD_CONTRACT_ID: Final = (
 V101_REWARD_CONTRACT_ID: Final = (
     "manorl.autonomy.reward.v10.1.temporal-grasp-lift-state"
 )
+V11_REWARD_CONTRACT_ID: Final = (
+    "manorl.autonomy.reward.v11.log-curve-temporal-grasp-lift"
+)
 REWARD_CONTRACT_BY_VERSION: Final[dict[str, str]] = {
     "v4": REWARD_CONTRACT_ID,
     "v10": V10_REWARD_CONTRACT_ID,
     "v10.1": V101_REWARD_CONTRACT_ID,
+    "v11": V11_REWARD_CONTRACT_ID,
 }
 SUPPORTED_REWARD_CONTRACT_IDS: Final = frozenset(
     REWARD_CONTRACT_BY_VERSION.values()
@@ -44,6 +48,7 @@ V101_REWARD_TERM_NAMES: Final = (
     "falling", "lateral_slip", "stalled_contact", "post_grasp_drop",
     "action", "survival", "severe",
 )
+V11_REWARD_TERM_NAMES: Final = V4_REWARD_TERM_NAMES
 CHECKPOINT_FORMAT: Final = "manorl.autonomy.ppo.v4"
 CACHE_CONTRACT_ID: Final = "manorl.autonomy.reference_cache.v4"
 # The old name remains an import-only alias; it names the v4 cache and never

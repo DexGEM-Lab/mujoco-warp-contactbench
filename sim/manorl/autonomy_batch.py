@@ -6,6 +6,7 @@ by a post-reset forward and are never row-masked.
 """
 from __future__ import annotations
 from typing import Any, NamedTuple
+import math
 import numpy as np
 from sim.manorl.autonomy_contracts import (
     ACTION_DIM,
@@ -23,6 +24,7 @@ from sim.manorl.autonomy_contracts import (
     V4_REWARD_TERM_NAMES,
     V10_REWARD_TERM_NAMES,
     V101_REWARD_TERM_NAMES,
+    V11_REWARD_TERM_NAMES,
     resolve_reward_contract,
 )
 from sim.manorl.autonomy_v4 import (
@@ -44,7 +46,12 @@ from sim.manorl.autonomy_reward_v101 import (
     initial_reward_state,
     reset_reward_state,
 )
-from sim.manorl.autonomy_curriculum import reference_stage_candidates
+from sim.manorl.autonomy_reward_v11 import (
+    DEFAULT_REWARD_V11_CONFIG,
+    RewardV11Config,
+    compute_reward as compute_reward_v11,
+)
+from sim.manorl.autonomy_curriculum import mixed_stage_frame, reference_stage_candidates
 
 V4_OBSERVATION_DIM = OBSERVATION_DIM
 V5_OBSERVATION_DIM = RAW_OBSERVATION_DIM_V5
@@ -87,6 +94,10 @@ class BatchedAutonomyRuntime:
         full_horizon_diagnostic: bool = False, observation_version: str = "v4",
         reward_version: str = "v4", reward_severe_penalty: float | None = None,
         curriculum_reset: bool = False,
+        curriculum_mix_previous: float = 0.0,
+        curriculum_full_horizon: float = 0.0,
+        reset_randomize_xy_m: float = 0.0,
+        reset_randomize_yaw_deg: float = 0.0,
         **_: Any,
     ):
         if not isinstance(num_envs, int) or isinstance(num_envs, bool) or num_envs < 1:
@@ -109,6 +120,24 @@ class BatchedAutonomyRuntime:
             raise TypeError("full_horizon_diagnostic must be bool")
         if not isinstance(curriculum_reset, bool):
             raise TypeError("curriculum_reset must be bool")
+        for name, ratio in (
+            ("curriculum_mix_previous", curriculum_mix_previous),
+            ("curriculum_full_horizon", curriculum_full_horizon),
+        ):
+            if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+                raise TypeError(f"{name} must be a real number")
+            if not 0.0 <= float(ratio) <= 1.0:
+                raise ValueError(f"{name} must lie in [0, 1]")
+        if float(curriculum_mix_previous) + float(curriculum_full_horizon) > 1.0:
+            raise ValueError("curriculum reset ratios must not sum above 1")
+        for name, value in (
+            ("reset_randomize_xy_m", reset_randomize_xy_m),
+            ("reset_randomize_yaw_deg", reset_randomize_yaw_deg),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a real number")
+            if not 0.0 <= float(value):
+                raise ValueError(f"{name} must be non-negative")
         observation_builders = {
             "v4": (build_raw_observation, V4_OBSERVATION_DIM, AUTONOMY_VERSION),
             "v5": (
@@ -165,7 +194,7 @@ class BatchedAutonomyRuntime:
             self.reward_config = RewardV10Config(severe_penalty=severe)
             self._compute_reward = compute_reward_v10
             self.reward_names = V10_REWARD_TERM_NAMES
-        else:
+        elif self.reward_version == "v10.1":
             severe = (
                 DEFAULT_REWARD_V101_CONFIG.base.severe_penalty
                 if reward_severe_penalty is None
@@ -176,6 +205,16 @@ class BatchedAutonomyRuntime:
             )
             self._compute_reward = compute_reward_v101
             self.reward_names = V101_REWARD_TERM_NAMES
+        elif self.reward_version == "v11":
+            self.reward_config = (
+                DEFAULT_REWARD_V11_CONFIG
+                if reward_severe_penalty is None
+                else RewardV11Config(severe_penalty=float(reward_severe_penalty))
+            )
+            self._compute_reward = compute_reward_v11
+            self.reward_names = V11_REWARD_TERM_NAMES
+        else:
+            raise AssertionError(f"unhandled reward version: {self.reward_version}")
 
         import jax
         import jax.numpy as j
@@ -269,6 +308,10 @@ class BatchedAutonomyRuntime:
             self._reset_ctrl = self._reset_ctrl.at[:, :28].set(self.cache.q_feasible[self.env_ref, 0])
         self.curriculum_enabled = curriculum_reset
         self.curriculum_stage = 1 if curriculum_reset else 0
+        self.curriculum_mix_previous = float(curriculum_mix_previous)
+        self.curriculum_full_horizon = float(curriculum_full_horizon)
+        self.reset_randomize_xy_m = float(reset_randomize_xy_m)
+        self.reset_randomize_yaw_rad = math.radians(float(reset_randomize_yaw_deg))
         self._install_reset_templates(self.curriculum_stage)
         self.data = self._forward_batch(jax.vmap(lambda _: self.initial)(j.arange(num_envs)).replace(qpos=self._reset_qpos, ctrl=self._reset_ctrl))
         self.persistent_ccd_workspace = None
@@ -315,14 +358,43 @@ class BatchedAutonomyRuntime:
             cache = self._reference_caches[env % len(self._reference_caches)]
             frame = 0
             if stage:
-                candidates = reference_stage_candidates(cache)[stage]
-                frame = candidates[env % len(candidates)]
+                all_candidates = reference_stage_candidates(cache)
+                frame = mixed_stage_frame(
+                    all_candidates,
+                    stage,
+                    env,
+                    mix_previous=self.curriculum_mix_previous,
+                    full_horizon=self.curriculum_full_horizon,
+                )
             reset_indices[env] = frame
             qpos[env, :28] = cache.q_feasible[frame]
             qpos[env, address:address + 3] = cache.object_origin[frame]
             qpos[env, address + 3:address + 7] = cache.object_quat_xyzw[
                 frame, (3, 0, 1, 2)
             ]
+            if self.reset_randomize_xy_m or self.reset_randomize_yaw_rad:
+                # Deterministic per-env object pose jitter: widens the reset
+                # state distribution so the policy cannot key on one exact
+                # approach pose. Seeded by (seed, stage, env) for replayability.
+                rng = np.random.default_rng(
+                    (self.seed * 1_000_003 + stage * 10_007 + env) & 0x7FFFFFFF
+                )
+                qpos[env, address] += rng.uniform(
+                    -self.reset_randomize_xy_m, self.reset_randomize_xy_m
+                )
+                qpos[env, address + 1] += rng.uniform(
+                    -self.reset_randomize_xy_m, self.reset_randomize_xy_m
+                )
+                if self.reset_randomize_yaw_rad:
+                    yaw = rng.uniform(
+                        -self.reset_randomize_yaw_rad, self.reset_randomize_yaw_rad
+                    )
+                    qw, qx, qy, qz = qpos[env, address + 3:address + 7]
+                    cy, sy = math.cos(yaw / 2.0), math.sin(yaw / 2.0)
+                    qpos[env, address + 3] = qw * cy - qz * sy
+                    qpos[env, address + 4] = qw * sy + qz * cy
+                    qpos[env, address + 5] = qx * cy - qy * sy
+                    qpos[env, address + 6] = qx * sy + qy * cy
             ctrl[env, :28] = cache.q_feasible[frame]
         self._reset_indices = self.jp.asarray(reset_indices)
         self._reset_qpos = self.jp.asarray(qpos)
@@ -456,7 +528,7 @@ class BatchedAutonomyRuntime:
                 self.env_ref,
                 **(
                     {"config": self.reward_config}
-                    if self.reward_version == "v10"
+                    if self.reward_version in ("v10", "v11")
                     else {}
                 ),
             )

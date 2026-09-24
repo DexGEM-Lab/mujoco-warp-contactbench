@@ -58,6 +58,47 @@ TEACHER_FLEX_JOINTS = (7, 9, 10, 13, 14, 15, 17, 18, 19, 21, 22, 23, 25, 26, 27)
 TEACHER_SQUEEZE_RAD = 0.2
 TEACHER_CONTACT_INTENT_THRESHOLD = 0.5
 
+_DEVICE_TELEMETRY_WIDTHS = (
+    ("reward_terms", None),
+    ("reward_total", 1),
+    ("reason", 1),
+    ("valid", 1),
+    ("position_error_abs", 3),
+    ("object_rotation_error_rad", 1),
+    ("palm_position_error", 1),
+    ("finger_raw_error", 1),
+    ("finger_feasible_error", 1),
+    ("bottom_clearance", 1),
+    ("reference_bottom_clearance", 1),
+    ("origin_lift_delta", 1),
+    ("paired_loaded", 16),
+    ("paired_active", 16),
+    ("paired_contact_count", 1),
+    ("paired_force_norm", 1),
+    ("object_all_force_norm", 1),
+    ("paired_torque_com_norm", 1),
+    ("tangential_slip", 16),
+    ("airborne", 1),
+    ("opposing_loaded", 1),
+    ("positive_lift", 1),
+    ("stable_airborne", 1),
+    ("command_envelope_utilization", 1),
+    ("antiwindup_active", 1),
+    ("reference_progress", 1),
+    ("object_world_z", 1),
+)
+
+
+def _telemetry_slices(reward_names):
+    """Describe the immutable columns in the single device telemetry buffer."""
+    result = {}
+    offset = 0
+    for name, configured_width in _DEVICE_TELEMETRY_WIDTHS:
+        width = len(reward_names) if configured_width is None else configured_width
+        result[name] = slice(offset, offset + width)
+        offset += width
+    return result, offset
+
 
 def teacher_anchor_metadata(
     beta: float = 0.0,
@@ -127,6 +168,12 @@ class BatchedAutonomyAdapter:
         self.num_envs=self.runtime.num_envs; self.device_name=device; self._device=torch.device("cuda" if device=="gpu" else "cpu")
         self.observation_dim=self.runtime.observation_dim; self.action_dim=ACTION_DIM
         self.reward_names=self.runtime.reward_names
+        self._telemetry_slices, self._telemetry_width = _telemetry_slices(
+            self.reward_names
+        )
+        self._packed_telemetry_fn = self.runtime.jax.jit(
+            self._pack_device_telemetry
+        )
         self.observation_space=gym.spaces.Box(-np.inf,np.inf,shape=(self.observation_dim,),dtype=np.float32)
         self.action_space=gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=np.float32)
     @property
@@ -174,56 +221,90 @@ class BatchedAutonomyAdapter:
                 "path": self._to_torch(jp.linalg.norm(physical.object_origin-target_object,axis=-1)).sum()}
 
     def telemetry_snapshot(self, raw_actions):
-        """Post-transition physical/reward facts, still resident on the runtime device."""
-        jp=self.runtime.jp; physical=self.runtime.last_physical; contact=self.runtime.last_contact; reward=self.runtime.last_reward
-        index=_gather(self.runtime.cache,self.runtime.indices,env_ref=getattr(self.runtime,"env_ref",None)); cache=self.runtime.cache
-        target_object=jp.asarray(cache.object_origin)[index]; target_palm=jp.asarray(cache.palm_origin)[index]
-        target_raw=jp.asarray(cache.q_raw)[index]; target_feasible=jp.asarray(cache.q_feasible)[index]
-        paired_norm=jp.linalg.norm(contact.paired_force_on_object,axis=-1); loaded=paired_norm>.02
-        opposing_loaded=(jp.any(loaded[:,:13],axis=-1)&jp.any(loaded[:,13:],axis=-1))
-        positive_lift=opposing_loaded&(physical.object_v_com[:,2]>.005)
-        stable_airborne=opposing_loaded&(physical.object_bottom>cache.table_height+.005)
+        """Return post-transition facts through one packed JAX/Torch transfer."""
         if raw_actions.shape != (self.num_envs, ACTION_DIM):
             raise ValueError("v4 raw actions must be (num_envs,28)")
+        packed = self._to_torch(
+            self._packed_telemetry_fn(
+                self.runtime.last_physical,
+                self.runtime.last_contact,
+                self.runtime.last_reward,
+                self.runtime.indices,
+            )
+        )
+        if packed.shape != (self.num_envs, self._telemetry_width):
+            raise RuntimeError("packed telemetry width does not match its schema")
+        snapshot = {}
+        for name, columns in self._telemetry_slices.items():
+            value = packed[:, columns]
+            snapshot[name] = value[:, 0] if value.shape[1] == 1 else value
         # Raw Normal samples stay in Torch: jp.asarray(CUDA Tensor) would take
         # NumPy's host path. Only physical execution crosses JAX/Torch via DLPack.
         raw_action_abs=raw_actions.detach().abs()
         executed=torch.clamp(raw_actions.detach(),-1.,1.)
-        reward_names = getattr(self, "reward_names", V4_REWARD_TERM_NAMES)
-        terms=jp.stack(
-            tuple(getattr(reward, name) for name in reward_names), axis=1
-        )
-        snapshot={
-            "reward_terms":terms, "reward_total":reward.total, "reason":reward.reason, "valid":reward.valid,
-            "position_error_abs":jp.abs(physical.object_origin-target_object),
-            "object_rotation_error_rad": 2*jp.arccos(jp.clip(jp.abs(jp.sum(physical.object_quat_xyzw*jp.asarray(cache.object_quat_xyzw)[index],axis=-1)),0.,1.)),
-            "palm_position_error":jp.linalg.norm(physical.palm_origin-target_palm,axis=-1),
-            "finger_raw_error":jp.sqrt(jp.mean((physical.q_raw[:,6:]-target_raw[:,6:])**2,axis=-1)),
-            "finger_feasible_error":jp.sqrt(jp.mean((physical.q_raw[:,6:]-target_feasible[:,6:])**2,axis=-1)),
-            "bottom_clearance":physical.object_bottom-cache.table_height,
-            "reference_bottom_clearance":jp.asarray(cache.reference_bottom)[index]-cache.table_height,
-            "origin_lift_delta":physical.object_origin[:,2]-jp.asarray(cache.object_origin)[_gather(cache,jp.zeros_like(self.runtime.indices),env_ref=getattr(self.runtime,"env_ref",None))][:,2],
-            "paired_loaded":loaded, "paired_active":contact.paired_count>0,
-            "paired_contact_count":contact.paired_count.sum(axis=-1), "paired_force_norm":paired_norm.sum(axis=-1),
-            "object_all_force_norm":jp.linalg.norm(contact.object_all_force,axis=-1),
-            "paired_torque_com_norm":jp.linalg.norm(contact.paired_torque_com,axis=-1),
-            # Contact reduction owns a [B,16,3] tangential velocity; this L2
-            # produces exactly one scalar slip speed per hand region.
-            "tangential_slip":jp.linalg.norm(contact.tangential_slip,axis=-1),
-            "airborne":physical.object_bottom > cache.table_height+.005,
-            "opposing_loaded":getattr(reward,"opposition_loaded",opposing_loaded),
-            "positive_lift":getattr(reward,"positive_lift",positive_lift),
-            "stable_airborne":getattr(reward,"stable_airborne",stable_airborne),
-            "action_raw_abs_sum":raw_action_abs.sum(dim=-1), "action_raw_abs_max":raw_action_abs.amax(dim=-1),
+        snapshot.update({
+            "action_raw_abs_sum":raw_action_abs.sum(dim=-1),
+            "action_raw_abs_max":raw_action_abs.amax(dim=-1),
             "action_raw_abs_denominator":torch.full((self.num_envs,), ACTION_DIM, dtype=raw_actions.dtype, device=raw_actions.device),
             "action_executed_norm":torch.linalg.vector_norm(executed,dim=-1),
             "action_clipped":(raw_action_abs>1.).to(raw_actions.dtype).sum(dim=-1),
             "action_denominator":torch.full((self.num_envs,), ACTION_DIM, dtype=raw_actions.dtype, device=raw_actions.device),
-            "command_envelope_utilization":jp.mean(jp.abs(physical.command_error),axis=-1),
-            "antiwindup_active":jp.any(jp.abs(physical.command_error)>=1.,axis=-1),
-            "reference_progress":jp.minimum(self.runtime.indices,reference_lengths(cache,getattr(self.runtime,"env_ref",None))-1)/jp.asarray(jp.maximum(1,reference_lengths(cache,getattr(self.runtime,"env_ref",None))-1),jp.float32),
-        }
-        return {name:value if isinstance(value,torch.Tensor) else self._to_torch(value) for name,value in snapshot.items()}
+        })
+        return snapshot
+
+    def _pack_device_telemetry(self, physical, contact, reward, indices):
+        """Fuse immutable post-transition diagnostics into one float32 buffer."""
+        jp=self.runtime.jp; cache=self.runtime.cache
+        env_ref=getattr(self.runtime,"env_ref",None)
+        index=_gather(cache,indices,env_ref=env_ref)
+        target_object=jp.asarray(cache.object_origin)[index]
+        target_palm=jp.asarray(cache.palm_origin)[index]
+        target_raw=jp.asarray(cache.q_raw)[index]
+        target_feasible=jp.asarray(cache.q_feasible)[index]
+        paired_norm=jp.linalg.norm(contact.paired_force_on_object,axis=-1)
+        loaded=paired_norm>.02
+        opposing_loaded=(jp.any(loaded[:,:13],axis=-1)&jp.any(loaded[:,13:],axis=-1))
+        positive_lift=opposing_loaded&(physical.object_v_com[:,2]>.005)
+        stable_airborne=opposing_loaded&(physical.object_bottom>cache.table_height+.005)
+        initial_index=_gather(cache,jp.zeros_like(indices),env_ref=env_ref)
+        values = (
+            jp.stack(tuple(getattr(reward, name) for name in self.reward_names), axis=1),
+            reward.total[:,None],
+            reward.reason[:,None],
+            reward.valid[:,None],
+            jp.abs(physical.object_origin-target_object),
+            (2*jp.arccos(jp.clip(jp.abs(jp.sum(
+                physical.object_quat_xyzw*jp.asarray(cache.object_quat_xyzw)[index],
+                axis=-1,
+            )),0.,1.)))[:,None],
+            jp.linalg.norm(physical.palm_origin-target_palm,axis=-1)[:,None],
+            jp.sqrt(jp.mean((physical.q_raw[:,6:]-target_raw[:,6:])**2,axis=-1))[:,None],
+            jp.sqrt(jp.mean((physical.q_raw[:,6:]-target_feasible[:,6:])**2,axis=-1))[:,None],
+            (physical.object_bottom-cache.table_height)[:,None],
+            (jp.asarray(cache.reference_bottom)[index]-cache.table_height)[:,None],
+            (physical.object_origin[:,2]-jp.asarray(cache.object_origin)[initial_index][:,2])[:,None],
+            loaded,
+            contact.paired_count>0,
+            contact.paired_count.sum(axis=-1)[:,None],
+            paired_norm.sum(axis=-1)[:,None],
+            jp.linalg.norm(contact.object_all_force,axis=-1)[:,None],
+            jp.linalg.norm(contact.paired_torque_com,axis=-1)[:,None],
+            jp.linalg.norm(contact.tangential_slip,axis=-1),
+            (physical.object_bottom>cache.table_height+.005)[:,None],
+            getattr(reward,"opposition_loaded",opposing_loaded)[:,None],
+            getattr(reward,"positive_lift",positive_lift)[:,None],
+            getattr(reward,"stable_airborne",stable_airborne)[:,None],
+            jp.mean(jp.abs(physical.command_error),axis=-1)[:,None],
+            jp.any(jp.abs(physical.command_error)>=1.,axis=-1)[:,None],
+            (
+                jp.minimum(indices,reference_lengths(cache,env_ref)-1)
+                / jp.asarray(jp.maximum(1,reference_lengths(cache,env_ref)-1),jp.float32)
+            )[:,None],
+            physical.object_origin[:,2,None],
+        )
+        return jp.concatenate(
+            tuple(jp.asarray(value,dtype=jp.float32) for value in values), axis=1
+        )
     def step(self,actions):
         # Preserve raw Gaussian actions for likelihood; physical boundary clips.
         if not isinstance(actions,torch.Tensor): actions=torch.as_tensor(actions,dtype=torch.float32,device=self._device)

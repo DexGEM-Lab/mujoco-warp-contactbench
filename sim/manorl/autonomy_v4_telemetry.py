@@ -98,6 +98,7 @@ class V4TelemetryAccumulator:
         self._sum("object_position_error_l2", l2); self._sum("object_position_error_l2_sq", l2.square())
         for name in ("object_rotation_error_rad", "palm_position_error", "finger_raw_error", "finger_feasible_error", "bottom_clearance", "reference_bottom_clearance", "origin_lift_delta"):
             self._sum(name, sample[name])
+        self._sum("object_world_z", sample["object_world_z"])
         self._max("bottom_clearance", sample["bottom_clearance"])
         loaded = sample["paired_loaded"].to(torch.float32)
         self._sum("paired_loaded_regions", loaded); self._count("paired_loaded_region_denominator", torch.ones_like(loaded))
@@ -143,6 +144,15 @@ class V4TelemetryAccumulator:
             out[f"reward/{name}"] = _scalar(self.reward_sum[i] / self.frames); out[f"reward/{name}_min"] = _scalar(self.reward_min[i]); out[f"reward/{name}_max"] = _scalar(self.reward_max[i])
         for axis in "xyz": out[f"physics/object_position_error_{axis}_abs_mean"] = _scalar(self.sums[f"object_position_error_{axis}_abs"] / self.frames)
         out["physics/object_position_error_l2_mean"] = _scalar(self.sums["object_position_error_l2"] / self.frames); out["physics/object_position_error_l2_rmse"] = _scalar(torch.sqrt(self.sums["object_position_error_l2_sq"] / self.frames))
+        out["physics/window_object_z_mean"] = _scalar(
+            self.sums["object_world_z"] / self.frames
+        )
+        out["physics/window_contact_force_mean"] = _scalar(
+            self.sums["paired_force_norm"] / self.frames
+        )
+        out["physics/window_path_error_mean"] = out[
+            "physics/object_position_error_l2_mean"
+        ]
         for name in ("object_rotation_error_rad", "palm_position_error", "finger_raw_error", "finger_feasible_error", "bottom_clearance", "reference_bottom_clearance", "origin_lift_delta", "paired_contact_count", "paired_force_norm", "object_all_force_norm", "paired_torque_com_norm"):
             out[f"physics/{name}_mean"] = _scalar(self.sums[name] / self.frames)
         out["action/raw_abs_mean"] = _scalar(self.sums["action_raw_abs"] / self.sums["action_raw_abs_denominator"]); out["action/raw_abs_max"] = _scalar(self.maxes["action_raw_abs"])
