@@ -139,7 +139,7 @@ def test_package_checks_explicit_hand_profile(tmp_path, monkeypatch):
         dataset_schema_digest="schema", discovery_digest="discovery")
     assert load_trajectory_package(p).manifest["source_hand_asset_profile"]["asset_manifest_sha256"] == "profile-a"
     monkeypatch.setattr(assets, "asset_provenance", lambda: {"asset_manifest_sha256": "profile-b"})
-    with pytest.raises(ValueError, match="source hand asset profile mismatch"):
+    with pytest.raises(ValueError, match="source_hand_asset_profile mismatch"):
         load_trajectory_package(p)
 
 
@@ -176,10 +176,14 @@ def test_explicit_cup_override_preserves_source_and_object_order(annotation, mon
     assert row["trajectory_metadata"] == original
 
 
-def test_override_must_not_invent_unannotated_target():
+def test_override_applies_only_where_annotated_and_never_invents():
+    # Raw-transfer contract: one action id spans many scenes. An override
+    # retargets only rows whose annotation contains the target; other rows
+    # keep their authoritative annotation instead of failing.
     s = TrajectorySelection(target_object_overrides="bowl:04")
-    with pytest.raises(ValueError, match="absent"):
-        _candidate_from_metadata_row(capture_row(), row_index=0, selection=s)
+    candidate = _candidate_from_metadata_row(capture_row(), row_index=0, selection=s)
+    assert candidate is not None
+    assert candidate.pair != ObjectActionPair("bowl", "04")
     with pytest.raises(ValueError, match="one object per action"):
         TrajectorySelection(target_object_overrides="bowl:04,egg_cup:04")
     with pytest.raises(ValueError, match="one object per action"):
