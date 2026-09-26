@@ -71,3 +71,15 @@ not an appropriate cross-hand validator. This export path instead checks the
 explicit physical profile, preserves raw metadata separately, verifies native
 state/target/observation roundtrips and exercises actual generated discovery plus
 complete-episode decoding. Do not falsify source metadata to satisfy a legacy check.
+
+## Capacity is a correctness floor for synthesis, not a knob
+
+Synthesis/replay must run with zero contact truncation: the recorded actual
+motion is only physically faithful when the Warp CCD convex-pair scratch and
+the constraint arena never saturate. The synthesis profile (contact 1024 per
+world, CCD 256 per world, constraint 4096) exists to keep real scenes below
+capacity; `_check_warp_ccd_overflow` fails closed if any substep saturates.
+Do not lower these values to save memory in synthesis — a truncated rollout
+produces physically wrong references. Training may use smaller capacities
+(ccd 8/world) for throughput because residual learning tolerates approximate
+contacts, but that profile is unacceptable for data generation.
