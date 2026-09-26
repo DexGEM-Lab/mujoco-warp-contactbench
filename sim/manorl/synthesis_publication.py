@@ -104,7 +104,7 @@ def publish_bundle(bundle_path: Path) -> dict:
             'checkpoint_metadata':context['metadata'],'physical_hand':context['physical_manifest']['hand_operator'],
             'software_commit':context['software_commit'],'phase_contract':{
                 'prefix':'MJX-Warp solved','manipulation':'MJX-Warp checkpoint policy',
-                'retreat':'offline kinematic XYZ; targets/keypoints translated; native geometry penetration check',
+                'retreat':'offline kinematic XYZ; targets/keypoints translated; no added geometry penetration vs solved base',
                 'contacts':'original MJX-Warp solved normal forces; no CPU reconstruction'}}
         atomic_json(temporary/'campaign-commit.json',commit)
         os.rename(temporary,shard)

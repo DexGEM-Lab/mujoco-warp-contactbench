@@ -71,3 +71,13 @@ def test_recovery_rejects_changed_payload(tmp_path,monkeypatch):
     with pytest.raises(RuntimeError,match='hash mismatch'):reconcile_shards(ledger,tmp_path/'output')
     assert ledger.summary()['accepted']==0
     ledger.close()
+
+
+def test_retreat_checks_added_overlap_not_existing_compliant_floor_contact():
+    from sim.manorl.synthesis_runtime import added_penetration
+    baseline={(0,4):-0.0015761033320828592}
+    assert added_penetration(dict(baseline),baseline) is None
+    assert added_penetration({(0,4):-0.0015},baseline) is None
+    assert added_penetration({(0,16):-0.0000338614},{(0,16):-0.0000355081}) is None
+    assert added_penetration({(0,4):-0.0017},baseline)['baseline_depth_m']==baseline[(0,4)]
+    assert added_penetration({(0,16):-0.0001},baseline)['geom_pair']==[0,16]

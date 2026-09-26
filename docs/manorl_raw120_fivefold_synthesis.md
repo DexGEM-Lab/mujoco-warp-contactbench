@@ -46,8 +46,10 @@ Because this is a kinematic wrist translation, world hand keypoints and wrist
 controller targets receive the same translation as actual wrist XYZ. This avoids
 an internally inconsistent picture/target pair. The tail is explicitly labeled
 kinematic; its new targets are not claimed to have been integrated by Warp.
-Native MuJoCo kinematics/collision geometry rejects hand penetration throughout
-the changed tail; it does not reconstruct or replace contact forces.
+Native MuJoCo kinematics/collision geometry rejects new or deeper hand
+penetration per geom pair relative to the original solved tail. Existing soft
+floor contact is not mistaken for a newly introduced collision (including at the
+two unchanged splice frames). This check does not reconstruct or replace forces.
 
 Compact output keeps the existing v2_contact schema and omits stored rollout
 observations/actions/rewards. Raw source identity, physical hand metadata,

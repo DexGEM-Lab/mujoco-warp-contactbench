@@ -15,6 +15,16 @@ from sim.manorl.synthesis_campaign import CAMPAIGN_CONTRACT, canonical_hash
 from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch
 
 
+def added_penetration(current: dict, baseline: dict, *, tolerance: float = 1e-5):
+    """Reject new/deeper overlap, not compliant contact already in the base."""
+    for pair, depth in current.items():
+        previous=min(0.0,baseline.get(pair,0.0))
+        if depth < previous-tolerance:
+            return {'geom_pair':list(pair),'depth_m':float(depth),'baseline_depth_m':float(previous)}
+    return None
+
+
+
 class BatchSynthesisRuntime:
     """One object/scene topology, one checkpoint, one fixed vector width.
 
@@ -268,27 +278,35 @@ class BatchSynthesisRuntime:
             result['diagnostic'].update(accepted=False,retreat_failure='kinematic_target_limits');return None
         updated['hands'][0]['urdf_dof_target']=targets.astype(np.float32).tolist()
         if collision_check:
-            collision=self._retreat_collision(updated,diag['anchor'])
+            collision=self._retreat_collision(updated,diag['anchor'],baseline_q=before)
             if collision is not None:
                 result['diagnostic'].update(accepted=False,retreat_failure=collision);return None
         updated['provenance']['augmentation_identity']=augmentation+':offline_retreat_xyz_targets_keypoints_v1'
         result['diagnostic']['retreat']={**diag,'contract':'offline_retreat_xyz_targets_keypoints_v1',
-            'collision_check':'native_kinematic_geometry_only' if collision_check else 'not_run',
+            'collision_check':'native_geometry_no_added_penetration_vs_solved_base' if collision_check else 'not_run',
             'contacts':'retained_original_warp_solution_no_new_force_solve'}
         return updated
 
-    def _retreat_collision(self,row,anchor):
+    def _retreat_collision(self,row,anchor,*,baseline_q):
         env=self.environment;mj=env.mujoco;data=mj.MjData(env.model)
-        q=np.asarray(row['hands'][0]['urdf_dof'])
+        q=np.asarray(row['hands'][0]['urdf_dof']);baseline_q=np.asarray(baseline_q)
         object_rot=[Rotation.from_rotvec(np.asarray(o['rot_aa'])).as_quat() for o in row['objects']]
+        def overlaps(hand_q):
+            data.qpos[:28]=hand_q
+            mj.mj_kinematics(env.model,data);mj.mj_comPos(env.model,data);mj.mj_collision(env.model,data)
+            depths={}
+            for c in data.contact[:data.ncon]:
+                a,b=int(c.geom1),int(c.geom2)
+                if ((a in self.hand_geoms)!=(b in self.hand_geoms)) and c.dist<0:
+                    pair=tuple(sorted((a,b)));depths[pair]=min(depths.get(pair,0.0),float(c.dist))
+            return depths
         for t in range(anchor+1,len(q)):
-            data.qpos[:28]=q[t]
             for j,name in enumerate(self.scene_names):
                 address=self.object_qpos[name];data.qpos[address:address+3]=row['objects'][j]['pos'][t]
                 data.qpos[address+3:address+7]=object_rot[j][t][[3,0,1,2]]
-            mj.mj_kinematics(env.model,data);mj.mj_comPos(env.model,data);mj.mj_collision(env.model,data)
-            for c in data.contact[:data.ncon]:
-                a,b=int(c.geom1),int(c.geom2)
-                if ((a in self.hand_geoms) != (b in self.hand_geoms)) and float(c.dist)<-1e-5:
-                    return {'reason':'offline_retreat_geometry_penetration','frame':t,'depth_m':float(c.dist)}
+            current=overlaps(q[t])
+            if current:
+                violation=added_penetration(current,overlaps(baseline_q[t]))
+                if violation is not None:
+                    return {'reason':'offline_retreat_added_penetration','frame':t,**violation}
         return None
