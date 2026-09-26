@@ -1426,6 +1426,13 @@ class MjxWarpPhysicalProducer:
             # Keypoint contact observations retain the primary-hand ABI. The
             # hand-object field is aggregated across sides for reward.
             forces = geometry_forces[:, self.keypoint_geom_ids]
+        # Opt-in synthesis reuse: export needs the exact same solved buffers as
+        # this observation. Keep one immutable snapshot, keyed by Data identity,
+        # rather than transferring the full contact arena a second time.
+        if getattr(self, "retain_materialized_snapshot", False):
+            self.materialized_snapshot = (
+                data, state, None if device_contact_decode else buffers
+            )
         if self.active_object_geom_ids is None:
             object_force = (
                 None

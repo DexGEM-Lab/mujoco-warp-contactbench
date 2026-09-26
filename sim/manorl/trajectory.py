@@ -275,6 +275,8 @@ class ReferenceTrajectory:
             self.augmentation_prefix_frames
             and movement_steps[0] is not None
             and self.augmentation_prefix_frames >= movement_steps[0]
+            and not (self.augmentation_base_early_phase_steps > 0
+                     and self.augmentation_prefix_frames == movement_steps[0])
         ):
             raise ValueError("approach prefix must end before the movement window")
         if (

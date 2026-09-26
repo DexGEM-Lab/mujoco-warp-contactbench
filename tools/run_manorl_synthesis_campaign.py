@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""Prepare, run and supervise source-faithful raw120 1:5 compact synthesis."""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from dataclasses import asdict
+import fcntl
+import json
+import os
+from pathlib import Path
+import pickle
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import traceback
+import uuid
+
+import numpy as np
+
+from sim.manorl.synthesis_campaign import (
+    CAMPAIGN_CONTRACT, PrefixConfig, QuotaLedger, atomic_json,
+    augment_source_prefix, canonical_hash, source_key,
+)
+
+
+def emit(event, **values):
+    print(json.dumps({'time':time.time(),'event':event,**values},sort_keys=True),flush=True)
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text())
+
+
+def prepare(args):
+    from sim.manorl.trajectory_package import load_trajectory_package, _apply_runtime_pre_padding
+    from sim.manorl.lance_v2 import file_sha256
+    root=args.campaign.resolve();root.mkdir(parents=True,exist_ok=True)
+    output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
+    inventory=read_json(args.inventory)
+    prefix=PrefixConfig()
+    config={'contract':CAMPAIGN_CONTRACT,'prefix':asdict(prefix),'output':str(output),
+        'ccd_contacts_per_world':args.ccd_contacts,'contacts_per_world':args.contacts_per_world,
+        'constraint_capacity':args.constraint_capacity,'software_commit':args.software_commit}
+    if (root/'config.json').exists() and read_json(root/'config.json')!=config:
+        raise ValueError('existing campaign configuration differs')
+    catalogs={};sources=[];checkpoints={};seen=set();exceptions=Counter()
+    for job in inventory['jobs']:
+        checkpoint=Path(job['checkpoint']).resolve()
+        metadata=read_json(str(checkpoint)+'.json')
+        env=metadata['runtime_config']['environment']
+        progress=metadata['runtime_config'].get('training_progress',{})
+        if progress.get('completed_updates',0)<5000:
+            raise ValueError('only completed 5000-update policies can enter this campaign')
+        if env['compatibility']['early_phase_steps']!=80 or env['pre_padding']!=80:
+            raise ValueError('checkpoint is not pre80/early80')
+        cp_sha=file_sha256(checkpoint)
+        checkpoints[cp_sha]={'path':str(checkpoint),'sha256':cp_sha,'metadata':metadata}
+        pairs=set(job['pairs'])
+        for package in job['packages']:
+            package=str(Path(package).resolve())
+            if package not in catalogs:
+                emit('package_load',path=package)
+                catalogs[package]=load_trajectory_package(package,verify_hashes=True)
+            catalog=catalogs[package]
+            for raw in catalog.trajectories:
+                obj,action,_=raw.identity.identity.rsplit('_',2)
+                if f'{obj}:{action}' not in pairs:continue
+                source=_apply_runtime_pre_padding(raw,80)
+                key=source_key(source)
+                if key in seen:raise ValueError('duplicate raw source across inventory entries')
+                seen.add(key)
+                scene=tuple(source.scene_object_types or (obj,))
+                group=obj+'-'+canonical_hash([scene,cp_sha])[:12]
+                folder=root/'sources'/obj;folder.mkdir(parents=True,exist_ok=True)
+                path=folder/(key+'.pkl')
+                if not path.exists():
+                    temporary=path.with_suffix('.tmp')
+                    with temporary.open('wb') as f:pickle.dump(source,f,protocol=pickle.HIGHEST_PROTOCOL)
+                    os.replace(temporary,path)
+                sources.append({'key':key,'identity':source.identity.identity,'pair':f'{obj}:{action}',
+                    'object':obj,'group_key':group,'scene_objects':list(scene),
+                    'source_uuid':source.identity.uuid,'dataset_path':str(source.identity.dataset_path),
+                    'dataset_version':source.identity.dataset_version,'row_index':source.identity.row_index,
+                    'source_operator':source.source_operator,'source_hand_betas':source.source_hand_betas,
+                    'pickle':str(path),'pickle_sha256':file_sha256(path),'checkpoint':str(checkpoint),
+                    'checkpoint_sha256':cp_sha,'package_digest':catalog.package_digest,
+                    'package_manifest_sha256':catalog.manifest_sha256,'frames':len(source.q_ref)})
+                if source.movement_start_step!=80:exceptions['source_start_less_than_80']+=1
+        emit('object_prepared',object=job['object'],sources=sum(s['object']==job['object'] for s in sources))
+    sources.sort(key=lambda s:s['key'])
+    atomic_json(root/'config.json',config)
+    atomic_json(root/'sources.json',sources)
+    atomic_json(root/'checkpoints.json',checkpoints)
+    ledger=QuotaLedger(root/'quota.sqlite');ledger.initialize(config,sources)
+    summary={**ledger.summary(),'objects':len({s['object'] for s in sources}),
+        'pairs':len({s['pair'] for s in sources}),'groups':len({s['group_key'] for s in sources}),
+        'source_exceptions':dict(exceptions)}
+    atomic_json(root/'preparation.json',summary);emit('prepared',**summary)
+    ledger.close()
+
+
+def load_sources(claims):
+    from sim.manorl.lance_v2 import file_sha256
+    trajectories=[]
+    for claim in claims:
+        spec=claim['source'];path=Path(spec['pickle'])
+        if file_sha256(path)!=spec['pickle_sha256']:raise RuntimeError('source pickle changed')
+        with path.open('rb') as f:trajectory=pickle.load(f)
+        if source_key(trajectory)!=spec['key']:raise RuntimeError('source namespace changed')
+        trajectories.append(trajectory)
+    return trajectories
+
+
+def require_log_capture(path):
+    expected=Path(path).resolve()
+    for fd in (1,2):
+        actual=Path(os.readlink(f'/proc/self/fd/{fd}'))
+        if not actual.is_absolute() or actual.resolve()!=expected:
+            raise RuntimeError('redirect both stdout and stderr directly to --log to capture native Warp warnings')
+
+
+def log_has_overflow(path):
+    if path is None or not path.exists():
+        raise RuntimeError('Warp warning capture log is unavailable')
+    # Only this worker's own log. A full-wave scan also catches startup overflows.
+    import re
+    pattern=re.compile(rb'CCD overflow|capacity saturated|contact buffer overflow|constraint buffer overflow',re.I)
+    import ctypes
+    sys.stdout.flush();sys.stderr.flush();ctypes.CDLL(None).fflush(None)
+    with path.open('rb') as f:
+        carry=b''
+        while chunk:=f.read(1024*1024):
+            if pattern.search(carry+chunk):return True
+            carry=chunk[-128:]
+    return False
+
+
+def run_worker(args):
+    from sim.manorl.synthesis_runtime import BatchSynthesisRuntime
+    from sim.manorl.synthesis_publication import runtime_context
+    root=args.campaign.resolve();config=read_json(root/'config.json');prefix=PrefixConfig(**config['prefix'])
+    if min(args.batch_size,args.waves)<1:raise ValueError('batch size and waves must be positive')
+    require_log_capture(args.log)
+    ledger=QuotaLedger(root/'quota.sqlite');owner=args.owner or f'worker-{os.getpid()}-{uuid.uuid4().hex[:8]}'
+    spool=root/'spool';spool.mkdir(exist_ok=True)
+    runtime=None;pending=None;wave=0;total_accepted=0
+    def heartbeat(**extra):
+        ledger.heartbeat(owner,{'pid':os.getpid(),'pid_start':_process_start(os.getpid()),
+            'group':args.group,'wave':wave,'accepted':total_accepted,**extra})
+    def reap_pending():
+        nonlocal pending,total_accepted
+        if pending is None:return
+        process,path,output_handle=pending
+        code=process.wait();output_handle.close()
+        if code:raise RuntimeError(f'CPU publication failed exit={code}; preserved {path}')
+        result=read_json(path.with_suffix('.result.json'))
+        for item in result['records']:
+            ledger.finish(item['claim'],item['diagnostic'],row_uuid=item['row_uuid'],shard=result['shard'] if item['row_uuid'] else None)
+        total_accepted+=result['accepted']
+        emit('published',owner=owner,wave=wave,accepted=result['accepted'],total_accepted=total_accepted,
+             failures=result['failures'],payload_bytes=result['payload_bytes'],
+             retreat_seconds=result['retreat_seconds'],publish_seconds=result['publish_seconds'],shard=result['shard'])
+        # This is the campaign's own temporary IPC payload, not a Lance dataset.
+        # Failed publications retain it. Durable accepted rows live on NAS.
+        path.unlink();pending=None
+    started=time.perf_counter()
+    try:
+        for wave in range(args.waves):
+            heartbeat(phase='claim')
+            claims=ledger.claim(owner,args.group,args.batch_size)
+            if not claims:break
+            base=load_sources(claims)
+            if runtime is None:
+                padded=(base+[base[-1]]*args.batch_size)[:args.batch_size]
+                t0=time.perf_counter()
+                runtime=BatchSynthesisRuntime(padded,Path(claims[0]['source']['checkpoint']),
+                    ccd_contacts=config['ccd_contacts_per_world'],contacts_per_world=config['contacts_per_world'],
+                    constraint_capacity=config['constraint_capacity'],reuse_contact_snapshot=not args.no_contact_cache)
+                emit('runtime_ready',seconds=time.perf_counter()-t0,batch_size=args.batch_size,group=args.group)
+            valid=[];trajectories=[];samples=[]
+            for claim,source in zip(claims,base):
+                try:
+                    trajectory,sample=augment_source_prefix(source,slot=claim['slot'],attempt=claim['attempt'],
+                        joint_lower=runtime.environment.joint_lower,joint_upper=runtime.environment.joint_upper,config=prefix)
+                except ValueError as exc:
+                    ledger.finish(claim,{'accepted':False,'prefix_sampling_failure':str(exc)});continue
+                valid.append(claim);trajectories.append(trajectory);samples.append(sample)
+            if not valid:
+                emit('sampling_rejected_wave',group=args.group,attempts=len(claims));continue
+            actual=len(valid)
+            trajectories += [trajectories[-1]]*(args.batch_size-actual)
+            samples += [samples[-1]]*(args.batch_size-actual)
+            runtime.install(trajectories,[s['seed'] for s in samples])
+            heartbeat(phase='rollout')
+            results,timing=runtime.collect(trajectories,samples,valid,progress=lambda d:heartbeat(phase='rollout',**d))
+            sys.stdout.flush();sys.stderr.flush()
+            if log_has_overflow(args.log):
+                raise RuntimeError('CAPACITY_BLOCKED: Warp overflow observed; no rows from this wave published')
+            emit('wave_complete',group=args.group,wave=wave,actual_candidates=actual,**timing)
+            # Bound postprocessing backlog to one wave. CPU writes overlap the
+            # following GPU wave; only backpressure waits here.
+            heartbeat(phase='publication_backpressure');reap_pending()
+            bundle_id=uuid.uuid4().hex;path=spool/(bundle_id+'.pkl')
+            bundle={'bundle_id':bundle_id,'output':config['output'],
+                    'context':runtime_context(runtime,config['software_commit']),'results':results}
+            with path.open('wb') as f:pickle.dump(bundle,f,protocol=pickle.HIGHEST_PROTOCOL)
+            log_handle=path.with_suffix('.log').open('wb')
+            cpu_env={**os.environ,'CUDA_VISIBLE_DEVICES':'','JAX_PLATFORMS':'cpu'}
+            process=subprocess.Popen([sys.executable,'-m','tools.run_manorl_synthesis_campaign','publish',str(path)],
+                stdout=log_handle,stderr=subprocess.STDOUT,env=cpu_env)
+            pending=(process,path,log_handle)
+        reap_pending()
+        elapsed=time.perf_counter()-started
+        heartbeat(phase='finished_round')
+        emit('worker_round_done',owner=owner,group=args.group,accepted=total_accepted,seconds=elapsed,
+             accepted_per_gpu_hour=total_accepted/max(elapsed,1e-9)*3600)
+    finally:
+        # Never release leases while a publisher still owns potentially durable
+        # rows. Supervisor reconciliation handles abnormal exits.
+        if pending is not None:
+            process,path,handle=pending
+            process.wait();handle.close()
+        ledger.close()
+
+
+def _process_start(pid):
+    try:return Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()[19]
+    except (OSError,IndexError):return None
+
+
+def supervise(args):
+    from sim.manorl.synthesis_publication import reconcile_shards
+    root=args.campaign.resolve();config=read_json(root/'config.json')
+    # Only one supervisor may own this campaign; flock survives unrelated SSH loss.
+    lock=(root/'supervisor.lock').open('a+')
+    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    ledger=QuotaLedger(root/'quota.sqlite');output=Path(config['output'])
+    recovered=reconcile_shards(ledger,output)
+    emit('reconciled',rows=recovered)
+    # Recover only demonstrably dead PID+start-time owners after NAS reconciliation.
+    for row in ledger.db.execute('SELECT owner,details FROM workers').fetchall():
+        details=json.loads(row['details']);pid=details.get('pid')
+        current_start=_process_start(pid) if pid else None
+        if current_start is not None and (details.get('pid_start') is None or current_start==details['pid_start']):
+            raise RuntimeError(f'previous worker is still alive or ownership is ambiguous: {row["owner"]} PID {pid}')
+        ledger.release_owner(row['owner'])
+    gpus=[int(v) for v in args.gpus.split(',')]
+    if not gpus or len(set(gpus))!=len(gpus):raise ValueError('GPU list must be unique')
+    logs=root/'logs';logs.mkdir(exist_ok=True)
+    workers={};last_scheduled={};failures=Counter();blocked={}
+    stop=False
+    def request_stop(signum,frame):
+        nonlocal stop
+        stop=True;emit('supervisor_stop_requested',signal=signum)
+    signal.signal(signal.SIGTERM,request_stop);signal.signal(signal.SIGINT,request_stop)
+    while True:
+        summary=ledger.summary()
+        for gpu,record in list(workers.items()):
+            process=record['process']
+            code=process.poll()
+            if code is None:continue
+            record['handle'].close()
+            reconcile_shards(ledger,output)
+            ledger.release_owner(record['owner'])
+            group=record['group'];del workers[gpu]
+            if code:
+                failures[group]+=1
+                tail=Path(record['log']).read_bytes()[-12000:].decode(errors='replace')
+                blocked[group]={'exit_code':code,'log':record['log'],'tail':tail,'time':time.time()}
+                emit('worker_failed',group=group,gpu=gpu,exit_code=code,log=record['log'])
+            else:emit('worker_round_finished',group=group,gpu=gpu)
+        summary=ledger.summary()
+        status={'time':time.time(),**summary,'workers':{str(g):{k:v for k,v in r.items() if k not in ('process','handle')}
+            for g,r in workers.items()},'blocked':blocked,'restarts':dict(failures),'stop_requested':stop}
+        atomic_json(root/'status.json',status)
+        if summary['complete'] and not workers:
+            atomic_json(root/'completed.json',status);emit('campaign_complete',**summary);break
+        if stop:
+            if not workers:break
+            time.sleep(10);continue
+        assigned={r['group'] for r in workers.values()}
+        groups=sorted(ledger.groups(),key=lambda g:(last_scheduled.get(g['group_key'],0),g['min_attempts'],g['group_key']))
+        for gpu in gpus:
+            if gpu in workers:continue
+            eligible=[g for g in groups if g['group_key'] not in assigned and g['group_key'] not in blocked]
+            if not eligible:continue
+            # Sample actual foreign compute ownership immediately before launch.
+            query=subprocess.run(['nvidia-smi','-i',str(gpu),'--query-compute-apps=pid','--format=csv,noheader,nounits'],capture_output=True,text=True,check=True)
+            if query.stdout.strip():
+                emit('gpu_busy',gpu=gpu,pids=query.stdout.strip());continue
+            group=eligible[0]['group_key'];owner=f'g{gpu}-{uuid.uuid4().hex[:12]}'
+            path=logs/(owner+'.log');handle=path.open('wb')
+            command=[sys.executable,'-m','tools.run_manorl_synthesis_campaign','worker','--campaign',str(root),
+                '--group',group,'--owner',owner,'--batch-size',str(args.batch_size),'--waves',str(args.waves),'--log',str(path)]
+            environment={**os.environ,'CUDA_VISIBLE_DEVICES':str(gpu),'XLA_PYTHON_CLIENT_MEM_FRACTION':'0.65',
+                         'PYTORCH_CUDA_ALLOC_CONF':'expandable_segments:True'}
+            process=subprocess.Popen(command,stdout=handle,stderr=subprocess.STDOUT,env=environment,start_new_session=True)
+            workers[gpu]={'process':process,'handle':handle,'pid':process.pid,'pid_start':_process_start(process.pid),
+                'owner':owner,'group':group,'log':str(path),'started':time.time()}
+            ledger.heartbeat(owner,{'pid':process.pid,'pid_start':_process_start(process.pid),'phase':'starting','group':group})
+            last_scheduled[group]=time.time();assigned.add(group)
+            emit('worker_started',gpu=gpu,group=group,pid=process.pid,owner=owner,log=str(path))
+        # Persistence/waiting belongs to this server process, not the LLM monitor.
+        time.sleep(10)
+    ledger.close();lock.close()
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='command',required=True)
+    p=sub.add_parser('prepare');p.add_argument('--inventory',type=Path,required=True);p.add_argument('--campaign',type=Path,required=True)
+    p.add_argument('--output',type=Path,required=True);p.add_argument('--software-commit',required=True)
+    p.add_argument('--ccd-contacts',type=int,default=16);p.add_argument('--contacts-per-world',type=int,default=1024)
+    p.add_argument('--constraint-capacity',type=int,default=4096)
+    for name in ('worker','supervise'):
+        p=sub.add_parser(name);p.add_argument('--campaign',type=Path,required=True);p.add_argument('--batch-size',type=int,default=64)
+        p.add_argument('--waves',type=int,default=32)
+        if name=='worker':
+            p.add_argument('--group',required=True);p.add_argument('--owner');p.add_argument('--log',type=Path,required=True)
+            p.add_argument('--no-contact-cache',action='store_true')
+        else:p.add_argument('--gpus',default='2,3')
+    p=sub.add_parser('publish');p.add_argument('bundle',type=Path)
+    p=sub.add_parser('status');p.add_argument('--campaign',type=Path,required=True)
+    args=parser.parse_args(argv)
+    if args.command=='prepare':prepare(args)
+    elif args.command=='worker':run_worker(args)
+    elif args.command=='supervise':supervise(args)
+    elif args.command=='publish':
+        from sim.manorl.synthesis_publication import publish_bundle
+        result=publish_bundle(args.bundle);emit('publication_done',accepted=result['accepted'],shard=result['shard'])
+    else:
+        ledger=QuotaLedger(args.campaign/'quota.sqlite');print(json.dumps(ledger.summary(),indent=2));ledger.close()
+    return 0
+
+
+if __name__=='__main__':
+    try:raise SystemExit(main())
+    except Exception:
+        traceback.print_exc();raise SystemExit(1)

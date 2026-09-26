@@ -1,5 +1,11 @@
 # Default ManoRL Far/Near approach-prefix synthesis
 
+For the pre80/early80 raw120 per-object checkpoints and the five accepted
+source-relative variants per trajectory campaign, use
+[`manorl_raw120_fivefold_synthesis.md`](manorl_raw120_fivefold_synthesis.md).
+That opt-in contract preserves the trained early80 phase after the added prefix;
+the historical Far/Near contract below is unchanged.
+
 ## Production contract
 
 The default accepted-parent synthesis operation is:
