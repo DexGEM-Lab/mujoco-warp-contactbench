@@ -24,7 +24,6 @@ def added_penetration(current: dict, baseline: dict, *, tolerance: float = 1e-5)
     return None
 
 
-
 class BatchSynthesisRuntime:
     """One object/scene topology, one checkpoint, one fixed vector width.
 
@@ -135,6 +134,13 @@ class BatchSynthesisRuntime:
         env._reset_ctrl_device = env.jax.device_put(env.reference_q_model[:,0], env.device)
         env._reset_data_fn = _build_masked_reset_data_fn(jax=env.jax, jp=env.jp,
             reset_qpos=env._reset_qpos_device, reset_ctrl=env._reset_ctrl_device)
+        # A new synthesis attempt must not inherit the preceding wave's solver
+        # initial guess or clock. The normal training reset intentionally only
+        # rewrites qpos/qvel/ctrl; clear these episode-local fields here.
+        env.data = env.data.replace(
+            qacc_warmstart=env.jp.zeros_like(env.data.qacc_warmstart),
+            time=env.jp.zeros_like(env.data.time),
+        )
         env.reseed_point_templates_per_env(np.asarray(seeds, dtype=np.int64))
         observations, _ = self.stepper._runtime.env.reset()
         self.stepper._observations = observations
@@ -142,6 +148,7 @@ class BatchSynthesisRuntime:
         self.stepper._policy_enable_steps = env.early_phase_lengths.copy()
         self.stepper._policy_disable_steps = None
         self.capacity_evidence = {'max_contacts':0,'max_constraints':0,
+            'reset_contract':'zero_velocity_warmstart_clock_per_wave_v1',
             'ccd_counter_available':bool(env._warp_ccd_overflow_guard_available),
             'ccd_contacts_per_world':env.config.warp_ccd_contacts_per_world,
             'contact_capacity':env.config.contact_capacity,'constraint_capacity':env.config.constraint_capacity}
