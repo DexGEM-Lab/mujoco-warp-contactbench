@@ -78,8 +78,8 @@ different datasets are namespaced by dataset/version/UUID/identity.
 python -m tools.run_manorl_synthesis_campaign prepare \
   --inventory inventory.json --campaign /local/campaign \
   --output /nas/new-campaign --software-commit "$REV"
-python -m tools.run_manorl_synthesis_campaign supervise \
-  --campaign /local/campaign --gpus 2,3 --batch-size 64 --waves 32
+python -m tools.watch_manorl_synthesis_campaign \
+  --campaign /local/campaign --gpus 2,3 --batch-size 256 --waves 8
 ```
 
 The supervisor owns two homogeneous-object worker processes. A worker retains
@@ -114,6 +114,15 @@ saved trajectories per GPU-hour**, initialization, physics/policy, contact
 materialization, collection and publication times. Benchmark rows live under
 separate output directories and never silently count toward production quotas.
 
-Monitor `status.json`, worker heartbeat records, per-source deficits, fatal/error
-logs, actual GPU process ownership and local/NAS free space. A blocked group or
-idle GPU with remaining work is an intervention signal, not a completion state.
+The persistent watch process restarts a departed supervisor; surviving workers
+are adopted using PID/start-time and inherited owner locks rather than duplicated.
+It exits normally only at exact per-source completion, or explicit operator pause.
+Creating `/local/campaign/PAUSE` stops new claims and drains the current wave;
+remove that marker and restart the watch process to resume. SIGTERM/SIGINT to the
+watch process records the same explicit pause intent.
+
+Monitor `watch-status.json`, `status.json`, worker heartbeats, per-source deficits,
+fatal/error logs, actual GPU ownership and local/NAS space. A blocked group or
+idle GPU with remaining work is an intervention signal, not completion. A Pi
+monitor agent performs bounded inspections; recurring agent inspection requires
+an enabled live Pi scheduler and is distinct from server-side process recovery.

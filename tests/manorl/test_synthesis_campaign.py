@@ -147,3 +147,10 @@ def test_unreachable_raw_finger_reference_joins_native_clipped_target():
     np.testing.assert_array_equal(augmented.q_ref[prefix:],source.q_ref)
     assert sample['finger_template']=='native_servo_clipped_source_frame0'
     assert 8 in sample['source_finger_limit_excess']
+
+
+def test_watch_continues_until_quota_or_explicit_pause():
+    from tools.watch_manorl_synthesis_campaign import should_continue
+    assert should_continue({'complete':False},paused=False)
+    assert not should_continue({'complete':True},paused=False)
+    assert not should_continue({'complete':False},paused=True)

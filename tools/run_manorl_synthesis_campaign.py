@@ -174,6 +174,7 @@ def run_worker(args):
     started=time.perf_counter()
     try:
         for wave in range(args.waves):
+            if (root/'PAUSE').exists():break
             heartbeat(phase='claim')
             if pending is not None and pending[0].poll() is not None:reap_pending()
             claims=ledger.claim(owner,args.group,args.batch_size)
@@ -301,6 +302,7 @@ def supervise(args):
         stop=True;emit('supervisor_stop_requested',signal=signum)
     signal.signal(signal.SIGTERM,request_stop);signal.signal(signal.SIGINT,request_stop)
     while True:
+        stop=stop or (root/'PAUSE').exists()
         summary=ledger.summary()
         for gpu,record in list(workers.items()):
             process=record['process']
