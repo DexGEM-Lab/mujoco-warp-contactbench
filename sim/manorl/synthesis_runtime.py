@@ -154,7 +154,7 @@ class BatchSynthesisRuntime:
             'contact_capacity':env.config.contact_capacity,'constraint_capacity':env.config.constraint_capacity}
 
     def _contacts(self):
-        from sim.manorl.lance_v2 import corrected_contact_frames
+        from sim.manorl.synthesis_contacts import corrected_contact_frames_vectorized as corrected_contact_frames
         env = self.environment
         cached = getattr(env.producer, 'materialized_snapshot', None)
         if cached is not None and cached[0] is env.data and cached[2] is not None:
