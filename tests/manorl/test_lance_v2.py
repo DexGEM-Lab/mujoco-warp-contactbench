@@ -61,7 +61,18 @@ def test_synthetic_export_cli_accepts_reference_fps_selection(
         ]
     )
     assert args.reference_fps == 100
-    assert args.output_format == "full"
+    assert args.output_format == "compact-replay-visual"
+    full_args = exporter_module.parse_args(
+        [
+            "--checkpoint",
+            "policy.pt",
+            "--output",
+            "rollout.lance",
+            "--output-format",
+            "full",
+        ]
+    )
+    assert full_args.output_format == "full"
     compact_args = exporter_module.parse_args(
         [
             "--checkpoint",

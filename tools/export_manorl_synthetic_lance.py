@@ -1975,8 +1975,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-format",
         choices=SYNTHETIC_LANCE_OUTPUT_FORMATS,
-        default=SYNTHETIC_LANCE_OUTPUT_FORMAT_FULL,
-        help="full v2.3 audit rows or compact replay/visual rows",
+        default=SYNTHETIC_LANCE_OUTPUT_FORMAT_COMPACT,
+        help="compact replay/visual rows (default) or full v2.3 audit rows",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--episodes-per-identity", type=int, default=5)
