@@ -112,6 +112,30 @@ def test_duplicate_output_uuid_cannot_fill_two_slots(tmp_path):
     a.close()
 
 
+def test_owner_lock_survives_gpu_process_descriptor_close(tmp_path):
+    import subprocess
+    import sys
+    from sim.manorl.synthesis_campaign import acquire_owner_lock, owner_lock_busy
+    handle=acquire_owner_lock(tmp_path,'worker-1')
+    child=subprocess.Popen([sys.executable,'-c','import sys; sys.stdin.buffer.read(1)'],
+        stdin=subprocess.PIPE,pass_fds=(handle.fileno(),))
+    try:
+        handle.close()
+        assert owner_lock_busy(tmp_path,'worker-1')
+        child.communicate(b'x',timeout=5)
+        assert not owner_lock_busy(tmp_path,'worker-1')
+    finally:
+        if child.poll() is None:child.kill();child.wait()
+
+
+def test_short_original_prephase_keeps_training_early80():
+    src=replace(trajectory(),movement_start_step=0)
+    low=np.full(28,-10.);high=-low
+    augmented,sample=augment_source_prefix(src,slot=0,attempt=1,joint_lower=low,joint_upper=high)
+    assert augmented.movement_start_step==augmented.augmentation_prefix_frames
+    assert sample['policy_enable_step']==augmented.augmentation_prefix_frames+80
+
+
 def test_unreachable_raw_finger_reference_joins_native_clipped_target():
     source=trajectory();q=np.array(source.q_ref,copy=True);q[:,14]=-0.18
     source=replace(source,q_ref=q,q_ref_by_side={'right':q})

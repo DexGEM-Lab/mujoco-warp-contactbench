@@ -22,7 +22,7 @@ import numpy as np
 
 from sim.manorl.synthesis_campaign import (
     CAMPAIGN_CONTRACT, PrefixConfig, QuotaLedger, atomic_json,
-    augment_source_prefix, canonical_hash, source_key,
+    augment_source_prefix, canonical_hash, source_key, acquire_owner_lock, owner_lock_busy,
 )
 
 
@@ -145,11 +145,13 @@ def run_worker(args):
     if min(args.batch_size,args.waves)<1:raise ValueError('batch size and waves must be positive')
     require_log_capture(args.log)
     ledger=QuotaLedger(root/'quota.sqlite');owner=args.owner or f'worker-{os.getpid()}-{uuid.uuid4().hex[:8]}'
+    owner_lock=acquire_owner_lock(root,owner)
     spool=root/'spool';spool.mkdir(exist_ok=True)
     runtime=None;pending=None;wave=0;total_accepted=0
     def heartbeat(**extra):
         ledger.heartbeat(owner,{'pid':os.getpid(),'pid_start':_process_start(os.getpid()),
-            'group':args.group,'wave':wave,'accepted':total_accepted,**extra})
+            'group':args.group,'wave':wave,'accepted':total_accepted,
+            'gpu':int(os.environ['CUDA_VISIBLE_DEVICES']),'log':str(args.log),**extra})
     def reap_pending():
         nonlocal pending,total_accepted
         if pending is None:return
@@ -210,7 +212,7 @@ def run_worker(args):
             log_handle=path.with_suffix('.log').open('wb')
             cpu_env={**os.environ,'CUDA_VISIBLE_DEVICES':'','JAX_PLATFORMS':'cpu'}
             process=subprocess.Popen([sys.executable,'-m','tools.run_manorl_synthesis_campaign','publish',str(path)],
-                stdout=log_handle,stderr=subprocess.STDOUT,env=cpu_env)
+                stdout=log_handle,stderr=subprocess.STDOUT,env=cpu_env,pass_fds=(owner_lock.fileno(),))
             pending=(process,path,log_handle)
         reap_pending()
         elapsed=time.perf_counter()-started
@@ -223,12 +225,26 @@ def run_worker(args):
         if pending is not None:
             process,path,handle=pending
             process.wait();handle.close()
-        ledger.close()
+        ledger.close();owner_lock.close()
 
 
 def _process_start(pid):
     try:return Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()[19]
     except (OSError,IndexError):return None
+
+
+class AdoptedWorker:
+    """Monitor an orphaned campaign process without spawning duplicate work."""
+    def __init__(self, root, ledger, owner, details):
+        self.root,self.ledger,self.owner,self.details=root,ledger,owner,details
+
+    def poll(self):
+        pid=self.details.get('pid');start=self.details.get('pid_start')
+        if owner_lock_busy(self.root,self.owner) or (pid and start and _process_start(pid)==start):
+            return None
+        row=self.ledger.db.execute('SELECT details FROM workers WHERE owner=?',(self.owner,)).fetchone()
+        phase=json.loads(row[0]).get('phase') if row else None
+        return 0 if phase=='finished_round' else 1
 
 
 def supervise(args):
@@ -240,17 +256,28 @@ def supervise(args):
     ledger=QuotaLedger(root/'quota.sqlite');output=Path(config['output'])
     recovered=reconcile_shards(ledger,output)
     emit('reconciled',rows=recovered)
-    # Recover only demonstrably dead PID+start-time owners after NAS reconciliation.
-    for row in ledger.db.execute('SELECT owner,details FROM workers').fetchall():
-        details=json.loads(row['details']);pid=details.get('pid')
-        current_start=_process_start(pid) if pid else None
-        if current_start is not None and (details.get('pid_start') is None or current_start==details['pid_start']):
-            raise RuntimeError(f'previous worker is still alive or ownership is ambiguous: {row["owner"]} PID {pid}')
-        ledger.release_owner(row['owner'])
     gpus=[int(v) for v in args.gpus.split(',')]
     if not gpus or len(set(gpus))!=len(gpus):raise ValueError('GPU list must be unique')
+    workers={}
+    # A CPU publisher inherits its GPU owner's lock descriptor. Even if the GPU
+    # process is killed, its claims remain unavailable until publication ends.
+    for row in ledger.db.execute('SELECT owner,details FROM workers').fetchall():
+        owner=row['owner'];details=json.loads(row['details']);pid=details.get('pid')
+        current_start=_process_start(pid) if pid else None
+        alive=owner_lock_busy(root,owner) or (current_start is not None and current_start==details.get('pid_start'))
+        if alive:
+            gpu=details.get('gpu')
+            if gpu not in gpus or gpu in workers or not details.get('log'):
+                raise RuntimeError(f'cannot safely adopt worker ownership: {owner}')
+            workers[gpu]={'process':AdoptedWorker(root,ledger,owner,details),'handle':None,
+                'owner':owner,'pid':pid,'pid_start':details.get('pid_start'),'group':details['group'],
+                'log':details['log'],'started':time.time(),'adopted':True}
+            emit('worker_adopted',owner=owner,gpu=gpu,pid=pid)
+        else:ledger.release_owner(owner)
     logs=root/'logs';logs.mkdir(exist_ok=True)
-    workers={};last_scheduled={};failures=Counter();blocked={}
+    state_path=root/'supervisor-state.json'
+    prior=read_json(state_path) if state_path.exists() else {}
+    last_scheduled=prior.get('last_scheduled',{});failures=Counter(prior.get('failures',{}));blocked=prior.get('blocked',{})
     stop=False
     def request_stop(signum,frame):
         nonlocal stop
@@ -261,8 +288,8 @@ def supervise(args):
         for gpu,record in list(workers.items()):
             process=record['process']
             code=process.poll()
-            if code is None:continue
-            record['handle'].close()
+            if code is None or owner_lock_busy(root,record['owner']):continue
+            if record['handle'] is not None:record['handle'].close()
             reconcile_shards(ledger,output)
             ledger.release_owner(record['owner'])
             group=record['group'];del workers[gpu]
@@ -272,6 +299,7 @@ def supervise(args):
                 blocked[group]={'exit_code':code,'log':record['log'],'tail':tail,'time':time.time()}
                 emit('worker_failed',group=group,gpu=gpu,exit_code=code,log=record['log'])
             else:emit('worker_round_finished',group=group,gpu=gpu)
+            atomic_json(state_path,{'last_scheduled':last_scheduled,'failures':dict(failures),'blocked':blocked})
         summary=ledger.summary()
         status={'time':time.time(),**summary,'workers':{str(g):{k:v for k,v in r.items() if k not in ('process','handle')}
             for g,r in workers.items()},'blocked':blocked,'restarts':dict(failures),'stop_requested':stop}
@@ -300,7 +328,8 @@ def supervise(args):
             process=subprocess.Popen(command,stdout=handle,stderr=subprocess.STDOUT,env=environment,start_new_session=True)
             workers[gpu]={'process':process,'handle':handle,'pid':process.pid,'pid_start':_process_start(process.pid),
                 'owner':owner,'group':group,'log':str(path),'started':time.time()}
-            ledger.heartbeat(owner,{'pid':process.pid,'pid_start':_process_start(process.pid),'phase':'starting','group':group})
+            ledger.heartbeat(owner,{'pid':process.pid,'pid_start':_process_start(process.pid),'phase':'starting',
+                'group':group,'gpu':gpu,'log':str(path)})
             last_scheduled[group]=time.time();assigned.add(group)
             emit('worker_started',gpu=gpu,group=group,pid=process.pid,owner=owner,log=str(path))
         # Persistence/waiting belongs to this server process, not the LLM monitor.

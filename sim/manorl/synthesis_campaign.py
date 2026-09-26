@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 import hashlib
+import fcntl
 import json
 import math
 import os
@@ -177,6 +178,23 @@ def atomic_json(path: Path, value: object) -> None:
         json.dump(value, f, ensure_ascii=False, sort_keys=True, allow_nan=False)
         f.write("\n"); f.flush(); os.fsync(f.fileno())
     os.replace(tmp, path)
+
+
+def acquire_owner_lock(root: Path, owner: str):
+    """Hold across GPU and inherited CPU-publisher lifetimes, including SIGKILL."""
+    if not owner or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._' for c in owner):
+        raise ValueError('invalid worker owner name')
+    path=root/'leases'/(owner+'.lock');path.parent.mkdir(parents=True,exist_ok=True)
+    handle=path.open('a+b')
+    try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BaseException:handle.close();raise
+    return handle
+
+
+def owner_lock_busy(root: Path, owner: str) -> bool:
+    try:handle=acquire_owner_lock(root,owner)
+    except BlockingIOError:return True
+    handle.close();return False
 
 
 class QuotaLedger:
