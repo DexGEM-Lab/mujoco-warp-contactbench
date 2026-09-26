@@ -28,6 +28,7 @@ def main(argv=None):
     p.add_argument('--output',type=Path,required=True);p.add_argument('--batch-size',type=int,required=True)
     p.add_argument('--sources',type=int,default=16);p.add_argument('--candidate-limit',type=int,default=80)
     p.add_argument('--no-contact-cache',action='store_true');p.add_argument('--log',type=Path,required=True)
+    p.add_argument('--start-prefilter',action='store_true')
     args=p.parse_args(argv)
     require_log_capture(args.log)
     if min(args.batch_size,args.sources,args.candidate_limit)<1:raise ValueError('benchmark sizes must be positive')
@@ -56,6 +57,8 @@ def main(argv=None):
                 joint_lower=runtime.environment.joint_lower,joint_upper=runtime.environment.joint_upper,config=prefix)
         except ValueError as exc:
             sampling_failures[str(exc)]+=1;continue
+        if args.start_prefilter and runtime.initial_geometry_failure(trajectory) is not None:
+            sampling_failures['initial_geometry_penetration']+=1;continue
         candidates.append((claim,trajectory,sample))
     if not candidates:
         raise RuntimeError('all fixed candidates failed geometric sampling: '+repr(sampling_failures))
@@ -92,7 +95,7 @@ def main(argv=None):
         'sampled_candidates':len(candidates),'sampling_failures':dict(sampling_failures),
         'initialization_seconds':initialize_seconds,'warmup_seconds':warm_seconds,'warmup':warm_timing,
         'measured_seconds':seconds,'accepted_saved':accepted,'accepted_per_gpu_hour':3600*accepted/seconds,
-        'contact_snapshot_cache':not args.no_contact_cache,'waves':waves,
+        'contact_snapshot_cache':not args.no_contact_cache,'start_prefilter':args.start_prefilter,'waves':waves,
         'publication':[ {k:s[k] for k in ('accepted','failures','payload_bytes','retreat_seconds','publish_seconds','wall_seconds','shard')} for s in summaries]}
     atomic_json(args.output/'benchmark.json',report);emit('benchmark_complete',**report)
 

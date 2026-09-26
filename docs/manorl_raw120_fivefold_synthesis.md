@@ -18,7 +18,9 @@ The historical pre60 Far/Near workflow remains available separately.
   clipped pose, within physical joint limits. Raw reference PIP angles can be
   negative even when the physical lower limit is zero; the prefix joins the
   reachable controller target without rewriting the original base reference.
-  A 4 cm endpoint-smooth arc joins the unchanged base reference.
+  A 4 cm endpoint-smooth arc joins the unchanged base reference. A pose-only
+  native collision prefilter rejects initial penetrations deeper than 1 mm;
+  it cannot accept a row or replace the subsequent Warp force/physics gates.
 - The added prefix **and the checkpoint's original early80 phase** are
   policy-free. Policy/deviation gates open at `prefix_frames + early80`.
   Prefix collision rejection covers the added prefix only, not the original
@@ -82,7 +84,10 @@ python -m tools.run_manorl_synthesis_campaign supervise \
 
 The supervisor owns two homogeneous-object worker processes. A worker retains
 one model/policy across waves and writes only compact-required state/commands.
-Exact solved host buffers can be reused from observation extraction. A separate
+Each new wave clears solver warm-start and clock state. Rejected start poses
+are replenished before dispatch so they do not consume full GPU episodes.
+Exact solved host buffers can be reused from observation extraction; batched
+contact-coordinate transforms preserve the scalar exporter contract. A separate
 CPU process performs retreat and compact publication while the GPU runs its next
 wave, with one pending publication as backpressure. Temporary IPC traces are
 reclaimed only after verified publication; failed IPC inputs and logs remain.
@@ -99,7 +104,8 @@ be turned into successful completion.
 
 Use `tools/benchmark_manorl_synthesis_campaign.py` in separate fresh processes
 for batch sizes 16, 32, 64 (and larger only when useful). Keep group, source limit,
-candidate limit, sampling seeds and physical/gate configuration fixed. Both
+candidate limit, sampling seeds and physical/gate configuration fixed. Pass
+`--start-prefilter` to include the production initial-geometry prefilter. Both
 stdout and stderr must redirect directly to the declared `--log`.
 
 The benchmark warms the runtime before timing the fixed candidate set and waits

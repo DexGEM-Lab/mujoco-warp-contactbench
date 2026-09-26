@@ -153,6 +153,31 @@ class BatchSynthesisRuntime:
             'ccd_contacts_per_world':env.config.warp_ccd_contacts_per_world,
             'contact_capacity':env.config.contact_capacity,'constraint_capacity':env.config.constraint_capacity}
 
+    def initial_geometry_failure(self, trajectory, *, tolerance_m=0.001):
+        """Cheap pose-only rejection; successful candidates still require Warp."""
+        env=self.environment;mj=env.mujoco
+        data=getattr(self,'_proposal_data',None)
+        if data is None:
+            data=mj.MjData(env.model);self._proposal_data=data
+        data.qpos[:28]=trajectory.q_ref[0]
+        for name in self.scene_names:
+            address=self.object_qpos[name]
+            if trajectory.scene_object_types:
+                slot=trajectory.scene_object_types.index(name)
+                position=trajectory.scene_object_initial_pos[slot]
+                quat=trajectory.scene_object_initial_quat_xyzw[slot]
+            else:
+                position=trajectory.object_pos[0];quat=trajectory.object_quat_xyzw[0]
+            data.qpos[address:address+3]=position
+            data.qpos[address+3:address+7]=quat[[3,0,1,2]]
+        mj.mj_kinematics(env.model,data);mj.mj_comPos(env.model,data);mj.mj_collision(env.model,data)
+        for contact in data.contact[:data.ncon]:
+            a,b=int(contact.geom1),int(contact.geom2)
+            if ((a in self.hand_geoms)!=(b in self.hand_geoms)) and contact.dist < -tolerance_m:
+                return {'reason':'initial_geometry_penetration','geom_pair':[a,b],
+                        'depth_m':float(contact.dist),'tolerance_m':float(tolerance_m)}
+        return None
+
     def _contacts(self):
         from sim.manorl.synthesis_contacts import corrected_contact_frames_vectorized as corrected_contact_frames
         env = self.environment
@@ -179,6 +204,8 @@ class BatchSynthesisRuntime:
                 w=int(buffers.world[i]); address=np.asarray(buffers.addresses[i],dtype=int)
                 valid=address[(address>=0)&(address<buffers.nefc[w])]
                 floor[w] |= float(np.sum(buffers.constraint_force[w,valid])) > .2
+        self.capacity_evidence['contact_capacity']=int(buffers.capacity)
+        self.capacity_evidence['constraint_capacity']=int(buffers.constraint_force.shape[1])
         self.capacity_evidence['max_contacts']=max(self.capacity_evidence['max_contacts'],buffers.count)
         self.capacity_evidence['max_constraints']=max(self.capacity_evidence['max_constraints'],int(np.max(buffers.nefc)))
         return contacts, floor, any_object, state

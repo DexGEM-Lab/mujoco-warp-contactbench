@@ -41,9 +41,12 @@ def prepare(args):
     output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
     inventory=read_json(args.inventory)
     prefix=PrefixConfig()
+    if not np.isfinite(args.initial_penetration_tolerance_m) or not 0 <= args.initial_penetration_tolerance_m <= 0.01:
+        raise ValueError('initial penetration tolerance must be between 0 and 0.01m')
     config={'contract':CAMPAIGN_CONTRACT,'prefix':asdict(prefix),'output':str(output),
         'ccd_contacts_per_world':args.ccd_contacts,'contacts_per_world':args.contacts_per_world,
-        'constraint_capacity':args.constraint_capacity,'software_commit':args.software_commit}
+        'constraint_capacity':args.constraint_capacity,'software_commit':args.software_commit,
+        'initial_penetration_tolerance_m':args.initial_penetration_tolerance_m}
     if (root/'config.json').exists() and read_json(root/'config.json')!=config:
         raise ValueError('existing campaign configuration differs')
     catalogs={};sources=[];checkpoints={};seen=set();exceptions=Counter()
@@ -172,6 +175,7 @@ def run_worker(args):
     try:
         for wave in range(args.waves):
             heartbeat(phase='claim')
+            if pending is not None and pending[0].poll() is not None:reap_pending()
             claims=ledger.claim(owner,args.group,args.batch_size)
             if not claims:break
             base=load_sources(claims)
@@ -182,26 +186,38 @@ def run_worker(args):
                     ccd_contacts=config['ccd_contacts_per_world'],contacts_per_world=config['contacts_per_world'],
                     constraint_capacity=config['constraint_capacity'],reuse_contact_snapshot=not args.no_contact_cache)
                 emit('runtime_ready',seconds=time.perf_counter()-t0,batch_size=args.batch_size,group=args.group)
-            valid=[];trajectories=[];samples=[]
-            for claim,source in zip(claims,base):
-                try:
-                    trajectory,sample=augment_source_prefix(source,slot=claim['slot'],attempt=claim['attempt'],
-                        joint_lower=runtime.environment.joint_lower,joint_upper=runtime.environment.joint_upper,config=prefix)
-                except ValueError as exc:
-                    ledger.finish(claim,{'accepted':False,'prefix_sampling_failure':str(exc)});continue
-                valid.append(claim);trajectories.append(trajectory);samples.append(sample)
+            valid=[];trajectories=[];samples=[];proposals=0
+            while claims:
+                proposals+=len(claims)
+                for claim,source in zip(claims,base):
+                    try:
+                        trajectory,sample=augment_source_prefix(source,slot=claim['slot'],attempt=claim['attempt'],
+                            joint_lower=runtime.environment.joint_lower,joint_upper=runtime.environment.joint_upper,config=prefix)
+                    except ValueError as exc:
+                        ledger.finish(claim,{'accepted':False,'prefix_sampling_failure':str(exc)});continue
+                    tolerance=config.get('initial_penetration_tolerance_m')
+                    if tolerance is not None:
+                        failure=runtime.initial_geometry_failure(trajectory,tolerance_m=tolerance)
+                        if failure:
+                            ledger.finish(claim,{'accepted':False,'initial_geometry_failure':failure,'prefix':sample});continue
+                    valid.append(claim);trajectories.append(trajectory);samples.append(sample)
+                if len(valid)==args.batch_size or proposals>=8*args.batch_size:break
+                claims=ledger.claim(owner,args.group,args.batch_size-len(valid))
+                base=load_sources(claims)
             if not valid:
-                emit('sampling_rejected_wave',group=args.group,attempts=len(claims));continue
+                emit('sampling_rejected_wave',group=args.group,attempts=proposals);continue
             actual=len(valid)
             trajectories += [trajectories[-1]]*(args.batch_size-actual)
             samples += [samples[-1]]*(args.batch_size-actual)
             runtime.install(trajectories,[s['seed'] for s in samples])
             heartbeat(phase='rollout')
             results,timing=runtime.collect(trajectories,samples,valid,progress=lambda d:heartbeat(phase='rollout',**d))
+            for result in results:
+                result['diagnostic']['initial_geometry_prefilter_tolerance_m']=config.get('initial_penetration_tolerance_m')
             sys.stdout.flush();sys.stderr.flush()
             if log_has_overflow(args.log):
                 raise RuntimeError('CAPACITY_BLOCKED: Warp overflow observed; no rows from this wave published')
-            emit('wave_complete',group=args.group,wave=wave,actual_candidates=actual,**timing)
+            emit('wave_complete',group=args.group,wave=wave,proposals=proposals,actual_candidates=actual,**timing)
             # Bound postprocessing backlog to one wave. CPU writes overlap the
             # following GPU wave; only backpressure waits here.
             heartbeat(phase='publication_backpressure');reap_pending()
@@ -259,6 +275,7 @@ def supervise(args):
     gpus=[int(v) for v in args.gpus.split(',')]
     if not gpus or len(set(gpus))!=len(gpus):raise ValueError('GPU list must be unique')
     workers={}
+    priority={name:i for i,name in enumerate(args.priority_objects.split(',')) if name}
     # A CPU publisher inherits its GPU owner's lock descriptor. Even if the GPU
     # process is killed, its claims remain unavailable until publication ends.
     for row in ledger.db.execute('SELECT owner,details FROM workers').fetchall():
@@ -310,7 +327,8 @@ def supervise(args):
             if not workers:break
             time.sleep(10);continue
         assigned={r['group'] for r in workers.values()}
-        groups=sorted(ledger.groups(),key=lambda g:(last_scheduled.get(g['group_key'],0),g['min_attempts'],g['group_key']))
+        groups=sorted(ledger.groups(),key=lambda g:(last_scheduled.get(g['group_key'],0),
+            priority.get(g['group_key'].rsplit('-',1)[0],len(priority)),g['min_attempts'],g['group_key']))
         for gpu in gpus:
             if gpu in workers:continue
             eligible=[g for g in groups if g['group_key'] not in assigned and g['group_key'] not in blocked]
@@ -343,13 +361,16 @@ def main(argv=None):
     p.add_argument('--output',type=Path,required=True);p.add_argument('--software-commit',required=True)
     p.add_argument('--ccd-contacts',type=int,default=16);p.add_argument('--contacts-per-world',type=int,default=1024)
     p.add_argument('--constraint-capacity',type=int,default=4096)
+    p.add_argument('--initial-penetration-tolerance-m',type=float,default=0.001)
     for name in ('worker','supervise'):
         p=sub.add_parser(name);p.add_argument('--campaign',type=Path,required=True);p.add_argument('--batch-size',type=int,default=64)
         p.add_argument('--waves',type=int,default=32)
         if name=='worker':
             p.add_argument('--group',required=True);p.add_argument('--owner');p.add_argument('--log',type=Path,required=True)
             p.add_argument('--no-contact-cache',action='store_true')
-        else:p.add_argument('--gpus',default='2,3')
+        else:
+            p.add_argument('--gpus',default='2,3')
+            p.add_argument('--priority-objects',default='cylinder6,cube2,sphere1,cylinder7,cylinder3,mayonnaisebottle')
     p=sub.add_parser('publish');p.add_argument('bundle',type=Path)
     p=sub.add_parser('status');p.add_argument('--campaign',type=Path,required=True)
     args=parser.parse_args(argv)

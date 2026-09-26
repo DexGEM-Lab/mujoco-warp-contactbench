@@ -81,3 +81,27 @@ def test_retreat_checks_added_overlap_not_existing_compliant_floor_contact():
     assert added_penetration({(0,16):-0.0000338614},{(0,16):-0.0000355081}) is None
     assert added_penetration({(0,4):-0.0017},baseline)['baseline_depth_m']==baseline[(0,4)]
     assert added_penetration({(0,16):-0.0001},baseline)['geom_pair']==[0,16]
+
+
+def test_initial_pose_prefilter_uses_geometry_without_integrating():
+    from dataclasses import replace
+    import mujoco
+    import numpy as np
+    from sim.manorl.synthesis_runtime import BatchSynthesisRuntime
+    from test_synthesis_campaign import trajectory
+    root_joints=''.join(f'<joint type="{kind}" axis="{axis}"/>' for kind,axis in
+        [('slide','1 0 0'),('slide','0 1 0'),('slide','0 0 1'),('hinge','1 0 0'),('hinge','0 1 0'),('hinge','0 0 1')])
+    fingers=''.join('<body><joint type="hinge"/><inertial pos="0 0 0" mass=".01" diaginertia=".001 .001 .001"/></body>' for _ in range(22))
+    model=mujoco.MjModel.from_xml_string(f'<mujoco><worldbody><geom type="plane" size="2 2 .1"/>'
+        f'<body>{root_joints}<geom name="hand" type="sphere" size=".04"/>{fingers}</body>'
+        '<body><freejoint/><geom type="sphere" size=".02"/></body></worldbody></mujoco>')
+    runtime=object.__new__(BatchSynthesisRuntime)
+    runtime.environment=SimpleNamespace(model=model,mujoco=mujoco)
+    runtime.scene_names=('cube1',);runtime.object_qpos={'cube1':28};runtime.hand_geoms={model.geom('hand').id}
+    source=trajectory()
+    assert runtime.initial_geometry_failure(source) is None
+    q=np.array(source.q_ref,copy=True);q[:,2]=.02
+    colliding=replace(source,q_ref=q,q_ref_by_side={'right':q})
+    result=runtime.initial_geometry_failure(colliding)
+    assert result['reason']=='initial_geometry_penetration' and result['depth_m']<-.01
+    assert runtime._proposal_data.time==0
