@@ -128,6 +128,9 @@ class ReferenceTrajectory:
     # value makes exactly the generated prefix the pure-reference phase; the
     # original reference begins with residual/deviation semantics enabled.
     augmentation_prefix_frames: int = 0
+    # New source-relative synthesis preserves the checkpoint's original early
+    # phase AFTER the added prefix. Zero keeps historical Far/Near semantics.
+    augmentation_base_early_phase_steps: int = 0
     # Synthesis-only policy-free tail-window length. Zero preserves normal
     # policy semantics. A positive value closes policy/action accumulation at
     # ``T-value`` and smoothly discharges existing cumulative residual;
@@ -274,6 +277,14 @@ class ReferenceTrajectory:
             and self.augmentation_prefix_frames >= movement_steps[0]
         ):
             raise ValueError("approach prefix must end before the movement window")
+        if (
+            not isinstance(self.augmentation_base_early_phase_steps, int)
+            or isinstance(self.augmentation_base_early_phase_steps, bool)
+            or self.augmentation_base_early_phase_steps < 0
+            or (self.augmentation_base_early_phase_steps and not self.augmentation_prefix_frames)
+            or self.augmentation_prefix_frames + self.augmentation_base_early_phase_steps >= expected
+        ):
+            raise ValueError("augmentation_base_early_phase_steps must preserve a live base horizon")
         if (
             not isinstance(self.augmentation_suffix_frames, int)
             or isinstance(self.augmentation_suffix_frames, bool)

@@ -2459,10 +2459,10 @@ class MujocoManoEnvironment:
             ],
             dtype=np.int64,
         )
-        # Ordinary training/reference trajectories preserve the fixed early30
-        # ABI. Synthesis-only augmented trajectories make exactly their new
-        # prefix the pure-reference phase; at the first unchanged pre60 frame,
-        # residual action and deviation termination become live together.
+        # Ordinary references preserve their configured early-phase ABI.
+        # Historical Far/Near enables policy at the base frame zero. New
+        # source-relative prefixes additionally preserve the checkpoint's base
+        # early phase; both residual and deviation gates shift by that amount.
         self.augmentation_prefix_mask = np.asarray(
             [
                 int(getattr(item, "augmentation_prefix_frames", 0)) > 0
@@ -2472,7 +2472,8 @@ class MujocoManoEnvironment:
         )
         self.early_phase_lengths = np.asarray(
             [
-                int(getattr(item, "augmentation_prefix_frames", 0))
+                (int(getattr(item, "augmentation_prefix_frames", 0))
+                 + int(getattr(item, "augmentation_base_early_phase_steps", 0)))
                 if augmented
                 else self.config.compatibility.early_phase_steps
                 for item, augmented in zip(
