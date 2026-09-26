@@ -14,7 +14,10 @@ The historical pre60 Far/Near workflow remains available separately.
   elevation distribution; infeasible starts are rejected, not clipped into a
   different distance. Retries stay within their slot's distance stratum.
 - Initial wrist orientation varies by up to 45 degrees about a sampled world
-  axis; finger targets vary by up to 0.15 rad within physical joint limits.
+  axis; finger targets vary by up to 0.15 rad around the source's native-servo
+  clipped pose, within physical joint limits. Raw reference PIP angles can be
+  negative even when the physical lower limit is zero; the prefix joins the
+  reachable controller target without rewriting the original base reference.
   A 4 cm endpoint-smooth arc joins the unchanged base reference.
 - The added prefix **and the checkpoint's original early80 phase** are
   policy-free. Policy/deviation gates open at `prefix_frames + early80`.

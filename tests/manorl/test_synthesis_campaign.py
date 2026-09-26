@@ -110,3 +110,16 @@ def test_duplicate_output_uuid_cannot_fill_two_slots(tmp_path):
     with pytest.raises(sqlite3.IntegrityError):a.finish(c[1],{},row_uuid='same',shard='a.lance')
     assert a.summary()['accepted']==1
     a.close()
+
+
+def test_unreachable_raw_finger_reference_joins_native_clipped_target():
+    source=trajectory();q=np.array(source.q_ref,copy=True);q[:,14]=-0.18
+    source=replace(source,q_ref=q,q_ref_by_side={'right':q})
+    lower=np.full(28,-10.);upper=np.full(28,10.);lower[14]=0.;upper[14]=1.745
+    augmented,sample=augment_source_prefix(source,slot=0,attempt=1,joint_lower=lower,joint_upper=upper)
+    prefix=augmented.augmentation_prefix_frames
+    assert np.all(augmented.q_ref[:prefix,14]>=0)
+    assert augmented.q_ref[prefix-1,14]==pytest.approx(0)
+    np.testing.assert_array_equal(augmented.q_ref[prefix:],source.q_ref)
+    assert sample['finger_template']=='native_servo_clipped_source_frame0'
+    assert 8 in sample['source_finger_limit_excess']

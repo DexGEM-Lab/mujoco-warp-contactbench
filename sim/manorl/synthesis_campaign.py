@@ -115,7 +115,12 @@ def augment_source_prefix(
     rotation = Rotation.from_rotvec(axis * angle) * Rotation.from_euler("XYZ", start[3:6])
     euler = rotation.as_euler("XYZ")
     start[3:6] += (euler - start[3:6] + math.pi) % (2 * math.pi) - math.pi
-    start[6:] = np.clip(start[6:] + rng.uniform(-config.finger_offset_rad, config.finger_offset_rad, 22), lower[6:], upper[6:])
+    # Raw MANO references may exceed physical finger limits (e.g. negative
+    # PIP flexion). Training's native command_target clamps them. Perturb the
+    # reachable baseline, not an unattainable raw value that erases variation.
+    start[6:] = np.clip(np.clip(start[6:], lower[6:], upper[6:])
+                        + rng.uniform(-config.finger_offset_rad, config.finger_offset_rad, 22),
+                        lower[6:], upper[6:])
     if np.any(start < lower) or np.any(start > upper):
         raise ValueError("sampled_start_joint_limits")
     duration = max(radius / config.nominal_speed_m_s,
@@ -123,9 +128,15 @@ def augment_source_prefix(
                    math.degrees(float(np.max(np.abs(start[6:] - source.q_ref[0, 6:])))) / config.nominal_angular_speed_deg_s)
     frames = int(np.clip(math.ceil(duration * 120), config.minimum_prefix_frames, config.maximum_prefix_frames))
     dt = 1 / 120
-    q = _discrete_c1_prefix(start, np.asarray(source.q_ref[:2]), frames=frames, dt=dt)
+    reachable = np.array(source.q_ref[:2], copy=True)
+    reachable[:, 6:] = np.clip(reachable[:, 6:], lower[6:], upper[6:])
+    q = _discrete_c1_prefix(start, reachable, frames=frames, dt=dt)
     q[:, :3] = _discrete_c1_prefix(start[:3], np.asarray(source.q_ref[:2, :3]), frames=frames, dt=dt,
                                   vertical_arc_height=config.vertical_arc_height_m)
+    # Endpoint derivatives can overshoot a bound; the native servo makes this
+    # same projection. The unchanged base remains raw, and will be clamped by
+    # the existing controller at execution as it was during training.
+    q[:, 6:] = np.clip(q[:, 6:], lower[6:], upper[6:])
     if np.any(q < lower[None] - 1e-6) or np.any(q > upper[None] + 1e-6):
         raise ValueError("sampled_prefix_joint_limits")
     q_all = _readonly(np.concatenate([q, source.q_ref]))
@@ -150,6 +161,10 @@ def augment_source_prefix(
         "start_q": start.tolist(), "prefix_frames": frames,
         "base_pre_padding": source.movement_start_step,
         "base_early_phase_steps": config.early_phase_steps,
+        "finger_template": "native_servo_clipped_source_frame0",
+        "source_finger_limit_excess": np.flatnonzero(
+            (source.q_ref[0, 6:] < lower[6:]) | (source.q_ref[0, 6:] > upper[6:])
+        ).tolist(),
         "policy_enable_step": frames + config.early_phase_steps,
         "config": asdict(config),
     }
