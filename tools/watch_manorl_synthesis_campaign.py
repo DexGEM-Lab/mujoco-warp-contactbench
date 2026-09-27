@@ -21,7 +21,7 @@ from sim.manorl.synthesis_campaign import QuotaLedger, atomic_json
 
 
 def should_continue(summary: dict, *, paused: bool) -> bool:
-    return not paused and not summary['complete']
+    return not paused and (not summary['complete'] or bool(summary.get('blocked')) or bool(summary.get('workers')))
 
 
 def active_worker_heartbeats(status: dict, worker_rows, now: float) -> dict:
@@ -69,7 +69,8 @@ def main(argv=None):
     try:
         while True:
             summary=ledger.summary();paused=stopping or (root/'PAUSE').exists()
-            if not should_continue(summary,paused=paused):
+            status=json.loads((root/'status.json').read_text()) if (root/'status.json').exists() else {}
+            if not should_continue({**summary,'blocked':status.get('blocked'),'workers':status.get('workers')},paused=paused):
                 atomic_json(root/'watch-status.json',{'time':time.time(),'pid':os.getpid(),
                     'state':'paused' if paused else 'complete','restarts':restarts,**summary})
                 if child is not None and child.poll() is None:child.terminate()
@@ -86,7 +87,6 @@ def main(argv=None):
                 child=subprocess.Popen(command,stdout=handle,stderr=subprocess.STDOUT,start_new_session=True)
                 restarts+=1
                 print(json.dumps({'event':'supervisor_started','pid':child.pid,'time':time.time(),'log':str(log)}),flush=True)
-            status=json.loads((root/'status.json').read_text()) if (root/'status.json').exists() else {}
             worker_rows=ledger.db.execute('SELECT owner,heartbeat,details FROM workers').fetchall()
             now=time.time()
             latest_workers={row['owner']:{'heartbeat_age_s':now-row['heartbeat'],**json.loads(row['details'])}

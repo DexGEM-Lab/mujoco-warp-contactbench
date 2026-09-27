@@ -24,6 +24,7 @@ from sim.manorl.trajectory import ReferenceTrajectory
 
 CAMPAIGN_CONTRACT = "manorl_raw120_source_prefix_offline_retreat_quota_v1"
 PREFIX_CONTRACT = "manorl_source_relative_shell_prefix_preserve_base_early_v1"
+SUCCESS_FILTER_CONTRACT = "manorl_source_durable_rows_per_settled_attempt_v1"
 
 
 def canonical_hash(value: object) -> str:
@@ -223,7 +224,109 @@ class QuotaLedger:
           token TEXT PRIMARY KEY, source_key TEXT, slot INTEGER, attempt INTEGER,
           started REAL, finished REAL, diagnostic TEXT);
         CREATE TABLE IF NOT EXISTS workers(owner TEXT PRIMARY KEY, heartbeat REAL, details TEXT);
+        CREATE TABLE IF NOT EXISTS source_success_policy(
+          id INTEGER PRIMARY KEY CHECK(id=1), minimum_rate REAL NOT NULL,
+          minimum_attempts INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS source_exclusions(
+          source_key TEXT PRIMARY KEY REFERENCES sources(key), decided REAL NOT NULL,
+          settled_attempts INTEGER NOT NULL, accepted_rows INTEGER NOT NULL,
+          minimum_rate REAL NOT NULL, minimum_attempts INTEGER NOT NULL);
+        -- Enforce exclusions even while an older worker finishes its current
+        -- wave. Leased claims stay valid; accepted rows are never changed.
+        CREATE TRIGGER IF NOT EXISTS excluded_source_ready_update
+        AFTER UPDATE OF state ON slots
+        WHEN NEW.state='ready' AND EXISTS(
+          SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+        BEGIN
+          UPDATE slots SET state='skipped' WHERE source_key=NEW.source_key AND slot=NEW.slot;
+        END;
+        CREATE TRIGGER IF NOT EXISTS excluded_source_ready_insert
+        AFTER INSERT ON slots
+        WHEN NEW.state='ready' AND EXISTS(
+          SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+        BEGIN
+          UPDATE slots SET state='skipped' WHERE source_key=NEW.source_key AND slot=NEW.slot;
+        END;
+        CREATE TRIGGER IF NOT EXISTS source_success_after_settlement
+        AFTER UPDATE OF finished ON attempts
+        WHEN NEW.finished IS NOT NULL AND OLD.finished IS NULL
+          AND EXISTS(SELECT 1 FROM source_success_policy WHERE id=1)
+          AND NOT EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+        BEGIN
+          INSERT OR IGNORE INTO source_exclusions
+          SELECT NEW.source_key,NEW.finished,a.n,q.n,p.minimum_rate,p.minimum_attempts
+          FROM source_success_policy p,
+            (SELECT COUNT(*) n FROM attempts
+             WHERE source_key=NEW.source_key AND finished IS NOT NULL) a,
+            (SELECT COUNT(*) n FROM slots
+             WHERE source_key=NEW.source_key AND state='accepted') q
+          WHERE p.id=1 AND q.n<5 AND a.n>=p.minimum_attempts
+            AND q.n<a.n*p.minimum_rate;
+          UPDATE slots SET state='skipped'
+          WHERE source_key=NEW.source_key AND state='ready'
+            AND EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key);
+        END;
         """)
+
+    def success_policy(self) -> dict | None:
+        row=self.db.execute('SELECT minimum_rate,minimum_attempts FROM source_success_policy WHERE id=1').fetchone()
+        if row is None:return None
+        return {'contract':SUCCESS_FILTER_CONTRACT,'minimum_rate':row['minimum_rate'],
+                'minimum_attempts':row['minimum_attempts'],
+                'denominator':'finished_generation_attempts',
+                'numerator':'durably_accepted_source_slots'}
+
+    def configure_success_filter(self, *, minimum_rate: float = .25, minimum_attempts: int = 20) -> int:
+        """Activate a persistent per-source filter without invalidating leases.
+
+        Finished attempts include sampler/geometry rejections and solved GPU
+        candidates. Abandoned/in-flight attempts have no finished timestamp and
+        do not count. Existing complete sources and all accepted rows are kept.
+        """
+        if (isinstance(minimum_rate,bool) or not isinstance(minimum_rate,(int,float)) or not math.isfinite(minimum_rate)
+                or not 0<=minimum_rate<=1):
+            raise ValueError('minimum success rate must be finite and between zero and one')
+        if isinstance(minimum_attempts,bool) or not isinstance(minimum_attempts,int) or minimum_attempts<1:
+            raise ValueError('minimum attempts must be a positive integer')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            previous=self.success_policy()
+            if previous is not None and (previous['minimum_rate']!=minimum_rate
+                    or previous['minimum_attempts']!=minimum_attempts):
+                raise ValueError('source success policy changed; an explicit exclusion-policy migration is required')
+            # Covering partial index avoids parsing/scanning large diagnostics
+            # for each settlement. The legacy finished UPDATE maintains it too.
+            self.db.execute('CREATE INDEX IF NOT EXISTS attempts_settled_source '
+                            'ON attempts(source_key) WHERE finished IS NOT NULL')
+            self.db.execute('INSERT OR IGNORE INTO source_success_policy VALUES(1,?,?)',
+                            (minimum_rate,minimum_attempts))
+            before=self.db.total_changes
+            self.db.execute('''INSERT OR IGNORE INTO source_exclusions
+                WITH finished AS (
+                  SELECT source_key,COUNT(*) n FROM attempts WHERE finished IS NOT NULL GROUP BY source_key),
+                accepted AS (
+                  SELECT source_key,COUNT(*) n FROM slots WHERE state='accepted' GROUP BY source_key)
+                SELECT f.source_key,?,f.n,COALESCE(a.n,0),?,?
+                FROM finished f LEFT JOIN accepted a USING(source_key)
+                WHERE f.n>=? AND COALESCE(a.n,0)<5 AND COALESCE(a.n,0)<f.n*?''',
+                (time.time(),minimum_rate,minimum_attempts,minimum_attempts,minimum_rate))
+            added=self.db.total_changes-before
+            self.db.execute("UPDATE slots SET state='skipped' WHERE state='ready' "
+                            'AND source_key IN (SELECT source_key FROM source_exclusions)')
+            self.db.commit()
+            return added
+        except BaseException:
+            self.db.rollback();raise
+
+    def exclusion_report(self) -> dict:
+        rows=[]
+        for row in self.db.execute('''SELECT e.*,s.group_key,s.spec FROM source_exclusions e
+                JOIN sources s ON s.key=e.source_key ORDER BY s.group_key,e.source_key'''):
+            item={k:row[k] for k in row.keys() if k!='spec'}
+            item['identity']=json.loads(row['spec']).get('identity',row['source_key'])
+            item['success_rate_at_exclusion']=row['accepted_rows']/row['settled_attempts']
+            rows.append(item)
+        return {'time':time.time(),'policy':self.success_policy(),'excluded_sources':rows}
 
     def initialize(self, config: dict, sources: list[dict]) -> None:
         digest = canonical_hash(config)
@@ -291,18 +394,40 @@ class QuotaLedger:
             self.db.execute("INSERT OR REPLACE INTO workers VALUES(?,?,?)", (owner, time.time(), json.dumps(details, sort_keys=True)))
 
     def summary(self) -> dict:
+        # Exclusion decisions and in-flight publications can change together;
+        # report all counters from one snapshot, not several unrelated reads.
+        own_snapshot=not self.db.in_transaction
+        if own_snapshot:self.db.execute('BEGIN')
+        try:return self._summary_snapshot()
+        finally:
+            if own_snapshot:self.db.rollback()
+
+    def _summary_snapshot(self) -> dict:
         counts = dict(self.db.execute("SELECT state,COUNT(*) FROM slots GROUP BY state").fetchall())
         sources = int(self.db.execute("SELECT COUNT(*) FROM sources").fetchone()[0])
         complete = int(self.db.execute("SELECT COUNT(*) FROM (SELECT source_key FROM slots WHERE state='accepted' GROUP BY source_key HAVING COUNT(*)=5)").fetchone()[0])
         accepted = counts.get("accepted", 0)
+        excluded=int(self.db.execute('SELECT COUNT(*) FROM source_exclusions').fetchone()[0])
+        retained=sources-excluded
+        retained_complete=int(self.db.execute('''SELECT COUNT(*) FROM (
+            SELECT q.source_key FROM slots q LEFT JOIN source_exclusions e ON e.source_key=q.source_key
+            WHERE e.source_key IS NULL AND q.state='accepted' GROUP BY q.source_key HAVING COUNT(*)=5)''').fetchone()[0])
+        excluded_accepted=int(self.db.execute('''SELECT COUNT(*) FROM slots q
+            JOIN source_exclusions e ON e.source_key=q.source_key WHERE q.state='accepted' ''').fetchone()[0])
+        skipped=counts.get('skipped',0);original_target=5*sources;target=original_target-skipped
         return {"sources": sources, "sources_complete": complete, "accepted": accepted,
-                "target": 5*sources, "remaining": 5*sources-accepted, "states": counts,
+                "original_target":original_target,"target":target,"remaining":target-accepted,"states":counts,
+                "sources_excluded":excluded,"sources_retained":retained,"skipped_slots":skipped,
+                "retained_sources_complete":retained_complete,"retained_target":5*retained,
+                "retained_accepted":accepted-excluded_accepted,"excluded_accepted":excluded_accepted,
+                "source_success_policy":self.success_policy(),
                 "attempts": int(self.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]),
-                "complete": sources > 0 and sources == complete and accepted == 5*sources}
+                "complete": sources>0 and retained_complete==retained and accepted+skipped==original_target
+                            and counts.get('leased',0)==0 and counts.get('ready',0)==0}
 
     def groups(self) -> list[dict]:
         return [dict(row) for row in self.db.execute("""SELECT s.group_key,COUNT(*) remaining,MIN(q.attempts) min_attempts
-            FROM slots q JOIN sources s ON s.key=q.source_key WHERE q.state!='accepted'
+            FROM slots q JOIN sources s ON s.key=q.source_key WHERE q.state IN ('ready','leased')
             GROUP BY s.group_key ORDER BY min_attempts,group_key""")]
 
     def close(self) -> None:

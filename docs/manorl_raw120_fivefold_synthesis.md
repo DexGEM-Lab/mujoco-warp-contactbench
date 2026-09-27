@@ -1,9 +1,12 @@
 # Raw120 fivefold synthesis
 
 This campaign consumes the completed per-object raw120 checkpoints. Its unit of
-completion is **five accepted, durably published variants for each raw source**.
-Attempts, other sources' surplus rows, and benchmark outputs do not fill a quota.
-The historical pre60 Far/Near workflow remains available separately.
+completion is **five accepted, durably published variants for each retained raw
+source**. The current campaign permits excluding incomplete sources below25%
+historical generation success after at least20 settled attempts. Attempts,
+other sources' surplus rows, and benchmark outputs do not fill a quota.
+Already-published rows are retained, including partial results from excluded
+sources. The historical pre60 Far/Near workflow remains available separately.
 
 ## Motion and physics
 
@@ -106,9 +109,46 @@ promotion; transient CIFS permission/sharing failures receive up to four logged
 rename attempts (1/2/4-second backoff), without rewriting rows or overwriting a
 final shard. Persistent failure retains the partial and IPC evidence. Only after
 successful promotion does SQLite mark accepted slots. Promotion-before-ledger crashes are reconciled before dead-owner claims
-are released. Completion requires every source's five unique slots, not merely
-an aggregate row count. Persistent failures leave visible deficits; they cannot
-be turned into successful completion.
+are released. Completion requires every retained source's five unique slots.
+Excluded deficits are explicitly skipped work, never successful rows. Persistent
+publication failures remain visible even when the retained quota is satisfied.
+
+## Excluding low-success sources
+
+Enable the opt-in policy on each host-local campaign:
+
+```bash
+python -m tools.run_manorl_synthesis_campaign set-source-filter \
+  --campaign /local/campaign --minimum-rate 0.25 --minimum-attempts 20
+```
+
+The numerator is accepted source slots after verified durable publication; the
+denominator is finished generation attempts, including prefix sampling/geometry
+rejections and solved candidates. Unfinished and infrastructure-abandoned
+attempts have no settlement timestamp and do not count. Exactly25% stays
+eligible. Sources already at five saved rows are left complete.
+
+The ledger freezes an exclusion decision and changes only ready slots to
+`skipped`. In-flight tokens remain valid: a successful late publication is still
+accepted, while a failed or abandoned excluded slot becomes skipped rather than
+retryable. SQLite triggers enforce this even for a pre-upgrade worker finishing
+its current wave. No source, attempt, shard, or accepted row is deleted.
+
+`original_target` preserves the inventory target. `target` subtracts skipped
+slots, retaining accepted rows and unresolved in-flight work in its denominator.
+`retained_target`/`retained_accepted` and
+`retained_sources_complete`/`sources_retained` describe the five-row obligation
+for retained sources. `sources_excluded`, `skipped_slots`, and
+`excluded_accepted` report exclusions and preserved partial data separately.
+Completion also requires no ready/leased slots, active workers, or publication
+blockers; quota completion alone must not hide a failed publication.
+
+Policy and per-source decisions live in local SQLite. Admission mirrors the
+audit to NAS `fleet/source-filters/<host>.json`, outside ownership records.
+Reapplying the same policy is idempotent; a changed threshold requires an
+explicit policy migration. Building the settled-attempt index on a large old
+ledger can hold a long write lock: drain workers and suspend manager writers
+before initial activation, then restart managers from an immutable snapshot.
 
 ## Growing the fleet without duplicating quotas
 

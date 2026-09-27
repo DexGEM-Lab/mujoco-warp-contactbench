@@ -78,7 +78,12 @@ def scan_once(args, ledger, config):
         'campaign':str(root),'output':config['output'],**summary}
     atomic_json(root/'admission-status.json',status)
     atomic_json(args.registry/'hosts'/f'{args.host}.json',status)
-    if args.ensure_watch and pool and summary['remaining']>0 and not lock_busy(root/'watch.lock'):
+    if summary['source_success_policy'] is not None:
+        atomic_json(args.registry/'source-filters'/f'{args.host}.json',
+                    {'host':args.host,'campaign_id':args.campaign_id,**ledger.exclusion_report()})
+    supervisor_status=json.loads((root/'status.json').read_text()) if (root/'status.json').exists() else {}
+    needs_watch=summary['remaining']>0 or supervisor_status.get('blocked') or supervisor_status.get('workers')
+    if args.ensure_watch and pool and needs_watch and not lock_busy(root/'watch.lock'):
         allowed=sorted(set(policy.get('always',[]))|{int(g) for g in policy.get('after_objects',{})})
         path=root/f'admission-watch-{time.time_ns()}.log'
         with path.open('ab') as stream:

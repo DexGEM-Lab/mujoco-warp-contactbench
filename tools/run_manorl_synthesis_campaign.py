@@ -346,7 +346,7 @@ def supervise(args):
         status={'time':time.time(),**summary,'workers':{str(g):{k:v for k,v in r.items() if k not in ('process','handle')}
             for g,r in workers.items()},'blocked':blocked,'restarts':dict(failures),'stop_requested':stop}
         atomic_json(root/'status.json',status)
-        if summary['complete'] and not workers:
+        if summary['complete'] and not workers and not blocked:
             atomic_json(root/'completed.json',status);emit('campaign_complete',**summary);break
         if stop:
             if not workers:break
@@ -397,6 +397,10 @@ def main(argv=None):
             p.add_argument('--gpus',default='2,3')
             p.add_argument('--priority-objects',default='cylinder6,cube2,sphere1,cylinder7,cylinder3,mayonnaisebottle')
     p=sub.add_parser('publish');p.add_argument('bundle',type=Path)
+    p=sub.add_parser('set-source-filter',help='Stop retrying low-success sources; keep all saved rows and in-flight claims')
+    p.add_argument('--campaign',type=Path,required=True)
+    p.add_argument('--minimum-rate',type=float,default=.25)
+    p.add_argument('--minimum-attempts',type=int,default=20)
     p=sub.add_parser('status');p.add_argument('--campaign',type=Path,required=True)
     args=parser.parse_args(argv)
     if args.command=='prepare':prepare(args)
@@ -405,6 +409,16 @@ def main(argv=None):
     elif args.command=='publish':
         from sim.manorl.synthesis_publication import publish_bundle
         result=publish_bundle(args.bundle);emit('publication_done',accepted=result['accepted'],shard=result['shard'])
+    elif args.command=='set-source-filter':
+        root=args.campaign.resolve()
+        if not (root/'quota.sqlite').is_file():raise ValueError('prepare the campaign before filtering sources')
+        ledger=QuotaLedger(root/'quota.sqlite')
+        try:
+            added=ledger.configure_success_filter(minimum_rate=args.minimum_rate,minimum_attempts=args.minimum_attempts)
+            report=ledger.exclusion_report();summary=ledger.summary()
+            atomic_json(root/'source-filter-report.json',{**report,'summary':summary})
+            emit('source_filter_enabled',added_exclusions=added,**summary)
+        finally:ledger.close()
     else:
         ledger=QuotaLedger(args.campaign/'quota.sqlite');print(json.dumps(ledger.summary(),indent=2));ledger.close()
     return 0

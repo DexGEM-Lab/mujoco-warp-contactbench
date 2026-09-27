@@ -1,95 +1,84 @@
 # Current model
 
 ## Objective and completion
-Every admitted raw source owns five accepted published slots. The active fleet
-has14,961 sources /74,805 slots /20 objects /129 pairs. largeclamp and cylinder5
-have also completed training and been admitted. Attempts, benchmark rows, or
-easier sources' surplus never fill another source's quota. All six GPUs are
-assigned to synthesis; actual per-worker progress remains a monitoring question.
+The original inventory is14961 sources/74805 slots/20 objects/129 pairs. The user
+now permits excluding incomplete raw sources below25% historical generation
+success. A retained source still requires five accepted published slots. Use at
+least20 finished attempts; exactly25% is retained. Keep all existing accepted
+rows, including partial data from excluded sources. Original inventory, retained
+source targets, skipped slots and preserved excluded-source rows must be separate.
+Completion requires retained sources full, no ready/leased work and no unresolved
+publication blockers. Foreign training does not define this campaign's completion.
 
-## Supported mechanisms
-- Preserve the trained early80 AFTER the physical approach prefix. Merely
-  cropping to pre80 does not preserve policy timing in the historical runner.
-- Raw PIP reference angles can be negative while physical lower limits are zero.
-  Prefix sampling must join the native-servo-clipped finger target, preserving
-  the original reference unchanged. Both first GPU probes rejected all40 rows
-  until this mismatch was corrected.
-- Offline retreat translates wrist XYZ, corresponding world keypoints and
-  kinematic wrist targets. Reject NEW/deeper per-geom-pair penetration relative
-  to the original solved state: absolute zero-penetration rejected unchanged
-  splice frames with legitimate soft floor contact (directly observed).
-- Cheap native geometry at reset identified all33 initial-force-rejected starts
-  in80 inspected candidates, with no false positives in that sample. It is a
-  proposal filter, never a replacement for Warp physics/force acceptance.
-- Vectorized contact export agrees with the scalar exporter on force signs,
-  transforms, grouped totals and order. It consumes actual solved Warp buffers.
-- Runtime reuse, exact host-buffer reuse, no discarded480D rollout storage and
-  overlapped CPU retreat/publication reduce wasted work. Initial pose rejection
-  before GPU dispatch and refilling make batches useful.
+## Physical/data invariants
+- Preserve trained early80 AFTER the physical prefix. Perturb native-servo-clipped
+  finger targets while leaving the base raw reference unchanged; raw PIPs can be
+  negative despite a physical lower limit of zero.
+- Prefix and manipulation are MJX-Warp physics. Compact contacts are actual solved
+  forces. Offline retreat translates wrist XYZ and dependent keypoints/targets
+  after last contact+15, preserving fingers, objects, timestamps and contacts.
+- Retreat rejects new/deeper per-geom-pair penetration relative to the solved
+  baseline, not pre-existing compliant overlap. Native geometry never substitutes
+  reconstructed CPU forces for Warp evidence.
+- Inference CCD16 is a setting, not proof of zero overflow. Live CCD count is
+  unavailable; captured warnings and nacon/nefc checks remain necessary.
+- Host-local SQLite and disjoint NAS ownership remain required. Only verified
+  durable publication earns credit. Reconcile promoted shards before releasing
+  dead-owner claims; publisher-inherited locks protect in-flight work.
 
-## Direct evidence
-See OPS.md experiment entries and local deployment record. B16 baseline yielded
-5/40 cube2 and20/40 cylinder6; all25 saved rows passed compact validation.
-Their object-bottom clearance was10.88–16.98cm and19.07–23.72cm, with103–269
-and133–199 contact+airborne frames respectively. These are specific physical
-witnesses, not a generalization claim for all113 pairs.
-Controlled320-candidate cylinder6 comparison: B64 saved149 in285.84s
-(1876.6/hour), B256 saved147 in210.67s (2512.0/hour).
-Final640-candidate comparison with geometry prefilter/vector export:248 starts
-rejected before physics,392 simulated; B256 andB512 both saved286. End-to-end
-rates5359.5 and4922.0 accepted rows/GPU-hour. Select B256; do not extrapolate
-this strong-object rate to weak policies or compare different source sets as a
-pure speedup attribution.
-No native CCD-overflow warning was seen in these tests. A live CCD count remains
-unavailable; nacon/nefc checks and captured native warnings guard publication.
-A capacity number is not proof of no truncation.
+## Source filtering mechanism
+The ledger's finished attempt timestamp is set only by settlement. Sampling and
+geometry rejections count as finished generation attempts; abandoned/in-flight
+attempts do not. The numerator comes from accepted source slots, not a diagnostic
+claim of success. Complete five-slot sources are not retroactively excluded.
+Frozen exclusion records plus SQLite triggers prevent even a legacy worker from
+making an excluded failed/released slot ready again. Leased tokens stay valid;
+late valid publications remain accepted. Summary counters use one read snapshot.
+Policy is separate from immutable physical campaign configuration. Admission
+mirrors the per-source audit under fleet/source-filters, not ownership records.
 
-## Current operational state
-Controller revision331cdc2 retains append-only admission and dynamic GPU pools;
-physics/sampling/acceptance math is unchanged. It releases readback handles and
-performs bounded logged retries of transient NAS promotion errors. Management
-handoffs preserved existing GPU workers and CPU publishers. New workers label their actual
-executing source revision rather than the original campaign revision.
-Server2 GPU0/1 actively synthesize cuboid3 (533 sources/2665 slots) and sphere2
-(150/750). First confirmed publications were85 and35 rows, with four NAS rows
-read back through the compact validator and matching source revision.
-Each host keeps local SQLite. The NAS registry assigns18 objects to Server1 and2
-to Server2; publication roots are disjoint. Server1 GPU0/1 passed their final
-model admission gates and are now synthesis GPUs. The owned Server2
-training heartbeat was retired after confirming no active trainer, preventing
-old failed-training queues from competing for the newly assigned synthesis GPUs.
-Owner locks pass to CPU publishers, so a killed GPU parent cannot expose slots
-still being published. Watch restarts departed supervisors, which adopt survivors.
-PAUSE remains explicit operator intent. Full source-level completion is open.
+## Efficiency and actual parallelism
+Each GPU worker was256 worlds with8 sequential waves. Server2 has now executed
+512-world waves without observed OOM/native capacity warnings, but higher useful
+throughput is not yet established. Four recent hard-source256 rounds yielded
+5 accepted rows from8192 simulated candidates; hardware utilization is distinct
+from this very low yield. A live256-world batch had only one useful candidate
+left at step1800. Finished slots are not refilled mid-wave and the viewer stepper
+can keep resetting/replaying discarded worlds. That remains an unresolved waste.
 
-## Recovered publication failure
-A largeclamp CPU publisher failed at NAS directory rename with EACCES, after
-writing and verifying a54-row partial. All payload hashes and unchanged attempts
-were checked; exact claim tokens were restored under owner lock, the partial
-promoted in a fresh process, and54 slots credited once. Final row count and three
-sampled rows validated. Cold rename succeeded without ACL changes, supporting a
-transient promotion refusal; a specific open-handle cause is not proven.
-The group's blocked entry was cleared after recovery. New snapshots were deployed
-by management-only handoffs preserving all GPU workers/publishers. Persistent
-permission failures still retain partials and require intervention; retries never
-overwrite final shards or bypass acceptance. See OPS.md for immutable evidence.
+A second, resolved-in-code problem affects initial batch filling: sphere2 had616
+remaining slots, and asynchronous publication held512 leases while the next wave
+claimed104 and padded to512. Logs alternated512/104 repeatedly. claim_wave now
+settles pending publication only when the next claim is short, then claims more
+released failures. Full claims retain overlap; accepted slots are not reclaimed.
+Seven real-SQLite tests cover refill, full-batch overlap, no-ready, accepted,
+completion, failure and genuinely insufficient quota cases. This fix does NOT
+implement mid-wave refill.
 
-## Open questions / limits
-- Actual per-object production yield, hard-source deficits and source-level five
-  slot completion remain to be measured. Prefix seed changes need not repair a
-  systematically failing manipulation policy.
-- Batch sizes produced small physical differences and one cube2 orientation-gate
-  flip in the small baseline; each actual row still needs its own acceptance.
-  Solver warm-start and clock are now cleared at each wave, without claiming
-  bitwise cross-batch identity.
-- Broad local suite:559 passed,15 skipped,64 failed,26 errors, dominated by an
-  uninitialized DexStream worktree and absent legacy Lance fixtures; isolated
-  entrypoint import failure is historical.47 focused tests pass; real-asset GPU
-  validation is decisive for this pipeline, not a claim the full suite passed.
-- Pi scheduling is now enabled. Project schedule
-  `raw120-training-synthesis-monitor` was created and read back as scheduled:
-  every15 minutes, fresh bounded operator, overlap skipped, parent notified.
-  Immediate monitoring confirmed largeclamp admission and five synthesis GPUs;
-  cylinder5 still trained in the observed snapshot. Remote checks use explicit
-  Python interpreters after correcting an unavailable `python` command. Server
-  admission/recovery remains independent of Pi and scans once per minute.
+Historical matched cylinder6 benchmark: B256 saved286/192.108s versus B512
+286/209.181s; do not extrapolate strong-object throughput to remaining hard sources.
+In sampled hard rounds,94–96% of rollout wall time was inside the stepper, which
+includes host/device synchronization; that is not a measurement of pure GPU time.
+CPU retreat/publication was roughly1s per415–719s round, not the dominant bottleneck.
+
+## Deployment boundary and remaining verification
+The512 management handoff was graceful and preserved existing workers; actual
+512 execution was observed. The initial-batch refill fix is committed locally as
+0e6b5e8, not yet deployed. Source filtering and completion guards currently have
+50 passing focused tests and still require immutable production deployment and
+real exclusion-count verification. Large histories lack a settled-source index:
+a read-only Server1 aggregation hit a35s deadline; EXPLAIN showed a full attempts
+scan and temporary grouping tree on local ext4. Initial index creation/filter
+activation therefore follows a writer drain rather than a long live write lock.
+
+Only two GPUs were recently available to this campaign (S1 GPU2, S2 GPU0); the
+others were occupied by external jobs. Do not kill them. Eligible pool size is
+not actual occupancy. Managers and scheduling are independent of LLM availability.
+The monitoring contract must be updated to retained-source completion before the
+new filter is activated. Existing EACCES recovery credited54 hash-verified rows
+once; keep that evidence and never recredit it.
+
+See OPS.md for immutable evidence and the ignored local operational record for
+current PIDs, paths, deployments and dated counters. The old broad local suite
+had559 passes/15 skips/64 failures/26 errors due mainly to missing assets/fixtures;
+focused tests are not a claim that the entire suite passed.
