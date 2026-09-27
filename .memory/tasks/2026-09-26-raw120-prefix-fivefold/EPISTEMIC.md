@@ -16,7 +16,21 @@ impossible. No-donor deficit pairs are reported blocked with their stranded
 debt split from runnable debt; completion requires every pair met and zero
 outstanding leases. The25% donor filter keeps its20-settled floor, finished
 attempt denominator and durable accepted numerator, without the old
-five-row exemption. The legacy per-source-slot ledger (slots CHECK(slot<5),
+five-row exemption, and is pending-aware: P = the source's unresolved leased
+output claims, exclusion only when (A+P)/(F+P) < rate at F>=20 (identical in
+the settlement trigger, policy activation/reapply and dead-owner release),
+with an append-only source_exclusion_history audit and an explicit quiescent
+`upgrade-source-policy` command that atomically replaces the old
+instantaneous trigger and reinstates only evidenced premature exclusions.
+Live fixed-pair 2a ledgers ARE deployed on both hosts (24006 credits and
+74805 target preserved); at01:34-01:36 all four GPUs genuinely ran our
+workers. A temporal bias was then observed live: already-issued failures
+settle before GPU successes publish, so the instantaneous rule made
+premature exclusions (e.g. sphere2_19_4107 at5/21, later30/59=.508;
+cuboid3_03_1190 5/21 -> 43/64=.672; S2 51 post-migration exclusions of
+which 43 now meet the durable rate). The guard prevents new ones and the
+upgrade repairs the evidenced ones; evidence lives in the primary repo at
+.memory/local/raw120-prefix-fivefold/late-settlement-20260928/server2.json. The legacy per-source-slot ledger (slots CHECK(slot<5),
 shrinking target, no replenishment) is converted by the explicit idempotent
 `migrate` CLI, which reconciles promoted shards first, refuses outstanding
 leases, converts schema AND reapplies the stored25%/20 policy in ONE

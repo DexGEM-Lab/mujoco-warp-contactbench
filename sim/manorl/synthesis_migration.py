@@ -291,26 +291,28 @@ def _leased(db: sqlite3.Connection, table: str) -> int:
 def _reapply_policy(db: sqlite3.Connection, minimum_rate: float, minimum_attempts: int) -> int:
     """Insert corrected-semantics exclusions for stored-policy ledgers.
 
-    Same statement the v2 settlement trigger uses, minus the accepted>=5
-    exemption. Returns the number of newly excluded sources; their ready
-    obligations are retired to 'skipped'. Historical rows are never changed.
+    Uses the same pending-aware guard as the settlement trigger: P counts
+    genuinely unresolved leased output claims, and an exclusion commits only
+    when even all P already-issued attempts succeeding leaves
+    (A+P)/(F+P) strictly below the rate (no accepted>=5 exemption). Returns
+    the number of newly excluded sources; their ready obligations are retired
+    to 'skipped'. Historical rows and accepted credit are never changed.
     """
+    from sim.manorl.synthesis_campaign import (
+        commit_source_exclusions, guarded_exclusion_candidates,
+    )
     db.execute("CREATE INDEX IF NOT EXISTS attempts_settled_source "
                "ON attempts(source_key) WHERE finished IS NOT NULL")
-    changed = db.total_changes
-    db.execute('''INSERT OR IGNORE INTO source_exclusions
-        WITH finished AS (
-          SELECT source_key,COUNT(*) n FROM attempts WHERE finished IS NOT NULL GROUP BY source_key),
-        accepted AS (
-          SELECT source_key,COUNT(*) n FROM outputs WHERE state='accepted' GROUP BY source_key)
-        SELECT f.source_key,?,f.n,COALESCE(a.n,0),?,?
-        FROM finished f LEFT JOIN accepted a USING(source_key)
-        WHERE f.n>=? AND COALESCE(a.n,0)<f.n*?''',
-        (time.time(), minimum_rate, minimum_attempts, minimum_attempts, minimum_rate))
-    newly_excluded = db.total_changes - changed
-    db.execute("UPDATE outputs SET state='skipped' WHERE state='ready' "
-               "AND source_key IN (SELECT source_key FROM source_exclusions)")
-    return newly_excluded
+    db.execute("CREATE TABLE IF NOT EXISTS source_exclusion_history("
+               "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+               "source_key TEXT NOT NULL REFERENCES sources(key),"
+               "action TEXT NOT NULL CHECK(action IN ('excluded','reinstated')),"
+               "decided REAL NOT NULL, settled_attempts INTEGER NOT NULL,"
+               "accepted_rows INTEGER NOT NULL, pending_claims INTEGER NOT NULL DEFAULT 0,"
+               "minimum_rate REAL NOT NULL, minimum_attempts INTEGER NOT NULL, evidence TEXT)")
+    candidates = guarded_exclusion_candidates(db, minimum_rate, minimum_attempts)
+    return commit_source_exclusions(db, candidates,
+        'migration policy reapply guard: (accepted+leased)/(finished+leased) < minimum_rate')
 
 
 def _policy_audit(db: sqlite3.Connection, exclusions_before: int, newly_excluded: int,

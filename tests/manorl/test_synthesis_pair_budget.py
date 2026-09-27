@@ -745,3 +745,359 @@ def test_already_migrated_repairs_interrupted_candidate_eligibility(tmp_path, mo
     # A healthy migrated ledger needs no repair: re-running is a no-op.
     again = migrate_ledger(tmp_path / 'legacy')
     assert again['state'] == 'already_migrated' and again['repaired_eligibility_sources'] == 0
+
+
+def settle_one(ledger, owner, group, *, accepted, key=None):
+    claims = ledger.claim(owner, group, 1)
+    assert claims, 'no claimable row for settlement'
+    claim = claims[0]
+    if key is not None:
+        assert claim['source']['key'] == key
+    if accepted:
+        ledger.finish(claim, {'accepted': True},
+                      row_uuid=f'u-{claim["source"]["key"]}-{claim["slot"]}-{claim["attempt"]}',
+                      shard='verified.lance')
+    else:
+        ledger.finish(claim, {'accepted': False})
+    return claim
+
+
+def settled_state(ledger, key):
+    row = ledger.db.execute(
+        'SELECT (SELECT COUNT(*) FROM attempts WHERE source_key=? AND finished IS NOT NULL) f,'
+        " (SELECT COUNT(*) FROM outputs WHERE source_key=? AND state='accepted') a,"
+        " (SELECT COUNT(*) FROM outputs WHERE source_key=? AND state='leased') p",
+        (key, key, key)).fetchone()
+    return int(row['f']), int(row['a']), int(row['p'])
+
+
+def excluded(ledger, key):
+    return ledger.db.execute('SELECT 1 FROM source_exclusions WHERE source_key=?', (key,)).fetchone() is not None
+
+
+def test_pending_claims_protect_healthy_donors_from_settlement_order(tmp_path):
+    """Failure-first then delayed successes (5/21 with 3 pending -> 7/24):
+    the instantaneous rule excluded exactly here; the guard must not."""
+    ledger = QuotaLedger(tmp_path / 'quota.sqlite')
+    ledger.initialize({}, [source('weak', 'gw', 'obj:01'), source('s', 'gs', 'obj:01')])
+    ledger.configure_success_filter()  # .25 / 20
+    for _ in range(20):
+        settle_one(ledger, 'w', 'gw', accepted=False, key='weak')
+    assert excluded(ledger, 'weak') and not excluded(ledger, 's')
+    ledger.claim('grow', 'gs', 64)  # reassigns weak's retired debt to donor s
+    ledger.release_owner('grow')   # abandoned without settling: no F added
+    for _ in range(5):
+        settle_one(ledger, 'w', 'gs', accepted=True, key='s')
+    for _ in range(15):
+        settle_one(ledger, 'w', 'gs', accepted=False, key='s')
+    assert settled_state(ledger, 's') == (20, 5, 0)  # exactly .25 stays eligible
+    pending = ledger.claim('gpu2', 'gs', 3)
+    assert len(pending) == 3 and all(c['source']['key'] == 's' for c in pending)
+    # failure settles first while two sibling claims are still in flight:
+    # 5/20 -> 5/21 with 2 pending; the instantaneous rule excluded here.
+    ledger.finish(pending[0], {'accepted': False})
+    assert settled_state(ledger, 's') == (21, 5, 2)
+    assert not excluded(ledger, 's')  # (5+2)/(21+2) >= .25: not excludable
+    for claim in pending[1:]:  # delayed GPU successes publish later
+        ledger.finish(claim, {'accepted': True},
+                      row_uuid=f'late-{claim["slot"]}', shard='verified.lance')
+    f, a, p = settled_state(ledger, 's')
+    assert (f, a, p) == (23, 7, 0) and a / f >= .25
+    assert not excluded(ledger, 's')  # delayed GPU successes kept the donor
+    assert ledger.summary()['sources_excluded'] == 1
+    ledger.close()
+
+
+def test_exclusion_is_irrevocable_under_best_pending_outcome(tmp_path):
+    """Once excluded under the guard, settlement of already-issued work alone
+    must never lift the final rate above the threshold."""
+    ledger = QuotaLedger(tmp_path / 'quota.sqlite')
+    ledger.initialize({}, [source('weak', 'gw', 'obj:01'), source('s', 'gs', 'obj:01')])
+    ledger.configure_success_filter()  # .25 / 20 floor
+    for _ in range(20):
+        settle_one(ledger, 'w', 'gw', accepted=False, key='weak')
+    ledger.claim('grow', 'gs', 64); ledger.release_owner('grow')
+    settle_one(ledger, 'w', 'gs', accepted=True, key='s')   # A=1
+    for _ in range(16):
+        settle_one(ledger, 'w', 'gs', accepted=False, key='s')  # F=17, P=0
+    pending = ledger.claim('gpu2', 'gs', 4)  # four already-issued claims
+    assert len(pending) == 4 and not excluded(ledger, 's')  # (1+4)/(17+4) >= .25
+    for claim in pending[:3]:
+        ledger.finish(claim, {'accepted': False})  # F=20, P=1: (1+1)/(21) < .25
+    assert excluded(ledger, 's')
+    record = ledger.db.execute('SELECT settled_attempts,accepted_rows FROM source_exclusions '
+                               "WHERE source_key='s'").fetchone()
+    assert (record['accepted_rows'], record['settled_attempts']) == (1, 20)
+    assert settled_state(ledger, 's') == (20, 1, 1)  # one claim still in flight
+    ledger.finish(pending[3], {'accepted': True}, row_uuid='best-outcome', shard='v.lance')
+    f, a, p = settled_state(ledger, 's')
+    assert (f, a, p) == (21, 2, 0) and a / f < .25
+    assert excluded(ledger, 's')  # best pending outcome cannot lift the rate
+    assert ledger.summary()['excluded_accepted'] == 2  # late success still credited
+    ledger.close()
+
+def test_source_far_below_threshold_is_excluded_despite_pending(tmp_path):
+    ledger = QuotaLedger(tmp_path / 'quota.sqlite')
+    ledger.initialize({}, [source('weak', 'gw', 'obj:01'), source('s', 'gs', 'obj:01')])
+    ledger.configure_success_filter()
+    for _ in range(20):
+        settle_one(ledger, 'w', 'gw', accepted=False, key='weak')
+    ledger.claim('grow', 'gs', 64); ledger.release_owner('grow')
+    settle_one(ledger, 'w', 'gs', accepted=True, key='s')
+    for _ in range(16):
+        settle_one(ledger, 'w', 'gs', accepted=False, key='s')  # F=17, P=0
+    pending = ledger.claim('gpu2', 'gs', 5)
+    assert len(pending) == 5
+    # (1+5)/(17+5) == .27: even five successes look rescuable; not excluded.
+    assert not excluded(ledger, 's')
+    for claim in pending[:3]:
+        ledger.finish(claim, {'accepted': False})  # F=20, P=2
+    # (1+2)/(20+2) < .25 at the floor: clearly below even if both remaining
+    # pending attempts succeed -> excluded while two claims are STILL leased.
+    assert excluded(ledger, 's')
+    f, a, p = settled_state(ledger, 's')
+    assert (a, f, p) == (1, 20, 2) and (a + p) / (f + p) < .25
+    for claim in pending[3:]:
+        ledger.finish(claim, {'accepted': True}, row_uuid=f'best-{claim["slot"]}', shard='v.lance')
+    f, a, p = settled_state(ledger, 's')
+    assert (a, f, p) == (3, 22, 0) and a / f < .25
+    assert excluded(ledger, 's')  # best pending outcome could not lift it
+    ledger.close()
+
+
+def test_two_worker_pending_leases_and_release_paths(tmp_path):
+    """Worker B's settlements must count worker A's same-source leases as P,
+    and a dead-owner release (P drops, no F added) re-evaluates correctly."""
+    ledger = QuotaLedger(tmp_path / 'quota.sqlite')
+    ledger.initialize({}, [source('weak', 'gw', 'obj:01'), source('s', 'gs', 'obj:01')])
+    ledger.configure_success_filter()
+    for _ in range(20):
+        settle_one(ledger, 'w', 'gw', accepted=False, key='weak')
+    ledger.claim('grow', 'gs', 64); ledger.release_owner('grow')
+    settle_one(ledger, 'w', 'gs', accepted=True, key='s')
+    for _ in range(16):
+        settle_one(ledger, 'w', 'gs', accepted=False, key='s')  # F=17, P=0
+    held = ledger.claim('worker-a', 'gs', 2)  # a second worker holds two leases
+    assert len(held) == 2 and not excluded(ledger, 's')  # (1+2)/(17+2) >= .25
+    for _ in range(2):
+        settle_one(ledger, 'worker-b', 'gs', accepted=False, key='s')  # B settles, A still holds
+    assert settled_state(ledger, 's') == (19, 1, 2) and not excluded(ledger, 's')
+    # exact optimistic boundary: (1+2)/(19+2) = 3/21 < .25 would exclude, so
+    # push to the boundary case (A+P)/(F+P) == .25 exactly: 5/20 -> eligible.
+    ledger2_state = settled_state(ledger, 's')
+    assert ledger2_state == (19, 1, 2)
+    # Release worker A (dead owner, recovery-before-release done by caller):
+    # P drops to 0 without adding F -> 1/19 < .25 but F=19 < floor 20.
+    assert ledger.release_owner('worker-a') == 2
+    assert settled_state(ledger, 's') == (19, 1, 0) and not excluded(ledger, 's')
+    # Abandoned unfinished attempts never count as F: the attempt rows for the
+    # released claims have finished IS NULL and the rate uses F=19 only.
+    unfinished = ledger.db.execute(
+        "SELECT COUNT(*) FROM attempts WHERE source_key='s' AND finished IS NULL").fetchone()[0]
+    assert unfinished >= 2 and settled_state(ledger, 's')[0] == 19
+    settle_one(ledger, 'w', 'gs', accepted=False, key='s')  # 20th settlement, P=0
+    assert excluded(ledger, 's')  # plain cutoff at the floor
+    record = ledger.db.execute('SELECT settled_attempts FROM source_exclusions '
+                               "WHERE source_key='s'").fetchone()
+    assert record['settled_attempts'] == 20  # abandoned attempts not counted
+    ledger.close()
+
+
+def test_release_of_last_leased_owner_triggers_exclusion_decision(tmp_path):
+    ledger = QuotaLedger(tmp_path / 'quota.sqlite')
+    ledger.initialize({}, [source('weak', 'gw', 'obj:01'), source('s', 'gs', 'obj:01')])
+    ledger.configure_success_filter()
+    for _ in range(20):
+        settle_one(ledger, 'w', 'gw', accepted=False, key='weak')
+    ledger.claim('grow', 'gs', 64); ledger.release_owner('grow')
+    for _ in range(5):
+        settle_one(ledger, 'w', 'gs', accepted=True, key='s')
+    for _ in range(15):
+        settle_one(ledger, 'w', 'gs', accepted=False, key='s')  # 5/20 == .25 exact
+    assert not excluded(ledger, 's')
+    held = ledger.claim('ghost', 'gs', 2)
+    assert len(held) == 2
+    ledger.finish(held[0], {'accepted': False})  # 5/21 with one pending
+    assert not excluded(ledger, 's')  # (5+1)/(21+1) >= .25
+    ledger.release_owner('ghost')  # last leased owner released: P -> 0
+    assert excluded(ledger, 's')  # 5/21 < .25 now decided at release time
+    history = ledger.db.execute("SELECT action,pending_claims,evidence FROM source_exclusion_history "
+                                "WHERE source_key='s' ORDER BY id").fetchall()
+    assert [row['action'] for row in history] == ['excluded']
+    assert 'release guard' in history[0]['evidence']
+    ledger.close()
+
+
+OLD_INSTANTANEOUS_TRIGGER_SQL = """CREATE TRIGGER source_success_after_settlement
+  AFTER UPDATE OF finished ON attempts
+  WHEN NEW.finished IS NOT NULL AND OLD.finished IS NULL
+    AND EXISTS(SELECT 1 FROM source_success_policy WHERE id=1)
+    AND NOT EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+  BEGIN
+    INSERT OR IGNORE INTO source_exclusions
+    SELECT NEW.source_key,NEW.finished,a.n,q.n,p.minimum_rate,p.minimum_attempts
+    FROM source_success_policy p,
+      (SELECT COUNT(*) n FROM attempts
+       WHERE source_key=NEW.source_key AND finished IS NOT NULL) a,
+      (SELECT COUNT(*) n FROM outputs
+       WHERE source_key=NEW.source_key AND state='accepted') q
+    WHERE p.id=1 AND a.n>=p.minimum_attempts AND q.n<a.n*p.minimum_rate;
+    UPDATE outputs SET state='skipped'
+      WHERE source_key=NEW.source_key AND state='ready'
+        AND EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key);
+  END"""
+
+
+def install_old_trigger(ledger):
+    """Reproduce a deployed 2a ledger running the pre-guard instantaneous rule."""
+    with ledger.db:
+        ledger.db.execute('DROP TRIGGER source_success_after_settlement')
+        ledger.db.execute(OLD_INSTANTANEOUS_TRIGGER_SQL)
+
+
+def trigger_sql(ledger):
+    return ledger.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' "
+                             "AND name='source_success_after_settlement'").fetchone()[0]
+
+
+def build_deployed_2a_ledger(tmp_path):
+    """Premature exclusion (43-like false positive), a genuinely low source,
+    and untouched credit/history, produced under the OLD instantaneous rule."""
+    ledger = QuotaLedger(tmp_path / 'quota.sqlite')
+    ledger.initialize({}, [source('false', 'gf', 'obj:01'), source('helper', 'gx', 'obj:01'),
+                           source('low', 'gl', 'obj:03'), source('healthy', 'gh', 'obj:02')])
+    install_old_trigger(ledger)
+    ledger.configure_success_filter()  # activates policy under old code semantics
+    # Burn 'helper' first so all pair-debt growth lands on 'false' alone.
+    for _ in range(20):
+        settle_one(ledger, 'w', 'gx', accepted=False, key='helper')
+    assert excluded(ledger, 'helper')
+    # 'false': 16 failures, three claims leased by a GPU worker, then durable
+    # accepts. The OLD rule ignores the pending successes and excludes at 4/20
+    # mid-wave (the fifth accept can no longer be claimed for it).
+    for _ in range(16):
+        settle_one(ledger, 'w', 'gf', accepted=False, key='false')
+    pending = ledger.claim('gpu', 'gf', 3)
+    assert len(pending) == 3
+    for _ in range(4):
+        settle_one(ledger, 'w', 'gf', accepted=True, key='false')
+    assert excluded(ledger, 'false')
+    original = ledger.db.execute('SELECT * FROM source_exclusions WHERE source_key=?',
+                                 ('false',)).fetchone()
+    assert (original['accepted_rows'], original['settled_attempts']) == (4, 20)
+    for i, claim in enumerate(pending):  # delayed successes settle afterwards
+        if i < 2:
+            ledger.finish(claim, {'accepted': True}, row_uuid=f'late-{i}', shard='v.lance')
+        else:
+            ledger.finish(claim, {'accepted': False})
+    # 'low': genuinely below the rate even fully settled (2/20 when the old
+    # rule fires; further failures settle after the decision).
+    for _ in range(2):
+        settle_one(ledger, 'w', 'gl', accepted=True, key='low')
+    for _ in range(23):
+        if excluded(ledger, 'low'):
+            break
+        settle_one(ledger, 'w', 'gl', accepted=False, key='low')
+    assert excluded(ledger, 'low')
+    # 'healthy': untouched donor with durable rows.
+    for _ in range(5):
+        settle_one(ledger, 'w', 'gh', accepted=True, key='healthy')
+    return ledger, dict(original)
+
+
+def test_upgrade_repairs_premature_exclusions_and_replaces_trigger(tmp_path):
+    ledger, original = build_deployed_2a_ledger(tmp_path)
+    assert 'leased' not in trigger_sql(ledger)  # old instantaneous rule active
+    before_summary = ledger.summary()
+    before_attempts = ledger.db.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]
+    before_seeds = sorted(r[0] for r in ledger.db.execute(
+        'SELECT allocated_seed FROM attempts WHERE allocated_seed IS NOT NULL'))
+    false_skipped = ledger.db.execute(
+        "SELECT COUNT(*) FROM outputs WHERE source_key='false' AND state='skipped'").fetchone()[0]
+    assert false_skipped > 0
+
+    report = ledger.upgrade_eligibility_guard()
+    assert report['trigger_replaced'] and 'leased' in trigger_sql(ledger)
+    assert report['repaired'] == 1
+    repaired = report['reinstated_sources'][0]
+    assert repaired['source_key'] == 'false' and repaired['now'] == '6/23'
+    assert repaired['at_exclusion'] == '4/20' and repaired['late_settlements'] == 3
+    assert not excluded(ledger, 'false') and excluded(ledger, 'low')
+
+    # Original decision record preserved append-only BEFORE reinstating.
+    history = ledger.db.execute('SELECT * FROM source_exclusion_history WHERE source_key=? '
+                                'ORDER BY id', ('false',)).fetchall()
+    assert [row['action'] for row in history] == ['reinstated']
+    assert history[0]['decided'] == original['decided']
+    assert history[0]['settled_attempts'] == original['settled_attempts'] == 20
+    assert history[0]['accepted_rows'] == original['accepted_rows'] == 4
+    assert 'premature exclusion repaired' in history[0]['evidence']
+
+    # Credit, targets, attempt history and the seed registry are untouched;
+    # skipped variants stay retired (no variant/seed reuse on reinstatement).
+    after_summary = ledger.summary()
+    assert after_summary['accepted'] == before_summary['accepted']
+    assert after_summary['target'] == before_summary['target']
+    assert ledger.db.execute('SELECT COUNT(*) FROM attempts').fetchone()[0] == before_attempts
+    assert sorted(r[0] for r in ledger.db.execute(
+        'SELECT allocated_seed FROM attempts WHERE allocated_seed IS NOT NULL')) == before_seeds
+    assert ledger.db.execute(
+        "SELECT COUNT(*) FROM outputs WHERE source_key='false' AND state='skipped'").fetchone()[0] == false_skipped
+
+    # The reinstated donor supplies its pair debt with FRESH variants/seeds.
+    fresh = ledger.claim('w', 'gf', 4)
+    assert len(fresh) == 4 and all(c['source']['key'] == 'false' for c in fresh)
+    assert all(c['slot'] >= 5 for c in fresh)  # no skipped variant/seed reuse
+    variants = [r[0] for r in ledger.db.execute(
+        "SELECT variant FROM outputs WHERE source_key='false' AND state='accepted' ORDER BY variant")]
+    assert max(variants) >= 5
+
+    # Safe re-exclusion: genuinely bad decisions after reinstatement remain
+    # possible and audited under the (now guarded) normal paths.
+    for claim in fresh:
+        ledger.finish(claim, {'accepted': False})  # 6/27 < .25 at P=0
+    assert excluded(ledger, 'false')
+    actions = [row[0] for row in ledger.db.execute(
+        'SELECT action FROM source_exclusion_history WHERE source_key=? ORDER BY id', ('false',))]
+    assert actions == ['reinstated', 'excluded']
+
+    # Idempotent: a second upgrade repairs nothing and changes nothing.
+    again = ledger.upgrade_eligibility_guard()
+    assert again['repaired'] == 0 and 'leased' in trigger_sql(ledger)
+    ledger.close()
+
+
+def test_upgrade_requires_quiescence_and_rolls_back_atomically(tmp_path):
+    ledger, original = build_deployed_2a_ledger(tmp_path)
+    # Re-create an outstanding lease to violate the quiescent precondition.
+    with ledger.db:
+        ledger.db.execute("UPDATE outputs SET state='leased',owner='live',token='probe' "
+                          "WHERE source_key='false' AND variant=(SELECT MIN(variant) FROM outputs "
+                          "WHERE source_key='false' AND state='skipped')")
+    old_trigger = trigger_sql(ledger)
+    with pytest.raises(RuntimeError, match='outstanding leased outputs'):
+        ledger.upgrade_eligibility_guard()
+    assert trigger_sql(ledger) == old_trigger  # untouched
+    assert excluded(ledger, 'false') and excluded(ledger, 'low')
+    with ledger.db:  # settle the probe back to its retired state
+        ledger.db.execute("UPDATE outputs SET state='skipped',owner=NULL,token=NULL "
+                          "WHERE owner='live' AND token='probe'")
+
+    # Mid-transaction failure (history insert succeeds, delete blocked):
+    # everything rolls back, including the trigger replacement.
+    with ledger.db:
+        ledger.db.execute("CREATE TRIGGER block_reinstate BEFORE DELETE ON source_exclusions "
+                          "BEGIN SELECT RAISE(ABORT,'reinstate blocked'); END")
+    with pytest.raises(Exception, match='reinstate blocked'):
+        ledger.upgrade_eligibility_guard()
+    assert trigger_sql(ledger) == old_trigger  # old rule restored by rollback
+    assert excluded(ledger, 'false') and excluded(ledger, 'low')
+    assert ledger.db.execute('SELECT COUNT(*) FROM source_exclusion_history').fetchone()[0] == 0
+    row = ledger.db.execute('SELECT * FROM source_exclusions WHERE source_key=?', ('false',)).fetchone()
+    assert dict(row) == original  # original decision intact
+    with ledger.db:
+        ledger.db.execute('DROP TRIGGER block_reinstate')
+    # After removing the block the same upgrade succeeds.
+    report = ledger.upgrade_eligibility_guard()
+    assert report['repaired'] == 1 and 'leased' in trigger_sql(ledger)
+    ledger.close()

@@ -169,8 +169,17 @@ S2 683/3415/1483/1932 with176 eligible donors and2 blocked sphere2 pairs
 (500 blocked,1432 runnable); totals2934 eligible donors (292 formerly-full
 donors below25%),34 blocked pairs carrying11767 debt and95 runnable pairs
 carrying39032. The25% donor filter keeps the20-settled-attempt floor,
-strictly-below exclusion, finished-attempt denominator and durable accepted
-numerator, but no longer exempts sources that already reached five rows.
+finished-attempt denominator and durable accepted numerator, no longer exempts
+sources that already reached five rows, and is **pending-aware**: P counts the
+source's genuinely unresolved leased output claims (abandoned/released records
+never count), and an exclusion commits only when even all P already-issued
+attempts succeeding cannot rescue the rate — (A+P)/(F+P) < minimum_rate with
+F >= 20. Exactly .25 stays eligible; at P=0 this is the plain cutoff. The rule
+is identical in the settlement trigger, explicit policy activation/reapply and
+dead-owner release, so settlement order alone (already-issued failures settle
+before GPU successes publish) can no longer kill a healthy donor, and once
+excluded the best pending outcome mathematically stays below the threshold.
+Every decision is recorded in the append-only `source_exclusion_history`.
 
 Legacy per-source-slot ledgers (live hosts) are converted by an explicit,
 idempotent, one-way migration — never implicitly on open; pair-budget code
@@ -226,8 +235,26 @@ source/slot/attempt seed or row UUID is ever reused. Operational preconditions: 
 local filesystems; drain writers first; test the migration on a copy of each
 live ledger before deploying.
 
+Deployed pair-budget ledgers created before this guard ran the instantaneous
+rule; upgrading them is explicit, idempotent and quiescent (no leases/writers):
+
+```bash
+python -m tools.run_manorl_synthesis_campaign upgrade-source-policy \
+  --campaign /local/campaign
+```
+
+One transaction creates the audit table, atomically REPLACES the old
+settlement trigger (the two rules can never coexist) and repairs only ACTIVE
+exclusions whose now fully-settled A/F meets the unchanged rate AND whose
+already-issued outcomes settled after the original decision — each original
+decision record is preserved in history BEFORE reinstating. Skipped variants
+stay retired (reinstated donors repay through fresh variant IDs and seeds),
+sources still below .25 stay excluded, credit/targets/history/seeds are
+untouched, and re-exclusion after repair remains possible and audited.
+
 The legacy `set-source-filter` command keeps its API but now applies the
-corrected semantics (no five-row exemption; targets never shrink):
+corrected semantics (no five-row exemption; pending-aware guard; targets
+never shrink):
 
 ```bash
 python -m tools.run_manorl_synthesis_campaign set-source-filter \

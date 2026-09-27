@@ -422,6 +422,8 @@ def main(argv=None):
     p.add_argument('--campaign',type=Path,required=True)
     p.add_argument('--minimum-rate',type=float,default=.25)
     p.add_argument('--minimum-attempts',type=int,default=20)
+    p=sub.add_parser('upgrade-source-policy',help='Quiescent pending-aware exclusion-guard upgrade with audited repair of premature exclusions')
+    p.add_argument('--campaign',type=Path,required=True)
     p=sub.add_parser('status');p.add_argument('--campaign',type=Path,required=True)
     args=parser.parse_args(argv)
     if args.command=='prepare':prepare(args)
@@ -444,6 +446,15 @@ def main(argv=None):
             report=ledger.exclusion_report();summary=ledger.summary()
             atomic_json(root/'source-filter-report.json',{**report,'summary':summary})
             emit('source_filter_enabled',added_exclusions=added,**summary)
+        finally:ledger.close()
+    elif args.command=='upgrade-source-policy':
+        root=args.campaign.resolve()
+        if not (root/'quota.sqlite').is_file():raise ValueError('prepare the campaign before upgrading its policy')
+        ledger=QuotaLedger(root/'quota.sqlite')
+        try:
+            report=ledger.upgrade_eligibility_guard()
+            atomic_json(root/'eligibility-upgrade-report.json',report)
+            emit('eligibility_guard_upgraded',**report)
         finally:ledger.close()
     else:
         ledger=QuotaLedger(args.campaign/'quota.sqlite');print(json.dumps(ledger.summary(),indent=2));ledger.close()

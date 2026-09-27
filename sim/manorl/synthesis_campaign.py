@@ -240,8 +240,55 @@ class LegacyLedgerError(RuntimeError):
     """A legacy per-source-slot ledger was opened by pair-budget code."""
 
 
+SOURCE_EXCLUSION_HISTORY_STATEMENT = """CREATE TABLE IF NOT EXISTS source_exclusion_history(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_key TEXT NOT NULL REFERENCES sources(key),
+  action TEXT NOT NULL CHECK(action IN ('excluded','reinstated')),
+  decided REAL NOT NULL, settled_attempts INTEGER NOT NULL,
+  accepted_rows INTEGER NOT NULL, pending_claims INTEGER NOT NULL DEFAULT 0,
+  minimum_rate REAL NOT NULL, minimum_attempts INTEGER NOT NULL,
+  evidence TEXT)"""
+
 # One statement per entry: executescript() would commit, so migrations apply
 # these inside a single transaction with execute().
+GUARDED_SETTLEMENT_TRIGGER_SQL = """CREATE TRIGGER source_success_after_settlement
+  AFTER UPDATE OF finished ON attempts
+  WHEN NEW.finished IS NOT NULL AND OLD.finished IS NULL
+    AND EXISTS(SELECT 1 FROM source_success_policy WHERE id=1)
+    AND NOT EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+  BEGIN
+    INSERT OR IGNORE INTO source_exclusions
+    SELECT NEW.source_key,NEW.finished,a.n,q.n,p.minimum_rate,p.minimum_attempts
+    FROM source_success_policy p,
+      (SELECT COUNT(*) n FROM attempts
+       WHERE source_key=NEW.source_key AND finished IS NOT NULL) a,
+      (SELECT COUNT(*) n FROM outputs
+       WHERE source_key=NEW.source_key AND state='accepted') q,
+      (SELECT COUNT(*) n FROM outputs
+       WHERE source_key=NEW.source_key AND state='leased') l
+    WHERE p.id=1 AND a.n>=p.minimum_attempts
+      AND (q.n+COALESCE(l.n,0)) < (a.n+COALESCE(l.n,0))*p.minimum_rate;
+    INSERT INTO source_exclusion_history
+      (source_key,action,decided,settled_attempts,accepted_rows,pending_claims,
+       minimum_rate,minimum_attempts,evidence)
+    SELECT NEW.source_key,'excluded',NEW.finished,a.n,q.n,COALESCE(l.n,0),
+      p.minimum_rate,p.minimum_attempts,
+      'settlement guard: (accepted+leased)/(finished+leased) < minimum_rate'
+    FROM source_success_policy p,
+      (SELECT COUNT(*) n FROM attempts
+       WHERE source_key=NEW.source_key AND finished IS NOT NULL) a,
+      (SELECT COUNT(*) n FROM outputs
+       WHERE source_key=NEW.source_key AND state='accepted') q,
+      (SELECT COUNT(*) n FROM outputs
+       WHERE source_key=NEW.source_key AND state='leased') l
+    WHERE p.id=1 AND a.n>=p.minimum_attempts
+      AND (q.n+COALESCE(l.n,0)) < (a.n+COALESCE(l.n,0))*p.minimum_rate
+      AND EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key);
+    UPDATE outputs SET state='skipped'
+      WHERE source_key=NEW.source_key AND state='ready'
+        AND EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key);
+  END"""
+
 PAIR_BUDGET_SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)""",
     """CREATE TABLE IF NOT EXISTS sources(key TEXT PRIMARY KEY, group_key TEXT NOT NULL, pair TEXT NOT NULL, spec TEXT NOT NULL)""",
@@ -269,6 +316,7 @@ PAIR_BUDGET_SCHEMA_STATEMENTS = (
   source_key TEXT PRIMARY KEY REFERENCES sources(key), decided REAL NOT NULL,
   settled_attempts INTEGER NOT NULL, accepted_rows INTEGER NOT NULL,
   minimum_rate REAL NOT NULL, minimum_attempts INTEGER NOT NULL)""",
+    SOURCE_EXCLUSION_HISTORY_STATEMENT,
     """CREATE TRIGGER IF NOT EXISTS excluded_output_ready_update
   AFTER UPDATE OF state ON outputs
   WHEN NEW.state='ready' AND EXISTS(
@@ -285,25 +333,71 @@ PAIR_BUDGET_SCHEMA_STATEMENTS = (
   END""",
     # Eligibility no longer exempts sources that already reached five accepted
     # rows: durable successes beyond five count toward the success-rate numerator.
-    """CREATE TRIGGER IF NOT EXISTS source_success_after_settlement
-  AFTER UPDATE OF finished ON attempts
-  WHEN NEW.finished IS NOT NULL AND OLD.finished IS NULL
-    AND EXISTS(SELECT 1 FROM source_success_policy WHERE id=1)
-    AND NOT EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
-  BEGIN
-    INSERT OR IGNORE INTO source_exclusions
-    SELECT NEW.source_key,NEW.finished,a.n,q.n,p.minimum_rate,p.minimum_attempts
-    FROM source_success_policy p,
-      (SELECT COUNT(*) n FROM attempts
-       WHERE source_key=NEW.source_key AND finished IS NOT NULL) a,
-      (SELECT COUNT(*) n FROM outputs
-       WHERE source_key=NEW.source_key AND state='accepted') q
-    WHERE p.id=1 AND a.n>=p.minimum_attempts AND q.n<a.n*p.minimum_rate;
-    UPDATE outputs SET state='skipped'
-      WHERE source_key=NEW.source_key AND state='ready'
-        AND EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key);
-  END""",
+    # Pending-aware guard: an exclusion is committed only when even all P
+    # still-leased (already issued) claims of the source succeeding could not
+    # rescue the rate, (A+P)/(F+P) < minimum_rate with F >= floor. At P=0 this
+    # is the plain cutoff; exactly .25 stays eligible. GPU successes publish
+    # later than failures settle, so an instantaneous rule killed healthy
+    # donors purely by settlement order (live evidence 2026-09-28).
+    GUARDED_SETTLEMENT_TRIGGER_SQL.replace('CREATE TRIGGER source_success_after_settlement',
+                                        'CREATE TRIGGER IF NOT EXISTS source_success_after_settlement', 1),
 )
+
+SOURCE_EXCLUSION_HISTORY_STATEMENT = """CREATE TABLE IF NOT EXISTS source_exclusion_history(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_key TEXT NOT NULL REFERENCES sources(key),
+  action TEXT NOT NULL CHECK(action IN ('excluded','reinstated')),
+  decided REAL NOT NULL, settled_attempts INTEGER NOT NULL,
+  accepted_rows INTEGER NOT NULL, pending_claims INTEGER NOT NULL DEFAULT 0,
+  minimum_rate REAL NOT NULL, minimum_attempts INTEGER NOT NULL,
+  evidence TEXT)"""
+
+
+GUARDED_EXCLUSION_CANDIDATES_SQL = '''WITH finished AS (
+      SELECT source_key,COUNT(*) n FROM attempts WHERE finished IS NOT NULL GROUP BY source_key),
+    accepted AS (
+      SELECT source_key,COUNT(*) n FROM outputs WHERE state='accepted' GROUP BY source_key),
+    leased AS (
+      SELECT source_key,COUNT(*) n FROM outputs WHERE state='leased' GROUP BY source_key)
+  SELECT f.source_key, f.n AS settled, COALESCE(a.n,0) AS accepted, COALESCE(l.n,0) AS pending
+  FROM finished f LEFT JOIN accepted a USING(source_key) LEFT JOIN leased l USING(source_key)
+  WHERE f.n>=? AND (COALESCE(a.n,0)+COALESCE(l.n,0)) < (f.n+COALESCE(l.n,0))*?
+    AND NOT EXISTS(SELECT 1 FROM source_exclusions e WHERE e.source_key=f.source_key)'''
+
+
+def guarded_exclusion_candidates(db: sqlite3.Connection, minimum_rate: float,
+                                 minimum_attempts: int, sources: list[str] | None = None) -> list[sqlite3.Row]:
+    """Sources the pending-aware guard may exclude: P is genuinely unresolved
+    leased output claims for the source (abandoned/released records never
+    count), and a candidate only when even all P already-issued attempts
+    succeeding leaves (A+P)/(F+P) strictly below the rate, with F at the
+    floor. Exactly .25 stays eligible; at P=0 this is the plain cutoff."""
+    rows = db.execute(GUARDED_EXCLUSION_CANDIDATES_SQL, (minimum_attempts, minimum_rate)).fetchall()
+    if sources is not None:
+        wanted = set(sources)
+        rows = [row for row in rows if row["source_key"] in wanted]
+    return rows
+
+
+def commit_source_exclusions(db: sqlite3.Connection, candidates: list[sqlite3.Row], reason: str) -> int:
+    """Insert active exclusions and their append-only audit rows, then retire
+    ready obligations. Pending rows are never counted as successes."""
+    policy = db.execute("SELECT minimum_rate,minimum_attempts FROM source_success_policy WHERE id=1").fetchone()
+    now = time.time()
+    for row in candidates:
+        db.execute("INSERT OR IGNORE INTO source_exclusions VALUES(?,?,?,?,?,?)",
+                   (row["source_key"], now, row["settled"], row["accepted"],
+                    policy["minimum_rate"], policy["minimum_attempts"]))
+        db.execute("INSERT INTO source_exclusion_history"
+                   "(source_key,action,decided,settled_attempts,accepted_rows,pending_claims,"
+                   "minimum_rate,minimum_attempts,evidence) VALUES(?,?,?,?,?,?,?,?,?)",
+                   (row["source_key"], 'excluded', now, row["settled"], row["accepted"], row["pending"],
+                    policy["minimum_rate"], policy["minimum_attempts"], reason))
+    if candidates:
+        keys = [row["source_key"] for row in candidates]
+        db.execute(f"UPDATE outputs SET state='skipped' WHERE state='ready' "
+                   f"AND source_key IN ({','.join('?' * len(keys))})", keys)
+    return len(candidates)
 
 
 def apply_pair_budget_schema(db: sqlite3.Connection) -> None:
@@ -355,7 +449,8 @@ class QuotaLedger:
                 'minimum_attempts':row['minimum_attempts'],
                 'denominator':'finished_generation_attempts',
                 'numerator':'durably_accepted_source_rows',
-                'accepted_ceiling_exemption':False}
+                'accepted_ceiling_exemption':False,
+                'pending_guard':'exclude only when (accepted+leased_pending)/(finished+leased_pending) < minimum_rate'}
 
     def configure_success_filter(self, *, minimum_rate: float = .25, minimum_attempts: int = 20) -> int:
         """Activate a persistent per-source donor filter; targets never shrink.
@@ -381,21 +476,12 @@ class QuotaLedger:
                             'ON attempts(source_key) WHERE finished IS NOT NULL')
             self.db.execute('INSERT OR IGNORE INTO source_success_policy VALUES(1,?,?)',
                             (minimum_rate,minimum_attempts))
-            before=self.db.total_changes
-            # No accepted>=5 exemption: five-row sources remain evaluable and
-            # their later successes still count toward the numerator.
-            self.db.execute('''INSERT OR IGNORE INTO source_exclusions
-                WITH finished AS (
-                  SELECT source_key,COUNT(*) n FROM attempts WHERE finished IS NOT NULL GROUP BY source_key),
-                accepted AS (
-                  SELECT source_key,COUNT(*) n FROM outputs WHERE state='accepted' GROUP BY source_key)
-                SELECT f.source_key,?,f.n,COALESCE(a.n,0),?,?
-                FROM finished f LEFT JOIN accepted a USING(source_key)
-                WHERE f.n>=? AND COALESCE(a.n,0)<f.n*?''',
-                (time.time(),minimum_rate,minimum_attempts,minimum_attempts,minimum_rate))
-            added=self.db.total_changes-before
-            self.db.execute("UPDATE outputs SET state='skipped' WHERE state='ready' "
-                            'AND source_key IN (SELECT source_key FROM source_exclusions)')
+            # Pending-aware guard, identical to the settlement trigger and the
+            # dead-owner release path: exclusions commit only when even all
+            # still-leased claims succeeding cannot rescue the rate.
+            candidates=guarded_exclusion_candidates(self.db,minimum_rate,minimum_attempts)
+            added=commit_source_exclusions(self.db,candidates,
+                'policy activation/reapply guard: (accepted+leased)/(finished+leased) < minimum_rate')
             self.db.commit()
             return added
         except BaseException:
@@ -410,6 +496,68 @@ class QuotaLedger:
             item['success_rate_at_exclusion']=row['accepted_rows']/row['settled_attempts']
             rows.append(item)
         return {'time':time.time(),'policy':self.success_policy(),'excluded_sources':rows}
+
+    def upgrade_eligibility_guard(self) -> dict:
+        """Explicit, idempotent, quiescent upgrade of deployed pair-budget
+        ledgers to the pending-aware exclusion guard.
+
+        ONE transaction: (1) create the append-only exclusion-history table,
+        (2) atomically REPLACE the old instantaneous settlement trigger so the
+        two rules can never coexist, (3) repair only ACTIVE exclusions whose
+        NOW fully-settled durable A/F meets the unchanged minimum rate AND
+        whose already-issued outcomes settled after the original decision —
+        preserving each original decision record in history BEFORE
+        reinstating. Skipped variants stay retired (no variant/seed reuse; the
+        pair deficit regrows through the normal donor machinery), sources
+        still below the rate stay excluded, and re-exclusion after repair
+        remains possible through the normal guarded paths. Requires no
+        outstanding leases; never run against live writers.
+        """
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            leased=int(self.db.execute("SELECT COUNT(*) FROM outputs WHERE state='leased'").fetchone()[0])
+            if leased:
+                raise RuntimeError(f'{leased} outstanding leased outputs: drain writers and settle '
+                                   'publications before upgrading the eligibility guard')
+            self.db.execute(SOURCE_EXCLUSION_HISTORY_STATEMENT)
+            self.db.execute('DROP TRIGGER IF EXISTS source_success_after_settlement')
+            self.db.execute(GUARDED_SETTLEMENT_TRIGGER_SQL)
+            policy=self.success_policy()
+            repaired=[]
+            if policy is not None:
+                rate=policy['minimum_rate']; floor=policy['minimum_attempts']
+                for row in self.db.execute('''SELECT e.*,s.group_key FROM source_exclusions e
+                        JOIN sources s ON s.key=e.source_key ORDER BY e.source_key''').fetchall():
+                    src=row['source_key']
+                    settled=int(self.db.execute(
+                        'SELECT COUNT(*) FROM attempts WHERE source_key=? AND finished IS NOT NULL',(src,)).fetchone()[0])
+                    accepted=int(self.db.execute(
+                        "SELECT COUNT(*) FROM outputs WHERE source_key=? AND state='accepted'",(src,)).fetchone()[0])
+                    late=int(self.db.execute(
+                        'SELECT COUNT(*) FROM attempts WHERE source_key=? AND finished IS NOT NULL AND finished>?',
+                        (src,row['decided'])).fetchone()[0])
+                    if settled<=0 or accepted < rate*settled or late<=0:
+                        continue  # genuinely low, or no evidence the decision was premature
+                    self.db.execute("INSERT INTO source_exclusion_history"
+                        "(source_key,action,decided,settled_attempts,accepted_rows,pending_claims,"
+                        "minimum_rate,minimum_attempts,evidence) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (src,'reinstated',row['decided'],row['settled_attempts'],row['accepted_rows'],0,
+                         row['minimum_rate'],row['minimum_attempts'],
+                         f'premature exclusion repaired: now {accepted}/{settled} >= minimum_rate '
+                         f'with {late} already-issued settlements after the decision'))
+                    self.db.execute('DELETE FROM source_exclusions WHERE source_key=?',(src,))
+                    repaired.append({'source_key':src,'group_key':row['group_key'],
+                        'at_exclusion':f"{row['accepted_rows']}/{row['settled_attempts']}",
+                        'now':f'{accepted}/{settled}','late_settlements':late})
+            remaining=int(self.db.execute('SELECT COUNT(*) FROM source_exclusions').fetchone()[0])
+            history=int(self.db.execute('SELECT COUNT(*) FROM source_exclusion_history').fetchone()[0])
+            self.db.commit()
+            return {'guard':'pending-aware','trigger_replaced':True,'repaired':len(repaired),
+                    'reinstated_sources':repaired,'remaining_excluded':remaining,
+                    'history_rows':history,
+                    'note':'skipped variants remain retired; pair deficits regrow with fresh variant IDs and seeds'}
+        except BaseException:
+            self.db.rollback();raise
 
     def initialize(self, config: dict, sources: list[dict]) -> None:
         digest = canonical_hash(config)
@@ -577,10 +725,22 @@ class QuotaLedger:
                             (time.time(), json.dumps(diagnostic, sort_keys=True), claim["token"]))
 
     def release_owner(self, owner: str) -> int:
-        # Caller is responsible for proving that owner PID+start-time is dead.
+        # Caller is responsible for proving that owner PID+start-time is dead
+        # (recovery-before-release). Abandoning claims drops P without adding
+        # F, so the pending-aware guard must be re-evalculated here: a source
+        # that only stayed eligible because of this owner's leases may now be
+        # safely excludable.
         with self.db:
+            affected=[row[0] for row in self.db.execute(
+                "SELECT DISTINCT source_key FROM outputs WHERE state='leased' AND owner=?",(owner,))]
             result = self.db.execute(
                 "UPDATE outputs SET state='ready',owner=NULL,token=NULL WHERE state='leased' AND owner=?", (owner,))
+            policy=self.success_policy()
+            if policy is not None and affected:
+                candidates=guarded_exclusion_candidates(self.db,policy['minimum_rate'],
+                                                        policy['minimum_attempts'],affected)
+                commit_source_exclusions(self.db,candidates,
+                    'dead-owner release guard: abandoned claims dropped P without adding F')
             return result.rowcount
 
     def heartbeat(self, owner: str, details: dict) -> None:

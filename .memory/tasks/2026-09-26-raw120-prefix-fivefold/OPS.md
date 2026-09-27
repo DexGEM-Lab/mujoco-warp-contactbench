@@ -159,3 +159,30 @@ test. 123 focused tests pass (20 pair-budget incl. forced-collision,
 stale/retry/restart allocation, dry-run immutability, interruption rollback,
 already-migrated repair; 7 publication incl. int64 seed roundtrip; approach
 prefix suite). No live ledger or shard was touched.
+
+## 2026-09-28T01:58:00+08:00 — Pending-aware exclusion guard + audited upgrade (fourth commit)
+
+New bounded T2 slice from decisive live evidence (late-settlement-20260928
+read-only snapshot in the primary repo): the per-settlement eligibility rule
+excluded donors on settlement order alone because already-issued failures
+settle immediately while GPU successes publish later. Implemented the approved
+mechanism unchanged elsewhere: reported rate stays durable A / finished F,
+floor F>=20, exactly .25 eligible; P = unresolved LEASED output claims for the
+source (abandoned/released records never count); exclusion commits only when
+(A+P)/(F+P) < minimum_rate — applied identically in the settlement trigger,
+explicit configure/reapply and dead-owner release, so once excluded the best
+pending outcome mathematically stays below threshold. Added append-only
+source_exclusion_history audit and the explicit idempotent quiescent
+`upgrade-source-policy` CLI: one transaction replaces the old instantaneous
+trigger (never coexisting), creates the audit table, and reinstates only
+active exclusions whose now fully-settled A/F meets the unchanged rate with
+already-issued settlements after the decision, preserving each original
+decision record before reinstating; skipped variants stay retired, genuinely
+low sources stay excluded, credit/targets/history/seeds untouched, and
+re-exclusion after repair remains possible and audited. 130 focused synthesis
+tests pass (27 pair-budget incl. failure-first/delayed-success protection,
+clearly-below-despite-pending, exact optimistic boundary, P=0 cutoff/floor,
+abandoned-not-P/F, last-lease release decision, two-worker pending leases,
+upgrade rollback/idempotence/trigger replacement and evidence-gated repair).
+No worker was stopped, no ledger or shard mutated, nothing deployed; the
+parent drains current rounds and runs the upgrade on both hosts.
