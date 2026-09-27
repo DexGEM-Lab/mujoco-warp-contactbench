@@ -413,6 +413,10 @@ def main(argv=None):
             p.add_argument('--gpus',default='2,3')
             p.add_argument('--priority-objects',default='cylinder6,cube2,sphere1,cylinder7,cylinder3,mayonnaisebottle')
     p=sub.add_parser('publish');p.add_argument('bundle',type=Path)
+    p=sub.add_parser('migrate',help='Explicitly convert a legacy per-source-slot ledger to fixed pair budgets')
+    p.add_argument('--campaign',type=Path,required=True)
+    p.add_argument('--output',type=Path,default=None,help='Override the publication root used for pre-migration reconciliation')
+    p.add_argument('--dry-run',action='store_true',help='Report the planned migration without changing the ledger')
     p=sub.add_parser('set-source-filter',help='Stop retrying low-success sources; keep all saved rows and in-flight claims')
     p.add_argument('--campaign',type=Path,required=True)
     p.add_argument('--minimum-rate',type=float,default=.25)
@@ -425,6 +429,11 @@ def main(argv=None):
     elif args.command=='publish':
         from sim.manorl.synthesis_publication import publish_bundle
         result=publish_bundle(args.bundle);emit('publication_done',accepted=result['accepted'],shard=result['shard'])
+    elif args.command=='migrate':
+        from sim.manorl.synthesis_migration import migrate_ledger, write_migration_report
+        report=migrate_ledger(args.campaign,output=args.output,dry_run=args.dry_run)
+        if report['state']=='migrated':write_migration_report(args.campaign,report)
+        emit('ledger_migration_'+report['state'].replace('-','_'),**report)
     elif args.command=='set-source-filter':
         root=args.campaign.resolve()
         if not (root/'quota.sqlite').is_file():raise ValueError('prepare the campaign before filtering sources')

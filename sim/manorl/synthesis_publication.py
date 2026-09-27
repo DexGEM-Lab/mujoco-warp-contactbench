@@ -19,7 +19,7 @@ import uuid
 
 import numpy as np
 
-from sim.manorl.synthesis_campaign import CAMPAIGN_CONTRACT, atomic_json
+from sim.manorl.synthesis_campaign import CAMPAIGN_CONTRACT, atomic_json, ledger_schema_state
 
 
 def runtime_context(runtime, software_commit: str) -> dict:
@@ -152,19 +152,31 @@ def publish_bundle(bundle_path: Path) -> dict:
 
 
 def reconcile_shards(ledger, output: Path, *, verify_hashes: bool = True) -> int:
-    """Recover promotion-before-SQL crashes BEFORE dead-owner lease release."""
+    """Recover promotion-before-SQL crashes BEFORE dead-owner lease release.
+
+    Reads both ledger generations: historical manifests use the same claim
+    shape, and the explicit legacy-to-pair-budget migration reconciles promoted
+    shards while the ledger is still in the legacy schema.
+    """
     from sim.manorl.lance_v2 import file_sha256
-    recovered=0
+    table, column = (('outputs', 'variant') if ledger_schema_state(ledger.db) == 'pair_budget'
+                     else ('slots', 'slot'))
+    recovered = 0
     for path in sorted((output/'shards').glob('*/*.lance/campaign-commit.json')):
-        commit=json.loads(path.read_text())
-        if commit.get('contract')!=CAMPAIGN_CONTRACT:
+        commit = json.loads(path.read_text())
+        if commit.get('contract') != CAMPAIGN_CONTRACT:
             raise RuntimeError('foreign shard in campaign output')
-        pending=[]
+        pending = []
         for record in commit['rows']:
-            claim=record['claim']
-            row=ledger.db.execute('SELECT state,row_uuid,shard FROM slots WHERE source_key=? AND slot=?',
-                (claim['source']['key'],claim['slot'])).fetchone()
-            if row is None:raise RuntimeError('published source absent from ledger')
+            claim = record['claim']
+            # 'slot' is the published lineage name of the variant index in both
+            # the legacy and pair-budget schemas, so historical manifests keep
+            # reconciling unchanged.
+            row = ledger.db.execute(
+                f'SELECT state,row_uuid,shard FROM {table} WHERE source_key=? AND {column}=?',
+                (claim['source']['key'], claim['slot'])).fetchone()
+            if row is None:
+                raise RuntimeError('published source absent from ledger')
             if row['state']=='accepted':
                 if row['row_uuid']!=record['row_uuid'] or row['shard']!=str(path.parent):
                     raise RuntimeError('two published rows compete for one source slot')

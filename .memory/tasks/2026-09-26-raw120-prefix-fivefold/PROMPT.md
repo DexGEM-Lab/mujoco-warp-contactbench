@@ -28,5 +28,5 @@ Current completed-model inventory: 16 objects, 113 object/action pairs, 13,540 r
 Do not edit protected dev directly or alter any running training checkout/queue script.
 Do not delete old worktrees, checkpoints, Lance datasets or ignored artifacts.
 Do not terminate active training, synthesis GPU workers, or other users' processes. Management-only handoffs may replace this campaign's watch/supervisor. An owned legacy training-only heartbeat may be retired on a host handed to synthesis after verifying that no live training needs it; preserve its scripts and logs.
-Subagent authorization in the current request is for monitoring; parent owns implementation in this isolated worktree.
 Do not make an LLM sleep/poll indefinitely; server-side supervision owns persistent waiting, and monitoring-agent checks are bounded.
+Superseded: the earlier restriction of subagent authorization to monitoring only. The user explicitly authorized bounded implementation delegation for the fixed pair-budget implementation in the2026-09-28 request; a single executor implements in this isolated worktree while the parent owns remote operations, acceptance and integration.

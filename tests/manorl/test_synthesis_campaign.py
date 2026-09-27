@@ -74,7 +74,7 @@ def test_environment_preserves_trained_early_phase():
 
 def test_ledger_counts_only_saved_acceptance_and_recovers(tmp_path):
     path=tmp_path/'quota.sqlite';a=QuotaLedger(path);b=QuotaLedger(path)
-    config={'ratio':5};sources=[{'key':'a','group_key':'cube1'},{'key':'b','group_key':'cube1'}]
+    config={'ratio':5};sources=[{'key':'a','group_key':'cube1','pair':'cube1:01'},{'key':'b','group_key':'cube1','pair':'cube1:01'}]
     a.initialize(config,sources)
     first=a.claim('worker-a','cube1',3);second=b.claim('worker-b','cube1',7)
     assert len(first)==3 and len(second)==7
@@ -93,7 +93,7 @@ def test_ledger_counts_only_saved_acceptance_and_recovers(tmp_path):
         b.finish(claim,{'accepted':True},row_uuid=row_uuid,shard='verified.lance')
         b.finish(claim,{'accepted':True},row_uuid=row_uuid,shard='verified.lance')
     assert a.summary()['complete'] and a.summary()['accepted']==10
-    assert a.summary()['sources_complete']==2
+    assert a.summary()['pairs_met']==1 and a.summary()['target']==10
     assert a.claim('worker-a','cube1',10)==[]
     a.close();b.close()
     c=QuotaLedger(path);c.initialize(config,sources)
@@ -104,7 +104,7 @@ def test_ledger_counts_only_saved_acceptance_and_recovers(tmp_path):
 
 def test_duplicate_output_uuid_cannot_fill_two_slots(tmp_path):
     import sqlite3
-    a=QuotaLedger(tmp_path/'state.sqlite');a.initialize({},[{'key':'a','group_key':'g'}])
+    a=QuotaLedger(tmp_path/'state.sqlite');a.initialize({},[{'key':'a','group_key':'g','pair':'obj:01'}])
     c=a.claim('w','g',2)
     a.finish(c[0],{},row_uuid='same',shard='a.lance')
     with pytest.raises(sqlite3.IntegrityError):a.finish(c[1],{},row_uuid='same',shard='a.lance')
@@ -174,7 +174,7 @@ def test_stale_monitor_checks_current_assignments_not_retired_failures():
 @pytest.fixture
 def wave_ledger(tmp_path):
     ledger=QuotaLedger(tmp_path/'waves.sqlite')
-    ledger.initialize({},[{'key':'a','group_key':'g'},{'key':'b','group_key':'g'}])
+    ledger.initialize({},[{'key':'a','group_key':'g','pair':'obj:01'},{'key':'b','group_key':'g','pair':'obj:01'}])
     yield ledger
     ledger.close()
 
@@ -295,19 +295,25 @@ def test_group_scheduler_balances_sharing_and_never_uses_blocked_groups():
 def test_same_group_workers_claim_disjoint_nonexcluded_slots(tmp_path):
     a=QuotaLedger(tmp_path/'shared.sqlite');b=QuotaLedger(tmp_path/'shared.sqlite')
     try:
-        a.initialize({},[{'key':'excluded','group_key':'g'}])
+        a.initialize({},[{'key':'excluded','group_key':'g','pair':'obj:01'}])
         a.configure_success_filter(minimum_attempts=1)
         rejected=a.claim('w','g',1)[0];a.finish(rejected,{'accepted':False})
-        a.initialize({},[{'key':'b','group_key':'g'},{'key':'c','group_key':'g'}])
-        assert a.groups()[0]['ready']==10
+        a.initialize({},[{'key':'b','group_key':'g','pair':'obj:01'},{'key':'c','group_key':'g','pair':'obj:01'}])
+        assert a.groups()[0]['ready']==15  # ten ready plus five reassignable obligations
         one=a.claim('gpu1','g',6);two=b.claim('gpu2','g',6)
-        assert len(one)==6 and len(two)==4
+        assert len(one)==6 and len(two)==6  # the short claim reassigns retired debt
         assert slot_ids(one).isdisjoint(slot_ids(two))
         assert all(c['source']['key']!='excluded' for c in one+two)
-        assert a.groups()[0]['ready']==0
+        assert a.groups()[0]['ready']==3  # only the reassignable debt remains
         for claim in one+two:
             key=claim['source']['key']
             a.finish(claim,{'accepted':True},row_uuid=f"{key}-{claim['slot']}",shard='verified.lance')
-        assert a.summary()['accepted']==10 and a.summary()['skipped_slots']==5
-        assert a.summary()['complete']
+        assert a.summary()['accepted']==12 and a.summary()['skipped_slots']==5
+        assert not a.summary()['complete']  # 3 retired obligations remain owed
+        assert a.summary()['remaining']==3
+        rest=a.claim('gpu1','g',3)
+        assert len(rest)==3 and all(c['slot']>=5 for c in rest)  # extra donor variants
+        for claim in rest:
+            a.finish(claim,{'accepted':True},row_uuid=f"extra-{claim['source']['key']}-{claim['slot']}",shard='verified.lance')
+        assert a.summary()['accepted']==15 and a.summary()['complete']
     finally:a.close();b.close()

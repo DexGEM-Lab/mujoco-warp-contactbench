@@ -81,3 +81,28 @@ Paused raw120-synthesis-success25-monitor after validation; schedule.show confir
 User explicitly clarified the unchanged goal:100 original sources in cylinder1:01 imply500 accepted outputs; excluding50 weak sources does NOT reduce500, and the remaining sources must supply it. Source eligibility and pair output budget are independent. Prior entries that described overall completion under a reduced retained-source target reflect the assistant's mistaken interpretation, not the user's intended scope reduction; that completion claim is withdrawn.
 Direct code inspection confirms the gap: slots has CHECK(slot<5), initialize creates exactly five slots per source, excluded source deficits become skipped, and summary sets target=original_target-skipped. No redistribution exists. The original aggregate target remains74805, valid saved rows24006, outstanding50799. Existing index/payload verification remains true and data must be preserved;105 nonempty pairs out of129 is coverage, not fixed-quota completion.
 Updated PROMPT/project guide/current model and todo state to the correct requirement. Correct implementation must retain fixed per-pair budgets, allow eligible sources beyond five unique variants, preserve all prior credit/lineage and classify no-eligible-source pairs as blocked rather than complete. No live ledger, source-policy setting, published data or GPU process was changed during this clarification; implementation/migration remains pending.
+
+## 2026-09-28T12:10:00+08:00 — Fixed pair-budget implementation and migration (feature branch only)
+
+Implemented the corrected quota model in the isolated worktree
+feat/raw120-prefix-fivefold: pair-budget ledger, donor reassignment with extra
+variants, explicit idempotent legacy migration with mandatory post-migration
+policy reapplication, per-pair status reporting, and the widened sampler
+(legacy seeds bit-identical; extra variants cycle strata within 5-50cm).
+98 focused synthesis tests pass, including 100-sources/50-excluded reaching
+500 from survivors, mixed-action group isolation, blocked no-donor pairs,
+exact .25/floor-20 boundaries, formerly-full donor re-evaluation, migration
+credit preservation/idempotence/lease refusal/historical-manifest recovery,
+unique variant seeds and UUID lineage, concurrent disjoint claims without
+overfill, and admission/watch fixed-target completion. All tests use real
+SQLite; publication tests use real shard fixtures.
+
+Deployment preconditions recorded for the parent: drain writers and settle
+publications; run `migrate --dry-run` then `migrate` on each live-ledger COPY
+under ROOT/production/recoveries/fixed-pair-copy-20260928/ first; expect
+accepted24006 unchanged, formerly-exempt full donors excluded (217 S1 +75 S2
+=292), eligible donors 2934 rather than3226, and blocked pairs reported for
+deficits without donors. The migration reapplies the stored 25%/20 policy
+before returning, so no claim can run against the uncorrected donor set.
+Parent owns remote operations, final acceptance and integration; no SSH, no
+protected-branch merges, no data deletion, no delegation.

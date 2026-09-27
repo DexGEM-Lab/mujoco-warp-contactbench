@@ -111,3 +111,46 @@ Python control plus Conda activation corrected it. A settled-source index was
 built after writer drain to avoid a long live SQLite write lock. The largeclamp
 54-row EACCES recovery was hash-verified and credited once; all failure evidence,
 checkpoints, datasets and worktrees remain preserved. See OPS.md for provenance.
+
+## 2026-09-28 — Fixed pair budgets implemented on the feature branch
+
+Commit (this branch): `sim/manorl/synthesis_campaign.py` now implements
+`manorl_raw120_fixed_pair_output_budget_v2`. `pair_targets` freezes each
+object:action pair's target at 5x its originally admitted source count
+(append-only on admission, immutable otherwise, never changed by eligibility).
+Claimable `outputs` rows are keyed `(source_key, variant)`; variants 0-4 are
+the historical slots, variants >=5 are extra donor variants created only for a
+pair's deficit and only on eligible same-pair donors, least-loaded first.
+`accepted+ready+leased` can therefore never exceed the pair target: overclaim
+and overpublication are structurally impossible, and cross-pair borrowing
+cannot happen because donors are drawn from the pair itself. Pairs with debt
+and no eligible donors are `blocked`, never complete; completion additionally
+requires zero ready/leased. The25% donor filter keeps the20-settled-attempt
+floor, strict-below exclusion, finished-attempt denominator and durable
+accepted numerator, and no longer exempts five-row sources.
+
+Legacy ledgers are converted by an explicit, idempotent, one-way migration
+(`sim/manorl/synthesis_migration.py`, CLI `migrate --campaign ... [--dry-run]`).
+It reconciles promoted shards under legacy semantics first, refuses any
+remaining outstanding lease, then converts in one transaction: drops `slots`,
+adds the explicit `pair` column (legacy order preserved; admissions use
+explicit column names), copies every row preserving state/attempts/owner/
+UUID/shard lineage, rebuilds pair targets, and re-creates exclusion triggers.
+It then MANDATORILY reapplies any stored source-success policy under corrected
+semantics before returning, with a pre/post exclusion audit: live-shaped
+formerly-exempt full donors (292 in the live copies) become excluded donors
+while their accepted rows stay credited. Pair-budget code fails loudly on
+legacy databases and vice versa; `slot` remains the published lineage name of
+the variant index, so historical manifests keep reconciling. Extra donor
+variants cycle the same five radial/azimuth strata within 5-50cm with a
+structurally different 64-bit seed derivation: no legacy source/slot/attempt
+seed or generated UUID is ever reused (slots 0-4 stay bit-identical).
+
+Validation: 98 focused synthesis tests pass (13+2 new pair-budget/migration
+tests using real SQLite and shard fixtures). Pre-existing unrelated
+`test_lance_v2` fixture failures reproduce at clean HEAD. No live ledger,
+policy, published data or GPU process was touched. Migration of the live
+ledgers (copies exist under each host's
+ROOT/production/recoveries/fixed-pair-copy-20260928/) remains the parent's
+deployment step; production is not fixed and the50799-row debt is not
+fulfilled by this change.

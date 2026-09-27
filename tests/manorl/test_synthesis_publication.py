@@ -36,7 +36,7 @@ def compact_fixture(source_key,slot):
 def test_atomic_publication_recovers_promoted_rows_before_releasing_claims(tmp_path,monkeypatch):
     import sim.manorl.synthesis_publication as publication
     pytest.importorskip('lance')
-    ledger=QuotaLedger(tmp_path/'state.sqlite');ledger.initialize({},[{'key':'a','group_key':'cube1'}])
+    ledger=QuotaLedger(tmp_path/'state.sqlite');ledger.initialize({},[{'key':'a','group_key':'cube1','pair':'cube1:01'}])
     claims=ledger.claim('dead-worker','cube1',2)
     def row_for(result,**kwargs):
         return compact_fixture(result['claim']['source']['key'],result['claim']['slot'])
@@ -61,7 +61,7 @@ def test_atomic_publication_recovers_promoted_rows_before_releasing_claims(tmp_p
 def test_recovery_rejects_changed_payload(tmp_path,monkeypatch):
     import json
     from sim.manorl.synthesis_campaign import CAMPAIGN_CONTRACT
-    ledger=QuotaLedger(tmp_path/'state.sqlite');ledger.initialize({},[{'key':'a','group_key':'g'}])
+    ledger=QuotaLedger(tmp_path/'state.sqlite');ledger.initialize({},[{'key':'a','group_key':'g','pair':'cube1:01'}])
     claim=ledger.claim('w','g',1)[0]
     shard=tmp_path/'output/shards/cube1/wave.lance';shard.mkdir(parents=True)
     (shard/'data').write_text('corrupted')

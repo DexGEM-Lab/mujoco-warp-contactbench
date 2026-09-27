@@ -38,17 +38,17 @@ def test_completed_report_requires_finished_matching_checkpoint(tmp_path):
 def test_append_preserves_accepted_slots_and_is_idempotent(tmp_path):
     root=tmp_path/'campaign';root.mkdir();ledger=QuotaLedger(root/'quota.sqlite')
     config={'contract':'test','prefix':{'quota':5}}
-    old={'key':'old','group_key':'cube1-x','object':'cube1','checkpoint_sha256':'a'*64}
+    old={'key':'old','group_key':'cube1-x','pair':'cube1:01','object':'cube1','checkpoint_sha256':'a'*64}
     ledger.initialize(config,[old]);claim=ledger.claim('live-worker','cube1-x',1)[0]
     ledger.finish(claim,{'accepted':True},row_uuid='old-row',shard='old.lance')
     live=ledger.claim('live-worker','cube1-x',1)[0]
     prepared=tmp_path/'prepared';prepared.mkdir();blob=prepared/'source.pkl';blob.write_bytes(b'example')
-    new={'key':'new','group_key':'cuboid3-y','object':'cuboid3','pickle':str(blob),'pickle_sha256':sha256(blob),'checkpoint_sha256':'b'*64}
+    new={'key':'new','group_key':'cuboid3-y','pair':'cuboid3:01','object':'cuboid3','pickle':str(blob),'pickle_sha256':sha256(blob),'checkpoint_sha256':'b'*64}
     atomic_json(prepared/'config.json',config);atomic_json(prepared/'sources.json',[new]);atomic_json(prepared/'checkpoints.json',{})
     assert append_prepared(ledger,root,prepared,config)==1
     assert append_prepared(ledger,root,prepared,config)==0
     assert ledger.summary()['target']==10 and ledger.summary()['accepted']==1
-    state=ledger.db.execute('SELECT state,token FROM slots WHERE source_key=? AND slot=?',('old',live['slot'])).fetchone()
+    state=ledger.db.execute('SELECT state,token FROM outputs WHERE source_key=? AND variant=?',('old',live['slot'])).fetchone()
     assert state['state']=='leased' and state['token']==live['token']
     register_existing(ledger,tmp_path/'registry',host='server1',campaign_id='s1',output='nas')
     with pytest.raises(RuntimeError,match='owned by another host'):

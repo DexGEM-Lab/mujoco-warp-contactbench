@@ -7,11 +7,13 @@ not their pair's output obligation. Other eligible sources in the SAME pair must
 supply the missing rows, with no five-row ceiling per source. No cross-pair
 substitution, duplicate credit or benchmark rows may fill the budget.
 
-**Implementation gap:** the deployed source-slot ledger does not implement this.
-It caps each source at five, turns excluded deficits into skipped slots and
-subtracts them from target. The previous completion claim is withdrawn. The
-fixed goal remains74805;24006 valid rows exist and50799 are still owed. Pairs
-with no eligible sources must be reported blocked, not complete.
+**Implementation status (this branch):** the pair-budget ledger and its explicit
+legacy migration below implement that goal. The previously deployed
+source-slot ledger capped each source at five, turned excluded deficits into
+skipped slots and subtracted them from the target; that completion claim was
+withdrawn and live ledgers must be migrated before the fixed target of74805
+(24006 verified rows exist,50799 still owed) can be pursued. Pairs with no
+eligible donors are reported blocked, not complete.
 
 ## Validated partial-data snapshot
 
@@ -142,47 +144,72 @@ budget, not surviving-source quotas. Source exclusion cannot remove that debt.
 Persistent publication failures and pairs without eligible sources must remain
 visible rather than being treated as complete.
 
-## Legacy source filtering (quota redistribution still missing)
+## Fixed pair budgets and the explicit ledger migration
 
-The following existing command implements source exclusion but also the incorrect
-shrinking target; it is not sufficient for the fixed-pair goal. Its legacy API is:
+The corrected quota model is now implemented in the pair-budget ledger
+(`manorl_raw120_fixed_pair_output_budget_v2`). Each object–action pair owes
+`5 x originally admitted source count` accepted rows, stored immutably in
+`pair_targets`; eligibility never mutates it and admission can only append.
+Claimable work lives in `outputs` rows keyed by `(source_key, variant)`, where
+variants `0..4` are the historical per-source slots and variants `>= 5` are
+extra donor variants. When a source is excluded (or its obligations are
+retired), the pair's deficit is reassigned by creating further variants on
+eligible donors of the SAME pair, least-loaded first, so
+`accepted + ready + leased` can never exceed the pair target: no pair can be
+overclaimed or overpublished, and no cross-pair borrowing is possible. A pair
+with remaining debt and no eligible donors is reported `blocked`, never
+complete. `summary()`/`pair_status()` expose fixed target, accepted, remaining,
+pair debt, and runnable/blocked pairs; completion additionally requires zero
+outstanding leases. The25% donor filter keeps the20-settled-attempt floor,
+strictly-below exclusion, finished-attempt denominator and durable accepted
+numerator, but no longer exempts sources that already reached five rows.
+
+Legacy per-source-slot ledgers (live hosts) are converted by an explicit,
+idempotent, one-way migration — never implicitly on open; pair-budget code
+fails loudly on a legacy database and vice versa:
+
+```bash
+# 0. stop supervisors/watches/workers, let pending publications settle
+python -m tools.run_manorl_synthesis_campaign migrate --campaign /local/campaign --dry-run
+python -m tools.run_manorl_synthesis_campaign migrate --campaign /local/campaign
+python -m tools.run_manorl_synthesis_campaign status --campaign /local/campaign
+```
+
+The migration first reconciles promoted shards against the legacy schema
+(recovering promotion-before-ledger crashes), then refuses to proceed if any
+lease is still outstanding — leases are never silently abandoned. Inside one
+transaction it drops `slots`, adds the explicit `pair` column, copies every
+slot row to `outputs` preserving state/attempt/owner/UUID/shard lineage,
+rebuilds `pair_targets` at `5 x` source count, and re-creates the exclusion
+triggers. Attempt history, the config digest, the exclusion audit and on-disk
+commit manifests are untouched; the report (`migration-report.json`) records
+before/after snapshots and an `accepted_identity_sha256` for independent
+verification. Re-running the command reports `already_migrated` without
+changes. **Policy reapplication is mandatory and automatic**: when a
+source-success policy row exists, the migration immediately re-evaluates every
+source under corrected semantics (no five-row exemption) before the CLI
+returns — before any claim can run — and reports the pre/post exclusion audit
+in `policy_reapplication`. Live-shaped data includes formerly-exempt full
+donors whose success rate settled below25% only after late filter activation
+(292 such donors across the live copies), so a migrated ledger must never be
+claimed against the uncorrected donor set. Reapplication changes only donor
+eligibility, never accepted-row counts. Appended admissions use explicit
+column names because a migrated `sources` table keeps the legacy column order
+with `pair` added last. Because `slot` remains the published lineage name of the variant
+index, historical manifests keep reconciling under the new schema. Extra donor
+variants cycle the same five radial/azimuth strata (always within 5–50 cm) with
+a structurally different seed derivation, so no legacy source/slot/attempt
+seed or row UUID is ever reused. Operational preconditions: SQLite stays on
+local filesystems; drain writers first; test the migration on a copy of each
+live ledger before deploying.
+
+The legacy `set-source-filter` command keeps its API but now applies the
+corrected semantics (no five-row exemption; targets never shrink):
 
 ```bash
 python -m tools.run_manorl_synthesis_campaign set-source-filter \
   --campaign /local/campaign --minimum-rate 0.25 --minimum-attempts 20
 ```
-
-The numerator is accepted source slots after verified durable publication; the
-denominator is finished generation attempts, including prefix sampling/geometry
-rejections and solved candidates. Unfinished and infrastructure-abandoned
-attempts have no settlement timestamp and do not count. Exactly25% stays
-eligible. Sources already at five saved rows are left complete.
-
-The ledger freezes an exclusion decision and changes only ready slots to
-`skipped`. In-flight tokens remain valid: a successful late publication is still
-accepted, while a failed or abandoned excluded slot becomes skipped rather than
-retryable. SQLite triggers enforce this even for a pre-upgrade worker finishing
-its current wave. No source, attempt, shard, or accepted row is deleted.
-
-`original_target` preserves the inventory target. `target` subtracts skipped
-slots, retaining accepted rows and unresolved in-flight work in its denominator.
-`retained_target`/`retained_accepted` and
-`retained_sources_complete`/`sources_retained` describe the five-row obligation
-for retained sources. `sources_excluded`, `skipped_slots`, and
-`excluded_accepted` report exclusions and preserved partial data separately.
-As additional sources reach the evidence floor, the effective target can shrink.
-`retained_accepted` can decrease when a partial source is newly excluded while
-its rows move to `excluded_accepted`; total `accepted` does not lose those rows.
-These legacy counters can report complete with no ready/leased work even though
-fixed pair budgets remain unsatisfied. The replacement must validate pair totals
-as well as absence of in-flight work and blockers.
-
-Policy and per-source decisions live in local SQLite. Admission mirrors the
-audit to NAS `fleet/source-filters/<host>.json`, outside ownership records.
-Reapplying the same policy is idempotent; a changed threshold requires an
-explicit policy migration. Building the settled-attempt index on a large old
-ledger can hold a long write lock: drain workers and suspend manager writers
-before initial activation, then restart managers from an immutable snapshot.
 
 ## Growing the fleet without duplicating quotas
 

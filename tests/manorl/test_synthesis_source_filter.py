@@ -1,4 +1,8 @@
-"""Per-source filtering must preserve saved rows, leases and legacy writers."""
+"""Per-source donor filtering under fixed pair budgets.
+
+Exclusions change which sources may generate rows; they never shrink a pair's
+output target. Saved rows, leases and legacy credit are preserved.
+"""
 import sqlite3
 import time
 
@@ -9,8 +13,11 @@ from sim.manorl.synthesis_campaign import QuotaLedger
 
 @pytest.fixture
 def ledger(tmp_path):
+    # One shared pair, two scene groups: eligibility is per source while the
+    # output obligation belongs to the pair.
     value=QuotaLedger(tmp_path/'quota.sqlite')
-    value.initialize({},[{'key':'a','group_key':'a','identity':'cube1_01_001'}])
+    value.initialize({},[{'key':'a','group_key':'a','pair':'cube1:01','identity':'cube1_01_001'},
+                         {'key':'b','group_key':'b','pair':'cube1:01','identity':'cube1_01_002'}])
     yield value
     value.close()
 
@@ -28,7 +35,7 @@ def test_filter_is_opt_in(ledger):
     for _ in range(25):attempt(ledger)
     summary=ledger.summary()
     assert summary['source_success_policy'] is None
-    assert summary['sources_excluded']==0 and summary['remaining']==5
+    assert summary['sources_excluded']==0 and summary['remaining']==10
 
 
 def test_twenty_settled_attempts_required_and_abandonment_not_counted(ledger):
@@ -42,10 +49,14 @@ def test_twenty_settled_attempts_required_and_abandonment_not_counted(ledger):
     assert not ledger.summary()['complete']
     ledger.finish(pending,{'accepted':False})
     summary=ledger.summary()
-    assert summary['original_target']==5 and summary['target']==0
-    assert summary['skipped_slots']==5 and summary['complete']
-    assert summary['sources_retained']==0 and summary['sources_excluded']==1
-    assert ledger.groups()==[] and ledger.claim('worker','a',5)==[]
+    assert summary['original_target']==10 and summary['target']==10
+    assert summary['skipped_slots']==5 and not summary['complete']
+    assert summary['blocked_pairs']==[]  # the surviving donor keeps the pair runnable
+    assert summary['sources_retained']==1 and summary['sources_excluded']==1
+    assert ledger.claim('worker','a',5)==[]  # the excluded group holds no claimable rows
+    # the retired debt was reassigned to the donor in the other scene group
+    assert [g['group_key'] for g in ledger.groups()]==['b']
+    assert ledger.groups()[0]['ready']==10
     report=ledger.exclusion_report()['excluded_sources'][0]
     assert report['settled_attempts']==20 and report['accepted_rows']==0
 
@@ -58,11 +69,18 @@ def test_exact_quarter_is_retained_below_quarter_is_excluded(ledger):
     attempt(ledger)  # Now 1/5.
     summary=ledger.summary()
     assert summary['accepted']==summary['excluded_accepted']==1
-    assert summary['skipped_slots']==4 and summary['complete']
-    row=ledger.db.execute('SELECT row_uuid,shard FROM slots WHERE source_key=? AND slot=?',
+    assert summary['skipped_slots']==4 and not summary['complete']
+    assert summary['remaining']==9 and summary['blocked_pairs']==[]
+    row=ledger.db.execute('SELECT row_uuid,shard FROM outputs WHERE source_key=? AND variant=?',
                          ('a',saved['slot'])).fetchone()
     assert tuple(row)==(f"a-{saved['slot']}",'verified.lance')
     assert ledger.exclusion_report()['excluded_sources'][0]['success_rate_at_exclusion']==.2
+    # the surviving donor repays the retired obligations with extra variants
+    donor=ledger.claim('worker','b',9)
+    assert len(donor)==9
+    for claim in donor:
+        ledger.finish(claim,{'accepted':True},row_uuid=f"b-{claim['slot']}",shard='verified.lance')
+    assert ledger.summary()['complete'] and ledger.summary()['accepted']==10
 
 
 def test_sampling_rejections_are_settled_generation_attempts(ledger):
@@ -75,23 +93,23 @@ def test_sampling_rejections_are_settled_generation_attempts(ledger):
 
 
 def test_historical_full_sources_and_rows_are_preserved(ledger):
-    for _ in range(20):attempt(ledger)
+    for _ in range(15):attempt(ledger)
     for _ in range(5):attempt(ledger,accepted=True)
-    assert ledger.configure_success_filter()==0
+    assert ledger.configure_success_filter()==0  # 5/20 == .25 exactly: still eligible
     summary=ledger.summary()
-    assert summary['accepted']==5 and summary['sources_retained']==1
-    assert summary['retained_sources_complete']==1 and summary['complete']
+    assert summary['accepted']==5 and summary['sources_retained']==2
+    assert summary['pairs_met']==0 and not summary['complete']  # the pair still owes five
+    assert summary['remaining']==5
 
 
 def test_historical_filter_preserves_inflight_tokens_and_accepts_late_rows(ledger):
     for _ in range(19):attempt(ledger)
     attempt(ledger,accepted=True)
     pending=ledger.claim('worker','a',2)
-    ledger.initialize({},[{'key':'b','group_key':'b'}])
     assert ledger.configure_success_filter()==1
     assert ledger.summary()['states']=={'accepted':1,'leased':2,'ready':5,'skipped':2}
     for claim in pending:
-        row=ledger.db.execute('SELECT state,token FROM slots WHERE source_key=? AND slot=?',
+        row=ledger.db.execute('SELECT state,token FROM outputs WHERE source_key=? AND variant=?',
                              ('a',claim['slot'])).fetchone()
         assert tuple(row)==('leased',claim['token'])
     assert not ledger.summary()['complete']
@@ -99,32 +117,20 @@ def test_historical_filter_preserves_inflight_tokens_and_accepts_late_rows(ledge
     ledger.finish(pending[1],{'accepted':False})
     summary=ledger.summary()
     assert summary['sources_retained']==1 and summary['sources_excluded']==1
-    assert summary['target']==7 and summary['remaining']==5 and summary['excluded_accepted']==2
-    assert [g['group_key'] for g in ledger.groups()]==['b']
+    assert summary['target']==10 and summary['remaining']==8 and summary['excluded_accepted']==2
     for _ in range(5):attempt(ledger,'b',accepted=True)
     summary=ledger.summary()
-    assert summary['complete'] and summary['accepted']==7
-    assert summary['retained_accepted']==summary['retained_target']==5
-    assert summary['retained_sources_complete']==summary['sources_retained']==1
+    # 'a' is excluded with a durable deficit; the donor still owes three rows.
+    assert not summary['complete'] and summary['blocked_pairs']==[]
+    assert summary['accepted']==7 and summary['remaining']==3
+    assert summary['retained_accepted']==5
 
 
-def test_legacy_sql_finish_and_release_cannot_resurrect_excluded_work(ledger,tmp_path):
+def test_pre_migration_writer_sql_fails_loudly_on_pair_budget_ledger(ledger,tmp_path):
     old=sqlite3.connect(tmp_path/'quota.sqlite')
     try:
-        pending=ledger.claim('old','a',2)
-        ledger.configure_success_filter(minimum_attempts=1)
-        # Same two updates as the deployed pre-filter finish implementation.
-        with old:
-            old.execute("UPDATE slots SET state='ready',owner=NULL,token=NULL WHERE source_key=? AND slot=?",
-                        ('a',pending[0]['slot']))
-            old.execute('UPDATE attempts SET finished=?,diagnostic=? WHERE token=?',
-                        (time.time(),'{}',pending[0]['token']))
-        assert ledger.summary()['states']=={'leased':1,'skipped':4}
-        with old:
-            old.execute("UPDATE slots SET state='ready',owner=NULL,token=NULL WHERE state='leased' AND owner='old'")
-        assert old.execute("SELECT COUNT(*) FROM slots WHERE state='ready'").fetchone()[0]==0
-        assert ledger.summary()['complete']
-        assert ledger.exclusion_report()['excluded_sources'][0]['settled_attempts']==1
+        with pytest.raises(sqlite3.OperationalError):
+            old.execute("UPDATE slots SET state='ready' WHERE source_key='a'").fetchall()
     finally:old.close()
 
 
@@ -141,9 +147,10 @@ def test_filter_survives_reopen_and_reinitialization(ledger,tmp_path):
     attempt(ledger)
     other=QuotaLedger(tmp_path/'quota.sqlite')
     try:
-        other.initialize({},[{'key':'a','group_key':'a','identity':'cube1_01_001'}])
+        other.initialize({},[{'key':'a','group_key':'a','pair':'cube1:01','identity':'cube1_01_001'},
+                             {'key':'b','group_key':'b','pair':'cube1:01','identity':'cube1_01_002'}])
         assert other.configure_success_filter(minimum_attempts=1)==0
-        assert other.summary()['skipped_slots']==5 and other.summary()['complete']
+        assert other.summary()['skipped_slots']==5 and not other.summary()['complete']
         with pytest.raises(ValueError,match='policy changed'):
             other.configure_success_filter(minimum_rate=.5,minimum_attempts=1)
         assert other.success_policy()['minimum_rate']==.25
@@ -153,12 +160,14 @@ def test_filter_survives_reopen_and_reinitialization(ledger,tmp_path):
 def test_new_sources_reopen_filtered_campaign(ledger):
     ledger.configure_success_filter(minimum_attempts=1)
     attempt(ledger)
-    assert ledger.summary()['complete']
-    ledger.initialize({},[{'key':'b','group_key':'b'}])
     assert not ledger.summary()['complete']
-    assert ledger.summary()['retained_target']==5
-    for _ in range(5):attempt(ledger,'b',accepted=True)
-    assert ledger.summary()['complete']
+    ledger.initialize({},[{'key':'c','group_key':'c','pair':'cube1:03'}])
+    assert not ledger.summary()['complete']
+    assert ledger.summary()['target']==15  # append-only growth for the new pair
+    for _ in range(5):attempt(ledger,'c',accepted=True)
+    summary=ledger.summary()
+    assert not summary['complete'] and summary['blocked_pairs']==[]
+    assert summary['pairs_met']==1 and summary['remaining']==10
 
 
 def test_summary_preserves_callers_transaction(ledger):
@@ -167,7 +176,7 @@ def test_summary_preserves_callers_transaction(ledger):
     ledger.summary()
     assert ledger.db.in_transaction
     ledger.db.rollback()
-    assert ledger.db.execute('SELECT COUNT(*) FROM workers').fetchone()[0]==0
+    assert ledger.db.execute("SELECT COUNT(*) FROM workers").fetchone()[0]==0
 
 
 @pytest.mark.parametrize('rate',[-.1,1.1,float('nan'),float('inf'),True,'0.25'])

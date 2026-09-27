@@ -24,7 +24,8 @@ from sim.manorl.trajectory import ReferenceTrajectory
 
 CAMPAIGN_CONTRACT = "manorl_raw120_source_prefix_offline_retreat_quota_v1"
 PREFIX_CONTRACT = "manorl_source_relative_shell_prefix_preserve_base_early_v1"
-SUCCESS_FILTER_CONTRACT = "manorl_source_durable_rows_per_settled_attempt_v1"
+SUCCESS_FILTER_CONTRACT = "manorl_source_durable_rows_per_settled_attempt_v2"
+PAIR_BUDGET_CONTRACT = "manorl_raw120_fixed_pair_output_budget_v2"
 
 
 def canonical_hash(value: object) -> str:
@@ -70,9 +71,17 @@ class PrefixConfig:
 
 
 def attempt_seed(key: str, slot: int, attempt: int, config: PrefixConfig) -> int:
-    if not 0 <= slot < config.quota or attempt < 1:
+    """Deterministic per-variant seed; slots 0-4 keep the historical derivation.
+
+    Extra donor variants (slot >= quota) use a structurally different
+    derivation so no legacy (source, slot, attempt) seed is ever reused and a
+    wider 64-bit digest keeps new seeds from colliding with historical ones.
+    """
+    if slot < 0 or attempt < 1:
         raise ValueError("slot/attempt is outside the campaign contract")
-    return int(canonical_hash([config.seed, key, slot, attempt, asdict(config)])[:8], 16) % (2**31 - 1)
+    if slot < config.quota:
+        return int(canonical_hash([config.seed, key, slot, attempt, asdict(config)])[:8], 16) % (2**31 - 1)
+    return int(canonical_hash([config.seed, key, "extra-variant", slot, attempt, asdict(config)])[:16], 16) % (2**31 - 1)
 
 
 def augment_source_prefix(
@@ -98,14 +107,17 @@ def augment_source_prefix(
     key = source_key(source)
     seed = attempt_seed(key, slot, attempt, config)
     rng = np.random.default_rng(seed)
+    # Extra donor variants (slot >= quota) cycle the same five radial/azimuth
+    # strata as slots 0-4 instead of widening the sampled displacement range.
+    stratum = slot if slot < config.quota else slot % config.quota
     width = (config.maximum_offset_m - config.minimum_offset_m) / config.quota
-    low = config.minimum_offset_m + slot * width
+    low = config.minimum_offset_m + stratum * width
     high = low + width
     radius = float(rng.uniform(low, high))
     # A per-source permutation keeps all five azimuth strata represented without
     # correlating large radii with one direction across the corpus.
     order = np.random.default_rng(int(key[:16], 16) ^ config.seed).permutation(config.quota)
-    azimuth = 2 * math.pi * (int(order[slot]) + rng.random()) / config.quota
+    azimuth = 2 * math.pi * (int(order[stratum]) + rng.random()) / config.quota
     cosine = float(rng.uniform(-1, 1))
     direction = np.array([math.sqrt(1-cosine*cosine)*math.cos(azimuth),
                           math.sqrt(1-cosine*cosine)*math.sin(azimuth), cosine])
@@ -159,7 +171,7 @@ def augment_source_prefix(
         "contract": PREFIX_CONTRACT, "source_key": key, "seed": seed,
         "slot": slot, "attempt": attempt, "radius_stratum_m": [low, high],
         "displacement_m": radius, "direction": direction.tolist(),
-        "azimuth_stratum": int(order[slot]), "wrist_rotation_deg": math.degrees(angle),
+        "azimuth_stratum": int(order[stratum]), "wrist_rotation_deg": math.degrees(angle),
         "start_q": start.tolist(), "prefix_frames": frames,
         "base_pre_padding": source.movement_start_step,
         "base_early_phase_steps": config.early_phase_steps,
@@ -198,75 +210,124 @@ def owner_lock_busy(root: Path, owner: str) -> bool:
     handle.close();return False
 
 
-class QuotaLedger:
-    """Single-host SQLite coordination; never place this database on NAS/CIFS.
 
-    Leases do not expire solely by wall time: the supervisor must establish that
-    the owning process died before calling release_owner. Accepted slots cannot
-    be claimed again, even if a worker restarts or a shard is replayed.
+def ledger_schema_state(db: sqlite3.Connection) -> str:
+    """Classify a ledger file without mutating it: legacy, pair_budget or fresh."""
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'outputs' in tables and 'slots' in tables:
+        raise RuntimeError('ledger contains both legacy slots and pair-budget outputs tables')
+    if 'outputs' in tables:
+        return 'pair_budget'
+    if 'slots' in tables:
+        return 'legacy'
+    if tables & {'sources', 'attempts', 'workers', 'source_exclusions', 'source_success_policy'}:
+        raise RuntimeError('unrecognized ledger schema')
+    return 'fresh'
+
+
+class LegacyLedgerError(RuntimeError):
+    """A legacy per-source-slot ledger was opened by pair-budget code."""
+
+
+# One statement per entry: executescript() would commit, so migrations apply
+# these inside a single transaction with execute().
+PAIR_BUDGET_SCHEMA_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS sources(key TEXT PRIMARY KEY, group_key TEXT NOT NULL, pair TEXT NOT NULL, spec TEXT NOT NULL)""",
+    """CREATE INDEX IF NOT EXISTS sources_pair ON sources(pair)""",
+    """CREATE TABLE IF NOT EXISTS pair_targets(
+  pair TEXT PRIMARY KEY, original_sources INTEGER NOT NULL CHECK(original_sources>0),
+  target_rows INTEGER NOT NULL CHECK(target_rows>=0))""",
+    """CREATE TABLE IF NOT EXISTS outputs(
+  pair TEXT NOT NULL, source_key TEXT NOT NULL REFERENCES sources(key),
+  variant INTEGER NOT NULL CHECK(variant>=0), state TEXT NOT NULL DEFAULT 'ready',
+  attempts INTEGER NOT NULL DEFAULT 0, owner TEXT, token TEXT, error TEXT,
+  row_uuid TEXT UNIQUE, shard TEXT, PRIMARY KEY(source_key,variant))""",
+    """CREATE INDEX IF NOT EXISTS outputs_ready ON outputs(state,attempts,source_key,variant)""",
+    """CREATE INDEX IF NOT EXISTS outputs_pair ON outputs(pair,state)""",
+    """CREATE TABLE IF NOT EXISTS attempts(
+  token TEXT PRIMARY KEY, source_key TEXT, slot INTEGER, attempt INTEGER,
+  started REAL, finished REAL, diagnostic TEXT)""",
+    """CREATE TABLE IF NOT EXISTS workers(owner TEXT PRIMARY KEY, heartbeat REAL, details TEXT)""",
+    """CREATE TABLE IF NOT EXISTS source_success_policy(
+  id INTEGER PRIMARY KEY CHECK(id=1), minimum_rate REAL NOT NULL,
+  minimum_attempts INTEGER NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS source_exclusions(
+  source_key TEXT PRIMARY KEY REFERENCES sources(key), decided REAL NOT NULL,
+  settled_attempts INTEGER NOT NULL, accepted_rows INTEGER NOT NULL,
+  minimum_rate REAL NOT NULL, minimum_attempts INTEGER NOT NULL)""",
+    """CREATE TRIGGER IF NOT EXISTS excluded_output_ready_update
+  AFTER UPDATE OF state ON outputs
+  WHEN NEW.state='ready' AND EXISTS(
+    SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+  BEGIN
+    UPDATE outputs SET state='skipped' WHERE source_key=NEW.source_key AND variant=NEW.variant;
+  END""",
+    """CREATE TRIGGER IF NOT EXISTS excluded_output_ready_insert
+  AFTER INSERT ON outputs
+  WHEN NEW.state='ready' AND EXISTS(
+    SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+  BEGIN
+    UPDATE outputs SET state='skipped' WHERE source_key=NEW.source_key AND variant=NEW.variant;
+  END""",
+    # Eligibility no longer exempts sources that already reached five accepted
+    # rows: durable successes beyond five count toward the success-rate numerator.
+    """CREATE TRIGGER IF NOT EXISTS source_success_after_settlement
+  AFTER UPDATE OF finished ON attempts
+  WHEN NEW.finished IS NOT NULL AND OLD.finished IS NULL
+    AND EXISTS(SELECT 1 FROM source_success_policy WHERE id=1)
+    AND NOT EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
+  BEGIN
+    INSERT OR IGNORE INTO source_exclusions
+    SELECT NEW.source_key,NEW.finished,a.n,q.n,p.minimum_rate,p.minimum_attempts
+    FROM source_success_policy p,
+      (SELECT COUNT(*) n FROM attempts
+       WHERE source_key=NEW.source_key AND finished IS NOT NULL) a,
+      (SELECT COUNT(*) n FROM outputs
+       WHERE source_key=NEW.source_key AND state='accepted') q
+    WHERE p.id=1 AND a.n>=p.minimum_attempts AND q.n<a.n*p.minimum_rate;
+    UPDATE outputs SET state='skipped'
+      WHERE source_key=NEW.source_key AND state='ready'
+        AND EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key);
+  END""",
+)
+
+
+def apply_pair_budget_schema(db: sqlite3.Connection) -> None:
+    for statement in PAIR_BUDGET_SCHEMA_STATEMENTS:
+        db.execute(statement)
+
+
+class QuotaLedger:
+    """Single-host fixed pair-budget coordination; never on NAS/CIFS.
+
+    Each object:action pair owes exactly five accepted rows per originally
+    admitted training source, independent of source eligibility. Obligations
+    are claimable ``outputs`` rows; excluded or exhausted donor work is
+    reassigned by creating further variants (index >= 5) on eligible donors of
+    the SAME pair, so ``accepted + ready + leased`` never exceeds the pair
+    target and no pair can be overpublished. Legacy per-source-slot ledgers
+    must be migrated explicitly first; opening one here fails loudly.
     """
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, timeout=60)
         self.db.row_factory = sqlite3.Row
+        state = ledger_schema_state(self.db)
+        if state == 'legacy':
+            self.db.close()
+            raise LegacyLedgerError(
+                f'{path} still uses the legacy per-source-slot schema; run the explicit '
+                'migration first: python -m tools.run_manorl_synthesis_campaign migrate '
+                '--campaign <campaign-dir>')
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
-        self.db.executescript("""
-        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS sources(key TEXT PRIMARY KEY, group_key TEXT NOT NULL, spec TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS slots(
-          source_key TEXT NOT NULL REFERENCES sources(key), slot INTEGER NOT NULL CHECK(slot>=0 AND slot<5),
-          state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0,
-          owner TEXT, token TEXT, error TEXT, row_uuid TEXT UNIQUE, shard TEXT,
-          PRIMARY KEY(source_key,slot));
-        CREATE INDEX IF NOT EXISTS slots_ready ON slots(state,attempts,source_key,slot);
-        CREATE TABLE IF NOT EXISTS attempts(
-          token TEXT PRIMARY KEY, source_key TEXT, slot INTEGER, attempt INTEGER,
-          started REAL, finished REAL, diagnostic TEXT);
-        CREATE TABLE IF NOT EXISTS workers(owner TEXT PRIMARY KEY, heartbeat REAL, details TEXT);
-        CREATE TABLE IF NOT EXISTS source_success_policy(
-          id INTEGER PRIMARY KEY CHECK(id=1), minimum_rate REAL NOT NULL,
-          minimum_attempts INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS source_exclusions(
-          source_key TEXT PRIMARY KEY REFERENCES sources(key), decided REAL NOT NULL,
-          settled_attempts INTEGER NOT NULL, accepted_rows INTEGER NOT NULL,
-          minimum_rate REAL NOT NULL, minimum_attempts INTEGER NOT NULL);
-        -- Enforce exclusions even while an older worker finishes its current
-        -- wave. Leased claims stay valid; accepted rows are never changed.
-        CREATE TRIGGER IF NOT EXISTS excluded_source_ready_update
-        AFTER UPDATE OF state ON slots
-        WHEN NEW.state='ready' AND EXISTS(
-          SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
-        BEGIN
-          UPDATE slots SET state='skipped' WHERE source_key=NEW.source_key AND slot=NEW.slot;
-        END;
-        CREATE TRIGGER IF NOT EXISTS excluded_source_ready_insert
-        AFTER INSERT ON slots
-        WHEN NEW.state='ready' AND EXISTS(
-          SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
-        BEGIN
-          UPDATE slots SET state='skipped' WHERE source_key=NEW.source_key AND slot=NEW.slot;
-        END;
-        CREATE TRIGGER IF NOT EXISTS source_success_after_settlement
-        AFTER UPDATE OF finished ON attempts
-        WHEN NEW.finished IS NOT NULL AND OLD.finished IS NULL
-          AND EXISTS(SELECT 1 FROM source_success_policy WHERE id=1)
-          AND NOT EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key)
-        BEGIN
-          INSERT OR IGNORE INTO source_exclusions
-          SELECT NEW.source_key,NEW.finished,a.n,q.n,p.minimum_rate,p.minimum_attempts
-          FROM source_success_policy p,
-            (SELECT COUNT(*) n FROM attempts
-             WHERE source_key=NEW.source_key AND finished IS NOT NULL) a,
-            (SELECT COUNT(*) n FROM slots
-             WHERE source_key=NEW.source_key AND state='accepted') q
-          WHERE p.id=1 AND q.n<5 AND a.n>=p.minimum_attempts
-            AND q.n<a.n*p.minimum_rate;
-          UPDATE slots SET state='skipped'
-          WHERE source_key=NEW.source_key AND state='ready'
-            AND EXISTS(SELECT 1 FROM source_exclusions WHERE source_key=NEW.source_key);
-        END;
-        """)
+        apply_pair_budget_schema(self.db)
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO settings VALUES('ledger_schema',?)", (PAIR_BUDGET_CONTRACT,))
+        row = self.db.execute("SELECT value FROM settings WHERE key='ledger_schema'").fetchone()
+        if row is None or row[0] != PAIR_BUDGET_CONTRACT:
+            raise RuntimeError('unknown pair-budget ledger schema contract')
 
     def success_policy(self) -> dict | None:
         row=self.db.execute('SELECT minimum_rate,minimum_attempts FROM source_success_policy WHERE id=1').fetchone()
@@ -274,14 +335,17 @@ class QuotaLedger:
         return {'contract':SUCCESS_FILTER_CONTRACT,'minimum_rate':row['minimum_rate'],
                 'minimum_attempts':row['minimum_attempts'],
                 'denominator':'finished_generation_attempts',
-                'numerator':'durably_accepted_source_slots'}
+                'numerator':'durably_accepted_source_rows',
+                'accepted_ceiling_exemption':False}
 
     def configure_success_filter(self, *, minimum_rate: float = .25, minimum_attempts: int = 20) -> int:
-        """Activate a persistent per-source filter without invalidating leases.
+        """Activate a persistent per-source donor filter; targets never shrink.
 
         Finished attempts include sampler/geometry rejections and solved GPU
         candidates. Abandoned/in-flight attempts have no finished timestamp and
-        do not count. Existing complete sources and all accepted rows are kept.
+        do not count. Sources strictly below the rate at the attempt floor stop
+        being donors; their accepted rows and pair credit are preserved and the
+        obligations they still owed are reassigned to same-pair donors.
         """
         if (isinstance(minimum_rate,bool) or not isinstance(minimum_rate,(int,float)) or not math.isfinite(minimum_rate)
                 or not 0<=minimum_rate<=1):
@@ -294,24 +358,24 @@ class QuotaLedger:
             if previous is not None and (previous['minimum_rate']!=minimum_rate
                     or previous['minimum_attempts']!=minimum_attempts):
                 raise ValueError('source success policy changed; an explicit exclusion-policy migration is required')
-            # Covering partial index avoids parsing/scanning large diagnostics
-            # for each settlement. The legacy finished UPDATE maintains it too.
             self.db.execute('CREATE INDEX IF NOT EXISTS attempts_settled_source '
                             'ON attempts(source_key) WHERE finished IS NOT NULL')
             self.db.execute('INSERT OR IGNORE INTO source_success_policy VALUES(1,?,?)',
                             (minimum_rate,minimum_attempts))
             before=self.db.total_changes
+            # No accepted>=5 exemption: five-row sources remain evaluable and
+            # their later successes still count toward the numerator.
             self.db.execute('''INSERT OR IGNORE INTO source_exclusions
                 WITH finished AS (
                   SELECT source_key,COUNT(*) n FROM attempts WHERE finished IS NOT NULL GROUP BY source_key),
                 accepted AS (
-                  SELECT source_key,COUNT(*) n FROM slots WHERE state='accepted' GROUP BY source_key)
+                  SELECT source_key,COUNT(*) n FROM outputs WHERE state='accepted' GROUP BY source_key)
                 SELECT f.source_key,?,f.n,COALESCE(a.n,0),?,?
                 FROM finished f LEFT JOIN accepted a USING(source_key)
-                WHERE f.n>=? AND COALESCE(a.n,0)<5 AND COALESCE(a.n,0)<f.n*?''',
+                WHERE f.n>=? AND COALESCE(a.n,0)<f.n*?''',
                 (time.time(),minimum_rate,minimum_attempts,minimum_attempts,minimum_rate))
             added=self.db.total_changes-before
-            self.db.execute("UPDATE slots SET state='skipped' WHERE state='ready' "
+            self.db.execute("UPDATE outputs SET state='skipped' WHERE state='ready' "
                             'AND source_key IN (SELECT source_key FROM source_exclusions)')
             self.db.commit()
             return added
@@ -330,38 +394,106 @@ class QuotaLedger:
 
     def initialize(self, config: dict, sources: list[dict]) -> None:
         digest = canonical_hash(config)
+        pairs: dict[str,int] = {}
         with self.db:
             previous = self.db.execute("SELECT value FROM settings WHERE key='config'").fetchone()
             if previous and previous[0] != digest:
                 raise ValueError("campaign configuration changed; use a new campaign directory")
             self.db.execute("INSERT OR IGNORE INTO settings VALUES('config',?)", (digest,))
             for source in sources:
-                key, group = source["key"], source["group_key"]
+                key, group, pair = source["key"], source["group_key"], source.get("pair")
+                if not isinstance(pair, str) or ":" not in pair:
+                    raise ValueError("pair-budget sources require an explicit object:action pair")
                 encoded = json.dumps(source, sort_keys=True)
                 old = self.db.execute("SELECT spec FROM sources WHERE key=?", (key,)).fetchone()
                 if old and old[0] != encoded:
                     raise ValueError("source/checkpoint provenance changed within campaign")
-                self.db.execute("INSERT OR IGNORE INTO sources VALUES(?,?,?)", (key, group, encoded))
-                self.db.executemany("INSERT OR IGNORE INTO slots(source_key,slot) VALUES(?,?)", [(key, i) for i in range(5)])
+                # Explicit column names: a migrated legacy table appends `pair`
+                # after `spec`, unlike the fresh schema's column order.
+                self.db.execute("INSERT OR IGNORE INTO sources(key,group_key,pair,spec) VALUES(?,?,?,?)",
+                                (key, group, pair, encoded))
+                self.db.executemany("INSERT OR IGNORE INTO outputs(pair,source_key,variant) VALUES(?,?,?)",
+                                    [(pair, key, i) for i in range(5)])
+                pairs[pair] = pairs.get(pair, 0) + 1
+            # Targets are fixed at 5x the pair's originally admitted source count,
+            # computed from the table (old + newly appended sources), never from
+            # the admission batch: append-only when sources arrive, immutable
+            # otherwise, and never modified by eligibility decisions.
+            for pair in sorted(pairs):
+                total = int(self.db.execute("SELECT COUNT(*) FROM sources WHERE pair=?", (pair,)).fetchone()[0])
+                row = self.db.execute("SELECT original_sources,target_rows FROM pair_targets WHERE pair=?", (pair,)).fetchone()
+                if row is None:
+                    self.db.execute("INSERT INTO pair_targets VALUES(?,?,?)", (pair, total, 5*total))
+                elif total > row["original_sources"]:
+                    self.db.execute("UPDATE pair_targets SET original_sources=?,target_rows=? WHERE pair=?",
+                                    (total, 5*total, pair))
+                elif 5*total != row["target_rows"]:
+                    raise ValueError("pair output target is immutable for already admitted sources")
+
+    def _ready_rows(self, group_key: str, count: int) -> list:
+        return self.db.execute("""SELECT s.spec,q.source_key,q.pair,q.variant,q.attempts
+            FROM outputs q JOIN sources s ON s.key=q.source_key
+            WHERE s.group_key=? AND q.state='ready'
+            ORDER BY q.attempts,q.variant,q.source_key LIMIT ?""", (group_key, count)).fetchall()
+
+    def _grow_group_obligations(self, group_key: str, needed: int) -> int:
+        """Reassign retired obligations to eligible same-pair donors.
+
+        Only the deficit below the pair target is created, so a pair can never
+        hold more claimable obligations than its fixed budget; cross-pair
+        borrowing is impossible because donors come from the same pair.
+        """
+        created = 0
+        for row in self.db.execute("SELECT DISTINCT pair FROM sources WHERE group_key=?", (group_key,)).fetchall():
+            if needed <= 0:
+                break
+            pair = row["pair"]
+            target = self.db.execute("SELECT target_rows FROM pair_targets WHERE pair=?", (pair,)).fetchone()
+            if target is None:
+                continue
+            outstanding = self.db.execute(
+                "SELECT COUNT(*) FROM outputs WHERE pair=? AND state IN ('accepted','ready','leased')",
+                (pair,)).fetchone()[0]
+            deficit = int(target["target_rows"]) - int(outstanding)
+            if deficit <= 0:
+                continue
+            donors = self.db.execute("""SELECT s.key FROM sources s
+                WHERE s.pair=? AND NOT EXISTS(
+                    SELECT 1 FROM source_exclusions e WHERE e.source_key=s.key)
+                ORDER BY (SELECT COUNT(*) FROM outputs o WHERE o.source_key=s.key), s.key""",
+                (pair,)).fetchall()
+            if not donors:
+                continue  # blocked pair: deficit without eligible donors
+            for i in range(min(deficit, needed)):
+                donor = donors[i % len(donors)]["key"]
+                variant = self.db.execute(
+                    "SELECT COALESCE(MAX(variant)+1,0) FROM outputs WHERE source_key=?", (donor,)).fetchone()[0]
+                self.db.execute("INSERT INTO outputs(pair,source_key,variant) VALUES(?,?,?)", (pair, donor, variant))
+                created += 1
+                needed -= 1
+        return created
 
     def claim(self, owner: str, group_key: str, count: int) -> list[dict]:
         if count < 1:
             raise ValueError("batch size must be positive")
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            rows = self.db.execute("""SELECT s.spec,q.source_key,q.slot,q.attempts
-                FROM slots q JOIN sources s ON s.key=q.source_key
-                WHERE s.group_key=? AND q.state='ready'
-                ORDER BY q.attempts,q.slot,q.source_key LIMIT ?""", (group_key, count)).fetchall()
+            rows = self._ready_rows(group_key, count)
+            if len(rows) < count:
+                self._grow_group_obligations(group_key, count - len(rows))
+                rows = self._ready_rows(group_key, count)
             claims = []
             for row in rows:
                 token = uuid.uuid4().hex
                 attempt = row["attempts"] + 1
-                self.db.execute("UPDATE slots SET state='leased',owner=?,token=?,attempts=? WHERE source_key=? AND slot=?",
-                                (owner, token, attempt, row["source_key"], row["slot"]))
+                self.db.execute(
+                    "UPDATE outputs SET state='leased',owner=?,token=?,attempts=? WHERE source_key=? AND variant=?",
+                    (owner, token, attempt, row["source_key"], row["variant"]))
                 self.db.execute("INSERT INTO attempts(token,source_key,slot,attempt,started) VALUES(?,?,?,?,?)",
-                                (token, row["source_key"], row["slot"], attempt, time.time()))
-                claims.append({"source": json.loads(row["spec"]), "slot": row["slot"], "attempt": attempt, "token": token, "owner": owner})
+                                (token, row["source_key"], row["variant"], attempt, time.time()))
+                # 'slot' remains the published lineage name for the variant index.
+                claims.append({"source": json.loads(row["spec"]), "slot": row["variant"],
+                               "pair": row["pair"], "attempt": attempt, "token": token, "owner": owner})
             self.db.commit()
             return claims
         except BaseException:
@@ -370,23 +502,26 @@ class QuotaLedger:
     def finish(self, claim: dict, diagnostic: dict, *, row_uuid: str | None = None, shard: str | None = None) -> None:
         if bool(row_uuid) != bool(shard):
             raise ValueError("accepted rows require both UUID and durable shard")
+        variant = int(claim["slot"])
         with self.db:
-            row = self.db.execute("SELECT state,token,row_uuid,shard FROM slots WHERE source_key=? AND slot=?",
-                                  (claim["source"]["key"], claim["slot"])).fetchone()
+            row = self.db.execute("SELECT state,token,row_uuid,shard FROM outputs WHERE source_key=? AND variant=?",
+                                  (claim["source"]["key"], variant)).fetchone()
             if row is not None and row["state"] == "accepted" and row["row_uuid"] == row_uuid and row["shard"] == shard:
                 return
             if row is None or row["state"] != "leased" or row["token"] != claim["token"]:
                 raise RuntimeError("stale/foreign claim cannot finish a slot")
-            self.db.execute("UPDATE slots SET state=?,owner=NULL,token=NULL,error=?,row_uuid=?,shard=? WHERE source_key=? AND slot=?",
-                            ("accepted" if row_uuid else "ready", json.dumps(diagnostic, sort_keys=True), row_uuid, shard,
-                             claim["source"]["key"], claim["slot"]))
+            self.db.execute(
+                "UPDATE outputs SET state=?,owner=NULL,token=NULL,error=?,row_uuid=?,shard=? WHERE source_key=? AND variant=?",
+                ("accepted" if row_uuid else "ready", json.dumps(diagnostic, sort_keys=True), row_uuid, shard,
+                 claim["source"]["key"], variant))
             self.db.execute("UPDATE attempts SET finished=?,diagnostic=? WHERE token=?",
                             (time.time(), json.dumps(diagnostic, sort_keys=True), claim["token"]))
 
     def release_owner(self, owner: str) -> int:
         # Caller is responsible for proving that owner PID+start-time is dead.
         with self.db:
-            result = self.db.execute("UPDATE slots SET state='ready',owner=NULL,token=NULL WHERE state='leased' AND owner=?", (owner,))
+            result = self.db.execute(
+                "UPDATE outputs SET state='ready',owner=NULL,token=NULL WHERE state='leased' AND owner=?", (owner,))
             return result.rowcount
 
     def heartbeat(self, owner: str, details: dict) -> None:
@@ -403,33 +538,101 @@ class QuotaLedger:
             if own_snapshot:self.db.rollback()
 
     def _summary_snapshot(self) -> dict:
-        counts = dict(self.db.execute("SELECT state,COUNT(*) FROM slots GROUP BY state").fetchall())
+        counts = dict(self.db.execute("SELECT state,COUNT(*) FROM outputs GROUP BY state").fetchall())
         sources = int(self.db.execute("SELECT COUNT(*) FROM sources").fetchone()[0])
-        complete = int(self.db.execute("SELECT COUNT(*) FROM (SELECT source_key FROM slots WHERE state='accepted' GROUP BY source_key HAVING COUNT(*)=5)").fetchone()[0])
         accepted = counts.get("accepted", 0)
-        excluded=int(self.db.execute('SELECT COUNT(*) FROM source_exclusions').fetchone()[0])
-        retained=sources-excluded
-        retained_complete=int(self.db.execute('''SELECT COUNT(*) FROM (
-            SELECT q.source_key FROM slots q LEFT JOIN source_exclusions e ON e.source_key=q.source_key
-            WHERE e.source_key IS NULL AND q.state='accepted' GROUP BY q.source_key HAVING COUNT(*)=5)''').fetchone()[0])
-        excluded_accepted=int(self.db.execute('''SELECT COUNT(*) FROM slots q
-            JOIN source_exclusions e ON e.source_key=q.source_key WHERE q.state='accepted' ''').fetchone()[0])
-        skipped=counts.get('skipped',0);original_target=5*sources;target=original_target-skipped
-        return {"sources": sources, "sources_complete": complete, "accepted": accepted,
-                "original_target":original_target,"target":target,"remaining":target-accepted,"states":counts,
-                "sources_excluded":excluded,"sources_retained":retained,"skipped_slots":skipped,
-                "retained_sources_complete":retained_complete,"retained_target":5*retained,
-                "retained_accepted":accepted-excluded_accepted,"excluded_accepted":excluded_accepted,
-                "source_success_policy":self.success_policy(),
+        target = int(self.db.execute("SELECT COALESCE(SUM(target_rows),0) FROM pair_targets").fetchone()[0])
+        excluded = int(self.db.execute('SELECT COUNT(*) FROM source_exclusions').fetchone()[0])
+        excluded_accepted = int(self.db.execute('''SELECT COUNT(*) FROM outputs o
+            JOIN source_exclusions e ON e.source_key=o.source_key WHERE o.state='accepted' ''').fetchone()[0])
+        pairs = []
+        for row in self.db.execute("""
+            SELECT t.pair,t.target_rows,
+              (SELECT COUNT(*) FROM outputs o WHERE o.pair=t.pair AND o.state='accepted') accepted,
+              (SELECT COUNT(*) FROM outputs o WHERE o.pair=t.pair
+                 AND o.state IN ('accepted','ready','leased')) outstanding,
+              (SELECT COUNT(*) FROM sources s WHERE s.pair=t.pair AND NOT EXISTS(
+                 SELECT 1 FROM source_exclusions e WHERE e.source_key=s.key)) donors
+            FROM pair_targets t ORDER BY t.pair"""):
+            remaining = max(0, int(row["target_rows"]) - int(row["accepted"]))
+            pairs.append({"pair": row["pair"], "target": int(row["target_rows"]), "accepted": int(row["accepted"]),
+                          "remaining": remaining, "donors": int(row["donors"]), "met": remaining == 0,
+                          "blocked": remaining > 0 and int(row["donors"]) == 0,
+                          "runnable": remaining > 0 and int(row["donors"]) > 0})
+        blocked = [p["pair"] for p in pairs if p["blocked"]]
+        met = sum(p["met"] for p in pairs)
+        remaining = max(0, target - accepted)
+        return {"contract": PAIR_BUDGET_CONTRACT, "sources": sources, "pairs": len(pairs),
+                "accepted": accepted, "target": target, "original_target": target,
+                "remaining": remaining, "pair_debt": remaining, "states": counts,
+                "skipped_slots": counts.get('skipped', 0),
+                "sources_excluded": excluded, "sources_retained": sources - excluded,
+                "retained_accepted": accepted - excluded_accepted, "excluded_accepted": excluded_accepted,
+                "pairs_met": met, "pairs_runnable": len(pairs) - met - len(blocked),
+                "pairs_blocked": len(blocked), "blocked_pairs": blocked,
+                "source_success_policy": self.success_policy(),
                 "attempts": int(self.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]),
-                "complete": sources>0 and retained_complete==retained and accepted+skipped==original_target
-                            and counts.get('leased',0)==0 and counts.get('ready',0)==0}
+                "complete": bool(pairs) and met == len(pairs)
+                            and counts.get('leased', 0) == 0 and counts.get('ready', 0) == 0}
+
+    def pair_status(self) -> list[dict]:
+        """Per-pair fixed target, accepted, remaining and blocked/runnable state."""
+        own_snapshot = not self.db.in_transaction
+        if own_snapshot:
+            self.db.execute('BEGIN')
+        try:
+            rows = []
+            for row in self.db.execute("""
+                SELECT t.pair,t.target_rows,
+                  (SELECT COUNT(*) FROM outputs o WHERE o.pair=t.pair AND o.state='accepted') accepted,
+                  (SELECT COUNT(*) FROM sources s WHERE s.pair=t.pair AND NOT EXISTS(
+                     SELECT 1 FROM source_exclusions e WHERE e.source_key=s.key)) donors
+                FROM pair_targets t ORDER BY t.pair"""):
+                remaining = max(0, int(row["target_rows"]) - int(row["accepted"]))
+                rows.append({"pair": row["pair"], "target": int(row["target_rows"]),
+                             "accepted": int(row["accepted"]), "remaining": remaining,
+                             "eligible_donors": int(row["donors"]),
+                             "met": remaining == 0,
+                             "blocked": remaining > 0 and int(row["donors"]) == 0})
+            return rows
+        finally:
+            if own_snapshot:
+                self.db.rollback()
+
+    def _creatable_by_group(self) -> dict:
+        creatable = {}
+        for row in self.db.execute("""
+            SELECT DISTINCT s.group_key g,t.pair,t.target_rows,
+              (SELECT COUNT(*) FROM outputs o WHERE o.pair=t.pair
+                 AND o.state IN ('accepted','ready','leased')) outstanding,
+              (SELECT COUNT(*) FROM sources d WHERE d.pair=t.pair AND NOT EXISTS(
+                 SELECT 1 FROM source_exclusions e WHERE e.source_key=d.key)) donors
+            FROM pair_targets t JOIN sources s ON s.pair=t.pair"""):
+            deficit = max(0, int(row["target_rows"]) - int(row["outstanding"]))
+            if deficit > 0 and int(row["donors"]) > 0:
+                creatable[row["g"]] = creatable.get(row["g"], 0) + deficit
+        return creatable
 
     def groups(self) -> list[dict]:
-        return [dict(row) for row in self.db.execute("""SELECT s.group_key,COUNT(*) remaining,
-            SUM(q.state='ready') ready,MIN(q.attempts) min_attempts
-            FROM slots q JOIN sources s ON s.key=q.source_key WHERE q.state IN ('ready','leased')
-            GROUP BY s.group_key ORDER BY min_attempts,group_key""")]
+        rows = {}
+        for row in self.db.execute("""SELECT s.group_key g,
+            SUM(o.state='ready') ready,SUM(o.state='leased') leased,
+            MIN(CASE WHEN o.state='ready' THEN o.attempts END) min_attempts
+            FROM outputs o JOIN sources s ON s.key=o.source_key
+            WHERE o.state IN ('ready','leased') GROUP BY s.group_key"""):
+            rows[row["g"]] = {"ready": int(row["ready"] or 0), "leased": int(row["leased"] or 0),
+                              "min_attempts": row["min_attempts"]}
+        creatable = self._creatable_by_group()
+        groups = []
+        for group, info in rows.items():
+            extra = creatable.get(group, 0)
+            groups.append({"group_key": group, "remaining": info["ready"] + info["leased"] + extra,
+                           "ready": info["ready"] + extra, "leased": info["leased"],
+                           "min_attempts": 0 if info["min_attempts"] is None else int(info["min_attempts"])})
+        for group, extra in creatable.items():
+            if group not in rows and extra > 0:
+                groups.append({"group_key": group, "remaining": extra, "ready": extra, "leased": 0, "min_attempts": 0})
+        return sorted(groups, key=lambda g: (g["min_attempts"], g["group_key"]))
 
     def close(self) -> None:
         self.db.close()
