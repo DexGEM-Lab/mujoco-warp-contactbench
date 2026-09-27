@@ -62,22 +62,34 @@ includes host/device synchronization; that is not a measurement of pure GPU time
 CPU retreat/publication was roughly1s per415–719s round, not the dominant bottleneck.
 
 ## Deployment boundary and remaining verification
-The512 management handoff was graceful and preserved existing workers; actual
-512 execution was observed. Initial-batch refill0e6b5e8 and source filtering are
-included in immutable snapshot b1cfa66 on both hosts;78 focused synthesis tests
-pass. Activation jobs are now waiting for a graceful writer drain, so real
-exclusion counts and resumed new-policy production still require verification.
-The first operations helpers failed before any signals because Conda Python
-lacks pidfd_open; corrected jobs use system Python for process control and the
-original Conda interpreter for ledger activation. Both corrected jobs reached
-the intended drain phase. See the local record for current identities.
-Large histories lack a settled-source index:
-a read-only Server1 aggregation hit a35s deadline; EXPLAIN showed a full attempts
-scan and temporary grouping tree on local ext4. Initial index creation/filter
-activation therefore follows a writer drain rather than a long live write lock.
+Both hosts now run the b1cfa66 source-filter policy after a successful graceful
+writer drain and index build;78 focused tests pass. Accepted identity sets and
+physical configuration hashes were identical before/after activation:21962 rows
+on S1 and1483 on S2. The first operations helper's missing Conda pidfd support
+was corrected by separating system-Python control from Conda ledger activation;
+failed pre-mutation evidence is preserved.
 
-Only two GPUs were recently available to this campaign (S1 GPU2, S2 GPU0); the
-others were occupied by external jobs. Do not kill them. Eligible pool size is
+S2 has completed its retained quota:251 sources at1255 rows,432 excluded sources,
+228 preserved partial rows,1483 total accepted,1932 skipped, no remaining leases
+or ready work. Its new watch exits normally. The old supervisor status can retain
+the pre-filter target; newer policy-bearing admission/watch records are the quota
+authority when completion required no new supervisor.
+
+S1 continues under the new policy. Its initial8944 exclusions grew to9029 through
+actual settlement. The observed current fleet retains5500 sources,2968 complete,
+with23487 total saved rows and9955 unresolved slots. These are changing counters,
+not a final target. Newly excluded partial sources transfer saved rows between
+retained_accepted and excluded_accepted without decreasing total accepted.
+
+The initial refill fix also has live evidence: S1 started with191 useful
+candidates, found0 ready for the next batch, settled42 newly saved rows, then
+claimed79 eligible candidates after19.6s. It correctly respects the smaller
+filtered quota instead of inventing256 independent candidates. Mid-wave refill
+remains unimplemented. S2's completed/excluded sources must not be rerun merely to
+benchmark512; prior actual512 execution did not establish a valid-row speedup.
+
+S1 currently uses GPU2; S2 GPU0 is now free because its retained quota is complete.
+Other GPUs remain occupied by external jobs. Do not kill them. Eligible pool size is
 not actual occupancy. Managers and scheduling are independent of LLM availability.
 The v2 monitoring contract now uses retained-source completion and explicitly
 recognizes the planned drain/index/migration phases; the old all-source schedule

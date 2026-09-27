@@ -140,6 +140,9 @@ slots, retaining accepted rows and unresolved in-flight work in its denominator.
 `retained_sources_complete`/`sources_retained` describe the five-row obligation
 for retained sources. `sources_excluded`, `skipped_slots`, and
 `excluded_accepted` report exclusions and preserved partial data separately.
+As additional sources reach the evidence floor, the effective target can shrink.
+`retained_accepted` can decrease when a partial source is newly excluded while
+its rows move to `excluded_accepted`; total `accepted` does not lose those rows.
 Completion also requires no ready/leased slots, active workers, or publication
 blockers; quota completion alone must not hide a failed publication.
 
