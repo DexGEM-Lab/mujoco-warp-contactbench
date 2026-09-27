@@ -100,6 +100,35 @@ are released. Completion requires every source's five unique slots, not merely
 an aggregate row count. Persistent failures leave visible deficits; they cannot
 be turned into successful completion.
 
+## Growing the fleet without duplicating quotas
+
+Use `tools/admit_manorl_synthesis_models.py` on each host. It scans final training
+reports and matching native checkpoint sidecars, requires completed5000 updates
+and the raw120/pre80/early80 profile, snapshots the checkpoint by content hash,
+then prepares and appends only new object sources to the live local ledger.
+Existing accepted slots, outstanding leases and source snapshots are unchanged.
+
+SQLite remains on each host's local filesystem. An immutable NAS registry assigns
+each object/checkpoint to exactly one host campaign; another host skips that
+object rather than generating another five rows for the same sources. Existing
+Server1 objects must be registered before starting Server2 discovery. Give each
+host a separate publication root (for example the original root for Server1 and
+`hosts/server2` beneath it for Server2), because recovery scans are ledger-local.
+
+A per-host GPU policy separates always-available cards from training-completion
+gates, e.g. `{"always":[2,3],"after_objects":{"0":["largeclamp"],"1":["cylinder5"]}}`.
+Admission writes `gpu-pool.json` only after the named model's source admission;
+the supervisor additionally checks live NVIDIA process ownership before launch.
+Thus releasing a card without a valid final model does not silently abandon its
+training. `--ensure-watch` also starts supervision when newly admitted work arrives
+after a previously completed local cohort. It respects the campaign's `PAUSE`.
+
+Deploy new controller code in a new immutable source directory. During a
+management-only handoff, surviving GPU workers and CPU publishers retain their
+owner locks and are adopted, not killed. New workers record their executing
+revision through `MANORL_SOFTWARE_COMMIT` or `DEPLOYED_COMMIT`; campaign configuration
+retains the original generation parameters and does not relabel older shards.
+
 ## Throughput measurement
 
 Use `tools/benchmark_manorl_synthesis_campaign.py` in separate fresh processes

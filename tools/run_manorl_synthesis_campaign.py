@@ -144,6 +144,8 @@ def log_has_overflow(path):
 def run_worker(args):
     from sim.manorl.synthesis_runtime import BatchSynthesisRuntime
     from sim.manorl.synthesis_publication import runtime_context
+    from sim.manorl.synthesis_admission import execution_revision
+    revision=execution_revision()
     root=args.campaign.resolve();config=read_json(root/'config.json');prefix=PrefixConfig(**config['prefix'])
     if min(args.batch_size,args.waves)<1:raise ValueError('batch size and waves must be positive')
     require_log_capture(args.log)
@@ -224,7 +226,7 @@ def run_worker(args):
             heartbeat(phase='publication_backpressure');reap_pending()
             bundle_id=uuid.uuid4().hex;path=spool/(bundle_id+'.pkl')
             bundle={'bundle_id':bundle_id,'output':config['output'],
-                    'context':runtime_context(runtime,config['software_commit']),'results':results}
+                    'context':runtime_context(runtime,revision),'results':results}
             with path.open('wb') as f:pickle.dump(bundle,f,protocol=pickle.HIGHEST_PROTOCOL)
             log_handle=path.with_suffix('.log').open('wb')
             cpu_env={**os.environ,'CUDA_VISIBLE_DEVICES':'','JAX_PLATFORMS':'cpu'}
@@ -266,6 +268,7 @@ class AdoptedWorker:
 
 def supervise(args):
     from sim.manorl.synthesis_publication import reconcile_shards
+    from sim.manorl.synthesis_admission import admitted_gpu_pool
     root=args.campaign.resolve();config=read_json(root/'config.json')
     # Only one supervisor may own this campaign; flock survives unrelated SSH loss.
     lock=(root/'supervisor.lock').open('a+')
@@ -331,7 +334,7 @@ def supervise(args):
         assigned={r['group'] for r in workers.values()}
         groups=sorted(ledger.groups(),key=lambda g:(last_scheduled.get(g['group_key'],0),
             priority.get(g['group_key'].rsplit('-',1)[0],len(priority)),g['min_attempts'],g['group_key']))
-        for gpu in gpus:
+        for gpu in admitted_gpu_pool(root,gpus):
             if gpu in workers:continue
             eligible=[g for g in groups if g['group_key'] not in assigned and g['group_key'] not in blocked]
             if not eligible:continue
