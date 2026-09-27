@@ -74,7 +74,10 @@ PAUSE remains explicit operator intent. Full source-level completion is open.
   uninitialized DexStream worktree and absent legacy Lance fixtures; isolated
   entrypoint import failure is historical.47 focused tests pass; real-asset GPU
   validation is decisive for this pipeline, not a claim the full suite passed.
-- Pi recurring subagents are NOT enabled in this live session: management still
-  returns scheduledRuns.enabled=false. The extension reads config once at load;
-  the actual on-disk extension config is already true. User /reload is needed
-  before creating a recurring agent schedule. Server-side recovery is separate.
+- Pi scheduling is now enabled. Project schedule
+  `raw120-training-synthesis-monitor` was created and read back as scheduled:
+  every15 minutes, fresh bounded operator, overlap skipped, parent notified.
+  Immediate monitoring confirmed largeclamp admission and five synthesis GPUs;
+  cylinder5 still trained in the observed snapshot. Remote checks use explicit
+  Python interpreters after correcting an unavailable `python` command. Server
+  admission/recovery remains independent of Pi and scans once per minute.
