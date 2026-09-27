@@ -2,11 +2,10 @@
 
 ## Objective and completion
 Every admitted raw source owns five accepted published slots. The active fleet
-has14,223 sources /71,115 slots /18 objects /121 pairs: original Server1 cohort
-plus newly completed cuboid3 and sphere2 on Server2. Attempts, benchmark rows,
-or easier sources' surplus never fill another source's quota. Four GPUs now
-synthesize; the two remaining training GPUs join only after their completed
-models are validated and admitted.
+has14,961 sources /74,805 slots /20 objects /129 pairs. largeclamp and cylinder5
+have also completed training and been admitted. Attempts, benchmark rows, or
+easier sources' surplus never fill another source's quota. All six GPUs are
+assigned to synthesis; actual per-worker progress remains a monitoring question.
 
 ## Supported mechanisms
 - Preserve the trained early80 AFTER the physical approach prefix. Merely
@@ -46,21 +45,34 @@ unavailable; nacon/nefc checks and captured native warnings guard publication.
 A capacity number is not proof of no truncation.
 
 ## Current operational state
-Controller revisionc34ff3c governs append-only admission and dynamic GPU pools;
-physics/sampling/publication math is unchanged. Server1 management adopted both
-live6495607 workers without changing their PIDs. New workers label their actual
+Controller revision331cdc2 retains append-only admission and dynamic GPU pools;
+physics/sampling/acceptance math is unchanged. It releases readback handles and
+performs bounded logged retries of transient NAS promotion errors. Management
+handoffs preserved existing GPU workers and CPU publishers. New workers label their actual
 executing source revision rather than the original campaign revision.
 Server2 GPU0/1 actively synthesize cuboid3 (533 sources/2665 slots) and sphere2
 (150/750). First confirmed publications were85 and35 rows, with four NAS rows
 read back through the compact validator and matching source revision.
-Each host keeps local SQLite. The NAS registry assigns16 objects to Server1 and2
-to Server2; publication roots are disjoint. Server1 GPU0/1 stay gated by final
-largeclamp/cylinder5 model admission and live GPU ownership. The owned Server2
+Each host keeps local SQLite. The NAS registry assigns18 objects to Server1 and2
+to Server2; publication roots are disjoint. Server1 GPU0/1 passed their final
+model admission gates and are now synthesis GPUs. The owned Server2
 training heartbeat was retired after confirming no active trainer, preventing
 old failed-training queues from competing for the newly assigned synthesis GPUs.
 Owner locks pass to CPU publishers, so a killed GPU parent cannot expose slots
 still being published. Watch restarts departed supervisors, which adopt survivors.
 PAUSE remains explicit operator intent. Full source-level completion is open.
+
+## Recovered publication failure
+A largeclamp CPU publisher failed at NAS directory rename with EACCES, after
+writing and verifying a54-row partial. All payload hashes and unchanged attempts
+were checked; exact claim tokens were restored under owner lock, the partial
+promoted in a fresh process, and54 slots credited once. Final row count and three
+sampled rows validated. Cold rename succeeded without ACL changes, supporting a
+transient promotion refusal; a specific open-handle cause is not proven.
+The group's blocked entry was cleared after recovery. New snapshots were deployed
+by management-only handoffs preserving all GPU workers/publishers. Persistent
+permission failures still retain partials and require intervention; retries never
+overwrite final shards or bypass acceptance. See OPS.md for immutable evidence.
 
 ## Open questions / limits
 - Actual per-object production yield, hard-source deficits and source-level five
