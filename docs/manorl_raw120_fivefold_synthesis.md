@@ -8,6 +8,22 @@ other sources' surplus rows, and benchmark outputs do not fill a quota.
 Already-published rows are retained, including partial results from excluded
 sources. The historical pre60 Far/Near workflow remains available separately.
 
+## Completed campaign snapshot
+
+The2026-09-27 cohort completed under the25%/20-settlement rule with24006 accepted
+rows:3226 retained sources at five each (16130 rows), plus7876 preserved rows
+from excluded sources.11735 sources stopped receiving new work;50799 slots
+were explicitly skipped. Actual published coverage is19 objects/105 object-action
+pairs, not the original20/129 inventory.
+
+Under the campaign output root, `fleet/completion/20260927-success25-v1/manifest.json`
+freezes1195 shard paths/counts and verification evidence. `rows.json` contains
+UUID/source/slot/shard mappings with a `retained_source` flag. Per-host audits and
+source-exclusion snapshots are included. All shard indices and3585 payload-file
+hashes matched the ledgers/publication records;38 compact row samples passed.
+The manifest is a fixed reader snapshot; future admissions do not silently change
+its shard list. Periodic inspection was paused after final verification.
+
 ## Motion and physics
 
 - Cheyingtong right 28-DoF, 120 Hz reference/control and 480 Hz physics.

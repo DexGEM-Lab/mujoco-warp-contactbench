@@ -2,6 +2,13 @@
 
 Canonical guide: `docs/manorl_raw120_fivefold_synthesis.md`.
 
+The2026-09-27 cohort is complete:24006 accepted rows, including3226 retained
+sources at five each plus7876 preserved excluded-source rows. Frozen reader
+artifacts are `fleet/completion/20260927-success25-v1/{manifest,rows}.json`
+under its output root; actual coverage19 objects/105 pairs. Full index/payload
+hash reconciliation and38 row samples passed; periodic monitoring is paused.
+See the canonical guide for counts, policy semantics and snapshot boundaries.
+
 Each retained raw source owns five accepted saved slots, independent of retry count.
 The current opt-in policy skips incomplete sources below25% durable rows per
 settled generation attempt, after at least20 settlements. Existing data and
