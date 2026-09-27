@@ -89,8 +89,15 @@ are replenished before dispatch so they do not consume full GPU episodes.
 Exact solved host buffers can be reused from observation extraction; batched
 contact-coordinate transforms preserve the scalar exporter contract. A separate
 CPU process performs retreat and compact publication while the GPU runs its next
-wave, with one pending publication as backpressure. Temporary IPC traces are
-reclaimed only after verified publication; failed IPC inputs and logs remain.
+wave, with one pending publication as backpressure. If the next claim is short,
+settle the pending publication and claim newly released failed slots before
+padding the wave. For example, 616 remaining slots cannot sustain two simultaneous
+512-slot leases: claiming before settlement otherwise alternates 512 real
+candidates with only 104. Full claims keep asynchronous publication overlap;
+accepted slots are never reclaimed. Compare `actual_candidates`, not just the
+fixed `worlds` count, when measuring useful concurrency. The worker logs this
+conditional wait and refill. Temporary IPC traces are reclaimed only after
+verified publication; failed IPC inputs and logs remain.
 Existing datasets and checkpoints are never overwritten.
 
 NAS shards are created under unique partial names, read back, hashed and promoted

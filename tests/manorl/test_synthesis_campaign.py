@@ -169,3 +169,93 @@ def test_stale_monitor_checks_current_assignments_not_retired_failures():
     assert stale_worker_owners(current)==['active']
     missing=active_worker_heartbeats({'workers':{'0':{'owner':'missing'}}},rows,3000.)
     assert stale_worker_owners(missing)==['missing']
+
+
+@pytest.fixture
+def wave_ledger(tmp_path):
+    ledger=QuotaLedger(tmp_path/'waves.sqlite')
+    ledger.initialize({},[{'key':'a','group_key':'g'},{'key':'b','group_key':'g'}])
+    yield ledger
+    ledger.close()
+
+
+def slot_ids(claims):
+    return {(c['source']['key'],c['slot']) for c in claims}
+
+
+def test_claim_wave_settles_previous_failures_before_padding(wave_ledger):
+    from tools.run_manorl_synthesis_campaign import claim_wave
+    pending=wave_ledger.claim('w','g',8)
+    calls=[]
+    def settle():
+        calls.append(True)
+        for claim in pending:wave_ledger.finish(claim,{'accepted':False})
+    current=claim_wave(wave_ledger,'w','g',8,settle_pending=settle)
+    assert calls==[True]
+    assert len(current)==len(slot_ids(current))==8
+    assert not ({c['token'] for c in current}&{c['token'] for c in pending})
+    assert sorted(c['attempt'] for c in current)==[1,1,2,2,2,2,2,2]
+    assert wave_ledger.summary()['states']=={'leased':8,'ready':2}
+
+
+def test_claim_wave_keeps_publication_overlap_when_full(wave_ledger):
+    from tools.run_manorl_synthesis_campaign import claim_wave
+    pending=wave_ledger.claim('w','g',2)
+    def must_not_settle():
+        pytest.fail('a full batch must retain publication overlap')
+    current=claim_wave(wave_ledger,'w','g',8,settle_pending=must_not_settle)
+    assert len(current)==8
+    assert slot_ids(current).isdisjoint(slot_ids(pending))
+    assert wave_ledger.summary()['states']=={'leased':10}
+
+
+def test_claim_wave_waits_when_all_slots_are_pending(wave_ledger):
+    from tools.run_manorl_synthesis_campaign import claim_wave
+    pending=wave_ledger.claim('w','g',10)
+    def settle():
+        for claim in pending:wave_ledger.finish(claim,{'accepted':False})
+    current=claim_wave(wave_ledger,'w','g',8,settle_pending=settle)
+    assert len(current)==len(slot_ids(current))==8
+    assert all(c['attempt']==2 for c in current)
+
+
+def test_claim_wave_never_reclaims_accepted_slots(wave_ledger):
+    from tools.run_manorl_synthesis_campaign import claim_wave
+    pending=wave_ledger.claim('w','g',8)
+    def settle():
+        for i,claim in enumerate(pending):
+            if i<6:
+                wave_ledger.finish(claim,{'accepted':True},row_uuid=f'row-{i}',shard='verified.lance')
+            else:wave_ledger.finish(claim,{'accepted':False})
+    current=claim_wave(wave_ledger,'w','g',8,settle_pending=settle)
+    assert len(current)==len(slot_ids(current))==4
+    assert slot_ids(current).isdisjoint(slot_ids(pending[:6]))
+    assert wave_ledger.summary()['states']=={'accepted':6,'leased':4}
+
+
+def test_claim_wave_returns_empty_after_pending_completes_quota(wave_ledger):
+    from tools.run_manorl_synthesis_campaign import claim_wave
+    pending=wave_ledger.claim('w','g',10)
+    def settle():
+        for i,claim in enumerate(pending):
+            wave_ledger.finish(claim,{'accepted':True},row_uuid=f'row-{i}',shard='verified.lance')
+    assert claim_wave(wave_ledger,'w','g',8,settle_pending=settle)==[]
+    assert wave_ledger.summary()['complete']
+
+
+def test_claim_wave_propagates_publication_failure_without_releasing(wave_ledger):
+    from tools.run_manorl_synthesis_campaign import claim_wave
+    pending=wave_ledger.claim('w','g',8)
+    def fail():raise RuntimeError('publication failed')
+    with pytest.raises(RuntimeError,match='publication failed'):
+        claim_wave(wave_ledger,'w','g',8,settle_pending=fail)
+    assert wave_ledger.summary()['accepted']==0
+    assert wave_ledger.summary()['states']=={'leased':10}
+    # Original tokens remain valid: the helper did not silently free the batch.
+    wave_ledger.finish(pending[0],{'accepted':False})
+
+
+def test_claim_wave_without_pending_respects_remaining_quota(wave_ledger):
+    from tools.run_manorl_synthesis_campaign import claim_wave
+    current=claim_wave(wave_ledger,'w','g',16)
+    assert len(current)==len(slot_ids(current))==10

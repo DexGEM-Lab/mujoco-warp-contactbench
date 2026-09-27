@@ -105,6 +105,25 @@ def prepare(args):
     ledger.close()
 
 
+def claim_wave(ledger, owner, group, batch_size, *, settle_pending=None):
+    """Fill a short batch only after its predecessor's publication is settled.
+
+    A small remaining quota may not hold two full batches of leases. Do not
+    pad a short batch while rejected candidates are still owned by the prior
+    publisher. Full batches retain the normal GPU/CPU publication overlap.
+    """
+    claims=ledger.claim(owner,group,batch_size)
+    if len(claims)<batch_size and settle_pending is not None:
+        emit('batch_wait_for_publication',owner=owner,group=group,
+             available=len(claims),requested=batch_size)
+        started=time.perf_counter()
+        settle_pending()  # May fail: never release or reuse unverified claims.
+        claims.extend(ledger.claim(owner,group,batch_size-len(claims)))
+        emit('batch_claim_refilled',owner=owner,group=group,
+             actual_candidates=len(claims),seconds=time.perf_counter()-started)
+    return claims
+
+
 def load_sources(claims):
     from sim.manorl.lance_v2 import file_sha256
     trajectories=[]
@@ -179,7 +198,8 @@ def run_worker(args):
             if (root/'PAUSE').exists():break
             heartbeat(phase='claim')
             if pending is not None and pending[0].poll() is not None:reap_pending()
-            claims=ledger.claim(owner,args.group,args.batch_size)
+            claims=claim_wave(ledger,owner,args.group,args.batch_size,
+                settle_pending=reap_pending if pending is not None else None)
             if not claims:break
             base=load_sources(claims)
             if runtime is None:

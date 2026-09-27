@@ -17,6 +17,10 @@ A local SQLite ledger claims source/slot pairs. Only checksum/readback-verified
 NAS publication counts as acceptance; recovery reconciles promoted shards before
 releasing dead-owner claims. Owner locks survive in CPU publishers. A server
 watch process, not an indefinitely waiting LLM, owns process continuity.
+If remaining group slots cannot hold two full batches, pending publication can
+make the next claim short. Settle it before padding that short claim, then reclaim
+only failed slots; full claims retain overlap. This fills the initial batch, not
+mid-rollout finished envs. Compare actual candidates with fixed world count.
 
 Benchmark accepted published rows/GPU-hour using fixed candidates and separate
 outputs. Contact/constraint capacity and CCD warning visibility are explicit;
