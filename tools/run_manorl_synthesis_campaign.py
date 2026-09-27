@@ -215,7 +215,8 @@ def run_worker(args):
                 for claim,source in zip(claims,base):
                     try:
                         trajectory,sample=augment_source_prefix(source,slot=claim['slot'],attempt=claim['attempt'],
-                            joint_lower=runtime.environment.joint_lower,joint_upper=runtime.environment.joint_upper,config=prefix)
+                            joint_lower=runtime.environment.joint_lower,joint_upper=runtime.environment.joint_upper,config=prefix,
+                            seed=claim.get('seed'))
                     except ValueError as exc:
                         ledger.finish(claim,{'accepted':False,'prefix_sampling_failure':str(exc)});continue
                     tolerance=config.get('initial_penetration_tolerance_m')

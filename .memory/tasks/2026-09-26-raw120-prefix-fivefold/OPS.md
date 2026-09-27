@@ -125,3 +125,37 @@ existing attempts_settled_source index keeps grouped policy reapplication
 counts fast (<.3s). Commit733e3a8+ reports blocked debt separately
 (`blocked_pair_debt`/`runnable_pair_debt` in summary) and preserves all
 target/credit; no GPU/source mutation was performed by this worker.
+
+## Timestamp correction (appended 2026-09-28T01:14:00+08:00, from `date`)
+
+The two OPS entries above labeled "2026-09-28T12:10:00+08:00" and
+"2026-09-28T12:40:00+08:00" were written while the actual local time was
+about 00:55-01:05 +08:00 on 2026-09-28; the 12:xx labels are wrong. The
+entries' technical content is unchanged; only their timestamps were
+mis-stated. Immutable entries are preserved as written; this correction is
+appended rather than rewriting them.
+
+## 2026-09-28T01:14:00+08:00 — Critic-review corrective pass (third commit)
+
+Fixed all three review blockers in the same worktree starting from ec14e1c:
+(1) schema conversion and stored25%/20 reapplication now commit in ONE BEGIN
+IMMEDIATE transaction, so the pair-budget marker is never visible before
+eligibility is corrected; an already-migrated invocation verifies and repairs
+eligibility left uncorrected by an interrupted older candidate while
+preserving credit/history/config and original exclusion rows. (2) `migrate
+--dry-run` projects reconciliation, conversion and reapplication on an
+isolated host-local temporary SQLite copy (read-only backup of the original,
+shutil fallback) and never constructs a writable legacy ledger or calls finish
+on the original; published shards are only read. (3) extra-variant seeds now
+come from a dedicated positive signed-int64 namespace [2**31,2**63) with a
+durable UNIQUE allocation registry (nullable attempts.allocated_seed column,
+historical rows keep NULL) and deterministic in-transaction collision
+resolution; the allocated seed is carried on the claim and propagated through
+prefix sampling, runtime point-template seeding, retreat and compact
+publication instead of being recomputed. Consumer audit: torch
+manual_seed_all, np.default_rng, int64 astype and sha256 identity seeding all
+accept full positive int63; lance provenance is pa.int64 with a roundtrip
+test. 123 focused tests pass (20 pair-budget incl. forced-collision,
+stale/retry/restart allocation, dry-run immutability, interruption rollback,
+already-migrated repair; 7 publication incl. int64 seed roundtrip; approach
+prefix suite). No live ledger or shard was touched.

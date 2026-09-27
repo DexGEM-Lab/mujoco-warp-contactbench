@@ -1,4 +1,4 @@
-# Current model — fixed pair quota not yet implemented
+# Current model — fixed pair budgets implemented on the branch, live migration pending
 
 ## Corrected understanding (authoritative)
 The user clarified the ORIGINAL goal: each object–action pair keeps its target
@@ -7,19 +7,38 @@ of original training-source count×5 even after weak sources are excluded.
 sources may contribute more than five variants. Quota can move between sources
 within a pair, never between different pairs.
 
-The implementation does NOT meet this goal. slots has CHECK(slot<5), initialize
-creates five slots per source, exclusions turn missing source slots into skipped,
-and summary subtracts skipped from target. There is no donor-source allocation
-or replenishment of excluded quota. The prior overall completion claim is
-withdrawn; this was an assistant interpretation and implementation error, not a
-user reduction of the output goal.
+The branch now implements this goal (commits733e3a8, ec14e1c and the corrective
+pass after the critic review): `pair_targets` freeze each pair's budget,
+claimable `outputs` obligations are keyed by source+variant, extra variants
+(>=5) are created only for same-pair deficits on eligible donors, so a pair
+can never be overclaimed or overpublished and cross-pair borrowing is
+impossible. No-donor deficit pairs are reported blocked with their stranded
+debt split from runnable debt; completion requires every pair met and zero
+outstanding leases. The25% donor filter keeps its20-settled floor, finished
+attempt denominator and durable accepted numerator, without the old
+five-row exemption. The legacy per-source-slot ledger (slots CHECK(slot<5),
+shrinking target, no replenishment) is converted by the explicit idempotent
+`migrate` CLI, which reconciles promoted shards first, refuses outstanding
+leases, converts schema AND reapplies the stored25%/20 policy in ONE
+cRASH-atomic transaction (the pair-budget marker is never visible before
+eligibility is corrected), verifies preserved credit/history/config lineage
+afterwards, and repairs eligibility if an interrupted older candidate
+committed the marker without the reapplication. `--dry-run` projects the
+whole run on an isolated temporary SQLite copy and never opens the original
+for writing. Extra-variant seeds are durably allocated inside the claim
+transaction from a dedicated positive-int64 namespace [2**31,2**63), disjoint
+from the legacy31-bit domain, with a UNIQUE registry (nullable attempt
+column preserving historical rows) and deterministic collision resolution;
+the allocated seed is propagated through prefix metadata, runtime seeding,
+retreat and compact publication instead of being recomputed.
 
-The verified24006 rows remain valid. Fixed target74805, deficit50799. Of129
+The verified24006 rows remain valid. Fixed target74805, deficit50799; the
+parent's live inventory expects2934 eligible donors,34 blocked pairs carrying
+11767 stranded debt and95 runnable pairs carrying39032 after migration. Of129
 trained/admitted pairs,105 have at least one row and24 have none;105 nonempty
-pairs does not mean105 fixed quotas are complete. Next implementation must keep
-pair budgets separate from source eligibility, migrate/credit all existing rows,
-permit unique variants beyond five per source, and report no-eligible-source
-pairs as blocked. No live ledger has yet been migrated to that design.
+pairs does not mean105 fixed quotas are complete. NO live ledger has yet been
+migrated: the parent will test full production-ledger copies before any
+deployment, and this branch's implementation is not a completion claim.
 
 ## Valid partial-data evidence (old completion claim superseded)
 The old implementation stopped after3226 sources reached five rows (16130)

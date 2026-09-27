@@ -185,11 +185,20 @@ python -m tools.run_manorl_synthesis_campaign status --campaign /local/campaign
 
 The migration first reconciles promoted shards against the legacy schema
 (recovering promotion-before-ledger crashes), then refuses to proceed if any
-lease is still outstanding — leases are never silently abandoned. Inside one
-transaction it drops `slots`, adds the explicit `pair` column, copies every
-slot row to `outputs` preserving state/attempt/owner/UUID/shard lineage,
-rebuilds `pair_targets` at `5 x` source count, and re-creates the exclusion
-triggers. Attempt history, the config digest, the exclusion audit and on-disk
+lease is still outstanding — leases are never silently abandoned. Inside ONE
+crash-atomic `BEGIN IMMEDIATE` transaction it drops `slots`, adds the explicit
+`pair` column, copies every slot row to `outputs` preserving
+state/attempt/owner/UUID/shard lineage, rebuilds `pair_targets` at `5 x`
+source count, re-creates the exclusion triggers, and reapplies the stored
+policy; the pair-budget marker is written last, only after eligibility is
+corrected, so an interrupted migration can never expose an uncorrected donor
+set. An `already_migrated` invocation verifies and repairs eligibility left
+uncorrected by an interrupted older candidate, preserving all credit, history
+and original exclusion rows. `--dry-run` projects the reconciliation,
+conversion and reapplication on an isolated host-local temporary SQLite copy
+(read-only backup of the original ledger) and never opens the original for
+writing or touches published shards; the projected report flags recoverable
+promoted rows without crediting them. Attempt history, the config digest, the exclusion audit and on-disk
 commit manifests are untouched; the report (`migration-report.json`) records
 before/after snapshots and an `accepted_identity_sha256` for independent
 verification. Re-running the command reports `already_migrated` without
@@ -205,9 +214,15 @@ eligibility, never accepted-row counts. Appended admissions use explicit
 column names because a migrated `sources` table keeps the legacy column order
 with `pair` added last. Because `slot` remains the published lineage name of the variant
 index, historical manifests keep reconciling under the new schema. Extra donor
-variants cycle the same five radial/azimuth strata (always within 5–50 cm) with
-a structurally different seed derivation, so no legacy source/slot/attempt
-seed or row UUID is ever reused. Operational preconditions: SQLite stays on
+variants cycle the same five radial/azimuth strata (always within 5–50 cm).
+Their attempt seeds are durably allocated inside the claim transaction from a
+dedicated positive signed-int64 namespace [2**31, 2**63) — disjoint from the
+legacy 31-bit domain by construction — through a UNIQUE registry
+(`attempts.allocated_seed`, NULL for all historical rows) with deterministic
+collision resolution; the allocated seed rides the claim into prefix
+metadata, runtime point-template seeding, retreat and the compact
+`provenance.seed` int64 column instead of being recomputed, so no legacy
+source/slot/attempt seed or row UUID is ever reused. Operational preconditions: SQLite stays on
 local filesystems; drain writers first; test the migration on a copy of each
 live ledger before deploying.
 

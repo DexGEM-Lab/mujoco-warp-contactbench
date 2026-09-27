@@ -513,3 +513,235 @@ def test_migration_reapplies_policy_to_formerly_exempt_full_donors(tmp_path):
         assert ledger.summary()['complete'] and ledger.summary()['accepted'] == 10
     finally:
         ledger.close()
+
+
+def _force_deficit_for_extra_variants(ledger, *, keep='b', exclude='a', group='g', pair='obj:01'):
+    ledger.initialize({}, [source(exclude, group, pair), source(keep, group, pair)])
+    ledger.configure_success_filter(minimum_attempts=1)
+    drive(ledger, 'w', group, {exclude: (0, 1)})  # excluded -> deficit for donors
+    for claim in ledger.claim('w', group, 5):  # settle the keeper's five originals
+        ledger.finish(claim, {'accepted': True},
+                      row_uuid=f'base-{claim["source"]["key"]}-{claim["slot"]}', shard='verified.lance')
+    return ledger
+
+
+def test_extra_variant_attempt_seeds_are_durably_allocated(tmp_path):
+    from sim.manorl.synthesis_campaign import PrefixConfig, attempt_seed as derive
+    ledger = QuotaLedger(tmp_path / 'quota.sqlite')
+    ledger.initialize({}, [source('a', 'g', 'obj:01'), source('b', 'g', 'obj:01')])
+    ledger.configure_success_filter(minimum_attempts=1)
+    drive(ledger, 'w', 'g', {'a': (0, 1)})  # excluded -> deficit for donors
+    try:
+        legacy = ledger.claim('w', 'g', 1)[0]
+        assert legacy['slot'] < 5
+        assert legacy['seed'] == derive(legacy['source']['key'], legacy['slot'], legacy['attempt'], PrefixConfig())
+        assert legacy['seed'] < 2**31  # legacy namespace unchanged
+        row = ledger.db.execute("SELECT allocated_seed FROM attempts WHERE token=?",
+                                (legacy['token'],)).fetchone()
+        assert row['allocated_seed'] is None  # historical rows keep NULL
+        ledger.finish(legacy, {'accepted': True}, row_uuid='legacy-row', shard='v.lance')
+        for claim in ledger.claim('w', 'g', 4):  # settle the keeper's other originals
+            ledger.finish(claim, {'accepted': True},
+                          row_uuid=f'base-{claim["slot"]}', shard='v.lance')
+        extra = ledger.claim('w', 'g', 8)
+        assert extra and all(c['slot'] >= 5 for c in extra)
+        for claim in extra:
+            assert 2**31 <= claim['seed'] < 2**63  # positive int64 namespace
+            row = ledger.db.execute("SELECT allocated_seed FROM attempts WHERE token=?",
+                                    (claim['token'],)).fetchone()
+            assert row['allocated_seed'] == claim['seed']
+        seeds = {c['seed'] for c in extra}
+        assert len(seeds) == len(extra) and all(s >= 2**31 for s in seeds)
+        # restart: a second connection cannot register a duplicate allocation
+        other = QuotaLedger(tmp_path / 'quota.sqlite')
+        try:
+            import sqlite3
+            with pytest.raises(sqlite3.IntegrityError):
+                with other.db:
+                    other.db.execute("INSERT INTO attempts(token,allocated_seed) VALUES('steal',?)",
+                                     (extra[0]['seed'],))
+        finally:
+            other.close()
+        # retry after failure allocates a fresh registered seed for the new attempt
+        ledger.finish(extra[0], {'accepted': False})
+        retry = [c for c in ledger.claim('w', 'g', 8) if c['slot'] == extra[0]['slot']][0]
+        assert retry['attempt'] == extra[0]['attempt'] + 1
+        assert retry['seed'] != extra[0]['seed'] and retry['seed'] >= 2**31
+        # allocated seeds propagate into the sampler output unchanged
+        from test_synthesis_campaign import trajectory
+        import numpy as np
+        src = trajectory()
+        low = np.full(28, -10.)
+        _, sample = augment_source_prefix(src, slot=retry['slot'], attempt=retry['attempt'],
+                                          joint_lower=low, joint_upper=-low, seed=retry['seed'])
+        assert sample['seed'] == retry['seed']
+        with pytest.raises(ValueError):
+            augment_source_prefix(src, slot=0, attempt=1, joint_lower=low, joint_upper=-low, seed=-1)
+        with pytest.raises(ValueError):
+            augment_source_prefix(src, slot=0, attempt=1, joint_lower=low, joint_upper=-low, seed=2**63)
+    finally:
+        ledger.close()
+
+
+def test_forced_seed_collision_resolves_deterministically(tmp_path):
+    from sim.manorl.synthesis_campaign import PrefixConfig, attempt_seed as derive, _collision_candidate
+    ledger = _force_deficit_for_extra_variants(QuotaLedger(tmp_path / 'q1.sqlite'))
+    try:
+        # The first extra claim is (b, variant 5, attempt 1): block its exact
+        # candidate so the allocation must take the deterministic alternative.
+        candidate = derive('b', 5, 1, PrefixConfig())
+        assert candidate >= 2**31
+        with ledger.db:
+            ledger.db.execute("INSERT INTO attempts(token,source_key,slot,attempt,started,allocated_seed) "
+                              "VALUES('blocker','b',5,0,0,?)", (candidate,))
+        claim = ledger.claim('w', 'g', 1)[0]
+        assert (claim['source']['key'], claim['slot'], claim['attempt']) == ('b', 5, 1)
+        assert claim['seed'] != candidate and claim['seed'] >= 2**31
+        assert claim['seed'] == _collision_candidate('b', 5, 1, PrefixConfig(), 1)
+        # Deterministic resolution: an identical ledger yields the same seed.
+        twin = _force_deficit_for_extra_variants(QuotaLedger(tmp_path / 'q2.sqlite'))
+        try:
+            with twin.db:
+                twin.db.execute("INSERT INTO attempts(token,source_key,slot,attempt,started,allocated_seed) "
+                                "VALUES('blocker','b',5,0,0,?)", (candidate,))
+            twin_claim = twin.claim('w', 'g', 1)[0]
+            assert twin_claim['seed'] == claim['seed']
+            # Chained collision: block both the attempt-2 base candidate and
+            # its first alternative; the allocator must walk to the second.
+            ledger.finish(claim, {'accepted': False})  # retry slot 5 as attempt 2
+            with ledger.db:
+                ledger.db.execute("INSERT INTO attempts(token,source_key,slot,attempt,started,allocated_seed) "
+                                  "VALUES('blocker2','b',5,0,0,?)", (derive('b', 5, 2, PrefixConfig()),))
+                ledger.db.execute("INSERT INTO attempts(token,source_key,slot,attempt,started,allocated_seed) "
+                                  "VALUES('blocker3','b',5,0,0,?)",
+                                  (_collision_candidate('b', 5, 2, PrefixConfig(), 1),))
+            chained = ledger.claim('w', 'g', 1)[0]
+            assert (chained['source']['key'], chained['slot'], chained['attempt']) == ('b', 5, 2)
+            assert chained['seed'] == _collision_candidate('b', 5, 2, PrefixConfig(), 2)
+        finally:
+            twin.close()
+    finally:
+        ledger.close()
+
+
+def test_dry_run_projects_on_a_copy_and_never_mutates_the_original(tmp_path):
+    from sim.manorl.lance_v2 import file_sha256
+    ledger, _ = build_legacy_campaign(tmp_path)
+    claim = ledger.claim('dead-publisher', 'g', 1)[0]
+    ledger.close()
+    shard = tmp_path / 'out' / 'shards' / 'cube1' / 'wave.lance'
+    shard.mkdir(parents=True)
+    (shard / 'data').write_bytes(b'verified payload')
+    (shard / 'campaign-commit.json').write_text(json.dumps({
+        'contract': CAMPAIGN_CONTRACT,
+        'rows': [{'claim': claim, 'diagnostic': {'accepted': True}, 'row_uuid': 'promoted-row'}],
+        'payload_sha256': {'data': file_sha256(shard / 'data')}}))
+    original = tmp_path / 'legacy' / 'quota.sqlite'
+    before_bytes = file_sha256(original)
+    reopened = LegacyQuotaLedger(original)
+    before_summary = reopened.summary()
+    before_master = [tuple(r) for r in reopened.db.execute(
+        "SELECT type,name FROM sqlite_master ORDER BY type,name")]
+    before_attempts = reopened.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]
+    reopened.close()
+
+    report = migrate_ledger(tmp_path / 'legacy', dry_run=True)
+    assert report['state'] == 'dry_run' and report['projected_state'] == 'migrated'
+    assert report['recovered_promoted_rows'] == 1  # recoverable publication reported
+    assert report['policy_reapplication']['reapplied'] is True
+
+    assert file_sha256(original) == before_bytes  # original bytes untouched
+    reopened = LegacyQuotaLedger(original)
+    try:
+        assert reopened.summary() == before_summary  # schema/credit/attempt state unchanged
+        assert [tuple(r) for r in reopened.db.execute(
+            "SELECT type,name FROM sqlite_master ORDER BY type,name")] == before_master
+        assert reopened.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == before_attempts
+        assert reopened.db.execute(
+            "SELECT COUNT(*) FROM slots WHERE state='accepted' AND row_uuid='promoted-row'").fetchone()[0] == 0
+    finally:
+        reopened.close()
+    with pytest.raises(Exception, match='legacy per-source-slot schema'):
+        QuotaLedger(original)
+    # the real run still performs the reported recovery on the original
+    real = migrate_ledger(tmp_path / 'legacy')
+    assert real['state'] == 'migrated' and real['recovered_promoted_rows'] == 1
+    migrated = QuotaLedger(original)
+    try:
+        assert migrated.db.execute(
+            "SELECT COUNT(*) FROM outputs WHERE row_uuid='promoted-row' AND state='accepted'").fetchone()[0] == 1
+    finally:
+        migrated.close()
+
+
+def test_migration_transaction_rolls_back_completely_on_interruption(tmp_path, monkeypatch):
+    import sim.manorl.synthesis_migration as migration
+    ledger, _ = build_legacy_campaign(tmp_path)
+    before = ledger.summary()
+    ledger.close()
+    original = tmp_path / 'legacy' / 'quota.sqlite'
+    real_apply = migration.apply_pair_budget_schema
+
+    def interrupted(db):
+        real_apply(db)  # schema work happens, then the process "crashes"
+        raise RuntimeError('simulated crash mid-migration')
+
+    monkeypatch.setattr(migration, 'apply_pair_budget_schema', interrupted)
+    with pytest.raises(RuntimeError, match='simulated crash'):
+        migrate_ledger(tmp_path / 'legacy')
+    monkeypatch.undo()
+    reopened = LegacyQuotaLedger(original)
+    try:
+        assert reopened.summary() == before  # data, credit and policy intact
+        assert reopened.db.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='outputs'").fetchone()[0] == 0
+        assert reopened.db.execute(
+            "SELECT COUNT(*) FROM settings WHERE key='ledger_schema'").fetchone()[0] == 0
+    finally:
+        reopened.close()
+    # the ledger remains fully migratable afterwards
+    report = migrate_ledger(tmp_path / 'legacy')
+    assert report['state'] == 'migrated'
+
+
+def test_already_migrated_repairs_interrupted_candidate_eligibility(tmp_path, monkeypatch):
+    import sim.manorl.synthesis_migration as migration
+    # Reproduce an interrupted OLD candidate: schema marker committed, stored
+    # policy never reapplied, formerly-full donor still eligible.
+    ledger = LegacyQuotaLedger(tmp_path / 'legacy' / 'quota.sqlite')
+    ledger.initialize({}, [source('full', 'g1', 'cube1:01'), source('donor', 'g2', 'cube1:01')])
+    drive(ledger, 'w', 'g1', {'full': (0, 20)})
+    drive(ledger, 'w', 'g1', {'full': (5, 0)})
+    assert ledger.configure_success_filter() == 0  # legacy exempted the full donor
+    ledger.close()
+    (tmp_path / 'legacy' / 'config.json').write_text(json.dumps({'output': str(tmp_path / 'out')}))
+    monkeypatch.setattr(migration, '_reapply_policy', lambda db, rate, floor: 0)
+    try:
+        interrupted = migrate_ledger(tmp_path / 'legacy')
+    finally:
+        monkeypatch.undo()
+    assert interrupted['state'] == 'migrated'
+    marked = QuotaLedger(tmp_path / 'legacy' / 'quota.sqlite')
+    try:
+        assert marked.summary()['sources_excluded'] == 0  # eligibility left uncorrected
+    finally:
+        marked.close()
+
+    repaired = migrate_ledger(tmp_path / 'legacy')  # already-migrated invocation must repair
+    assert repaired['state'] == 'already_migrated'
+    assert repaired['repaired_eligibility_sources'] == 1
+    audit = repaired['policy_reapplication']
+    assert audit['newly_excluded_formerly_exempt_donors'] == 1 and audit['exclusions_after'] == 1
+    ledger = QuotaLedger(tmp_path / 'legacy' / 'quota.sqlite')
+    try:
+        summary = ledger.summary()
+        assert summary['accepted'] == 5  # original credit preserved
+        assert summary['sources_excluded'] == 1 and summary['excluded_accepted'] == 5
+        assert summary['target'] == 10 and summary['attempts'] == 25  # history preserved
+        per_source = fill_pair(ledger, 'w', 'g2')
+        assert per_source == Counter({'donor': 5})  # 'full' is no longer a donor
+    finally:
+        ledger.close()
+    # A healthy migrated ledger needs no repair: re-running is a no-op.
+    again = migrate_ledger(tmp_path / 'legacy')
+    assert again['state'] == 'already_migrated' and again['repaired_eligibility_sources'] == 0

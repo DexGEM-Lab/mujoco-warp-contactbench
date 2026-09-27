@@ -73,21 +73,29 @@ class PrefixConfig:
 def attempt_seed(key: str, slot: int, attempt: int, config: PrefixConfig) -> int:
     """Deterministic per-variant seed; slots 0-4 keep the historical derivation.
 
-    Extra donor variants (slot >= quota) use a structurally different
-    derivation so no legacy (source, slot, attempt) seed is ever reused and a
-    wider 64-bit digest keeps new seeds from colliding with historical ones.
+    Extra donor variants (slot >= quota) derive their base candidate in a
+    dedicated positive signed-int64 namespace [2**31, 2**63), disjoint from
+    the legacy [0, 2**31-2] range by construction. Production claims allocate
+    the durable seed inside the ledger transaction (see QuotaLedger.claim)
+    with a UNIQUE check and deterministic collision resolution; this function
+    only derives the base candidate for standalone callers.
     """
     if slot < 0 or attempt < 1:
         raise ValueError("slot/attempt is outside the campaign contract")
     if slot < config.quota:
         return int(canonical_hash([config.seed, key, slot, attempt, asdict(config)])[:8], 16) % (2**31 - 1)
-    return int(canonical_hash([config.seed, key, "extra-variant", slot, attempt, asdict(config)])[:16], 16) % (2**31 - 1)
+    return 2**31 + int(canonical_hash([config.seed, key, "extra-variant", slot, attempt, asdict(config)])[:15], 16) % (2**63 - 2**31)
+
+
+def _collision_candidate(key: str, slot: int, attempt: int, config: PrefixConfig, retry: int) -> int:
+    """Deterministic in-namespace alternative after a durable seed collision."""
+    return 2**31 + int(canonical_hash([config.seed, key, "extra-variant-collision", retry, slot, attempt, asdict(config)])[:15], 16) % (2**63 - 2**31)
 
 
 def augment_source_prefix(
     source: ReferenceTrajectory, *, slot: int, attempt: int,
     joint_lower: np.ndarray, joint_upper: np.ndarray,
-    config: PrefixConfig = PrefixConfig(),
+    config: PrefixConfig = PrefixConfig(), seed: int | None = None,
 ) -> tuple[ReferenceTrajectory, dict]:
     """Five radial strata, stratified azimuth and randomized feasible posture.
 
@@ -105,7 +113,10 @@ def augment_source_prefix(
     if lower.shape != (28,) or upper.shape != (28,) or np.any(lower >= upper):
         raise ValueError("expected 28 ordered joint limits")
     key = source_key(source)
-    seed = attempt_seed(key, slot, attempt, config)
+    if seed is None:
+        seed = attempt_seed(key, slot, attempt, config)
+    elif (not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2**63):
+        raise ValueError("allocated seed must be a nonnegative signed int64")
     rng = np.random.default_rng(seed)
     # Extra donor variants (slot >= quota) cycle the same five radial/azimuth
     # strata as slots 0-4 instead of widening the sampled displacement range.
@@ -247,7 +258,9 @@ PAIR_BUDGET_SCHEMA_STATEMENTS = (
     """CREATE INDEX IF NOT EXISTS outputs_pair ON outputs(pair,state)""",
     """CREATE TABLE IF NOT EXISTS attempts(
   token TEXT PRIMARY KEY, source_key TEXT, slot INTEGER, attempt INTEGER,
-  started REAL, finished REAL, diagnostic TEXT)""",
+  started REAL, finished REAL, diagnostic TEXT, allocated_seed INTEGER)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS attempts_allocated_seed
+  ON attempts(allocated_seed) WHERE allocated_seed IS NOT NULL""",
     """CREATE TABLE IF NOT EXISTS workers(owner TEXT PRIMARY KEY, heartbeat REAL, details TEXT)""",
     """CREATE TABLE IF NOT EXISTS source_success_policy(
   id INTEGER PRIMARY KEY CHECK(id=1), minimum_rate REAL NOT NULL,
@@ -294,6 +307,12 @@ PAIR_BUDGET_SCHEMA_STATEMENTS = (
 
 
 def apply_pair_budget_schema(db: sqlite3.Connection) -> None:
+    # Ledgers created by an earlier pair-budget candidate lack the durable
+    # seed-allocation column; add it before the index statements and without
+    # touching historical rows (they keep NULL and remain fully readable).
+    existing = {row[1] for row in db.execute("PRAGMA table_info(attempts)")}
+    if existing and "allocated_seed" not in existing:
+        db.execute("ALTER TABLE attempts ADD COLUMN allocated_seed INTEGER")
     for statement in PAIR_BUDGET_SCHEMA_STATEMENTS:
         db.execute(statement)
 
@@ -400,6 +419,8 @@ class QuotaLedger:
             if previous and previous[0] != digest:
                 raise ValueError("campaign configuration changed; use a new campaign directory")
             self.db.execute("INSERT OR IGNORE INTO settings VALUES('config',?)", (digest,))
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES('campaign_config',?)",
+                            (json.dumps(config, sort_keys=True),))
             for source in sources:
                 key, group, pair = source["key"], source["group_key"], source.get("pair")
                 if not isinstance(pair, str) or ":" not in pair:
@@ -429,6 +450,46 @@ class QuotaLedger:
                                     (total, 5*total, pair))
                 elif 5*total != row["target_rows"]:
                     raise ValueError("pair output target is immutable for already admitted sources")
+
+    def _allocate_attempt_seed(self, row, attempt: int, token: str) -> dict:
+        """Durably register this attempt's seed inside the claim transaction.
+
+        Variants 0-4 keep the historical derivation and store NULL: legacy
+        31-bit seeds may legitimately repeat across sources, so uniqueness is
+        enforced only for the new int64 namespace. Extra variants allocate a
+        candidate from that namespace and resolve collisions deterministically
+        against the partial UNIQUE index until the insert succeeds.
+        """
+        config = self.seed_config
+        if row["variant"] < config.quota:
+            seed = attempt_seed(row["source_key"], row["variant"], attempt, config)
+            self.db.execute(
+                "INSERT INTO attempts(token,source_key,slot,attempt,started) VALUES(?,?,?,?,?)",
+                (token, row["source_key"], row["variant"], attempt, time.time()))
+            return {"seed": seed}
+        candidate = attempt_seed(row["source_key"], row["variant"], attempt, config)
+        for retry in range(64):
+            try:
+                self.db.execute(
+                    "INSERT INTO attempts(token,source_key,slot,attempt,started,allocated_seed) VALUES(?,?,?,?,?,?)",
+                    (token, row["source_key"], row["variant"], attempt, time.time(), candidate))
+                return {"seed": candidate}
+            except sqlite3.IntegrityError:
+                if self.db.execute(
+                    "SELECT 1 FROM attempts WHERE allocated_seed=?", (candidate,)).fetchone() is None:
+                    raise  # not a seed collision; do not mask other failures
+                candidate = _collision_candidate(row["source_key"], row["variant"], attempt, config, retry + 1)
+        raise RuntimeError("could not allocate a unique extra-variant seed after 64 collisions")
+
+    @property
+    def seed_config(self) -> PrefixConfig:
+        """The campaign's prefix sampling contract, for deterministic seeds."""
+        row = self.db.execute("SELECT value FROM settings WHERE key='campaign_config'").fetchone()
+        if row is not None:
+            stored = json.loads(row[0])
+            if 'prefix' in stored:
+                return PrefixConfig(**stored['prefix'])
+        return PrefixConfig()
 
     def _ready_rows(self, group_key: str, count: int) -> list:
         return self.db.execute("""SELECT s.spec,q.source_key,q.pair,q.variant,q.attempts
@@ -489,11 +550,9 @@ class QuotaLedger:
                 self.db.execute(
                     "UPDATE outputs SET state='leased',owner=?,token=?,attempts=? WHERE source_key=? AND variant=?",
                     (owner, token, attempt, row["source_key"], row["variant"]))
-                self.db.execute("INSERT INTO attempts(token,source_key,slot,attempt,started) VALUES(?,?,?,?,?)",
-                                (token, row["source_key"], row["variant"], attempt, time.time()))
-                # 'slot' remains the published lineage name for the variant index.
                 claims.append({"source": json.loads(row["spec"]), "slot": row["variant"],
-                               "pair": row["pair"], "attempt": attempt, "token": token, "owner": owner})
+                               "pair": row["pair"], "attempt": attempt, "token": token, "owner": owner,
+                               **self._allocate_attempt_seed(row, attempt, token)})
             self.db.commit()
             return claims
         except BaseException:

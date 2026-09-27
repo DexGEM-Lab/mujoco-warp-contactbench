@@ -139,3 +139,23 @@ def test_promotion_persistent_denial_keeps_partial_and_never_overwrites(tmp_path
     target.mkdir();(target/'keep').write_text('existing')
     with pytest.raises(FileExistsError):publication.promote_verified_shard(source,target)
     assert len(calls)==4 and (target/'keep').read_text()=='existing'
+
+
+def test_allocated_int64_seed_survives_lance_roundtrip(tmp_path):
+    """Extra-variant seeds live in [2**31, 2**63); the compact provenance
+    column must carry the full value without truncation to 31 bits."""
+    pytest.importorskip('lance')
+    import lance
+    from sim.manorl.lance_v2 import write_compact_lance_stream
+    allocated = 2**31 + 12345678901234567  # inside the positive int63 namespace
+    assert allocated < 2**63
+    rows = []
+    for slot, seed in ((5, allocated), (6, 2**63 - 1)):
+        row = compact_fixture('bigseed', slot)
+        row['provenance']['seed'] = seed
+        row['provenance']['episode_index'] = slot
+        rows.append(row)
+    output = tmp_path / 'seeds.lance'
+    write_compact_lance_stream(rows, output=output, batch_size=2)
+    table = lance.dataset(str(output)).to_table(columns=['provenance']).to_pylist()
+    assert [r['provenance']['seed'] for r in table] == [allocated, 2**63 - 1]
