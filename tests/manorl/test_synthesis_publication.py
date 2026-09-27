@@ -105,3 +105,37 @@ def test_initial_pose_prefilter_uses_geometry_without_integrating():
     result=runtime.initial_geometry_failure(colliding)
     assert result['reason']=='initial_geometry_penetration' and result['depth_m']<-.01
     assert runtime._proposal_data.time==0
+
+
+def test_promotion_retries_sharing_denial_without_regenerating(tmp_path,monkeypatch,capsys):
+    import errno
+    import sim.manorl.synthesis_publication as publication
+    source=tmp_path/'partial';source.mkdir();(source/'campaign-commit.json').write_text('{}')
+    (source/'data').write_bytes(b'verified payload');target=tmp_path/'final.lance'
+    original=publication.os.rename;calls=[];delays=[]
+    def transient(a,b):
+        calls.append((a,b))
+        if len(calls)<3:raise PermissionError(errno.EACCES,'sharing denial')
+        return original(a,b)
+    monkeypatch.setattr(publication.os,'rename',transient)
+    monkeypatch.setattr(publication.time,'sleep',delays.append)
+    publication.promote_verified_shard(source,target)
+    assert (target/'data').read_bytes()==b'verified payload'
+    assert delays==[1,2] and len(calls)==3
+    assert capsys.readouterr().out.count('publish_rename_retry')==2
+
+
+def test_promotion_persistent_denial_keeps_partial_and_never_overwrites(tmp_path,monkeypatch):
+    import errno
+    import sim.manorl.synthesis_publication as publication
+    source=tmp_path/'partial';source.mkdir();(source/'campaign-commit.json').write_text('{}')
+    target=tmp_path/'final.lance';calls=[]
+    def denied(*args):
+        calls.append(args);raise PermissionError(errno.EACCES,'persistent denial')
+    monkeypatch.setattr(publication.os,'rename',denied)
+    monkeypatch.setattr(publication.time,'sleep',lambda _:None)
+    with pytest.raises(PermissionError):publication.promote_verified_shard(source,target)
+    assert len(calls)==4 and source.exists() and not target.exists()
+    target.mkdir();(target/'keep').write_text('existing')
+    with pytest.raises(FileExistsError):publication.promote_verified_shard(source,target)
+    assert len(calls)==4 and (target/'keep').read_text()=='existing'

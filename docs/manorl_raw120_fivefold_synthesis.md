@@ -94,8 +94,11 @@ reclaimed only after verified publication; failed IPC inputs and logs remain.
 Existing datasets and checkpoints are never overwritten.
 
 NAS shards are created under unique partial names, read back, hashed and promoted
-atomically with their recovery manifest. Only then does SQLite mark accepted
-slots. Promotion-before-ledger crashes are reconciled before dead-owner claims
+atomically with their recovery manifest. Readback handles are released before
+promotion; transient CIFS permission/sharing failures receive up to four logged
+rename attempts (1/2/4-second backoff), without rewriting rows or overwriting a
+final shard. Persistent failure retains the partial and IPC evidence. Only after
+successful promotion does SQLite mark accepted slots. Promotion-before-ledger crashes are reconciled before dead-owner claims
 are released. Completion requires every source's five unique slots, not merely
 an aggregate row count. Persistent failures leave visible deficits; they cannot
 be turned into successful completion.

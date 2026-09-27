@@ -6,6 +6,8 @@ block the next rollout wave. Published shards contain their own recovery record.
 from __future__ import annotations
 
 from collections import Counter
+import errno
+import gc
 import json
 import os
 from pathlib import Path
@@ -55,6 +57,32 @@ def _cpu_processor(context):
     return runtime
 
 
+def promote_verified_shard(temporary: Path, final: Path, *, attempts: int = 4) -> None:
+    """Bounded, visible retry of CIFS sharing/permission transients only.
+
+    Caller has already verified the row readback, payload hashes and commit
+    manifest. Never overwrite a final shard or regenerate rows during retry.
+    """
+    if attempts < 1:raise ValueError('promotion attempts must be positive')
+    if not (temporary/'campaign-commit.json').is_file():
+        raise RuntimeError('cannot promote a shard without its recovery manifest')
+    for attempt in range(attempts):
+        if final.exists():raise FileExistsError('final shard exists; reconcile rather than overwrite')
+        try:
+            os.rename(temporary,final)
+            return
+        except OSError as exc:
+            if (exc.errno not in (errno.EACCES,errno.EPERM,errno.EBUSY)
+                    or attempt+1==attempts or final.exists() or not temporary.exists()):
+                raise
+            delay=min(2**attempt,4)
+            print(json.dumps({'event':'publish_rename_retry','attempt':attempt+1,
+                'errno':exc.errno,'error':str(exc),'delay_seconds':delay,
+                'temporary':str(temporary),'final':str(final)}),flush=True)
+            gc.collect()
+            time.sleep(delay)
+
+
 def publish_bundle(bundle_path: Path) -> dict:
     from sim.manorl.lance_v2 import write_compact_lance_stream, file_sha256
     import lance
@@ -92,6 +120,10 @@ def publish_bundle(bundle_path: Path) -> dict:
             raise RuntimeError('published shard UUID/source readback mismatch')
         if 'rollout' in dataset.schema.names:
             raise RuntimeError('compact shard unexpectedly contains rollout data')
+        # Release readback/scanner handles before renaming a directory on CIFS.
+        # Keep the Python row/UUID evidence, not the live Lance dataset handle.
+        del dataset
+        gc.collect()
         # Re-read actual payloads, not only an in-memory Arrow table.
         hashes={}
         for path in sorted(temporary.rglob('*')):
@@ -107,7 +139,7 @@ def publish_bundle(bundle_path: Path) -> dict:
                 'retreat':'offline kinematic XYZ; targets/keypoints translated; no added geometry penetration vs solved base',
                 'contacts':'original MJX-Warp solved normal forces; no CPU reconstruction'}}
         atomic_json(temporary/'campaign-commit.json',commit)
-        os.rename(temporary,shard)
+        promote_verified_shard(temporary,shard)
         if lance.dataset(str(shard)).count_rows()!=len(rows):
             raise RuntimeError('final shard row count changed after promotion')
     summary={'contract':CAMPAIGN_CONTRACT,'bundle_id':bundle['bundle_id'],
