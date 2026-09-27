@@ -127,7 +127,21 @@ settle the pending publication and claim newly released failed slots before
 padding the wave. For example, 616 remaining slots cannot sustain two simultaneous
 512-slot leases: claiming before settlement otherwise alternates 512 real
 candidates with only 104. Full claims keep asynchronous publication overlap;
-accepted slots are never reclaimed. Compare `actual_candidates`, not just the
+accepted slots are never reclaimed. A short wave still installs the runtime's
+fixed physical batch width, but every trailing world uses one joint-limit-valid
+parked reference: clipped-zero fingers, a raised wrist, a stationary tracked
+object at the active scene slot, and an empty policy window (`disable == enable`).
+The parked posture must have zero hand-to-external contacts at every scene
+object's actual qpos address; native same-hand overlap is allowed. If no such
+posture exists, installation fails rather than falling back to active reference
+duplication. Real candidates retain their exact references, seeds, physics,
+acceptance gates, and quota lineage; fillers are never recorded, terminated, or
+credited, and collection stops when the last real claim finishes. Full batches
+do not install a disable mask and remain unchanged. This contract follows the
+paired 256-world evidence: duplicating the last of 11 real trajectories into
+245 active worlds overflowed CCD capacity 4096 (observed maximum 4401), while
+parked empty-window fillers produced zero overflow with the same 7/11 base
+acceptance. Compare `actual_candidates`, not just the
 fixed `worlds` count, when measuring useful concurrency. The worker logs this
 conditional wait and refill. Temporary IPC traces are reclaimed only after
 verified publication; failed IPC inputs and logs remain.

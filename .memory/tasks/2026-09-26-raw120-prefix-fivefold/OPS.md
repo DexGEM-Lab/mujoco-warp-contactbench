@@ -245,3 +245,24 @@ deleted. This OPS entry is appended, not rewritten: the 04:22 entry above is
 historical record. No live ledger, GPU process or publication was touched; the
 transfer architecture is neither reopened nor judged here — it is deferred so
 an unrelated unsafe-to-deploy prototype is not shipped alongside other work.
+
+## 2026-09-28T06:58:18+08:00 — Parked short-wave padding candidate validated
+
+Closed out the inherited fixed-width short-wave padding candidate without
+changing real candidate semantics. Short waves retain every actual reference,
+seed, physics/gate path and quota claim, while trailing physical worlds use a
+stationary joint-limit-valid raised/open hand, stationary active-object
+reference, and empty policy window; external hand contacts fail installation
+and native hand-self overlap remains allowed. Collection stores, terminates and
+credits only actual claims. Full batches keep the original no-disable-mask path.
+Repaired only invalid test fixtures: active reference positions now equal their
+scene slots before `ReferenceTrajectory` construction, the collision fixture
+places its passive object at the actual 0.85 m parked hand location and named
+per-object qpos addresses, and fake-stepper frame counts reflect increment-before-
+reset behavior. Validation: padding behavior 13 passed; focused campaign,
+pair-budget, admission, publication, source-filter, seed-plan, acceptance and
+contacts regression suites 111 passed. This is CPU/native-MuJoCo validation;
+no GPU run, deployment, remote operation, live ledger or protected branch was
+touched. Paired real-input evidence remains the prior 11-real/256-world result:
+active duplicate padding overflowed CCD4096 (max4401), parked fillers had zero
+overflow, and both retained 7/11 base acceptance.

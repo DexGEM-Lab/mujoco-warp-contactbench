@@ -15,6 +15,36 @@ from sim.manorl.synthesis_campaign import CAMPAIGN_CONTRACT, canonical_hash
 from sim.manorl.trajectory import ReferenceTrajectory, TrajectoryBatch
 
 
+def padding_policy_windows(enable_steps, lengths, claim_worlds: int) -> np.ndarray:
+    """Per-world policy disable steps for a wave with trailing parked padding.
+
+    Real claim worlds keep their production window operationally unchanged:
+    ``disable = length + 1`` is a no-op versus ``None`` because episodes end
+    at ``length`` and no final policy step is added. Each parked padding world
+    gets ``disable == enable``: an EMPTY policy window with zero residual
+    action every step (the stepper constructor permits equality). Enable
+    steps are never modified.
+    """
+    enable = np.asarray(enable_steps, dtype=np.int64)
+    lengths = np.asarray(lengths, dtype=np.int64)
+    if enable.ndim != 1 or lengths.shape != enable.shape:
+        raise ValueError('enable steps and lengths must match the batch worlds')
+    if not 0 < claim_worlds < enable.shape[0]:
+        raise ValueError('claim world count must be positive and below the batch width')
+    disable = enable.copy()
+    disable[:claim_worlds] = lengths[:claim_worlds] + 1
+    disable[claim_worlds:] = enable[claim_worlds:]
+    return disable
+
+def _stationary_reference(trajectory: ReferenceTrajectory) -> bool:
+    """A parked padding world holds constant hand and object references."""
+    q = np.asarray(trajectory.q_ref)
+    if not bool(np.all(q == q[0])):
+        return False
+    pos = np.asarray(trajectory.object_pos)
+    quat = np.asarray(trajectory.object_quat_xyzw)
+    return bool(np.all(pos == pos[0]) and np.all(quat == quat[0]))
+
 def added_penetration(current: dict, baseline: dict, *, tolerance: float = 1e-5):
     """Reject new/deeper overlap, not compliant contact already in the base."""
     for pair, depth in current.items():
@@ -105,6 +135,7 @@ class BatchSynthesisRuntime:
         self.hand_geoms = set(env.producer.keypoint_geom_ids_by_side['right'])
         self.floor = int(env.mujoco.mj_name2id(env.model, env.mujoco.mjtObj.mjOBJ_GEOM, 'floor'))
         self.capacity_evidence = {}
+        self.padding_evidence = {}
 
     def _check_topology(self, trajectories):
         if len(trajectories) != self.batch_size:
@@ -115,7 +146,94 @@ class BatchSynthesisRuntime:
                 or t.hand_sides != ('right',) or t.control_fps != 120):
                 raise ValueError('runtime object/scene/hand/clock topology changed')
 
-    def install(self, trajectories: list[ReferenceTrajectory], seeds: list[int]) -> None:
+    def build_parked_filler(self, template: ReferenceTrajectory) -> ReferenceTrajectory:
+        """Parked padding reference for extra physical worlds of a short wave.
+
+        Matches the paired CCD-overflow attribution evidence
+        (bowl-ccd-overflow-20260928, condition B): length, clock, phase and
+        every scalar of the template real trajectory are preserved; only the
+        hand reference (one constant parked posture: clipped-zero fingers,
+        wrist raised within joint limits) and the tracked-object reference
+        (stationary at its first frame) are replaced. Scene objects keep the
+        template's stationary initial poses. Raises RuntimeError when no
+        joint-limit-valid parked posture free of external hand contacts
+        exists — the caller must fail the wave explicitly instead of padding
+        with active reference duplicates. Same-hand palm/MCP/CMC baseline
+        overlaps are native geometry, not external collisions.
+        """
+        env = self.environment; mj = env.mujoco
+        lower = np.asarray(env.joint_lower); upper = np.asarray(env.joint_upper)
+        start = np.array(template.q_ref[0], copy=True)
+        dz = max(0.0, min(0.45, float(upper[2] - start[2]) - 1e-3))
+        # One canonical open/neutral posture; same-hand overlaps are the
+        # unchanged production baseline and stay allowed.
+        parked = np.array(start, copy=True)
+        parked[2] = min(start[2] + dz, upper[2] - 1e-3)
+        parked[6:] = np.clip(np.zeros(parked.shape[0] - 6), lower[6:], upper[6:])
+        data = getattr(self, '_proposal_data', None)
+        if data is None:
+            data = mj.MjData(env.model); self._proposal_data = data
+        data.qpos[:28] = parked
+        for name in self.scene_names:
+            address = self.object_qpos[name]
+            if template.scene_object_types:
+                slot = template.scene_object_types.index(name)
+                position = template.scene_object_initial_pos[slot]
+                quat = template.scene_object_initial_quat_xyzw[slot]
+            else:
+                position = template.object_pos[0]; quat = template.object_quat_xyzw[0]
+            data.qpos[address:address + 3] = position
+            data.qpos[address + 3:address + 7] = quat[[3, 0, 1, 2]]
+        mj.mj_kinematics(env.model, data); mj.mj_comPos(env.model, data); mj.mj_collision(env.model, data)
+        # Production gate is hand-vs-nonhand (XOR): hand–object, hand–table
+        # and any other external pair must show zero contact; hand–self
+        # overlap is the native Cheyingtong baseline and is preserved.
+        external, hand_self = [], []
+        for contact in data.contact[:data.ncon]:
+            a, b = int(contact.geom1), int(contact.geom2)
+            if (a in self.hand_geoms) != (b in self.hand_geoms):
+                external.append({'geom_pair': [a, b], 'depth_m': float(contact.dist)})
+            elif a in self.hand_geoms:
+                hand_self.append([a, b])
+        if external:
+            raise RuntimeError('no joint-limit-valid parked posture free of external hand '
+                               f'contacts: raise_m={parked[2] - start[2]:.4f} '
+                               f'external={external} hand_self={hand_self}')
+        T = int(len(template.q_ref))
+        q_all = np.repeat(parked[None, :], T, axis=0)
+        self.padding_evidence = {
+            'fingers': 'clipped_zero', 'raise_m': float(parked[2] - start[2]),
+            'template_length': T, 'external_hand_contacts': 0,
+            'baseline_hand_self_contacts': len(hand_self)}
+        return replace(
+            template,
+            q_ref=q_all, q_ref_by_side={'right': q_all},
+            object_pos=np.repeat(template.object_pos[:1], T, axis=0),
+            object_pos_raw=np.repeat(template.object_pos_raw[:1], T, axis=0),
+            object_quat_xyzw=np.repeat(template.object_quat_xyzw[:1], T, axis=0))
+
+    def _install_padding_windows(self, claim_worlds: int) -> None:
+        """Close the policy window of trailing parked padding worlds only.
+
+        Real claim windows stay operationally unchanged (disable = length+1
+        versus None); every padding world gets an empty window. Padding worlds
+        must hold the constant parked reference — an active duplicate with a
+        disabled policy is not the evidenced mechanism and is refused.
+        """
+        trajectories = self.environment.trajectories
+        if claim_worlds == len(trajectories):
+            return
+        if not 0 < claim_worlds < len(trajectories):
+            raise ValueError('claim world count must be positive and below the batch width')
+        for trajectory in trajectories[claim_worlds:]:
+            if not _stationary_reference(trajectory):
+                raise ValueError('padding worlds must hold a constant parked reference, '
+                                 'not an active duplicate of a real trajectory')
+        self.stepper._policy_disable_steps = padding_policy_windows(
+            self.stepper._policy_enable_steps, self.environment.trajectory_lengths, claim_worlds)
+
+    def install(self, trajectories: list[ReferenceTrajectory], seeds: list[int],
+                *, claim_worlds: int | None = None) -> None:
         from sim.manorl.environment import _build_masked_reset_data_fn, _expected_keypoint_ids
         self._check_topology(trajectories)
         env = self.environment
@@ -147,6 +265,8 @@ class BatchSynthesisRuntime:
         self.stepper._pending_done = None
         self.stepper._policy_enable_steps = env.early_phase_lengths.copy()
         self.stepper._policy_disable_steps = None
+        if claim_worlds is not None:
+            self._install_padding_windows(claim_worlds)
         self.capacity_evidence = {'max_contacts':0,'max_constraints':0,
             'reset_contract':'zero_velocity_warmstart_clock_per_wave_v1',
             'ccd_counter_available':bool(env._warp_ccd_overflow_guard_available),
@@ -214,10 +334,19 @@ class BatchSynthesisRuntime:
                 progress: Callable[[dict], None] = lambda value: None) -> tuple[list[dict], dict]:
         from tools.export_manorl_synthetic_lance import _evaluate_collected_candidate
         env=self.environment; n=len(trajectories)
-        stores=[defaultdict(list) for _ in range(n)]; commands=[defaultdict(list) for _ in range(n)]
-        contact_frames=[[] for _ in range(n)]
-        active=np.ones(n,dtype=bool); reasons=np.zeros(n,dtype=int); complete=np.zeros(n,dtype=bool)
-        failures=[None]*n
+        # Only actual claim worlds are recorded, terminated or credited. When
+        # the wave is padded, trailing physical worlds still simulate (batch
+        # width B is unchanged) but never enter stores, active-termination
+        # accounting or results, and collection ends when every real claim
+        # finishes even if padding worlds have not.
+        claim_n=len(claims)
+        if not 0 < claim_n <= n:
+            raise ValueError('collect requires at least one claim per physical batch')
+        stores=[defaultdict(list) for _ in range(claim_n)]; commands=[defaultdict(list) for _ in range(claim_n)]
+        contact_frames=[[] for _ in range(claim_n)]
+        active=np.zeros(n,dtype=bool); active[:claim_n]=True
+        reasons=np.zeros(claim_n,dtype=int); complete=np.zeros(claim_n,dtype=bool)
+        failures=[None]*claim_n
         started=time.perf_counter(); phase={'physics_policy_seconds':0.,'contacts_seconds':0.,'collection_seconds':0.}
         t0=time.perf_counter(); contacts,floor,obj,state=self._contacts();phase['contacts_seconds']+=time.perf_counter()-t0
         def append(i, native, ctrl):
@@ -229,7 +358,7 @@ class BatchSynthesisRuntime:
             stores[i]['object_orientation_xyzw'].append(np.array(p.object_orientation_xyzw[i],copy=True))
             stores[i]['scene_position'].append(np.array([native.xpos[i,self.object_bodies[name]] for name in self.scene_names]))
             stores[i]['scene_quaternion'].append(np.array([native.xquat[i,self.object_bodies[name]][[1,2,3,0]] for name in self.scene_names]))
-        for i in range(n):
+        for i in range(claim_n):
             append(i,state,env.reference_q_model[:,0]);contact_frames[i].append(contacts[i])
             if floor[i] or obj[i]:failures[i]='prefix_initial_collision';active[i]=False
         steps=0

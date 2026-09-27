@@ -160,6 +160,32 @@ def log_has_overflow(path):
     return False
 
 
+def install_wave(runtime, trajectories, samples, batch_size, *, group=None):
+    """Install one wave of actual claim candidates into the fixed-width runtime,
+    returning the padded (trajectories, samples) lists for collection.
+
+    Full batches keep the production stepper semantics unchanged. A short
+    wave parks the extra physical worlds (paired CCD-overflow attribution
+    evidence bowl-ccd-overflow-20260928, condition B) instead of duplicating
+    the last real reference, which saturated CCD capacity in condition A.
+    Real trajectories, seeds and samples are preserved bit-for-bit; filler
+    references keep the last real's length/clock/phase/scalars. If no
+    joint-limit-valid parked posture free of external hand contacts exists,
+    the wave fails explicitly here rather than silently reverting to active
+    padding.
+    """
+    actual=len(trajectories)
+    if actual>=batch_size:
+        runtime.install(trajectories,[s['seed'] for s in samples])
+        return trajectories,samples
+    filler=runtime.build_parked_filler(trajectories[-1])
+    trajectories=trajectories+[filler]*(batch_size-actual)
+    samples=samples+[samples[-1]]*(batch_size-actual)
+    runtime.install(trajectories,[s['seed'] for s in samples],claim_worlds=actual)
+    emit('batch_parked_padding',group=group,real_candidates=actual,
+         padding_worlds=batch_size-actual,**runtime.padding_evidence)
+    return trajectories,samples
+
 def run_worker(args):
     from sim.manorl.synthesis_runtime import BatchSynthesisRuntime
     from sim.manorl.synthesis_publication import runtime_context
@@ -231,9 +257,7 @@ def run_worker(args):
             if not valid:
                 emit('sampling_rejected_wave',group=args.group,attempts=proposals);continue
             actual=len(valid)
-            trajectories += [trajectories[-1]]*(args.batch_size-actual)
-            samples += [samples[-1]]*(args.batch_size-actual)
-            runtime.install(trajectories,[s['seed'] for s in samples])
+            trajectories,samples=install_wave(runtime,trajectories,samples,args.batch_size,group=args.group)
             heartbeat(phase='rollout')
             results,timing=runtime.collect(trajectories,samples,valid,progress=lambda d:heartbeat(phase='rollout',**d))
             for result in results:
