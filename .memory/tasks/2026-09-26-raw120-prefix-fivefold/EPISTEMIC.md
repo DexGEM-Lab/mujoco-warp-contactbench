@@ -88,9 +88,19 @@ filtered quota instead of inventing256 independent candidates. Mid-wave refill
 remains unimplemented. S2's completed/excluded sources must not be rerun merely to
 benchmark512; prior actual512 execution did not establish a valid-row speedup.
 
-S1 currently uses GPU2; S2 GPU0 is now free because its retained quota is complete.
-Other GPUs remain occupied by external jobs. Do not kill them. Eligible pool size is
-not actual occupancy. Managers and scheduling are independent of LLM availability.
+Filtering left only a large cube1 group with ready work. The original assigned-
+group exclusion prevented another local GPU from helping even with8912 ready
+slots. S1 now runs eb51e5d: prefer distinct groups, then share a ready group across
+idle GPUs, reserving one batch per planned launch.83 synthesis tests pass.
+Live evidence shows the original GPU2 worker was adopted unchanged and a newly
+released GPU3 started another cube1 worker. Their479 leased slots had479 unique
+tokens and source/slot pairs. Both run256 worlds; no worker or foreign process was
+signalled. This removes a scheduling limit, not the mid-wave refill limitation.
+
+S1 now uses GPU2/3. The previously free GPU1 and both S2 GPUs were subsequently
+occupied by external jobs; do not kill them. Eligible pool size is not occupancy.
+A later snapshot had23887 fleet accepted rows and479 unresolved slots, all leased;
+no ready work is not itself completion until leases settle. Managers and scheduling are independent of LLM availability.
 The v2 monitoring contract now uses retained-source completion and explicitly
 recognizes the planned drain/index/migration phases; the old all-source schedule
 is paused and retained as history. Existing EACCES recovery credited54 hash-verified rows
