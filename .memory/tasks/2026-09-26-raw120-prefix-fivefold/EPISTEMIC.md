@@ -63,10 +63,15 @@ CPU retreat/publication was roughly1s per415–719s round, not the dominant bott
 
 ## Deployment boundary and remaining verification
 The512 management handoff was graceful and preserved existing workers; actual
-512 execution was observed. The initial-batch refill fix is committed locally as
-0e6b5e8, not yet deployed. Source filtering and completion guards currently have
-50 passing focused tests and still require immutable production deployment and
-real exclusion-count verification. Large histories lack a settled-source index:
+512 execution was observed. Initial-batch refill0e6b5e8 and source filtering are
+included in immutable snapshot b1cfa66 on both hosts;78 focused synthesis tests
+pass. Activation jobs are now waiting for a graceful writer drain, so real
+exclusion counts and resumed new-policy production still require verification.
+The first operations helpers failed before any signals because Conda Python
+lacks pidfd_open; corrected jobs use system Python for process control and the
+original Conda interpreter for ledger activation. Both corrected jobs reached
+the intended drain phase. See the local record for current identities.
+Large histories lack a settled-source index:
 a read-only Server1 aggregation hit a35s deadline; EXPLAIN showed a full attempts
 scan and temporary grouping tree on local ext4. Initial index creation/filter
 activation therefore follows a writer drain rather than a long live write lock.
@@ -74,8 +79,9 @@ activation therefore follows a writer drain rather than a long live write lock.
 Only two GPUs were recently available to this campaign (S1 GPU2, S2 GPU0); the
 others were occupied by external jobs. Do not kill them. Eligible pool size is
 not actual occupancy. Managers and scheduling are independent of LLM availability.
-The monitoring contract must be updated to retained-source completion before the
-new filter is activated. Existing EACCES recovery credited54 hash-verified rows
+The v2 monitoring contract now uses retained-source completion and explicitly
+recognizes the planned drain/index/migration phases; the old all-source schedule
+is paused and retained as history. Existing EACCES recovery credited54 hash-verified rows
 once; keep that evidence and never recredit it.
 
 See OPS.md for immutable evidence and the ignored local operational record for
