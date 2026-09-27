@@ -259,3 +259,55 @@ def test_claim_wave_without_pending_respects_remaining_quota(wave_ledger):
     from tools.run_manorl_synthesis_campaign import claim_wave
     current=claim_wave(wave_ledger,'w','g',16)
     assert len(current)==len(slot_ids(current))==10
+
+
+def test_group_scheduler_prefers_unassigned_groups():
+    from tools.run_manorl_synthesis_campaign import select_worker_group
+    groups=[{'group_key':'a','ready':9000},{'group_key':'b','ready':1}]
+    assert select_worker_group(groups,{'a':1},{},{},256)=='b'
+
+
+def test_group_scheduler_shares_last_large_group():
+    from tools.run_manorl_synthesis_campaign import select_worker_group
+    groups=[{'group_key':'cube1','ready':8912}]
+    assert select_worker_group(groups,{'cube1':1},{},{},256)=='cube1'
+
+
+def test_group_scheduler_respects_reserved_and_leased_only_work():
+    from tools.run_manorl_synthesis_campaign import select_worker_group
+    groups=[{'group_key':'a','ready':300}]
+    assert select_worker_group(groups,{'a':1},{},{},256)=='a'
+    assert select_worker_group(groups,{'a':2},{},{'a':256},256) is None
+    assert select_worker_group([{'group_key':'a','ready':0}],{},{},{},256) is None
+    # A genuinely small final pool can run once, but is not shared prematurely.
+    assert select_worker_group([{'group_key':'a','ready':4}],{},{},{},256)=='a'
+    assert select_worker_group([{'group_key':'a','ready':4}],{'a':1},{},{},256) is None
+
+
+def test_group_scheduler_balances_sharing_and_never_uses_blocked_groups():
+    from tools.run_manorl_synthesis_campaign import select_worker_group
+    groups=[{'group_key':'a','ready':2048},{'group_key':'b','ready':2048}]
+    assert select_worker_group(groups,{'a':2,'b':1},{},{},256)=='b'
+    assert select_worker_group(groups,{'a':1,'b':1},{},{},256)=='a'
+    assert select_worker_group(groups,{'a':1,'b':1},{'a':{},'b':{}},{},256) is None
+
+
+def test_same_group_workers_claim_disjoint_nonexcluded_slots(tmp_path):
+    a=QuotaLedger(tmp_path/'shared.sqlite');b=QuotaLedger(tmp_path/'shared.sqlite')
+    try:
+        a.initialize({},[{'key':'excluded','group_key':'g'}])
+        a.configure_success_filter(minimum_attempts=1)
+        rejected=a.claim('w','g',1)[0];a.finish(rejected,{'accepted':False})
+        a.initialize({},[{'key':'b','group_key':'g'},{'key':'c','group_key':'g'}])
+        assert a.groups()[0]['ready']==10
+        one=a.claim('gpu1','g',6);two=b.claim('gpu2','g',6)
+        assert len(one)==6 and len(two)==4
+        assert slot_ids(one).isdisjoint(slot_ids(two))
+        assert all(c['source']['key']!='excluded' for c in one+two)
+        assert a.groups()[0]['ready']==0
+        for claim in one+two:
+            key=claim['source']['key']
+            a.finish(claim,{'accepted':True},row_uuid=f"{key}-{claim['slot']}",shard='verified.lance')
+        assert a.summary()['accepted']==10 and a.summary()['skipped_slots']==5
+        assert a.summary()['complete']
+    finally:a.close();b.close()

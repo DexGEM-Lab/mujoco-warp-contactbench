@@ -85,8 +85,14 @@ python -m tools.watch_manorl_synthesis_campaign \
   --campaign /local/campaign --gpus 2,3 --batch-size 256 --waves 8
 ```
 
-The supervisor owns two homogeneous-object worker processes. A worker retains
-one model/policy across waves and writes only compact-required state/commands.
+The supervisor assigns workers to available eligible GPUs, preferring distinct
+object/scene groups. If only a few groups remain, another idle GPU may share a
+group with at least one full batch of ready slots. Planned launches reserve their
+batch capacity until the next ledger snapshot; leased-only or blocked work never
+justifies another launch. Same-group workers claim disjoint slots atomically in
+the same host-local ledger. The live NVIDIA ownership check still prevents
+starting on a card occupied by another job. A worker retains one homogeneous
+model/policy across waves and writes only compact-required state/commands.
 Each new wave clears solver warm-start and clock state. Rejected start poses
 are replenished before dispatch so they do not consume full GPU episodes.
 Exact solved host buffers can be reused from observation extraction; batched

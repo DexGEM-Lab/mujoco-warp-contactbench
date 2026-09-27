@@ -27,6 +27,10 @@ If remaining group slots cannot hold two full batches, pending publication can
 make the next claim short. Settle it before padding that short claim, then reclaim
 only failed slots; full claims retain overlap. This fills the initial batch, not
 mid-rollout finished envs. Compare actual candidates with fixed world count.
+An object is exclusive to a host, not a single GPU. When filtering leaves one
+large group, idle local GPUs may claim disjoint slots from it; prefer distinct
+groups first and reserve planned launch capacity. Foreign compute ownership and
+blocked groups still prevent launch.
 
 Benchmark accepted published rows/GPU-hour using fixed candidates and separate
 outputs. Contact/constraint capacity and CCD warning visibility are explicit;

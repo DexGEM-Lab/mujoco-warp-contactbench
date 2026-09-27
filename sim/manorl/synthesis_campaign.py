@@ -426,7 +426,8 @@ class QuotaLedger:
                             and counts.get('leased',0)==0 and counts.get('ready',0)==0}
 
     def groups(self) -> list[dict]:
-        return [dict(row) for row in self.db.execute("""SELECT s.group_key,COUNT(*) remaining,MIN(q.attempts) min_attempts
+        return [dict(row) for row in self.db.execute("""SELECT s.group_key,COUNT(*) remaining,
+            SUM(q.state='ready') ready,MIN(q.attempts) min_attempts
             FROM slots q JOIN sources s ON s.key=q.source_key WHERE q.state IN ('ready','leased')
             GROUP BY s.group_key ORDER BY min_attempts,group_key""")]
 

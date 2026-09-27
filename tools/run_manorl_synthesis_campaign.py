@@ -286,6 +286,22 @@ class AdoptedWorker:
         return 0 if phase=='finished_round' else 1
 
 
+def select_worker_group(groups, assigned, blocked, reserved, batch_size):
+    """Prefer distinct groups, then share ready work across otherwise idle GPUs.
+
+    Reserve one batch per launch decision until the next ledger snapshot so a
+    small queue is not assigned to every free card before workers claim it.
+    """
+    candidates=[g for g in groups if g['group_key'] not in blocked
+                and g['ready']-reserved.get(g['group_key'],0)>0]
+    for group in candidates:
+        if not assigned.get(group['group_key'],0):return group['group_key']
+    shared=[g for g in candidates
+            if g['ready']-reserved.get(g['group_key'],0)>=batch_size]
+    if not shared:return None
+    return min(shared,key=lambda g:assigned[g['group_key']])['group_key']
+
+
 def supervise(args):
     from sim.manorl.synthesis_publication import reconcile_shards
     from sim.manorl.synthesis_admission import admitted_gpu_pool
@@ -351,18 +367,18 @@ def supervise(args):
         if stop:
             if not workers:break
             time.sleep(10);continue
-        assigned={r['group'] for r in workers.values()}
+        assigned=Counter(r['group'] for r in workers.values());reserved=Counter()
         groups=sorted(ledger.groups(),key=lambda g:(last_scheduled.get(g['group_key'],0),
             priority.get(g['group_key'].rsplit('-',1)[0],len(priority)),g['min_attempts'],g['group_key']))
         for gpu in admitted_gpu_pool(root,gpus):
             if gpu in workers:continue
-            eligible=[g for g in groups if g['group_key'] not in assigned and g['group_key'] not in blocked]
-            if not eligible:continue
+            group=select_worker_group(groups,assigned,blocked,reserved,args.batch_size)
+            if group is None:continue
             # Sample actual foreign compute ownership immediately before launch.
             query=subprocess.run(['nvidia-smi','-i',str(gpu),'--query-compute-apps=pid','--format=csv,noheader,nounits'],capture_output=True,text=True,check=True)
             if query.stdout.strip():
                 emit('gpu_busy',gpu=gpu,pids=query.stdout.strip());continue
-            group=eligible[0]['group_key'];owner=f'g{gpu}-{uuid.uuid4().hex[:12]}'
+            owner=f'g{gpu}-{uuid.uuid4().hex[:12]}'
             path=logs/(owner+'.log');handle=path.open('wb')
             command=[sys.executable,'-m','tools.run_manorl_synthesis_campaign','worker','--campaign',str(root),
                 '--group',group,'--owner',owner,'--batch-size',str(args.batch_size),'--waves',str(args.waves),'--log',str(path)]
@@ -373,7 +389,7 @@ def supervise(args):
                 'owner':owner,'group':group,'log':str(path),'started':time.time()}
             ledger.heartbeat(owner,{'pid':process.pid,'pid_start':_process_start(process.pid),'phase':'starting',
                 'group':group,'gpu':gpu,'log':str(path)})
-            last_scheduled[group]=time.time();assigned.add(group)
+            last_scheduled[group]=time.time();assigned[group]+=1;reserved[group]+=args.batch_size
             emit('worker_started',gpu=gpu,group=group,pid=process.pid,owner=owner,log=str(path))
         # Persistence/waiting belongs to this server process, not the LLM monitor.
         time.sleep(10)
