@@ -1,19 +1,23 @@
 # Raw120 fivefold synthesis
 
-This campaign consumes the completed per-object raw120 checkpoints. Its unit of
-completion is **five accepted, durably published variants for each retained raw
-source**. The current campaign permits excluding incomplete sources below25%
-historical generation success after at least20 settled attempts. Attempts,
-other sources' surplus rows, and benchmark outputs do not fill a quota.
-Already-published rows are retained, including partial results from excluded
-sources. The historical pre60 Far/Near workflow remains available separately.
+This campaign consumes completed per-object raw120 checkpoints. The intended
+goal is **a fixed accepted-row budget for each object–action pair: five times its
+original training-source count**. The25% rule removes weak sources from sampling,
+not their pair's output obligation. Other eligible sources in the SAME pair must
+supply the missing rows, with no five-row ceiling per source. No cross-pair
+substitution, duplicate credit or benchmark rows may fill the budget.
 
-## Completed campaign snapshot
+**Implementation gap:** the deployed source-slot ledger does not implement this.
+It caps each source at five, turns excluded deficits into skipped slots and
+subtracts them from target. The previous completion claim is withdrawn. The
+fixed goal remains74805;24006 valid rows exist and50799 are still owed. Pairs
+with no eligible sources must be reported blocked, not complete.
 
-The2026-09-27 cohort completed under the25%/20-settlement rule with24006 accepted
-rows:3226 retained sources at five each (16130 rows), plus7876 preserved rows
-from excluded sources.11735 sources stopped receiving new work;50799 slots
-were explicitly skipped. Actual published coverage is19 objects/105 object-action
+## Validated partial-data snapshot
+
+The2026-09-27 execution produced24006 accepted rows:3226 sources at five each
+(16130 rows), plus7876 preserved rows from excluded sources. Its legacy ledger
+stopped11735 sources and incorrectly canceled50799 output obligations. Actual published coverage is19 objects/105 object-action
 pairs, not the original20/129 inventory.
 
 Under the campaign output root, `fleet/completion/20260927-success25-v1/manifest.json`
@@ -21,8 +25,10 @@ freezes1195 shard paths/counts and verification evidence. `rows.json` contains
 UUID/source/slot/shard mappings with a `retained_source` flag. Per-host audits and
 source-exclusion snapshots are included. All shard indices and3585 payload-file
 hashes matched the ledgers/publication records;38 compact row samples passed.
-The manifest is a fixed reader snapshot; future admissions do not silently change
-its shard list. Periodic inspection was paused after final verification.
+The manifest is a fixed, valid reader snapshot; its data hashes/row counts remain
+valid, but its completion interpretation does not satisfy the fixed-pair goal.
+Do not overwrite it or existing data when correcting the quota implementation.
+The old monitoring criterion also requires correction before resuming.
 
 ## Motion and physics
 
@@ -131,13 +137,15 @@ promotion; transient CIFS permission/sharing failures receive up to four logged
 rename attempts (1/2/4-second backoff), without rewriting rows or overwriting a
 final shard. Persistent failure retains the partial and IPC evidence. Only after
 successful promotion does SQLite mark accepted slots. Promotion-before-ledger crashes are reconciled before dead-owner claims
-are released. Completion requires every retained source's five unique slots.
-Excluded deficits are explicitly skipped work, never successful rows. Persistent
-publication failures remain visible even when the retained quota is satisfied.
+are released. Intended completion requires every pair's fixed original-count×5
+budget, not surviving-source quotas. Source exclusion cannot remove that debt.
+Persistent publication failures and pairs without eligible sources must remain
+visible rather than being treated as complete.
 
-## Excluding low-success sources
+## Legacy source filtering (quota redistribution still missing)
 
-Enable the opt-in policy on each host-local campaign:
+The following existing command implements source exclusion but also the incorrect
+shrinking target; it is not sufficient for the fixed-pair goal. Its legacy API is:
 
 ```bash
 python -m tools.run_manorl_synthesis_campaign set-source-filter \
@@ -165,8 +173,9 @@ for retained sources. `sources_excluded`, `skipped_slots`, and
 As additional sources reach the evidence floor, the effective target can shrink.
 `retained_accepted` can decrease when a partial source is newly excluded while
 its rows move to `excluded_accepted`; total `accepted` does not lose those rows.
-Completion also requires no ready/leased slots, active workers, or publication
-blockers; quota completion alone must not hide a failed publication.
+These legacy counters can report complete with no ready/leased work even though
+fixed pair budgets remain unsatisfied. The replacement must validate pair totals
+as well as absence of in-flight work and blockers.
 
 Policy and per-source decisions live in local SQLite. Admission mirrors the
 audit to NAS `fleet/source-filters/<host>.json`, outside ownership records.

@@ -2,18 +2,22 @@
 
 Canonical guide: `docs/manorl_raw120_fivefold_synthesis.md`.
 
-The2026-09-27 cohort is complete:24006 accepted rows, including3226 retained
-sources at five each plus7876 preserved excluded-source rows. Frozen reader
-artifacts are `fleet/completion/20260927-success25-v1/{manifest,rows}.json`
-under its output root; actual coverage19 objects/105 pairs. Full index/payload
-hash reconciliation and38 row samples passed; periodic monitoring is paused.
-See the canonical guide for counts, policy semantics and snapshot boundaries.
+COMPLETION CLAIM WITHDRAWN: the user's unchanged goal is a fixed budget for EACH
+object–action pair = its original training-source count×5. The25% cutoff removes
+weak sources from sampling but must NOT reduce that pair's output goal. Remaining
+eligible sources must supply more variants, with no per-source five-row ceiling.
+A pair with no eligible sources is blocked, not complete; no cross-pair pooling.
 
-Each retained raw source owns five accepted saved slots, independent of retry count.
-The current opt-in policy skips incomplete sources below25% durable rows per
-settled generation attempt, after at least20 settlements. Existing data and
-in-flight claims are preserved; skipped slots are never counted as successes.
-Original inventory and retained/effective targets are separate status fields.
+The deployed ledger does not yet implement this: it caps slots at5 per source
+and subtracts skipped slots from target. Original target74805, valid saved24006,
+outstanding50799. Fix pair-budget allocation/unique extra-variant lineage and
+monitoring before resuming; do not restart the old empty queue as if fixed.
+
+The frozen `fleet/completion/20260927-success25-v1/{manifest,rows}.json` remains
+valid PARTIAL-DATA evidence (19 objects/105 nonempty pairs, full payload/index
+verification and38 samples passed), not goal completion. Preserve every existing
+row and published hash. Exactly25% source eligibility and the previously stated
+20-settled-attempt floor remain unless explicitly revised.
 Historical pre60 Far/Near remains separate. New prefixes preserve the trained
 early80 AFTER augmentation and join native-servo-clipped finger targets; raw
 MANO PIPs can violate physical limits without invalidating the training reference.

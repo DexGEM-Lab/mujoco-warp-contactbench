@@ -1,19 +1,41 @@
-# Current model — completed cohort
+# Current model — fixed pair quota not yet implemented
 
-## Outcome and scope
-The campaign is complete under the user's revised25% source-selection rule,
-not under the original all-source74805-slot objective. All3226 retained raw
-sources have five distinct accepted rows (16130 rows). Another7876 previously
-accepted rows from excluded sources are preserved:24006 total.11735 sources
-stopped receiving new work, with50799 missing slots explicitly skipped. Actual
-published coverage is19 objects/105 object-action pairs, from the original
-20-object/129-pair inventory. cuboid1 produced no accepted rows.
+## Corrected understanding (authoritative)
+The user clarified the ORIGINAL goal: each object–action pair keeps its target
+of original training-source count×5 even after weak sources are excluded.
+100 sources with50 excluded still requires500 accepted rows, not250. Healthy
+sources may contribute more than five variants. Quota can move between sources
+within a pair, never between different pairs.
+
+The implementation does NOT meet this goal. slots has CHECK(slot<5), initialize
+creates five slots per source, exclusions turn missing source slots into skipped,
+and summary subtracts skipped from target. There is no donor-source allocation
+or replenishment of excluded quota. The prior overall completion claim is
+withdrawn; this was an assistant interpretation and implementation error, not a
+user reduction of the output goal.
+
+The verified24006 rows remain valid. Fixed target74805, deficit50799. Of129
+trained/admitted pairs,105 have at least one row and24 have none;105 nonempty
+pairs does not mean105 fixed quotas are complete. Next implementation must keep
+pair budgets separate from source eligibility, migrate/credit all existing rows,
+permit unique variants beyond five per source, and report no-eligible-source
+pairs as blocked. No live ledger has yet been migrated to that design.
+
+## Valid partial-data evidence (old completion claim superseded)
+The old implementation stopped after3226 sources reached five rows (16130)
+and retained7876 additional previously accepted rows:24006 total. It incorrectly
+removed50799 output obligations when11735 sources were excluded. These skipped
+obligations are still owed under the user's fixed-pair goal. Published coverage
+is19 objects/105 object-action pairs from the trained20/129 inventory; cuboid1
+has no accepted output.
 
 S1 has22523 accepted rows,2975 retained sources full,11303 excluded sources and
 48867 skipped slots. S2 has1483 accepted rows,251 retained sources full,432
 excluded sources and1932 skipped slots. Both have no ready/leased slots,
-workers, or blocked publication. Watchers completed normally; the v2 periodic
-monitor is paused after verification. External training was never stopped.
+workers, or blocked publication under the old schema. This empty queue is a
+consequence of the wrong quota model, not proof that the intended goal is done.
+The v2 monitor is paused and also needs its completion criterion corrected.
+External training was never stopped.
 
 ## Delivered snapshot and verification
 The campaign output's `fleet/completion/20260927-success25-v1/manifest.json`
