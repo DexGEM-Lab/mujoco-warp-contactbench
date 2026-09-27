@@ -1,10 +1,12 @@
 # Current model
 
 ## Objective and completion
-Every one of 13,540 currently completed-policy raw sources owns five accepted
-published slots (67,700 rows, 16 objects, 113 pairs). Attempts, benchmark rows,
-or easier sources' surplus never fill another source's quota. Training remains
-on four GPUs; synthesis owns Server1 GPU2/3.
+Every admitted raw source owns five accepted published slots. The active fleet
+has14,223 sources /71,115 slots /18 objects /121 pairs: original Server1 cohort
+plus newly completed cuboid3 and sphere2 on Server2. Attempts, benchmark rows,
+or easier sources' surplus never fill another source's quota. Four GPUs now
+synthesize; the two remaining training GPUs join only after their completed
+models are validated and admitted.
 
 ## Supported mechanisms
 - Preserve the trained early80 AFTER the physical approach prefix. Merely
@@ -44,15 +46,21 @@ unavailable; nacon/nefc checks and captured native warnings guard publication.
 A capacity number is not proof of no truncation.
 
 ## Current operational state
-Production6495607 runs on Server1 GPU2/3 with B256 and8 waves per worker round.
-Operator inspection confirmed live watch/supervisor/two workers and fresh
-rollout heartbeats. Subsequent direct SQL and NAS reads confirmed833 accepted
-production rows (554 cylinder6,279 cube2);12 sampled rows across four actual
-NAS shards passed compact validation. Production is genuinely producing data,
-but67,700-row completion remains open. Benchmark outputs are separate.
+Controller revisionc34ff3c governs append-only admission and dynamic GPU pools;
+physics/sampling/publication math is unchanged. Server1 management adopted both
+live6495607 workers without changing their PIDs. New workers label their actual
+executing source revision rather than the original campaign revision.
+Server2 GPU0/1 actively synthesize cuboid3 (533 sources/2665 slots) and sphere2
+(150/750). First confirmed publications were85 and35 rows, with four NAS rows
+read back through the compact validator and matching source revision.
+Each host keeps local SQLite. The NAS registry assigns16 objects to Server1 and2
+to Server2; publication roots are disjoint. Server1 GPU0/1 stay gated by final
+largeclamp/cylinder5 model admission and live GPU ownership. The owned Server2
+training heartbeat was retired after confirming no active trainer, preventing
+old failed-training queues from competing for the newly assigned synthesis GPUs.
 Owner locks pass to CPU publishers, so a killed GPU parent cannot expose slots
-still being published. Watch restarts a departed supervisor; supervisor adopts
-survivors. PAUSE is explicit operator intent.
+still being published. Watch restarts departed supervisors, which adopt survivors.
+PAUSE remains explicit operator intent. Full source-level completion is open.
 
 ## Open questions / limits
 - Actual per-object production yield, hard-source deficits and source-level five
