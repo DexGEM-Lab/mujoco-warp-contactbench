@@ -159,8 +159,16 @@ eligible donors of the SAME pair, least-loaded first, so
 overclaimed or overpublished, and no cross-pair borrowing is possible. A pair
 with remaining debt and no eligible donors is reported `blocked`, never
 complete. `summary()`/`pair_status()` expose fixed target, accepted, remaining,
-pair debt, and runnable/blocked pairs; completion additionally requires zero
-outstanding leases. The25% donor filter keeps the20-settled-attempt floor,
+pair debt split into `blocked_pair_debt` (stranded without donors) and
+`runnable_pair_debt`, plus runnable/blocked pair lists; completion additionally
+requires zero outstanding leases. An independent live inventory of both legacy
+ledgers confirms the expected post-migration shape: all129 pairs deficient;
+S1 14278 sources / target71390 / accepted22523 / deficit48867 with2758
+eligible donors and32 no-donor pairs (11267 blocked debt,37600 runnable);
+S2 683/3415/1483/1932 with176 eligible donors and2 blocked sphere2 pairs
+(500 blocked,1432 runnable); totals2934 eligible donors (292 formerly-full
+donors below25%),34 blocked pairs carrying11767 debt and95 runnable pairs
+carrying39032. The25% donor filter keeps the20-settled-attempt floor,
 strictly-below exclusion, finished-attempt denominator and durable accepted
 numerator, but no longer exempts sources that already reached five rows.
 

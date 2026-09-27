@@ -106,3 +106,22 @@ deficits without donors. The migration reapplies the stored 25%/20 policy
 before returning, so no claim can run against the uncorrected donor set.
 Parent owns remote operations, final acceptance and integration; no SSH, no
 protected-branch merges, no data deletion, no delegation.
+
+## 2026-09-28T12:40:00+08:00 — Parent live inventory confirms migration expectations
+
+Parent's independent read-only inventory of both live legacy ledgers: source
+specs carry explicit `pair` (e.g. cylinder7:02) and groups span actions, so
+the migration's spec-based pair extraction and mixed-action group isolation
+match reality. All129 pairs are deficient. With the full5 exemption removed
+and old exclusions preserved: S1 14278 sources / target71390 / accepted22523 /
+deficit48867, 2758 eligible donors, 217 formerly-full donors below .25, 32
+no-donor pairs (11267 blocked debt, 37600 runnable); S2 683/3415/1483/1932,
+176 eligible, 75 formerly-full, 2 blocked sphere2:01/02 pairs (500/1432).
+Totals: 2934 eligible donors, 34 blocked pairs /11767 debt, 95 runnable
+pairs /39032 debt. Both ledgers hold accepted/skipped only (no leases,
+workers), so the migration's lease-refusal precondition passes; admission
+daemons are alive and the parent will quiesce them before the real run. The
+existing attempts_settled_source index keeps grouped policy reapplication
+counts fast (<.3s). Commit733e3a8+ reports blocked debt separately
+(`blocked_pair_debt`/`runnable_pair_debt` in summary) and preserves all
+target/credit; no GPU/source mutation was performed by this worker.

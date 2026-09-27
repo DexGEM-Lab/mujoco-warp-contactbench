@@ -562,9 +562,14 @@ class QuotaLedger:
         blocked = [p["pair"] for p in pairs if p["blocked"]]
         met = sum(p["met"] for p in pairs)
         remaining = max(0, target - accepted)
+        # Debt the fleet can still generate is reported separately from debt
+        # stranded on no-donor pairs: blocked debt cannot shrink without new
+        # donors, while runnable debt is ordinary outstanding work.
+        blocked_debt = sum(p["remaining"] for p in pairs if p["blocked"])
         return {"contract": PAIR_BUDGET_CONTRACT, "sources": sources, "pairs": len(pairs),
                 "accepted": accepted, "target": target, "original_target": target,
                 "remaining": remaining, "pair_debt": remaining, "states": counts,
+                "blocked_pair_debt": blocked_debt, "runnable_pair_debt": remaining - blocked_debt,
                 "skipped_slots": counts.get('skipped', 0),
                 "sources_excluded": excluded, "sources_retained": sources - excluded,
                 "retained_accepted": accepted - excluded_accepted, "excluded_accepted": excluded_accepted,

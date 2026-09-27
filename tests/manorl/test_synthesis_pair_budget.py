@@ -119,6 +119,7 @@ def test_mixed_action_group_never_borrows_across_pairs(tmp_path):
     assert summary['blocked_pairs'] == ['cube1:01']
     assert summary['pairs_blocked'] == 1 and summary['pairs_met'] == 1 and not summary['complete']
     assert summary['remaining'] == 10 and summary['pair_debt'] == 10
+    assert summary['blocked_pair_debt'] == 10 and summary['runnable_pair_debt'] == 0
     assert [p['pair'] for p in ledger.pair_status() if p['blocked']] == ['cube1:01']
     assert ledger.claim('w', 'cube1-g', 4) == []  # no runnable work, no cross-pair growth
     pairs = {r['pair'] for r in ledger.db.execute(
@@ -161,6 +162,7 @@ def test_exactly_quarter_is_eligible_and_twenty_settled_floor(tmp_path):
     assert summary['sources_excluded'] == 2
     assert summary['accepted'] == 5 and summary['excluded_accepted'] == 5
     assert summary['remaining'] == 5 and summary['blocked_pairs'] == ['cube1:01']  # target never shrank
+    assert summary['blocked_pair_debt'] == 5 and summary['runnable_pair_debt'] == 0
     ledger.close()
 
 
@@ -307,6 +309,7 @@ def test_migration_preserves_credit_history_and_is_idempotent(tmp_path):
         assert summary['contract'] == PAIR_BUDGET_CONTRACT
         assert summary['target'] == 15  # fixed again: exclusions cannot shrink it
         assert summary['accepted'] == 4 and summary['excluded_accepted'] == 1
+        assert summary['blocked_pair_debt'] == 0 and summary['runnable_pair_debt'] == 11  # donors remain
         assert summary['sources_excluded'] == 1
         assert summary['attempts'] == legacy_summary['attempts']
         assert summary['source_success_policy']['minimum_rate'] == .25
