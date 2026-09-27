@@ -319,3 +319,69 @@ active liveness targets. A blocked group or
 idle GPU with remaining work is an intervention signal, not completion. A Pi
 monitor agent performs bounded inspections; recurring agent inspection requires
 an enabled live Pi scheduler and is distinct from server-side process recovery.
+
+## Explicit single-object authority transfer (2026-09-28)
+
+`sim/manorl/synthesis_transfer.py` implements ONE bounded seam for reusing
+another host's GPUs when a pair has no eligible local donors: hand a whole
+object at a time to the destination campaign, never a second independently
+initialized 5x queue. It is not a general remote-GPU backend and contains no
+automatic balancing, lease expiry heuristics or rollback.
+
+**Quiescence prerequisite (documented, externally established):** both
+campaigns are fully drained — zero `leased` outputs in either ledger and no
+live worker owner lock (`owner_lock_busy`) on either campaign root. Every
+transfer command re-checks this directly and refuses otherwise. Stop both
+campaigns' watch/admission/supervisor and settle all publications first.
+
+**CLI sequence** (`python -m tools.run_manorl_synthesis_campaign …`, host-local
+staging directory copied to the destination host between steps 1 and 2):
+
+1. `transfer-export --campaign <S1-root> --object <obj> --registry <NAS
+   registry> --staging <new empty dir> --host <S1> --campaign-id <S1-id>
+   --destination-host <S2> --destination-campaign <S2-id> [--transfer-id …]`
+   — stages a relationally complete bundle (sources/outputs/attempts/
+   exclusions/history/pair targets/policy + pickles + checkpoint + sidecar)
+   under hashed `manifest.json`; the directory becomes read-only (0444) and
+   is never rewritten.
+2. `transfer-import --campaign <S2-root> --registry … --staging <same dir>
+   --host <S2> --campaign-id <S2-id>` — verifies the manifest hashes, the
+   generation contract, registry ownership, and key/pair/group/UUID/token/seed
+   collisions; copies inputs byte-identically rebasing ONLY machine-local
+   pickle/checkpoint paths; inserts all rows in ONE transaction; writes
+   `<S2-root>/transfer-receipts/<id>.json`.
+3. `transfer-detach --campaign <S1-root> --registry … --staging …
+   --destination-receipt <S2 receipt>` — requires the verified destination
+   receipt AND unchanged source fingerprints; retires the object's ACTIVE rows
+   in ONE transaction while keeping exact retired-credit receipts
+   (`transferred_credit`: pair, source, variant, UUID, original shard);
+   writes `<S1-root>/transfer-receipts/<id>.detach.json`.
+4. `transfer-commit-owner --registry … --staging … --source-receipt <detach
+   receipt> --destination-receipt <import receipt>` — registry only, after
+   BOTH receipts verify: appends an immutable record under
+   `objects/<obj>.transfers/` and atomically flips
+   `objects/<obj>.current.json`. The original `objects/<obj>.json` owner
+   record is never rewritten.
+5. `transfer-finalize --campaign <root> --registry … --staging … --host …
+   --campaign-id …` — on EACH host: verifies the registry now shows the
+   destination as owner and marks the local `authority_transfers` row
+   `complete`.
+
+**Interruption and recovery.** Every step is idempotent on replay (same
+inputs → same receipts, no duplication) or fails with the exact recovery
+state. While a transfer row is not `complete`, claims for that object are
+refused on both hosts and the campaign summary can never report `complete`
+(`transfers_pending` lists it). There is NO automatic destructive rollback
+after the destination can generate; recover an interrupted handoff by
+re-running the same step, then continuing the sequence. The source ledger is
+mutated only at detach, only behind a verified destination receipt. `reconcile_shards`
+on the source skips ONLY exact retired-credit receipts (matching source,
+variant, UUID and ORIGINAL shard path); unknown sources, changed UUIDs or
+shard conflicts still fail loudly. Conservation at a completed handoff:
+global source-key set, per-pair ORIGINAL-source×5 targets, accepted
+UUID/source/variant/shard set, full attempt/seed history and the exclusion
+audit are all preserved; authority is unique; transferred credit is not new
+production. Per-host counters move; the global target never shrinks.
+
+All export/receipt data is generated programmatically from SQLite and file
+bytes; never transcribe hashes or IDs by hand.

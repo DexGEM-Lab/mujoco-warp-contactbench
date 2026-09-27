@@ -176,6 +176,15 @@ def reconcile_shards(ledger, output: Path, *, verify_hashes: bool = True) -> int
                 f'SELECT state,row_uuid,shard FROM {table} WHERE source_key=? AND {column}=?',
                 (claim['source']['key'], claim['slot'])).fetchone()
             if row is None:
+                # A completed authority transfer retired this source locally.
+                # Skip ONLY an exact already-credited transferred row (source,
+                # variant, UUID and its ORIGINAL shard); anything else — an
+                # unknown source, a foreign UUID or a shard conflict — is a
+                # real reconciliation failure and still fails loudly.
+                matches = getattr(ledger, 'retired_credit_matches', None)
+                if (matches is not None and matches(claim['source']['key'], claim['slot'],
+                                                    record['row_uuid'], str(path.parent))):
+                    continue
                 raise RuntimeError('published source absent from ledger')
             if row['state']=='accepted':
                 if row['row_uuid']!=record['row_uuid'] or row['shard']!=str(path.parent):

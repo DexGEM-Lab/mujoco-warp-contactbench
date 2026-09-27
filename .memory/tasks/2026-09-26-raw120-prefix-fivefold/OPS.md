@@ -186,3 +186,44 @@ abandoned-not-P/F, last-lease release decision, two-worker pending leases,
 upgrade rollback/idempotence/trigger replacement and evidence-gated repair).
 No worker was stopped, no ledger or shard mutated, nothing deployed; the
 parent drains current rounds and runs the upgrade on both hosts.
+
+## 2026-09-28T04:22:00+08:00 — Explicit single-object authority transfer tool (fifth commit)
+
+Implemented the bounded authority-transfer seam for reusing S2 GPUs on
+blocked S1 pairs: `sim/manorl/synthesis_transfer.py` plus five
+`transfer-*` subcommands in `tools/run_manorl_synthesis_campaign.py`.
+One object at a time under externally established FULL campaign quiescence
+(zero leased outputs, no live worker owner locks — re-checked by every
+command); export/import/detach/commit-owner/finalize with durable receipts,
+idempotent replay or loud refusal, and no automatic rollback. Schema additions
+are minimal: `authority_transfers` (pending rows block claims and campaign
+completion on both hosts) and `transferred_credit` (exact retired-credit
+receipts). Registry authority uses an append-only transfer record plus an
+atomic `objects/<obj>.current.json` pointer; `ownership_record` returns the
+pointer first, so admission already skips foreign-owned objects and
+`register_existing` additionally skips objects mid-transfer. `reconcile_shards`
+now skips ONLY exact retired receipts (source, variant, UUID, ORIGINAL shard);
+unknown sources/UUID/shard conflicts still fail loudly. Only machine-local
+pickle/checkpoint paths are rebased onto verified byte-identical copies;
+source identity, hashes, pair targets, attempts/seeds, exclusions and history
+are imported verbatim. Historical accepted rows keep their original NAS shard
+paths; the destination publishes new rows under its own output root. Frozen
+fleet/completion/20260927-success25-v1 paths are untouched. No physics,
+sampler, reward or eligibility math changed. Focused tests
+`tests/manorl/test_synthesis_transfer.py` use two real SQLite campaigns with
+accepted/failed/unfinished/excluded history and real input files: global
+conservation (sources, pair targets, accepted UUID/variant/shard, attempts,
+seeds, exclusion audit), destination path rebase, lineage continuation
+without duplication, claim/completion blocking until finalize, exact
+retired-receipt reconciliation (foreign/changed/shard-conflict still fail),
+precondition/identity/config-mismatch refusals, interrupted-step idempotent
+replay, admission semantics before/after transfer, and CLI wiring. Validation
+with /home/jay/dexrobot/FromSSH/manoRL_mujoco/.venv/bin/python: 93 passed
+across test_synthesis_{transfer,pair_budget,admission,publication,
+source_filter,campaign}.py, plus 23 passed in test_synthesis_{seed_plan,
+acceptance}.py. The one earlier failure under bare python3 was an
+environment-only `import mujoco` miss, not a regression. Operational
+CLI/quiescence/recovery documentation was appended to
+docs/manorl_raw120_fivefold_synthesis.md. No SSH, no live ledger, no GPU job,
+no dataset deletion, no protected-branch merge; the parent owns both
+production-ledger copy rehearsals and any actual object choice/transfer.

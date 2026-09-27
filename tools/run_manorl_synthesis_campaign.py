@@ -424,6 +424,30 @@ def main(argv=None):
     p.add_argument('--minimum-attempts',type=int,default=20)
     p=sub.add_parser('upgrade-source-policy',help='Quiescent pending-aware exclusion-guard upgrade with audited repair of premature exclusions')
     p.add_argument('--campaign',type=Path,required=True)
+    for name,help_text in (
+        ('transfer-export','Quiescent source host: stage a relationally complete single-object authority-transfer bundle'),
+        ('transfer-import','Quiescent destination host: validate and stage a transferred object bundle with a durable receipt'),
+        ('transfer-detach','Quiescent source host: retire a transferred object behind a verified destination receipt'),
+        ('transfer-commit-owner','Registry only: flip the exclusive object owner after both transfer receipts verify'),
+        ('transfer-finalize','Verify registry ownership and mark a local authority transfer complete')):
+        p=sub.add_parser(name,help=help_text)
+        if name!='transfer-commit-owner':
+            p.add_argument('--campaign',type=Path,required=True)
+        p.add_argument('--registry',type=Path,required=True)
+        p.add_argument('--staging',type=Path,required=True)
+        if name in ('transfer-export','transfer-import','transfer-finalize'):
+            p.add_argument('--host',required=True)
+            p.add_argument('--campaign-id',required=True)
+        if name=='transfer-export':
+            p.add_argument('--object',required=True)
+            p.add_argument('--destination-host',required=True)
+            p.add_argument('--destination-campaign',required=True)
+            p.add_argument('--transfer-id',default=None)
+        if name=='transfer-detach':
+            p.add_argument('--destination-receipt',type=Path,required=True)
+        if name=='transfer-commit-owner':
+            p.add_argument('--source-receipt',type=Path,required=True)
+            p.add_argument('--destination-receipt',type=Path,required=True)
     p=sub.add_parser('status');p.add_argument('--campaign',type=Path,required=True)
     args=parser.parse_args(argv)
     if args.command=='prepare':prepare(args)
@@ -456,6 +480,32 @@ def main(argv=None):
             atomic_json(root/'eligibility-upgrade-report.json',report)
             emit('eligibility_guard_upgraded',**report)
         finally:ledger.close()
+    elif args.command=='transfer-export':
+        from sim.manorl.synthesis_transfer import export_object
+        report=export_object(args.campaign,obj=args.object,registry=args.registry,staging=args.staging,
+            host=args.host,campaign_id=args.campaign_id,destination_host=args.destination_host,
+            destination_campaign=args.destination_campaign,transfer_id=args.transfer_id)
+        emit('object_authority_exported',**report)
+    elif args.command=='transfer-import':
+        from sim.manorl.synthesis_transfer import import_object
+        receipt=import_object(args.campaign,registry=args.registry,staging=args.staging,
+            host=args.host,campaign_id=args.campaign_id)
+        emit('object_authority_imported',**receipt)
+    elif args.command=='transfer-detach':
+        from sim.manorl.synthesis_transfer import detach_object
+        receipt=detach_object(args.campaign,staging=args.staging,
+            destination_receipt=args.destination_receipt)
+        emit('object_authority_detached',**{k:v for k,v in receipt.items() if k!='retired_rows'})
+    elif args.command=='transfer-commit-owner':
+        from sim.manorl.synthesis_transfer import commit_registry_owner
+        report=commit_registry_owner(args.registry,staging=args.staging,
+            source_receipt=args.source_receipt,destination_receipt=args.destination_receipt)
+        emit('object_authority_committed',**{k:v for k,v in report.items() if k!='current_owner'})
+    elif args.command=='transfer-finalize':
+        from sim.manorl.synthesis_transfer import finalize_transfer
+        report=finalize_transfer(args.campaign,registry=args.registry,staging=args.staging,
+            host=args.host,campaign_id=args.campaign_id)
+        emit('object_authority_finalized',**report)
     else:
         ledger=QuotaLedger(args.campaign/'quota.sqlite');print(json.dumps(ledger.summary(),indent=2));ledger.close()
     return 0
