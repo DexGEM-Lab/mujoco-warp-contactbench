@@ -154,3 +154,18 @@ def test_watch_continues_until_quota_or_explicit_pause():
     assert should_continue({'complete':False},paused=False)
     assert not should_continue({'complete':True},paused=False)
     assert not should_continue({'complete':False},paused=True)
+
+
+def test_stale_monitor_checks_current_assignments_not_retired_failures():
+    import json
+    from tools.watch_manorl_synthesis_campaign import active_worker_heartbeats, stale_worker_owners
+    rows=[{'owner':'retired','heartbeat':100.,'details':json.dumps({'phase':'publication_backpressure'})},
+          {'owner':'active','heartbeat':2995.,'details':json.dumps({'phase':'rollout','step':400})}]
+    status={'workers':{'0':{'owner':'active'}}}
+    current=active_worker_heartbeats(status,rows,3000.)
+    assert set(current)=={'active'} and current['active']['heartbeat_age_s']==5.
+    assert stale_worker_owners(current)==[]
+    current=active_worker_heartbeats(status,rows,5000.)
+    assert stale_worker_owners(current)==['active']
+    missing=active_worker_heartbeats({'workers':{'0':{'owner':'missing'}}},rows,3000.)
+    assert stale_worker_owners(missing)==['missing']

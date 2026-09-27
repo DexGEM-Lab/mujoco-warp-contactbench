@@ -24,6 +24,22 @@ def should_continue(summary: dict, *, paused: bool) -> bool:
     return not paused and not summary['complete']
 
 
+def active_worker_heartbeats(status: dict, worker_rows, now: float) -> dict:
+    """Historical failed owners are audit records, not current liveness targets."""
+    records={row['owner']:row for row in worker_rows}
+    active={}
+    for assignment in status.get('workers',{}).values():
+        owner=assignment['owner'];row=records.get(owner)
+        active[owner]=({'heartbeat_age_s':now-row['heartbeat'],**json.loads(row['details'])}
+                       if row is not None else {'heartbeat_age_s':None,'phase':'heartbeat_missing'})
+    return active
+
+
+def stale_worker_owners(active: dict, threshold: float = 1800) -> list[str]:
+    return [owner for owner,item in active.items()
+            if item['heartbeat_age_s'] is None or item['heartbeat_age_s']>threshold]
+
+
 def lock_busy(path: Path) -> bool:
     with path.open('a+') as handle:
         try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -72,19 +88,22 @@ def main(argv=None):
                 print(json.dumps({'event':'supervisor_started','pid':child.pid,'time':time.time(),'log':str(log)}),flush=True)
             status=json.loads((root/'status.json').read_text()) if (root/'status.json').exists() else {}
             worker_rows=ledger.db.execute('SELECT owner,heartbeat,details FROM workers').fetchall()
-            latest_workers={row['owner']:{'heartbeat_age_s':time.time()-row['heartbeat'],**json.loads(row['details'])}
-                            for row in worker_rows if time.time()-row['heartbeat']<7200}
+            now=time.time()
+            latest_workers={row['owner']:{'heartbeat_age_s':now-row['heartbeat'],**json.loads(row['details'])}
+                            for row in worker_rows if now-row['heartbeat']<7200}
+            active_workers=active_worker_heartbeats(status,worker_rows,now)
+            stale_owners=stale_worker_owners(active_workers)
             alerts=[]
             if status.get('blocked'):alerts.append('blocked_groups_require_intervention')
             if status and time.time()-status.get('time',0)>180:alerts.append('supervisor_status_stale')
             local_free=shutil.disk_usage(root).free;publish_free=shutil.disk_usage(config['output']).free
             if local_free<10*1024**3:alerts.append('local_space_below_10GiB')
             if publish_free<20*1024**3:alerts.append('publish_space_below_20GiB')
-            if any(w['heartbeat_age_s']>1800 and w.get('phase')!='finished_round' for w in latest_workers.values()):
-                alerts.append('worker_heartbeat_stale')
+            if stale_owners:alerts.append('worker_heartbeat_stale')
             atomic_json(root/'watch-status.json',{'time':time.time(),'pid':os.getpid(),'state':'running',
                 'supervisor_pid':None if child is None else child.pid,'supervisor_lock_held':active,
                 'restarts':restarts,'alerts':alerts,'local_free_bytes':local_free,'publish_free_bytes':publish_free,
+                'active_workers':active_workers,'stale_worker_owners':stale_owners,
                 'recent_workers':latest_workers,**summary})
             time.sleep(args.interval)
     finally:

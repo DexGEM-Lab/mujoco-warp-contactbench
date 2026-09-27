@@ -154,7 +154,10 @@ remove that marker and restart the watch process to resume. SIGTERM/SIGINT to th
 watch process records the same explicit pause intent.
 
 Monitor `watch-status.json`, `status.json`, worker heartbeats, per-source deficits,
-fatal/error logs, actual GPU ownership and local/NAS space. A blocked group or
+fatal/error logs, actual GPU ownership and local/NAS space. Heartbeat alerts use
+only current supervisor owner assignments (`active_workers` and
+`stale_worker_owners`); retained historical failures remain audit evidence, not
+active liveness targets. A blocked group or
 idle GPU with remaining work is an intervention signal, not completion. A Pi
 monitor agent performs bounded inspections; recurring agent inspection requires
 an enabled live Pi scheduler and is distinct from server-side process recovery.
