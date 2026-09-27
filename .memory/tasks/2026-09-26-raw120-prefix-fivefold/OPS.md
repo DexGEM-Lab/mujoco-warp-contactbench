@@ -227,3 +227,21 @@ CLI/quiescence/recovery documentation was appended to
 docs/manorl_raw120_fivefold_synthesis.md. No SSH, no live ledger, no GPU job,
 no dataset deletion, no protected-branch merge; the parent owns both
 production-ledger copy rehearsals and any actual object choice/transfer.
+
+## 2026-09-28T05:56:53+08:00 — Undeployed authority-transfer prototype deferred from the active line (sixth commit)
+
+Commit 84432142e9c362a7e32602dc9a2df0f754f87e46 (the explicit single-object
+authority-transfer seam) is an UNDEPLOYED prototype that carried three BLOCK
+review findings. The parent authorized a reversible defer: a scoped revert
+commit removes only its executable code (`sim/manorl/synthesis_transfer.py`),
+CLI wiring (`tools/run_manorl_synthesis_campaign.py` transfer-* subcommands),
+tests (`tests/manorl/test_synthesis_transfer.py`) and guide documentation
+(`docs/manorl_raw120_fivefold_synthesis.md` transfer section), restoring the
+active feature line to the reviewed/deployed 8d7fc386955f8350ab7f06491b6a7a6443064d14
+baseline semantics for those files. The prototype commit itself is preserved
+verbatim and remains explicitly recoverable by reverting this defer; no
+worktree, checkpoint, dataset, ignored artifact or private/local evidence was
+deleted. This OPS entry is appended, not rewritten: the 04:22 entry above is
+historical record. No live ledger, GPU process or publication was touched; the
+transfer architecture is neither reopened nor judged here — it is deferred so
+an unrelated unsafe-to-deploy prototype is not shipped alongside other work.

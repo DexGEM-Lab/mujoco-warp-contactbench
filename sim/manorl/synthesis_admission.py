@@ -51,14 +51,6 @@ def completed_job(report: Path) -> dict | None:
 
 
 def ownership_record(registry: Path, obj: str) -> dict | None:
-    # An authority transfer never rewrites the original owner record: it
-    # appends immutable transfer records and flips this atomic current-owner
-    # pointer (see sim/manorl/synthesis_transfer.py).
-    override=registry/'objects'/f'{obj}.current.json'
-    if override.exists():
-        value=json.loads(override.read_text())
-        if value.get('contract')!=REGISTRY_CONTRACT:raise ValueError('unknown object ownership contract')
-        return value
     path=registry/'objects'/f'{obj}.json'
     if not path.exists():return None
     value=json.loads(path.read_text())
@@ -106,11 +98,7 @@ def register_existing(ledger: QuotaLedger, registry: Path, *, host: str, campaig
     objects=defaultdict(set)
     for (raw,) in ledger.db.execute('SELECT spec FROM sources'):
         spec=json.loads(raw);objects[spec['object']].add(spec['checkpoint_sha256'])
-    # Objects mid authority-transfer are neither re-claimed nor reclaimed:
-    # an in-flight handoff must not silently re-assert local ownership.
-    pending=getattr(ledger,'pending_transfer_objects',set)()
     for obj,hashes in objects.items():
-        if obj in pending:continue
         if len(hashes)!=1:raise ValueError(f'local object {obj} has mixed checkpoints')
         if not claim_object(registry,obj=obj,host=host,campaign_id=campaign_id,
                             checkpoint_sha=next(iter(hashes)),output=output):

@@ -341,21 +341,6 @@ PAIR_BUDGET_SCHEMA_STATEMENTS = (
     # donors purely by settlement order (live evidence 2026-09-28).
     GUARDED_SETTLEMENT_TRIGGER_SQL.replace('CREATE TRIGGER source_success_after_settlement',
                                         'CREATE TRIGGER IF NOT EXISTS source_success_after_settlement', 1),
-    # Minimal authority-transfer metadata (see sim/manorl/synthesis_transfer.py):
-    # one pending row blocks claims and completion for that object on this
-    # host until the explicit handoff finalizes; retired credit keeps exact
-    # already-credited rows so shard reconciliation can skip only those.
-    """CREATE TABLE IF NOT EXISTS authority_transfers(
-  transfer_id TEXT PRIMARY KEY, object TEXT NOT NULL,
-  direction TEXT NOT NULL CHECK(direction IN ('outbound','inbound')),
-  peer_host TEXT, peer_campaign TEXT, bundle_sha256 TEXT NOT NULL,
-  state TEXT NOT NULL CHECK(state IN ('exported','imported','detached','complete')),
-  updated REAL NOT NULL)""",
-    """CREATE TABLE IF NOT EXISTS transferred_credit(
-  transfer_id TEXT NOT NULL REFERENCES authority_transfers(transfer_id),
-  pair TEXT NOT NULL, source_key TEXT NOT NULL, variant INTEGER NOT NULL,
-  row_uuid TEXT NOT NULL, shard TEXT NOT NULL,
-  PRIMARY KEY(transfer_id,source_key,variant))""",
 )
 
 SOURCE_EXCLUSION_HISTORY_STATEMENT = """CREATE TABLE IF NOT EXISTS source_exclusion_history(
@@ -697,43 +682,11 @@ class QuotaLedger:
                 needed -= 1
         return created
 
-    def pending_transfers(self) -> list[dict]:
-        """Explicit in-flight object authority handoffs of this ledger.
-
-        A pending transfer marks an INCOMPLETE handoff: claims for that
-        object are refused and the campaign summary can never report
-        complete until the handoff is finalized on this host.
-        """
-        return [dict(row) for row in self.db.execute(
-            "SELECT transfer_id,object,direction,state,peer_host,peer_campaign,bundle_sha256 "
-            "FROM authority_transfers WHERE state!='complete' ORDER BY transfer_id")]
-
-    def pending_transfer_objects(self) -> set[str]:
-        return {row['object'] for row in self.db.execute(
-            "SELECT DISTINCT object FROM authority_transfers WHERE state!='complete'")}
-
-    def retired_credit_matches(self, source_key: str, variant: int, row_uuid: str, shard: str) -> bool:
-        """Exact retired-credit receipt for a transferred-away accepted row.
-
-        Shard reconciliation consults this ONLY when the source row no longer
-        exists in this ledger; any UUID or shard difference still fails.
-        """
-        return self.db.execute(
-            'SELECT 1 FROM transferred_credit WHERE source_key=? AND variant=? '
-            'AND row_uuid=? AND shard=?', (source_key, variant, row_uuid, shard)).fetchone() is not None
-
     def claim(self, owner: str, group_key: str, count: int) -> list[dict]:
         if count < 1:
             raise ValueError("batch size must be positive")
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            blocked = self.pending_transfer_objects()
-            if blocked:
-                group_pairs = [row[0] for row in self.db.execute(
-                    "SELECT DISTINCT pair FROM sources WHERE group_key=?", (group_key,))]
-                if any(pair.rsplit(":", 1)[0] in blocked for pair in group_pairs):
-                    raise RuntimeError("object authority transfer is in flight; claiming is blocked "
-                                       "until the handoff is finalized")
             rows = self._ready_rows(group_key, count)
             if len(rows) < count:
                 self._grow_group_obligations(group_key, count - len(rows))
@@ -828,9 +781,6 @@ class QuotaLedger:
         blocked = [p["pair"] for p in pairs if p["blocked"]]
         met = sum(p["met"] for p in pairs)
         remaining = max(0, target - accepted)
-        # An in-flight authority handoff is an INCOMPLETE state by definition:
-        # its object is neither claimable here nor owned here until finalized.
-        transfers = self.pending_transfers()
         # Debt the fleet can still generate is reported separately from debt
         # stranded on no-donor pairs: blocked debt cannot shrink without new
         # donors, while runnable debt is ordinary outstanding work.
@@ -845,11 +795,9 @@ class QuotaLedger:
                 "pairs_met": met, "pairs_runnable": len(pairs) - met - len(blocked),
                 "pairs_blocked": len(blocked), "blocked_pairs": blocked,
                 "source_success_policy": self.success_policy(),
-                "transfers_pending": transfers,
                 "attempts": int(self.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]),
                 "complete": bool(pairs) and met == len(pairs)
-                            and counts.get('leased', 0) == 0 and counts.get('ready', 0) == 0
-                            and not transfers}
+                            and counts.get('leased', 0) == 0 and counts.get('ready', 0) == 0}
 
     def pair_status(self) -> list[dict]:
         """Per-pair fixed target, accepted, remaining and blocked/runnable state."""
