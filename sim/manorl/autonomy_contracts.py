@@ -99,6 +99,19 @@ ENCODED_OBSERVATION_DIM_V575: Final = 525
 OBSERVATION_CONTRACT_ID_V6: Final = "manorl.autonomy.observation.v6.region-token-cross-attention"
 CHECKPOINT_FORMAT_V6: Final = "manorl.autonomy.ppo.v6"
 RAW_OBSERVATION_DIM_V6: Final = 2205
+OBSERVATION_CONTRACT_ID_VOXMANI453: Final = "manorl.autonomy.observation.v5.voxmani453"
+CHECKPOINT_FORMAT_VOXMANI453: Final = "manorl.autonomy.ppo.v5.voxmani453"
+RAW_OBSERVATION_DIM_VOXMANI453: Final = 453
+RAW_OBSERVATION_FIELDS_VOXMANI453: Final = (
+    ("obj_part_pose", 7), ("obj_past_pose", 35), ("obj_past_pad", 5),
+    ("hand_body_pose", 112), ("finger_q", 22), ("finger_qd", 22),
+    ("bone_contact", 48), ("obj_force_obs", 60), ("wrist_twist", 6),
+    ("obj_twist", 6), ("mass_obs", 1), ("prev_action", 28), ("priv_13", 13),
+    ("support_ratio_obs", 1), ("contact_bone_count_obs", 1),
+    ("servo_error", 28), ("critic_keypoint_error", 48), ("terminal_hand_goal", 10),
+)
+CRITIC_ONLY_FIELDS_VOXMANI453: Final = ("priv_13", "critic_keypoint_error")
+assert sum(width for _, width in RAW_OBSERVATION_FIELDS_VOXMANI453) == 453
 MODEL_DIM_V6: Final = 128
 CURRENT_TOKENS_V6: Final = 34
 GOAL_TOKENS_V6: Final = 16
@@ -181,6 +194,19 @@ def encoded_observation_slices_v5() -> dict[str, slice]: return _slices(ENCODED_
 def raw_observation_slices_v55() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V55)
 def raw_observation_slices_v575() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V575)
 def raw_observation_slices_v6() -> dict[str, slice]: return _slices(RAW_OBSERVATION_FIELDS_V6)
+
+
+def raw_observation_slices_voxmani453() -> dict[str, slice]:
+    return _slices(RAW_OBSERVATION_FIELDS_VOXMANI453)
+
+
+def validate_voxmani453_checkpoint_metadata(metadata: dict[str, object]) -> None:
+    _validate_checkpoint_metadata(
+        metadata,
+        checkpoint_format=CHECKPOINT_FORMAT_VOXMANI453,
+        observation_contract=OBSERVATION_CONTRACT_ID_VOXMANI453,
+        version="v5.voxmani453",
+    )
 
 @dataclass(frozen=True)
 class AutonomousActionContract:

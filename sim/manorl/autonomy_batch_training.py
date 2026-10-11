@@ -437,14 +437,18 @@ def _sync(device: torch.device) -> None:
 
 def _apply_teacher_anchor(model, optimizer, pairs, *, beta: float, passes: int, mini_batches: int):
     """Separate mean-only Adam steps after PPO, covering every collected sample."""
-    observations = torch.cat([observation for observation, _ in pairs])
-    targets = torch.cat([teacher for _, teacher in pairs])
+    observations = torch.cat([pair[0] for pair in pairs])
+    targets = torch.cat([pair[1] for pair in pairs])
+    states = torch.cat([pair[2] for pair in pairs]) if len(pairs[0]) == 3 else None
     count = observations.shape[0]
     mse_sum = torch.zeros((), device=observations.device)
     for _ in range(passes):
         indices = torch.randperm(count, device=observations.device)
         for batch in torch.tensor_split(indices, mini_batches):
-            mean, _ = model.compute({"observations": observations[batch]}, role="policy")
+            inputs = {"observations": observations[batch]}
+            if states is not None:
+                inputs["states"] = states[batch]
+            mean, _ = model.compute(inputs, role="policy")
             mse = torch.nn.functional.mse_loss(mean, targets[batch])
             # None gradients are essential: Adam must not move value-only/log_std
             # parameters using momentum left over from the preceding PPO update.
@@ -607,16 +611,19 @@ def run_batched_ppo(adapter: Any, *, updates: int, rollouts: int, learning_epoch
         )
         teacher_pairs = [] if current_anchor_beta > 0 else None
         for _ in range(rollouts):
+            states = adapter.policy_states() if hasattr(adapter, "policy_states") else None
             with torch.no_grad():
                 if teacher_pairs is not None:
-                    teacher_pairs.append((observations.detach().clone(), adapter.teacher_actions().detach().clone()))
+                    pair = (observations.detach().clone(), adapter.teacher_actions().detach().clone())
+                    teacher_pairs.append(pair + (states.detach().clone(),) if states is not None else pair)
                 # This action is the unmodified Normal sample used by PPO likelihood.
-                actions, _ = agent.act(observations, None, timestep=policy_steps, timesteps=updates * rollouts)
+                actions, _ = agent.act(observations, states, timestep=policy_steps, timesteps=updates * rollouts)
             terminal_next, rewards, terminated, info = adapter.step(actions)
+            terminal_next_states = adapter.policy_states() if hasattr(adapter, "policy_states") else None
             if rewards.shape != (adapter.num_envs, 1) or terminated.shape != (adapter.num_envs, 1):
                 raise RuntimeError("adapter must return (B,1) reward and done")
-            agent.record_transition(observations=observations, states=None, actions=actions, rewards=rewards,
-                                    next_observations=terminal_next, next_states=None, terminated=terminated,
+            agent.record_transition(observations=observations, states=states, actions=actions, rewards=rewards,
+                                    next_observations=terminal_next, next_states=terminal_next_states, terminated=terminated,
                                     truncated=torch.zeros_like(terminated), infos=info,
                                     timestep=policy_steps, timesteps=updates * rollouts)
             reward_sum += rewards.sum(); done_count += terminated.sum(); valid &= adapter._to_torch(info["valid"]).bool().all()

@@ -1,0 +1,37 @@
+"""Architecture constants from VoxMani 16a80fc, without its MDP/reward config."""
+
+from sim.manorl.autonomy_contracts import RAW_OBSERVATION_FIELDS_VOXMANI453
+
+FINGER_DOF = 22
+ACTION_DIM = 28
+NUM_HAND_BODIES = 16
+CONTROL_DT = 1.0 / 120
+SCENE_SIGMA = 0.2
+T_MAX = 5.475
+PAST_FRAMES = (1, 2, 4, 8, 16)
+FOURIER_BANDS = tuple(2.0**k / (2.0 * T_MAX) for k in range(8))
+MODEL_DIM = 128
+ATTN_HEADS = 4
+FFN_DIM = 512
+TRUNK_LAYERS = 4
+SKEL_CHANNELS_LINK = 4
+SKEL_CHANNELS_JOINT = 4
+SKEL_LAYERS = 3
+SKEL_LINK_DIM = 64
+SEMANTIC_VOCAB = 2
+PART_VOCAB = 8
+EMB_DIM = 16
+OBJ_FINE_PATCHES = 16
+OBJ_COARSE_PATCHES = 4
+HAND_POINTS_PER_BONE = 16
+HEAD2_TOKENS = 16
+POINT_CHANNELS_SCENE = 69
+POINT_CHANNELS_HAND = 19
+X_LOW_DIM = 314
+X_LOW_CRITIC_DIM = X_LOW_DIM + 13 + 48
+
+
+def abi_fields(num_parts=1):
+    if num_parts != 1:
+        raise ValueError("ManoRL 453 ABI requires one rigid object part")
+    return RAW_OBSERVATION_FIELDS_VOXMANI453

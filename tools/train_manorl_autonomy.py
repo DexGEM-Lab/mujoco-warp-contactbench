@@ -25,12 +25,14 @@ from sim.manorl.autonomy_contracts import (
     CHECKPOINT_FORMAT_V55,
     CHECKPOINT_FORMAT_V575,
     CHECKPOINT_FORMAT_V6,
+    CHECKPOINT_FORMAT_VOXMANI453,
     OBSERVATION_CONTRACT_ID,
     OBSERVATION_CONTRACT_ID_V5,
     OBSERVATION_CONTRACT_ID_V525,
     OBSERVATION_CONTRACT_ID_V55,
     OBSERVATION_CONTRACT_ID_V575,
     OBSERVATION_CONTRACT_ID_V6,
+    OBSERVATION_CONTRACT_ID_VOXMANI453,
     REWARD_CONTRACT_BY_VERSION,
     REWARD_CONTRACT_ID,
     V4_REWARD_TERM_NAMES,
@@ -41,6 +43,7 @@ from sim.manorl.autonomy_contracts import (
     validate_v55_checkpoint_metadata,
     validate_v575_checkpoint_metadata,
     validate_v6_checkpoint_metadata,
+    validate_voxmani453_checkpoint_metadata,
 )
 from sim.manorl.autonomy_v5_intermediate_model import (
     actor_critic_architecture_v525,
@@ -179,6 +182,13 @@ def _contracts(
         return {
             "checkpoint": CHECKPOINT_FORMAT_V6,
             "observation": OBSERVATION_CONTRACT_ID_V6,
+            "action": ACTION_CONTRACT_ID,
+            "reward": reward_contract,
+        }
+    if policy_version == "v5.voxmani453":
+        return {
+            "checkpoint": CHECKPOINT_FORMAT_VOXMANI453,
+            "observation": OBSERVATION_CONTRACT_ID_VOXMANI453,
             "action": ACTION_CONTRACT_ID,
             "reward": reward_contract,
         }
@@ -353,7 +363,7 @@ def train(args):
     # Multi/subset-reference adapters adopt the first reference as the runtime
     # trajectory; provenance must keep the explicitly requested anchor identity.
     provenance["identity"] = trajectory.identity.identity
-    if _adapter_policy_version(adapter) == "v6":
+    if _adapter_policy_version(adapter) in ("v6", "v5.voxmani453"):
         # Independent actor/critic fusion towers are part of the v6 model
         # contract rather than an optional PPO setting.
         args.separate_critic = True
@@ -427,6 +437,7 @@ def train(args):
             device="cpu",
             separate_critic=args.separate_critic,
             reward_contract_id=_adapter_reward_contract_id(adapter),
+            object_type=adapter.runtime.object_type,
         )
         validation_optimizer = torch.optim.Adam(validation_model.parameters(), lr=args.learning_rate)
         payload = inspect_v4_resume(args.resume_checkpoint, validation_model, validation_optimizer,
@@ -479,7 +490,7 @@ def train(args):
 
 def _checkpoint_separate_critic(payload):
     policy_version = _checkpoint_policy_version(payload)
-    if policy_version == "v6":
+    if policy_version in ("v6", "v5.voxmani453"):
         return True
     architecture = payload.get("model_architecture")
     if architecture == actor_critic_architecture(separate_critic=False): return False
@@ -515,6 +526,9 @@ def _checkpoint_policy_version(payload) -> str:
     if checkpoint_format == CHECKPOINT_FORMAT_V6:
         validate_v6_checkpoint_metadata(payload)
         return "v6"
+    if checkpoint_format == CHECKPOINT_FORMAT_VOXMANI453:
+        validate_voxmani453_checkpoint_metadata(payload)
+        return "v5.voxmani453"
     raise ValueError("unsupported checkpoint format")
 
 
@@ -583,6 +597,7 @@ def evaluate(args):
         device=adapter.device,
         separate_critic=separate_critic,
         reward_contract_id=adapter.runtime.reward_contract_id,
+        object_type=adapter.runtime.object_type,
     )
     # Identity is a conditioning input, not a compatibility contract: a frozen
     # checkpoint must accept references it was not trained on.  Compatibility
@@ -596,7 +611,9 @@ def evaluate(args):
     limit = args.steps if args.steps is not None else adapter.runtime.length - 1
     for policy_step in range(limit):
         with torch.no_grad():
-            mean, _ = model.compute({"observations": observations}, role="policy")
+            mean, _ = model.compute(
+                {"observations": observations, "states": adapter.policy_states()}, role="policy"
+            )
             action = torch.clamp(mean, -1., 1.)
         next_obs, reward, done, info = adapter.step(action); reward_value = float(reward[0, 0].cpu()); total += reward_value
         natural_done = bool(np.asarray(adapter.runtime.last_reward.done)[0])
@@ -661,7 +678,7 @@ def build_parser():
     common.add_argument("--device", choices=("cpu", "gpu"), default="gpu"); common.add_argument("--seed", type=int, default=0)
     common.add_argument(
         "--policy-version",
-        choices=("v4", "v5", "v5.25", "v5.5", "v5.75", "v6"),
+        choices=("v4", "v5", "v5.25", "v5.5", "v5.75", "v6", "v5.voxmani453"),
                         help="observation/model ABI; defaults to v4 for compatibility")
     common.add_argument(
         "--reward-version",

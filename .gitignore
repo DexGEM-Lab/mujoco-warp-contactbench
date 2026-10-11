@@ -9,6 +9,9 @@ __pycache__/
 .venv/
 .env
 
+# Local reference package delivered separately from source history.
+/data/
+
 # Jupyter
 .ipynb_checkpoints/
 .jupyter/
