@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -71,6 +72,12 @@ def main() -> None:
     np.testing.assert_array_equal(np.asarray(runtime.history_counts), [0, 3])
     result = {
         "device": args.device,
+        "jax_devices": sorted(str(device) for device in runtime.data.qpos.devices()),
+        "jax_platforms": sorted(
+            {device.platform for device in runtime.data.qpos.devices()}
+        ),
+        "torch_device": str(adapter.device),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "batch": 2,
         "physics_steps": 3,
         "observation_shape": list(reset_obs.shape),
@@ -80,6 +87,8 @@ def main() -> None:
         "all_observations_finite": bool(np.isfinite(reset_obs).all()),
     }
     assert result["all_observations_finite"]
+    if args.device == "gpu":
+        assert result["jax_platforms"] == ["gpu"] and adapter.device.type == "cuda"
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + "\n")

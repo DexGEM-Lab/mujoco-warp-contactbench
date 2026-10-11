@@ -140,6 +140,9 @@ def verify_results(output: Path, args) -> dict:
     assert (
         reset["subset_reset_preserves_other_world"] and reset["all_observations_finite"]
     )
+    assert reset["jax_platforms"] == ["gpu"] and reset["torch_device"].startswith(
+        "cuda"
+    )
     trace = json.loads((output / "evaluation.json").read_text())
     assert trace["steps"] > 0 and all(
         row["finite"] and row["valid"] for row in trace["trace"]
