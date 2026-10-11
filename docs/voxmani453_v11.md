@@ -96,6 +96,12 @@ Python 3.11，依赖见 `pyproject.toml`。220 已验证的环境是
 `/home/cty/miniconda3/envs/contact-conditioned-autonomy`；
 本地 CPU 验证环境为 `/tmp/voxmani453-validation-env`。
 
+完整交付还物化了可选 Lance 导出工具的依赖。
+基线的 `lance_manager` 指针 `6ca6702` 在其配置远端返回 `not our ref`，
+因此改为本地既有导出项目使用的可验证提交 `72240d7`，
+并携带它所锁定的 `schema@bf3d7bb` 和 `data_structure_analyzer@5e662fc`。
+该依赖不进入物理训练、453 观测、PPO 或 reward v11。
+
 在项目根目录运行完整 GPU 执行验证：
 
 ```bash
