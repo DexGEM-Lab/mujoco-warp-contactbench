@@ -1,0 +1,36 @@
+{
+  "device": "cpu",
+  "physical_backend": "mjx-warp",
+  "initial_updates": 3,
+  "resumed_updates": 4,
+  "transitions": 64,
+  "adam_parameters": 645,
+  "changed_tensors_on_resume": 637,
+  "evaluation_steps": 228,
+  "evaluation_return": 6.87830363214016,
+  "natural_first_termination": {
+    "policy_step": 227,
+    "reason_code": 2
+  },
+  "all_metrics_and_evaluation_finite": true,
+  "runtime_subset_reset": {
+    "device": "cpu",
+    "batch": 2,
+    "physics_steps": 3,
+    "observation_shape": [
+      2,
+      453
+    ],
+    "structured_state_shape": [
+      2,
+      547
+    ],
+    "subset_reset_preserves_other_world": true,
+    "history_advances_only_after_physics": true,
+    "all_observations_finite": true
+  },
+  "checkpoint_sha256": "3305f58d45f59ff855d513dd1088a3fe066ca036896fa4652ba0cce6baed4a6e",
+  "focused_tests": "43 passed",
+  "baseline_test_failures": "7 failed, 16 errors reproduced at unmodified base 0f8f441",
+  "boundary": "Execution validated; grasp success or convergence not established."
+}

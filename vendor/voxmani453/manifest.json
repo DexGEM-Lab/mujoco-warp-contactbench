@@ -1,0 +1,35 @@
+{
+  "source_commit": "c17000d7041d48c79fc0ae8c5c0dd31eed47591a",
+  "dependencies": [
+    {
+      "path": "assets/dexstream_digital_assets",
+      "commit": "f98da997f316c8a6b4bc2931cabed19e831ef163",
+      "bundle": "vendor/voxmani453/dexstream_digital_assets.bundle",
+      "sha256": "63b8b9530d600dca9506f2bb94eb7f1e10b31b28f7830863de66badeccefd15b"
+    },
+    {
+      "path": "3rd_party/lance_manager",
+      "commit": "72240d77acc38aba5041f8788c4a0506dc80055d",
+      "bundle": "vendor/voxmani453/lance_manager.bundle",
+      "sha256": "91343d681df89eeac3f1f1161c77013bb74ede7a2d8880a46aa4c5c368bddc4a"
+    },
+    {
+      "path": "3rd_party/lance_manager/schema",
+      "commit": "bf3d7bb8d23cd4662a9c507a5f7f6dbd42899c84",
+      "bundle": "vendor/voxmani453/lance_schema.bundle",
+      "sha256": "a35be104ed3192b1b6bd6bee80b515f6a942d634095613c7b990089093c4f804"
+    },
+    {
+      "path": "3rd_party/lance_manager/external/data_structure_analyzer",
+      "commit": "5e662fc1a376ad5cb3781fbbe2bf8ff7d75cafd3",
+      "bundle": "vendor/voxmani453/data_structure_analyzer.bundle",
+      "sha256": "7d2a4b89437d0243a9a64f0517f985b68312d2de6dfcf083e32342ae4ad66fb7"
+    }
+  ],
+  "lfs_archive": {
+    "file": "vendor/voxmani453/dexstream_lfs_objects.tar.gz",
+    "sha256": "bd61139eaea3eede3d8e9da2a618d6cf8c45317113dd570d8ae2013c21d3d2ca"
+  },
+  "reference_package": "data/cube2_all_v295_f120_pre180_post180",
+  "reference_package_digest": "ff556382596e4f0a5140ac25fbc7d757d5cf512e2f3c7753ba150173bcf661d5"
+}

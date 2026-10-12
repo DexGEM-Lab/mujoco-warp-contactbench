@@ -5,6 +5,9 @@ Standalone MJX-Warp sim-to-Lance export repo.
 ## v8：VoxMani 453 + reward v11
 
 本交付版的模型入口为 `--policy-version v8 --reward-version v11`。
+`case/voxmani2contact_bench` 分支包含迁移后的完整源码、训练参考包、
+固定版本依赖的离线 Git bundles 和已有 CPU 验证记录。
+首次获取及离线依赖恢复见 [分支交付说明](docs/voxmani2contact_bench_release.md)。
 旧名称 `v5.voxmani453` 仍作为兼容别名。命名不改变网络或旧检查点格式。
 观测为453维，另有547维目标快照；两张量合计1000个输入数值。
 每个索引的物理含义、单位、归一化与Actor/Critic读取范围见
@@ -53,7 +56,7 @@ The current pinned source is:
 
 ```text
 assets/dexstream_digital_assets -> git@github.com:DexGEM-Lab/dexstream_digital-assets.git
-  main @ 778614d09e917deffed0bff3f357aa237efa762d
+  main @ f98da997f316c8a6b4bc2931cabed19e831ef163
 ```
 
 `sim/manorl/task_assets/dexstream_manifest.json` records the source commit and

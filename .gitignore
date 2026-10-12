@@ -9,8 +9,11 @@ __pycache__/
 .venv/
 .env
 
-# Local reference package delivered separately from source history.
+# This publication includes its verified reference package.
 /data/
+!/data/
+/data/*
+!/data/cube2_all_v295_f120_pre180_post180/
 
 # Jupyter
 .ipynb_checkpoints/

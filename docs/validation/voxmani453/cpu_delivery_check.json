@@ -1,0 +1,44 @@
+{
+  "host": "cty-ThinkBook-16-G7-IAH",
+  "commit": "70befa689ceed197962e92c4c39ed2e2b37a3833",
+  "branch": null,
+  "python": "3.11.15 (main, Jun 11 2026, 15:20:16) [GCC 14.3.0]",
+  "torch": "2.11.0+cu128",
+  "current_gpu_available": false,
+  "focused_tests": "12 passed in 35.26s",
+  "physics_reset": {
+    "device": "cpu",
+    "jax_devices": [
+      "cpu:0"
+    ],
+    "jax_platforms": [
+      "cpu"
+    ],
+    "torch_device": "cpu",
+    "cuda_visible_devices": "",
+    "batch": 2,
+    "physics_steps": 3,
+    "observation_shape": [
+      2,
+      453
+    ],
+    "structured_state_shape": [
+      2,
+      547
+    ],
+    "subset_reset_preserves_other_world": true,
+    "history_advances_only_after_physics": true,
+    "all_observations_finite": true
+  },
+  "training_updates": 1,
+  "resumed_updates": 2,
+  "environment_transitions": 16,
+  "optimizer_states": 645,
+  "changed_tensors_after_resume": 638,
+  "actor_and_critic_updated": true,
+  "evaluation_steps": 8,
+  "evaluation_return": 2.652954012155533,
+  "all_recorded_states_finite_valid": true,
+  "boundary": "CPU execution validation only; no convergence or task-success claim; remote GPU not rerun.",
+  "head_state": "detached at verified delivery commit"
+}

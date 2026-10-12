@@ -147,7 +147,9 @@ Python 3.11，依赖见 `pyproject.toml`。220 已验证的环境是
   return 为 6.87830363214016。该结果不代表抓取成功或策略收敛。
 - 真实物理环境的部分重置保留另一世界的位置、指令、历史和目标快照，
   `prepare_action` 不增加历史计数。
-- 证据见 `outputs/voxmani453_cpu_resume_v3/validation.json`。
+- CPU 验证结果随发布分支归档在
+  `docs/validation/voxmani453/cpu_train_resume_evaluate.json`；
+  本地完整原始输出保留在 `outputs/voxmani453_cpu_resume_v3/`。
 - 扩展旧测试发现 7 failures / 16 setup errors，均已在未修改基线 `0f8f441`
   复现：旧控制测试 patch 已移除的符号，遥测 fixture 缺少现行字段，
   CLI resume fixture 使用没有 identity 的对象。没有将这些检查宣称为通过。
