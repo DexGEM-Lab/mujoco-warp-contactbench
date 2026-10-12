@@ -16,6 +16,8 @@ from sim.manorl.autonomy_contracts import (
     OBSERVATION_CONTRACT_ID_V55,
     OBSERVATION_CONTRACT_ID_V575,
     OBSERVATION_CONTRACT_ID_V6,
+    OBSERVATION_CONTRACT_ID_VOXMANI453,
+    RAW_OBSERVATION_DIM_VOXMANI453,
     OBSERVATION_DIM,
     RAW_OBSERVATION_DIM_V5,
     RAW_OBSERVATION_DIM_V55,
@@ -52,6 +54,9 @@ from sim.manorl.autonomy_reward_v11 import (
     compute_reward as compute_reward_v11,
 )
 from sim.manorl.autonomy_curriculum import mixed_stage_frame, reference_stage_candidates
+from sim.manorl.voxmani453.observation import (
+    build_raw_observation_voxmani453, pose as voxmani_pose, update_history,
+)
 
 V4_OBSERVATION_DIM = OBSERVATION_DIM
 V5_OBSERVATION_DIM = RAW_OBSERVATION_DIM_V5
@@ -164,6 +169,11 @@ class BatchedAutonomyRuntime:
                 build_raw_observation_v6,
                 V6_OBSERVATION_DIM,
                 OBSERVATION_CONTRACT_ID_V6,
+            ),
+            "v5.voxmani453": (
+                build_raw_observation_voxmani453,
+                RAW_OBSERVATION_DIM_VOXMANI453,
+                OBSERVATION_CONTRACT_ID_VOXMANI453,
             ),
         }
         if observation_version not in observation_builders:
@@ -339,6 +349,11 @@ class BatchedAutonomyRuntime:
         self.reward_state = initial_reward_state(num_envs, jp=j)
         self.object_vertices = j.asarray(object_collision_vertices(self.object_type), j.float32)
         self._transition_fn = jax.jit(self._transition)
+        if self.observation_version == "v5.voxmani453":
+            self.pose_history = j.zeros((num_envs, 17, 7), j.float32)
+            self.history_counts = j.zeros((num_envs,), j.int32)
+            self.previous_action = j.zeros((num_envs, ACTION_DIM), j.float32)
+            self._history_observation_fn = jax.jit(self._history_observation)
         self._refresh(False, j.zeros((num_envs, 28), j.float32))
 
     def _install_reset_templates(self, stage: int) -> None:
@@ -547,6 +562,16 @@ class BatchedAutonomyRuntime:
             physical_next,
         )
 
+    def _history_observation(self, physical, contact, index, command, history, counts, previous_action, execute):
+        history, counts, past, pad = update_history(
+            history, counts, voxmani_pose(physical.object_origin, physical.object_quat_xyzw), execute
+        )
+        raw = build_raw_observation_voxmani453(
+            physical, contact, self.cache, index, command, self.env_ref,
+            past_pose=past, past_pad=pad, previous_action=previous_action,
+        )
+        return history, counts, raw
+
     def _refresh(self, execute, action):
         (
             self.data, self.indices, self.previous_command, self.reward_state,
@@ -560,6 +585,16 @@ class BatchedAutonomyRuntime:
             action,
             execute,
         )
+        if self.observation_version == "v5.voxmani453":
+            self.previous_action = self.jp.where(
+                execute, self.jp.clip(action, -1, 1), self.previous_action
+            )
+            self.pose_history, self.history_counts, self.raw_observation = self._history_observation_fn(
+                self.last_physical, self.last_contact, self.indices, self.previous_command,
+                self.pose_history, self.history_counts, self.previous_action, execute,
+            )
+            self.observation = self.raw_observation
+            self.last_valid &= self.jp.all(self.jp.isfinite(self.observation), axis=-1)
         # Diagnostic rollouts may continue past a normal terminal, but this
         # option is runtime-only and is intentionally absent from training.
         self.last_done = self.jp.zeros_like(self.last_reward.done) if self.full_horizon_diagnostic else self.last_reward.done
@@ -577,6 +612,10 @@ class BatchedAutonomyRuntime:
         initial_command = self._reset_ctrl[:, :28]
         self.previous_command = self.jp.where(mask[:, None], initial_command, self.previous_command)
         self.reward_state = reset_reward_state(self.reward_state, mask, jp=self.jp)
+        if self.observation_version == "v5.voxmani453":
+            self.pose_history = self.jp.where(mask[:, None, None], 0., self.pose_history)
+            self.history_counts = self.jp.where(mask, 0, self.history_counts)
+            self.previous_action = self.jp.where(mask[:, None], 0., self.previous_action)
         # Every raw cache row is rebuilt from one forwarded state; no stale
         # global contact arena is exposed after a subset reset.
         self._refresh(False, self.jp.zeros((self.num_envs, 28), self.jp.float32))

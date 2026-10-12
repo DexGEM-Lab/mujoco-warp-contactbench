@@ -36,6 +36,10 @@ from sim.manorl.autonomy_v6_model import (
     AutonomyActorCriticV6,
     actor_critic_architecture_v6,
 )
+from sim.manorl.autonomy_v5_voxmani453_model import (
+    AutonomyActorCriticVoxMani453, actor_critic_architecture_voxmani453,
+)
+from sim.manorl.voxmani453.streams import STATE_DIM, reference_states
 from sim.manorl.autonomy_v5_intermediate_model import (
     AutonomyActorCriticV525,
     AutonomyActorCriticV55,
@@ -176,6 +180,12 @@ class BatchedAutonomyAdapter:
         )
         self.observation_space=gym.spaces.Box(-np.inf,np.inf,shape=(self.observation_dim,),dtype=np.float32)
         self.action_space=gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=np.float32)
+        self.state_space = (
+            gym.spaces.Box(-np.inf, np.inf, shape=(STATE_DIM,), dtype=np.float32)
+            if policy_version == "v5.voxmani453" else None
+        )
+        if self.state_space is not None:
+            self._policy_states_fn = self.runtime.jax.jit(lambda index: reference_states(self.runtime, index))
     @property
     def device(self): return self._device
     def _to_torch(self,x):
@@ -189,6 +199,10 @@ class BatchedAutonomyAdapter:
             "contract":self.runtime.observation_contract,
         }
     def prepare_action(self): return self._to_torch(self.runtime.prepare_action())
+    def policy_states(self):
+        if self.state_space is None:
+            return None
+        return self._to_torch(self._policy_states_fn(self.runtime.indices))
     def configure_curriculum_stage(self, stage: int) -> None:
         self.runtime.configure_curriculum_stage(stage)
     def teacher_actions(self, squeeze_rad=TEACHER_SQUEEZE_RAD, contact_intent_threshold=TEACHER_CONTACT_INTENT_THRESHOLD):
@@ -288,7 +302,7 @@ class BatchedAutonomyAdapter:
             contact.paired_count.sum(axis=-1)[:,None],
             paired_norm.sum(axis=-1)[:,None],
             jp.linalg.norm(contact.object_all_force,axis=-1)[:,None],
-            jp.linalg.norm(contact.paired_torque_com,axis=-1)[:,None],
+            jp.linalg.norm(jp.sum(contact.paired_torque_com, axis=1), axis=-1)[:,None],
             jp.linalg.norm(contact.tangential_slip,axis=-1),
             (physical.object_bottom>cache.table_height+.005)[:,None],
             getattr(reward,"opposition_loaded",opposing_loaded)[:,None],
@@ -491,6 +505,11 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
             adapter.observation_space,adapter.action_space,device=device,
             clip_actions=False
         )
+    elif policy_version == "v5.voxmani453":
+        model = AutonomyActorCriticVoxMani453(
+            adapter.observation_space, adapter.action_space, device=device,
+            clip_actions=False, object_type=adapter.runtime.object_type,
+        )
     else:
         raise ValueError(f"unsupported policy version: {policy_version!r}")
     reward_contract_id = getattr(
@@ -500,7 +519,7 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
     )
     _bind_reward_contract(model, reward_contract_id)
     agent=RlGamesPPO(models={"policy":model,"value":model},memory=memory,
-                     observation_space=adapter.observation_space,state_space=None,
+                     observation_space=adapter.observation_space,state_space=getattr(adapter, "state_space", None),
                      action_space=adapter.action_space,device=device,cfg=cfg)
     agent.target_kl = target_kl
     agent.init(); return model,agent
@@ -521,6 +540,8 @@ def actor_critic_architecture_for_version(
         return actor_critic_architecture_v575(separate_critic=separate_critic)
     if policy_version == "v6":
         return actor_critic_architecture_v6()
+    if policy_version == "v5.voxmani453":
+        return actor_critic_architecture_voxmani453()
     raise ValueError(f"unsupported policy version: {policy_version!r}")
 
 
@@ -532,6 +553,7 @@ def model_for_version(
     device: str | torch.device,
     separate_critic: bool = False,
     reward_contract_id: str = REWARD_CONTRACT_ID,
+    object_type: str = "cube2",
 ):
     if policy_version == "v4":
         model = AutonomyActorCritic(
@@ -561,6 +583,10 @@ def model_for_version(
     elif policy_version == "v6":
         model = AutonomyActorCriticV6(
             observation_space, action_space, device=device
+        )
+    elif policy_version == "v5.voxmani453":
+        model = AutonomyActorCriticVoxMani453(
+            observation_space, action_space, device=device, object_type=object_type,
         )
     else:
         raise ValueError(f"unsupported policy version: {policy_version!r}")

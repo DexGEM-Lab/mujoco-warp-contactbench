@@ -2,6 +2,17 @@
 
 Standalone MJX-Warp sim-to-Lance export repo.
 
+## VoxMani 453 + reward v11
+
+本交付版的模型入口为 `--policy-version v5.voxmani453 --reward-version v11`。
+完整架构、453 维字段、与上游的适配差异和验证结果见
+[docs/voxmani453_v11.md](docs/voxmani453_v11.md)。
+在空闲 GPU 上运行训练、严格续训和冻结评估：
+
+```bash
+python tools/run_voxmani453_experiment.py --output outputs/voxmani453_gpu_run001 --wait-seconds 3600
+```
+
 This repository has one authoritative physical asset source:
 [`dexstream_digital-assets`](https://github.com/DexGEM-Lab/dexstream_digital-assets).
 ManoRL resolves both the MANO hand and DexGEM object geometry directly from its
