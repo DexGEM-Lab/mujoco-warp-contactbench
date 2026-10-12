@@ -34,7 +34,7 @@ def main() -> None:
             "--identity",
             args.identity,
             "--policy-version",
-            "v5.voxmani453",
+            "v8",
             "--reward-version",
             "v11",
             "--device",

@@ -1,9 +1,11 @@
-# VoxMani 453 + ManoRL v11
+# v8：VoxMani 453 + ManoRL v11
 
 该版本在 ManoRL `0f8f441` 上整体替换策略网络，网络结构依据
 VoxMani `16a80fc6615c3f82194acd34e45b98d459359325`，
 提交时间为北京时间 2026-10-10 20:26:00，分支为
-`case/auton-policy/waypoint-generalization`。版本名为 `v5.voxmani453`。
+`case/auton-policy/waypoint-generalization`。公开版本名为 `v8`，
+旧名称 `v5.voxmani453` 是兼容别名；已有架构/观测/检查点标识保持不变。
+逐维说明见 [v8_observation_dimensions.md](v8_observation_dimensions.md)。
 
 ## 网络与数据流
 
@@ -122,7 +124,7 @@ Python 3.11，依赖见 `pyproject.toml`。220 已验证的环境是
 
 ```bash
 /tmp/voxmani453-validation-env/bin/python tools/train_manorl_autonomy.py train \
-  --policy-version v5.voxmani453 --reward-version v11 \
+  --policy-version v8 --reward-version v11 \
   --package data/cube2_all_v295_f120_pre180_post180 --identity cube2_02_2833 \
   --device cpu --num-envs 2 --no-persistentworkspace \
   --updates 3 --rollouts 8 --learning-epochs 1 --mini-batches 2 \

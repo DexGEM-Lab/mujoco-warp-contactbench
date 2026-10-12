@@ -10,6 +10,7 @@ from sim.manorl.autonomy_contracts import (
     OBSERVATION_CONTRACT_ID_VOXMANI453,
     POLICY_SAMPLING_CONTRACT,
     REWARD_CONTRACT_ID,
+    POLICY_VERSION_V8,
 )
 from sim.manorl.voxmani453.canonical import build_canonical
 from sim.manorl.voxmani453.goal_stream import empty_streams
@@ -45,6 +46,8 @@ def actor_critic_architecture_voxmani453():
 
 
 class AutonomyActorCriticVoxMani453(GaussianMixin, DeterministicMixin, Model):
+    architecture_name = POLICY_VERSION_V8
+
     def __init__(
         self,
         observation_space,

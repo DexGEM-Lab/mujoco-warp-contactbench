@@ -31,6 +31,7 @@ from sim.manorl.autonomy_contracts import (
     RAW_OBSERVATION_DIM_V6,
     REWARD_CONTRACT_ID,
     V4_REWARD_TERM_NAMES,
+    normalize_policy_version,
 )
 from sim.manorl.autonomy_v6_model import (
     AutonomyActorCriticV6,
@@ -163,6 +164,7 @@ class BatchedAutonomyAdapter:
         policy_version="v4", reward_version="v4", **kwargs,
     ):
         from sim.manorl.autonomy_batch import BatchedAutonomyRuntime
+        policy_version = normalize_policy_version(policy_version)
         self.policy_version=policy_version
         self.runtime=BatchedAutonomyRuntime(
             trajectory,num_envs=num_envs,device=device,seed=seed,
@@ -182,7 +184,7 @@ class BatchedAutonomyAdapter:
         self.action_space=gym.spaces.Box(-1.,1.,shape=(ACTION_DIM,),dtype=np.float32)
         self.state_space = (
             gym.spaces.Box(-np.inf, np.inf, shape=(STATE_DIM,), dtype=np.float32)
-            if policy_version == "v5.voxmani453" else None
+            if policy_version == "v8" else None
         )
         if self.state_space is not None:
             self._policy_states_fn = self.runtime.jax.jit(lambda index: reference_states(self.runtime, index))
@@ -474,7 +476,7 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
     """Canonical RlGamesPPO with a version-selected observation/model pair."""
     cfg=v4_ppo_config(rollouts=rollouts,learning_epochs=learning_epochs,mini_batches=mini_batches,learning_rate=learning_rate,target_kl=target_kl)
     memory=RandomMemory(memory_size=rollouts,num_envs=adapter.num_envs,device=device)
-    policy_version=getattr(adapter,"policy_version","v4")
+    policy_version=normalize_policy_version(getattr(adapter,"policy_version","v4"))
     if policy_version == "v4":
         model=AutonomyActorCritic(
             adapter.observation_space,adapter.action_space,device=device,
@@ -505,7 +507,7 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
             adapter.observation_space,adapter.action_space,device=device,
             clip_actions=False
         )
-    elif policy_version == "v5.voxmani453":
+    elif policy_version == "v8":
         model = AutonomyActorCriticVoxMani453(
             adapter.observation_space, adapter.action_space, device=device,
             clip_actions=False, object_type=adapter.runtime.object_type,
@@ -528,6 +530,7 @@ def build_batched_runtime(adapter, *, rollouts:int, learning_epochs:int, mini_ba
 def actor_critic_architecture_for_version(
     policy_version: str, *, separate_critic: bool = False
 ) -> dict[str, Any]:
+    policy_version = normalize_policy_version(policy_version)
     if policy_version == "v4":
         return actor_critic_architecture(separate_critic=separate_critic)
     if policy_version == "v5":
@@ -540,7 +543,7 @@ def actor_critic_architecture_for_version(
         return actor_critic_architecture_v575(separate_critic=separate_critic)
     if policy_version == "v6":
         return actor_critic_architecture_v6()
-    if policy_version == "v5.voxmani453":
+    if policy_version == "v8":
         return actor_critic_architecture_voxmani453()
     raise ValueError(f"unsupported policy version: {policy_version!r}")
 
@@ -555,6 +558,7 @@ def model_for_version(
     reward_contract_id: str = REWARD_CONTRACT_ID,
     object_type: str = "cube2",
 ):
+    policy_version = normalize_policy_version(policy_version)
     if policy_version == "v4":
         model = AutonomyActorCritic(
             observation_space, action_space, device=device,
@@ -584,7 +588,7 @@ def model_for_version(
         model = AutonomyActorCriticV6(
             observation_space, action_space, device=device
         )
-    elif policy_version == "v5.voxmani453":
+    elif policy_version == "v8":
         model = AutonomyActorCriticVoxMani453(
             observation_space, action_space, device=device, object_type=object_type,
         )
