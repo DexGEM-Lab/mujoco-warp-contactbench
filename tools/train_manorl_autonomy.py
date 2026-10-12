@@ -37,6 +37,7 @@ from sim.manorl.autonomy_contracts import (
     REWARD_CONTRACT_ID,
     V4_REWARD_TERM_NAMES,
     resolve_reward_contract,
+    normalize_policy_version,
     validate_v4_checkpoint_metadata,
     validate_v5_checkpoint_metadata,
     validate_v525_checkpoint_metadata,
@@ -137,12 +138,13 @@ def _training_references(args, catalog, trajectory, split):
 
 
 def _policy_version(args) -> str:
-    return getattr(args, "policy_version", None) or "v4"
+    return normalize_policy_version(getattr(args, "policy_version", None) or "v4")
 
 
 def _contracts(
     policy_version: str, reward_contract: str = REWARD_CONTRACT_ID,
 ) -> dict[str, str]:
+    policy_version = normalize_policy_version(policy_version)
     if policy_version == "v4":
         return {
             "checkpoint": CHECKPOINT_FORMAT,
@@ -185,7 +187,7 @@ def _contracts(
             "action": ACTION_CONTRACT_ID,
             "reward": reward_contract,
         }
-    if policy_version == "v5.voxmani453":
+    if policy_version == "v8":
         return {
             "checkpoint": CHECKPOINT_FORMAT_VOXMANI453,
             "observation": OBSERVATION_CONTRACT_ID_VOXMANI453,
@@ -363,7 +365,7 @@ def train(args):
     # Multi/subset-reference adapters adopt the first reference as the runtime
     # trajectory; provenance must keep the explicitly requested anchor identity.
     provenance["identity"] = trajectory.identity.identity
-    if _adapter_policy_version(adapter) in ("v6", "v5.voxmani453"):
+    if _adapter_policy_version(adapter) in ("v6", "v8"):
         # Independent actor/critic fusion towers are part of the v6 model
         # contract rather than an optional PPO setting.
         args.separate_critic = True
@@ -490,7 +492,7 @@ def train(args):
 
 def _checkpoint_separate_critic(payload):
     policy_version = _checkpoint_policy_version(payload)
-    if policy_version in ("v6", "v5.voxmani453"):
+    if policy_version in ("v6", "v8"):
         return True
     architecture = payload.get("model_architecture")
     if architecture == actor_critic_architecture(separate_critic=False): return False
@@ -528,7 +530,7 @@ def _checkpoint_policy_version(payload) -> str:
         return "v6"
     if checkpoint_format == CHECKPOINT_FORMAT_VOXMANI453:
         validate_voxmani453_checkpoint_metadata(payload)
-        return "v5.voxmani453"
+        return "v8"
     raise ValueError("unsupported checkpoint format")
 
 
@@ -578,7 +580,10 @@ def evaluate(args):
     ):
         raise ValueError("requested severe penalty does not match checkpoint")
     args.severe_penalty = checkpoint_severe_penalty
-    if args.policy_version is not None and args.policy_version != policy_version:
+    if (
+        args.policy_version is not None
+        and normalize_policy_version(args.policy_version) != policy_version
+    ):
         raise ValueError(
             f"requested policy version {args.policy_version!r} does not match "
             f"checkpoint {policy_version!r}"
@@ -678,8 +683,9 @@ def build_parser():
     common.add_argument("--device", choices=("cpu", "gpu"), default="gpu"); common.add_argument("--seed", type=int, default=0)
     common.add_argument(
         "--policy-version",
-        choices=("v4", "v5", "v5.25", "v5.5", "v5.75", "v6", "v5.voxmani453"),
-                        help="observation/model ABI; defaults to v4 for compatibility")
+        type=normalize_policy_version,
+        choices=("v4", "v5", "v5.25", "v5.5", "v5.75", "v6", "v8"),
+        help="observation/model ABI; v8 also accepts legacy v5.voxmani453; defaults to v4")
     common.add_argument(
         "--reward-version",
         choices=tuple(REWARD_CONTRACT_BY_VERSION),

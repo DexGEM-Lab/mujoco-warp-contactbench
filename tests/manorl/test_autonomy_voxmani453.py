@@ -322,7 +322,8 @@ def test_packed_telemetry_reduces_per_bone_torque_to_one_world_scalar():
     np.testing.assert_allclose(packed[:, slices["paired_torque_com_norm"]], 1.5)
 
 
-def test_cli_and_checkpoint_contract():
+@pytest.mark.parametrize("spelling", ["v8", "v5.voxmani453"])
+def test_cli_and_checkpoint_contract(spelling):
     from tools.train_manorl_autonomy import (
         parse_args,
         _checkpoint_policy_version,
@@ -333,13 +334,13 @@ def test_cli_and_checkpoint_contract():
         [
             "train",
             "--policy-version",
-            "v5.voxmani453",
+            spelling,
             "--reward-version",
             "v11",
             "--no-wandb",
         ]
     )
-    assert args.policy_version == "v5.voxmani453"
+    assert args.policy_version == "v8"
     contracts = _contracts(args.policy_version, V11_REWARD_CONTRACT_ID)
     payload = {
         f"{name}_contract": value
@@ -348,3 +349,25 @@ def test_cli_and_checkpoint_contract():
     }
     payload["checkpoint_format"] = contracts["checkpoint"]
     assert _checkpoint_policy_version(payload) == args.policy_version
+
+
+def test_v8_factory_keeps_existing_weight_and_checkpoint_layout(model):
+    from sim.manorl.autonomy_training import (
+        actor_critic_architecture_for_version,
+        model_for_version,
+    )
+
+    renamed = model_for_version(
+        "v8", model.observation_space, model.action_space, device="cpu",
+        reward_contract_id=V11_REWARD_CONTRACT_ID,
+    )
+    assert renamed.architecture_name == "v8"
+    assert type(renamed) is type(model)
+    assert renamed.checkpoint_architecture() == model.checkpoint_architecture()
+    assert (
+        actor_critic_architecture_for_version("v5.voxmani453")
+        == renamed.checkpoint_architecture()
+    )
+    assert list(renamed.state_dict()) == list(model.state_dict())
+    # This must accept historical weight dictionaries without conversion.
+    renamed.load_state_dict(model.state_dict(), strict=True)

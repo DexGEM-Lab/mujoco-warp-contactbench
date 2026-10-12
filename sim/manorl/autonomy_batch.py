@@ -28,6 +28,7 @@ from sim.manorl.autonomy_contracts import (
     V101_REWARD_TERM_NAMES,
     V11_REWARD_TERM_NAMES,
     resolve_reward_contract,
+    normalize_policy_version,
 )
 from sim.manorl.autonomy_v4 import (
     ReferenceCacheV4, ReferenceBankV4, V4Contact, compile_reference_cache_v4, extract_v4_physical,
@@ -143,6 +144,7 @@ class BatchedAutonomyRuntime:
                 raise TypeError(f"{name} must be a real number")
             if not 0.0 <= float(value):
                 raise ValueError(f"{name} must be non-negative")
+        observation_version = normalize_policy_version(observation_version)
         observation_builders = {
             "v4": (build_raw_observation, V4_OBSERVATION_DIM, AUTONOMY_VERSION),
             "v5": (
@@ -170,7 +172,7 @@ class BatchedAutonomyRuntime:
                 V6_OBSERVATION_DIM,
                 OBSERVATION_CONTRACT_ID_V6,
             ),
-            "v5.voxmani453": (
+            "v8": (
                 build_raw_observation_voxmani453,
                 RAW_OBSERVATION_DIM_VOXMANI453,
                 OBSERVATION_CONTRACT_ID_VOXMANI453,
@@ -349,7 +351,7 @@ class BatchedAutonomyRuntime:
         self.reward_state = initial_reward_state(num_envs, jp=j)
         self.object_vertices = j.asarray(object_collision_vertices(self.object_type), j.float32)
         self._transition_fn = jax.jit(self._transition)
-        if self.observation_version == "v5.voxmani453":
+        if self.observation_version == "v8":
             self.pose_history = j.zeros((num_envs, 17, 7), j.float32)
             self.history_counts = j.zeros((num_envs,), j.int32)
             self.previous_action = j.zeros((num_envs, ACTION_DIM), j.float32)
@@ -585,7 +587,7 @@ class BatchedAutonomyRuntime:
             action,
             execute,
         )
-        if self.observation_version == "v5.voxmani453":
+        if self.observation_version == "v8":
             self.previous_action = self.jp.where(
                 execute, self.jp.clip(action, -1, 1), self.previous_action
             )
@@ -612,7 +614,7 @@ class BatchedAutonomyRuntime:
         initial_command = self._reset_ctrl[:, :28]
         self.previous_command = self.jp.where(mask[:, None], initial_command, self.previous_command)
         self.reward_state = reset_reward_state(self.reward_state, mask, jp=self.jp)
-        if self.observation_version == "v5.voxmani453":
+        if self.observation_version == "v8":
             self.pose_history = self.jp.where(mask[:, None, None], 0., self.pose_history)
             self.history_counts = self.jp.where(mask, 0, self.history_counts)
             self.previous_action = self.jp.where(mask[:, None], 0., self.previous_action)

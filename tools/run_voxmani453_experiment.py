@@ -207,7 +207,7 @@ def main() -> int:
             str(ROOT / "tools/train_manorl_autonomy.py"),
             "train",
             "--policy-version",
-            "v5.voxmani453",
+            "v8",
             "--reward-version",
             "v11",
             "--package",

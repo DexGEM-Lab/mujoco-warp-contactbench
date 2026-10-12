@@ -99,6 +99,17 @@ ENCODED_OBSERVATION_DIM_V575: Final = 525
 OBSERVATION_CONTRACT_ID_V6: Final = "manorl.autonomy.observation.v6.region-token-cross-attention"
 CHECKPOINT_FORMAT_V6: Final = "manorl.autonomy.ppo.v6"
 RAW_OBSERVATION_DIM_V6: Final = 2205
+# Public architecture name. Keep persisted ABI identifiers unchanged so existing
+# VoxMani 453 model and Adam checkpoints remain valid under the v8 name.
+POLICY_VERSION_V8: Final = "v8"
+LEGACY_POLICY_VERSION_V8: Final = "v5.voxmani453"
+
+
+def normalize_policy_version(value: str) -> str:
+    """Resolve the historical v8 spelling; other versions retain their names."""
+    return POLICY_VERSION_V8 if value == LEGACY_POLICY_VERSION_V8 else value
+
+
 OBSERVATION_CONTRACT_ID_VOXMANI453: Final = "manorl.autonomy.observation.v5.voxmani453"
 CHECKPOINT_FORMAT_VOXMANI453: Final = "manorl.autonomy.ppo.v5.voxmani453"
 RAW_OBSERVATION_DIM_VOXMANI453: Final = 453

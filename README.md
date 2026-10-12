@@ -2,9 +2,14 @@
 
 Standalone MJX-Warp sim-to-Lance export repo.
 
-## VoxMani 453 + reward v11
+## v8：VoxMani 453 + reward v11
 
-本交付版的模型入口为 `--policy-version v5.voxmani453 --reward-version v11`。
+本交付版的模型入口为 `--policy-version v8 --reward-version v11`。
+旧名称 `v5.voxmani453` 仍作为兼容别名。命名不改变网络或旧检查点格式。
+观测为453维，另有547维目标快照；两张量合计1000个输入数值。
+每个索引的物理含义、单位、归一化与Actor/Critic读取范围见
+[453维逐维说明](docs/v8_observation_dimensions.md)和
+[547维目标快照说明](docs/v8_goal_snapshot_dimensions.md)。
 完整架构、453 维字段、与上游的适配差异和验证结果见
 [docs/voxmani453_v11.md](docs/voxmani453_v11.md)。
 在空闲 GPU 上运行训练、严格续训和冻结评估：

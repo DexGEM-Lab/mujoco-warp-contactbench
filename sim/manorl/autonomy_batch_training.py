@@ -23,6 +23,7 @@ import torch
 from sim.manorl.autonomy_contracts import (
     ACTION_CONTRACT_ID, CHECKPOINT_FORMAT, OBSERVATION_CONTRACT_ID,
     POLICY_SAMPLING_CONTRACT, REWARD_CONTRACT_ID, validate_v4_checkpoint_metadata,
+    normalize_policy_version,
 )
 from sim.manorl.autonomy_telemetry import latest_ppo_metrics
 from sim.manorl.autonomy_v4_telemetry import REWARD_NAMES, V4TelemetryAccumulator
@@ -286,6 +287,8 @@ def inspect_v4_resume(path: str | Path, model: torch.nn.Module, optimizer: torch
     # original disabled-anchor, v4-reward path.
     def with_anchor_defaults(config):
         config = dict(config)
+        if config.get("policy_version") is not None:
+            config["policy_version"] = normalize_policy_version(config["policy_version"])
         config["reward_version"] = config.get("reward_version") or "v4"
         config.setdefault("all_train_references", False)
         config.setdefault("all_references", False)
